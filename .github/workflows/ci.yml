@@ -266,6 +266,7 @@ jobs:
             .temp/windows-horizontal/**/*-stdout.txt
             .temp/windows-horizontal/**/*-stderr.txt
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
       - name: Diagnose Windows native config and trace placement (non-gating)
         if: matrix.rid == 'win-x64'
@@ -355,6 +356,8 @@ jobs:
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh
         timeout-minutes: 8
+        env:
+          MOTE_NATIVE_MAC_STAGE_TRACE: ${{ matrix.rid == 'osx-arm64' && '1' || '0' }}
         run: |
           $rid = '${{ matrix.rid }}'
           & ./tests/NativeMacCanvasClipboardWorkflow.ps1 `
@@ -371,6 +374,30 @@ jobs:
             .cache/ci-inventory/${{ matrix.rid }}/canvas-clipboard.json
             .temp/canvas-clipboard-*.txt
           if-no-files-found: warn
+          retention-days: 14
+      # Run the smallest real opt-in canvas under LLDB only on ARM64; stage
+      # codes and bounded backtrace are diagnostic, never a substitute for the
+      # blocking clipboard/selection workflow above.
+      - name: Diagnose macOS ARM canvas startup crash (non-gating)
+        if: always() && matrix.rid == 'osx-arm64'
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          & ./tests/NativeMacCanvasCrashProbe.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/osx-arm64/publish/mote' `
+            -RuntimeIdentifier osx-arm64
+      - name: Upload macOS ARM canvas startup crash diagnostic
+        if: always() && matrix.rid == 'osx-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-crash-osx-arm64
+          path: |
+            .cache/ci-inventory/osx-arm64/mac-canvas-crash.json
+            .cache/ci-inventory/osx-arm64/mac-canvas-crash-*-stdout.txt
+            .cache/ci-inventory/osx-arm64/mac-canvas-crash-*-stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
       - name: Verify macOS canvas empty-host delete
         if: startsWith(matrix.rid, 'osx-')
@@ -477,6 +504,8 @@ jobs:
         shell: pwsh
         timeout-minutes: 8
         continue-on-error: true
+        env:
+          MOTE_NATIVE_MAC_STAGE_TRACE: ${{ matrix.rid == 'osx-arm64' && '1' || '0' }}
         run: |
           $rid = '${{ matrix.rid }}'
           & ./tests/NativeMacHorizontalWorkflow.ps1 `
@@ -494,6 +523,7 @@ jobs:
             .cache/horizontal-*/*.png
             .cache/horizontal-*/metrics.txt
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
       # Initial external keyboard/edit/save capability probe for the opt-in
       # canvas. AX range movement is not a physical-paint or host-size oracle.
