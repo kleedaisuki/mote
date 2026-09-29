@@ -23,9 +23,25 @@ bounds and nonempty paint are not proof of an editor-quality visual selection
 model. Horizontal geometry of a `ViewportSlice` with hidden prefix/suffix is
 only *local* to that window; exact remote horizontal placement requires more
 context. No keyboard, mouse, IME, screen reader, or on-screen frame is
-exercised. Native AOT compilation on Windows only checks signatures; both
-macOS architectures must run the published binary probe before calling this
-OS-backed geometry path verified.
+exercised.
+
+## Target-host evidence (2026-09-29)
+
+[Fully green GitHub Actions run 36553927870](https://github.com/kleedaisuki/mote/actions/runs/36553927870)
+confirmed the strict one-file Native AOT probe on both macOS architectures.
+The first target-host probe pass, [run 36552700358](https://github.com/kleedaisuki/mote/actions/runs/36552700358),
+recorded these inspectable outputs (its overall red result was a separate
+AppleScript syntax error before editor input):
+
+| RID | Exact diagnostic stdout | Result |
+| --- | --- | --- |
+| `osx-arm64` | `mote-native-mac-canvas-ready cases=4 painted=3681` | Passed |
+| `osx-x64` | `mote-native-mac-canvas-ready cases=4 painted=3685` | Passed |
+
+The `painted` count is nonzero bytes in a CoreGraphics **offscreen** bitmap,
+not displayed frames, frame latency, visual correctness, or editability. These
+results establish target-host CoreText/CoreGraphics ABI and bounded geometry
+feasibility only. The current `NSTextView` remains the product editor.
 
 ## Primary API references
 
