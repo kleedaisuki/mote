@@ -111,6 +111,8 @@ internal static class MacCanvasHorizontalProbe
         private double _beforeX;
         private double _normalCanvasHeight;
         private double _normalCanvasWidth;
+        private double _normalWindowHeight;
+        private double _normalWindowWidth;
         private int _shortHit;
         private int _remoteHit;
 
@@ -337,8 +339,17 @@ internal static class MacCanvasHorizontalProbe
                         _metrics.Add($"small-host-native-x={smallHost.Value.NativeX.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"small-host-clip-x={smallHost.Value.ClipX.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"small-caret-x={smallCaret.Value.X.ToString("F3", CultureInfo.InvariantCulture)}");
+                        var normalCanvas = MacOnScreenCanvasNative.GetRect(
+                            _shell.ProbeCanvasView, ObjC.Sel("bounds"));
+                        var normalContent = MacOnScreenCanvasNative.GetRect(
+                            ObjC.Send(_shell.ProbeWindow, ObjC.Sel("contentView")),
+                            ObjC.Sel("bounds"));
+                        _normalCanvasWidth = normalCanvas.Size.Width;
+                        _normalCanvasHeight = normalCanvas.Size.Height;
+                        _normalWindowWidth = normalContent.Size.Width;
+                        _normalWindowHeight = normalContent.Size.Height;
                         ObjC.Send(_shell.ProbeWindow, ObjC.Sel("setContentSize:"),
-                            new ObjC.Size(100, 50));
+                            new ObjC.Size(420, 120));
                         _stage = 7;
                         break;
                     case 7 when _shell.ProbeCanvasFrame is { } tinyFrame:
@@ -347,8 +358,11 @@ internal static class MacCanvasHorizontalProbe
                             ObjC.Sel("bounds"));
                         var minimumHost = _shell.ProbeCanvasHostGeometry(0);
                         var minimumCaret = _shell.GetCanvasCaretGeometry(tinyFrame, 0);
+                        var physicalBody = _shell.ProbeCanvasBodyRect.Size.Height;
+                        _metrics.Add($"minimum-bounds-width={bounds.Size.Width.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"minimum-bounds-height={bounds.Size.Height.ToString("F3", CultureInfo.InvariantCulture)}");
-                        _metrics.Add($"minimum-physical-body-height={_shell.ProbeCanvasBodyRect.Size.Height.ToString("F3", CultureInfo.InvariantCulture)}");
+                        _metrics.Add($"minimum-physical-body-height={physicalBody.ToString("F3", CultureInfo.InvariantCulture)}");
+                        _metrics.Add($"minimum-host-clip-width={RibbonClipWidth().ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"minimum-frame-rows={tinyFrame.RowWindows.Length}");
                         _metrics.Add($"minimum-host-present={minimumHost is not null}");
                         _metrics.Add($"minimum-host-aligned={minimumHost?.Aligned}");
@@ -359,8 +373,7 @@ internal static class MacCanvasHorizontalProbe
                             _metrics.Add($"minimum-caret-local-x={physicalCaret.X.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"minimum-input-focused={_shell.ProbeCanvasInputFocused}");
                         _check = "S7-minimum-physical-body";
-                        if (bounds.Size.Height <= 37 ||
-                            _shell.ProbeCanvasBodyRect.Size.Height <= 1)
+                        if (physicalBody <= 1 || tinyFrame.RowWindows.Length == 0)
                             throw new InvalidOperationException("Minimum window lacks a physical source body.");
                         _check = "S7-minimum-host";
                         if (minimumHost is not { Aligned: true, Hidden: false })
@@ -372,9 +385,7 @@ internal static class MacCanvasHorizontalProbe
                         if (minimumCaret is not { IsVisible: true })
                             throw new InvalidOperationException("Minimum window lost its source caret.");
                         _metrics.Add($"minimum-canvas-height={bounds.Size.Height.ToString("F3", CultureInfo.InvariantCulture)}");
-                        _metrics.Add($"minimum-body-height={(bounds.Size.Height - 36).ToString("F3", CultureInfo.InvariantCulture)}");
-                        _normalCanvasHeight = bounds.Size.Height;
-                        _normalCanvasWidth = bounds.Size.Width;
+                        _metrics.Add($"minimum-body-height={physicalBody.ToString("F3", CultureInfo.InvariantCulture)}");
                         ObjC.Send(_shell.ProbeCanvasView, ObjC.Sel("setFrameSize:"),
                             new ObjC.Size(bounds.Size.Width, 36));
                         _shell.ProbeCanvasPublishBodyHeight();
@@ -389,6 +400,8 @@ internal static class MacCanvasHorizontalProbe
                             _shell.GetCanvasCaretGeometry(zeroFrame, 0) is not null)
                             throw new InvalidOperationException("Zero body advertised source or lost input.");
                         _metrics.Add("zero-body-visible-rows=0");
+                        ObjC.Send(_shell.ProbeWindow, ObjC.Sel("setContentSize:"),
+                            new ObjC.Size(_normalWindowWidth, _normalWindowHeight));
                         ObjC.Send(_shell.ProbeCanvasView, ObjC.Sel("setFrameSize:"),
                             new ObjC.Size(_normalCanvasWidth, _normalCanvasHeight));
                         _shell.ProbeCanvasPublishBodyHeight();
@@ -424,6 +437,24 @@ internal static class MacCanvasHorizontalProbe
             var view = _shell.ProbeCanvasView;
             return view == 0 ? 0 : MacOnScreenCanvasNative.GetRect(view,
                 ObjC.Sel("bounds")).Size.Width;
+        }
+
+        private double RibbonClipWidth()
+        {
+            var view = _shell.ProbeCanvasView;
+            if (view == 0) return 0;
+            var children = ObjC.Send(view, ObjC.Sel("subviews"));
+            var count = checked((int)ObjC.Send(children, ObjC.Sel("count")));
+            for (var index = 0; index < count; index++)
+            {
+                var child = ObjC.Send(children, ObjC.Sel("objectAtIndex:"), (nint)index);
+                if (ObjC.Send(child, ObjC.Sel("isKindOfClass:"),
+                    ObjC.Class("NSScrollView")) == 0) continue;
+                var clip = ObjC.Send(child, ObjC.Sel("contentView"));
+                return MacOnScreenCanvasNative.GetRect(clip,
+                    ObjC.Sel("bounds")).Size.Width;
+            }
+            return 0;
         }
 
         private void CheckBounded(Mote.Native.Viewport.CanvasFrame frame)
