@@ -100,6 +100,42 @@ public sealed class NativeIdleAnalysisTests
             32 * 1024 * 1024, 0, 200L * 1024 * 1024, 150L * 1024 * 1024));
     }
 
+    /// <summary>Files above 32 MiB use a fake 15 s clock and preserve the policy's honest Full claim.</summary>
+    [Theory]
+    [InlineData(AnalysisCompleteness.Complete)]
+    [InlineData(AnalysisCompleteness.Provisional)]
+    public async Task Large_markdown_idle_full_does_not_invent_completeness(
+        AnalysisCompleteness fullClaim)
+    {
+        // 33 MiB is the smallest inexpensive representative of the same
+        // >32 MiB scheduler branch used for a 100 MiB document. A ProbePolicy
+        // isolates orchestration; real flat/complex Markdown parsing is tested
+        // separately by MarkdownAdmissionValidationTests.
+        using var document = new Document(new string('x', 33 * 1024 * 1024));
+        var policy = new ProbePolicy(DocumentKind.Markdown, fullClaim);
+        using var driver = new NativeFormatSessionDriver(policy);
+        var delay = new ControlledDelay();
+        var published = new TaskCompletionSource<DocumentAnalysis>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var idle = new NativeIdleFullAnalysis(driver, policy.Kind,
+            (_, result, _) => published.TrySetResult(result), delay: delay.WaitAsync);
+        var snapshot = document.Snapshot;
+        var range = new TextSpan(snapshot.Length / 2, 64);
+        Assert.Equal(IdleFullOffer.Scheduled, idle.Offer(snapshot, Visible(snapshot), range));
+        Assert.Equal(TimeSpan.FromSeconds(15), Assert.Single(delay.Requests).Duration);
+        Assert.Equal(0, policy.FullCalls); // Offering cannot parse on the UI thread.
+
+        delay.Complete(0);
+        var result = await published.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(snapshot.Version, result.Version);
+        Assert.Equal(fullClaim, result.Completeness);
+        Assert.Equal(fullClaim == AnalysisCompleteness.Complete ? 0 : null,
+            result.TotalDiagnosticCount);
+        Assert.Equal(1, policy.FullCalls);
+        Assert.Equal(IdleFullOffer.AlreadyPendingOrAttempted,
+            idle.Offer(snapshot, Visible(snapshot), range));
+    }
+
     /// <summary>Builds a truthfully provisional visible result for scheduler offers.</summary>
     private static DocumentAnalysis Visible(TextSnapshot snapshot) => new(snapshot.Version,
         new TextSpan(0, snapshot.Length), AnalysisCompleteness.Provisional,

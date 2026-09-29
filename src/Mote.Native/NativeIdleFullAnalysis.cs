@@ -28,7 +28,6 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
 {
     private const int SmallLimit = 4 * 1024 * 1024;
     private const int MediumLimit = 32 * 1024 * 1024;
-    private const int MarkdownLimit = 16 * 1024 * 1024;
 
     private readonly object _gate = new();
     private readonly NativeFormatSessionDriver _driver;
@@ -85,7 +84,7 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
                 _attemptedVersion = snapshot.Version;
                 return IdleFullOffer.Complete;
             }
-            if (!CanRun(snapshot.Length)) return IdleFullOffer.PolicyLimited;
+            if (!CanRun()) return IdleFullOffer.PolicyLimited;
             if (_attemptedVersion == snapshot.Version)
                 return IdleFullOffer.AlreadyPendingOrAttempted;
             if (_pending is { } current)
@@ -125,11 +124,15 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
         }
     }
 
-    /// <summary>Excludes policies whose Full pass has no useful bounded cost.</summary>
-    private bool CanRun(int length) => _kind switch
+    /// <summary>
+    /// Offers Full only to policies with a cancellable, resource-admitted path.
+    /// Markdown's large-file policy now certifies a restricted flat subset and
+    /// returns Provisional for structures it cannot prove within its budget.
+    /// </summary>
+    private bool CanRun() => _kind switch
     {
-        DocumentKind.Json or DocumentKind.Yaml or DocumentKind.Toml => true,
-        DocumentKind.Markdown => length <= MarkdownLimit,
+        DocumentKind.Json or DocumentKind.Yaml or DocumentKind.Toml or
+            DocumentKind.Markdown => true,
         _ => false
     };
 
