@@ -324,6 +324,7 @@ function Invoke-Case {
     $start.RedirectStandardError = $true
     $start.Environment['MOTE_HOME'] = Join-Path $scratch 'mote-home'
     $start.Environment['MOTE_TRACE'] = '0'
+    $start.Environment['MOTE_NATIVE_MAC_STAGE_TRACE'] = '1'
     [void]$start.ArgumentList.Add('--canvas-experimental')
     [void]$start.ArgumentList.Add($file)
     $result = [ordered]@{
@@ -367,6 +368,7 @@ function Invoke-Case {
         post_edit_attempts = 0
         post_edit_last_error = ''
         post_edit_last_gate = $null
+        native_stage_codes = @()
         ax_visible_range_before = $null
         ax_visible_range_after = $null
         vertical_scroll_status = 'unverified'
@@ -377,6 +379,8 @@ function Invoke-Case {
         observed_peak_working_set_bytes = $null
         reopen_source_chars = $null
         reopen_observed_ms = $null
+        process_alive_at_failure = $null
+        process_exit_code_at_failure = $null
         error_kind = ''
         error = ''
     }
@@ -611,6 +615,11 @@ end tell
         $result.error_kind = if ($result.error -match '^([a-z-]+):') {
             $Matches[1]
         } else { 'unexpected' }
+        if ($null -ne $child) {
+            $child.Refresh()
+            $result.process_alive_at_failure = -not $child.HasExited
+            if ($child.HasExited) { $result.process_exit_code_at_failure = $child.ExitCode }
+        }
         throw
     }
     finally {
@@ -632,8 +641,12 @@ end tell
             }
             [IO.File]::WriteAllText((Join-Path $scratch "$Name-stdout.txt"),
                 $child.StandardOutput.ReadToEnd(), $utf8)
+            $nativeStderr = $child.StandardError.ReadToEnd()
             [IO.File]::WriteAllText((Join-Path $scratch "$Name-stderr.txt"),
-                $child.StandardError.ReadToEnd(), $utf8)
+                $nativeStderr, $utf8)
+            $result.native_stage_codes = @([regex]::Matches($nativeStderr,
+                '(?m)^mote-mac-stage:[A-Za-z0-9_.-]+\r?$') |
+                ForEach-Object { $_.Value.Trim() })
             $child.Dispose()
         }
         $result | ConvertTo-Json -Depth 5 -Compress |

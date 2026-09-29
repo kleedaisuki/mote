@@ -13,13 +13,19 @@ private struct GateReport: Codable {
     let focusedWindowPid: Int32
     let focusedWindowMatches: Bool
     let focusedWindowError: Int32
+    let focusedWindowRole: String?
+    let focusedWindowSubrole: String?
+    let focusedWindowTitleLength: Int?
+    let windowCount: Int?
     let sourceCandidates: Int
     let sourceLength: Int?
+    let labeledSourceCandidates: Int
+    let labeledSourceLength: Int?
     let proxyFocused: Bool?
-    let focusError: Int32
+    let focusError: Int32?
     let selectionStart: Int?
     let selectionLength: Int?
-    let selectionError: Int32
+    let selectionError: Int32?
     let visibleStart: Int?
     let visibleLength: Int?
 }
@@ -40,24 +46,29 @@ private func range(_ raw: AnyObject?) -> CFRange? {
     return AXValueGetValue(value, .cfRange, &result) ? result : nil
 }
 
-/// Enumerates a bounded AX tree to distinguish the full source proxy from preview text.
-private func sourceProxy(_ app: AXUIElement, expectedLength: Int) -> (AXUIElement?, Int) {
+/// Enumerates a bounded AX tree without hiding a source proxy of the wrong length.
+private func sourceProxy(_ app: AXUIElement, expectedLength: Int)
+    -> (AXUIElement?, Int, AXUIElement?, Int) {
     var queue: [(AXUIElement, Int)] = [(app, 0)]
     var cursor = 0
-    var candidates: [AXUIElement] = []
+    var exact: [AXUIElement] = []
+    var labeled: [AXUIElement] = []
     while cursor < queue.count && cursor < 256 {
         let (element, depth) = queue[cursor]
         cursor += 1
         if attribute(element, "AXRole").1 as? String == "AXTextArea",
-           attribute(element, "AXDescription").1 as? String == "Mote editor",
-           (attribute(element, "AXNumberOfCharacters").1 as? NSNumber)?.intValue == expectedLength {
-            candidates.append(element)
+           attribute(element, "AXDescription").1 as? String == "Mote editor" {
+            labeled.append(element)
+            if (attribute(element, "AXNumberOfCharacters").1 as? NSNumber)?.intValue == expectedLength {
+                exact.append(element)
+            }
         }
         if depth < 10, let children = attribute(element, "AXChildren").1 as? [AXUIElement] {
             queue.append(contentsOf: children.map { ($0, depth + 1) })
         }
     }
-    return (candidates.count == 1 ? candidates[0] : nil, candidates.count)
+    return (exact.count == 1 ? exact[0] : nil, exact.count,
+            labeled.count == 1 ? labeled[0] : nil, labeled.count)
 }
 
 /// Captures process, focused-window, physical-first-responder proxy, and range metadata.
@@ -70,21 +81,32 @@ private func observe(pid: pid_t, expectedLength: Int, expectedFileName: String) 
     let (windowError, windowRaw) = attribute(app, "AXFocusedWindow")
     var windowPid: pid_t = 0
     var windowMatches = false
+    var windowRole: String?
+    var windowSubrole: String?
+    var titleLength: Int?
     if windowError == .success, let windowRaw,
        CFGetTypeID(windowRaw) == AXUIElementGetTypeID() {
         let window = unsafeBitCast(windowRaw, to: AXUIElement.self)
         _ = AXUIElementGetPid(window, &windowPid)
+        windowRole = attribute(window, "AXRole").1 as? String
+        windowSubrole = attribute(window, "AXSubrole").1 as? String
         let title = attribute(window, "AXTitle").1 as? String ?? ""
+        titleLength = title.utf16.count
         windowMatches = windowPid == pid && title.contains(expectedFileName)
     }
+    let windows = attribute(app, "AXWindows").1 as? [AXUIElement]
 
-    let (proxy, candidates) = sourceProxy(app, expectedLength: expectedLength)
+    let (exactProxy, candidates, labeledProxy, labeledCount) =
+        sourceProxy(app, expectedLength: expectedLength)
     var focused: Bool?
-    var focusError: AXError = .failure
+    var focusError: AXError?
     var selected: CFRange?
-    var selectionError: AXError = .failure
+    var selectionError: AXError?
     var visible: CFRange?
-    if let proxy {
+    let labeledLength = labeledProxy.flatMap {
+        (attribute($0, "AXNumberOfCharacters").1 as? NSNumber)?.intValue
+    }
+    if let proxy = exactProxy ?? labeledProxy {
         let focus = attribute(proxy, "AXFocused")
         focusError = focus.0
         focused = (focus.1 as? NSNumber)?.boolValue
@@ -100,10 +122,14 @@ private func observe(pid: pid_t, expectedLength: Int, expectedFileName: String) 
         workspaceFrontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
         focusedWindowPid: windowPid,
         focusedWindowMatches: windowMatches, focusedWindowError: windowError.rawValue,
-        sourceCandidates: candidates, sourceLength: proxy == nil ? nil : expectedLength,
-        proxyFocused: focused, focusError: focusError.rawValue,
+        focusedWindowRole: windowRole, focusedWindowSubrole: windowSubrole,
+        focusedWindowTitleLength: titleLength, windowCount: windows?.count,
+        sourceCandidates: candidates,
+        sourceLength: exactProxy == nil ? nil : expectedLength,
+        labeledSourceCandidates: labeledCount, labeledSourceLength: labeledLength,
+        proxyFocused: focused, focusError: focusError?.rawValue,
         selectionStart: selected?.location, selectionLength: selected?.length,
-        selectionError: selectionError.rawValue,
+        selectionError: selectionError?.rawValue,
         visibleStart: visible?.location, visibleLength: visible?.length)
 }
 

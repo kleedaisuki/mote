@@ -614,8 +614,10 @@ internal sealed unsafe class MacTextInputIsland
     {
         if (_binding is null || _projection is null || _inChange) return;
         if (!_nativeChangeObserved && !_compositionDirty) return;
+        TraceStage("F0-before-native-diff");
         var final = ObjC.ManagedString(ObjC.Send(_editor, ObjC.Sel("string")));
         var change = _projection.Difference(final);
+        TraceStage("F1-native-diff-ready");
         var wasComposition = _compositionDirty;
         _compositionDirty = false;
         _nativeChangeObserved = false;
@@ -653,8 +655,10 @@ internal sealed unsafe class MacTextInputIsland
         _inChange = true;
         try
         {
+            TraceStage("F2-before-controller-edit");
             _edit(new CanvasCommittedEdit(binding.DocumentGeneration, binding.BaseVersion,
                 binding.BindingNonce, new TextChange(start, delete, insert), active));
+            TraceStage("F3-controller-edit-returned");
         }
         finally
         {
@@ -1339,6 +1343,7 @@ internal sealed unsafe class MacTextInputIsland
     internal void DisableAfterFailure(string reason)
     {
         if (_reportedFailure) return;
+        TraceStage("Q0-disable-input-enter");
         _reportedFailure = true;
         _binding = null;
         _projection = null;
@@ -1358,6 +1363,7 @@ internal sealed unsafe class MacTextInputIsland
         catch { /* Keep callback unwind safe even if AppKit is already failing. */ }
         try { _error($"The experimental canvas input stopped: {reason}"); }
         catch { /* Never unwind a managed exception through an AppKit IMP. */ }
+        TraceStage("Q1-disable-input-returned");
     }
 
     private static string RegisterClass()
@@ -1411,11 +1417,15 @@ internal sealed unsafe class MacTextInputIsland
     {
         var current = s_current;
         if (current is null) return;
+        var key = s_traceStages && selector == ObjC.Sel("keyDown:");
+        if (key) TraceStage("K0-key-down-enter");
         current.InvokeSafely(() =>
         {
             current.ArmUserSelectionGesture();
             var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTextView"));
+            if (key) TraceStage("K1-before-appkit-key-down");
             MacOnScreenCanvasNative.SendSuper(ref superclass, selector, eventObject);
+            if (key) TraceStage("K2-appkit-key-down-returned");
         });
     }
 

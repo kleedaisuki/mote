@@ -151,7 +151,31 @@ Save. If AX confirms but the title does not, it records
 `dirty_marker_status=missing-after-source-confirmed` and allows one Command-S
 only after renewing the focused-source/window gate; the full streaming byte
 oracle and fresh reopen still decide whether the edit actually persisted.
-This diagnostic has **not yet been target-run**.
+
+The [follow-up run `36596274416`](https://github.com/kleedaisuki/mote/actions/runs/36596274416)
+again passed exact 1 MiB and 100 MiB external Save/reopen. For the 50 MiB
+single line, one X was dispatched and the process remained alive, but **73
+read-only source/title observations over 25 seconds** found neither the
+expected source length +1 nor a dirty marker; no Save was sent. All 73 AX
+observer processes returned metadata with the target application and focused
+window PID, but `focusedWindowMatches=false`. The old helper's
+`sourceCandidates=0` means **no proxy with the expected post-edit length was
+found**, not that the old-length proxy was absent. Its `focusError=-25200` and
+`selectionError=-25200` were *locally initialized sentinels when no exact
+candidate existed*, **not** observed AX system errors. Thus this evidence
+does not distinguish an unchanged source, a target-owned modal window, a
+changed window title, or an input callback failure. A global AppKit freeze is
+not established: each bounded AX call returned and the target process stayed
+alive. The next observer now reports independently labeled source-proxy count
+and **actual** length, focused-window role/subrole/title length (never title
+text), and AX window count; unavailable focus/selection error codes serialize
+as `null` rather than the misleading sentinel. Only the synthetic Canvas child
+sets `MOTE_NATIVE_MAC_STAGE_TRACE=1`; the native shell's static, text-free
+`mote-mac-stage:` codes are preserved from stderr and copied into JSON. This
+can separate `keyDown`, prechange, `textDidChange`, diff/controller, fail-closed
+disable, and modal error stages without logging a key, document text, or path.
+The read-only observer extension and stage codes have **not yet been hosted**;
+do not classify the 50 MiB failure as an OOM/modal or a parsing regression.
 
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS

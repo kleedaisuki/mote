@@ -605,6 +605,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public void ShowError(string message)
     {
+        if (_experimentalCanvas) MacTextInputIsland.TraceStage("E0-show-error-enter");
         if (_probeCaptureCanvasErrors)
         {
             _probeCanvasError = message;
@@ -614,7 +615,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(alert, ObjC.Sel("setAlertStyle:"), 2);
         ObjC.Send(alert, ObjC.Sel("setMessageText:"), ObjC.String("mote could not complete the operation"));
         ObjC.Send(alert, ObjC.Sel("setInformativeText:"), ObjC.String(message));
+        if (_experimentalCanvas) MacTextInputIsland.TraceStage("E1-before-error-modal");
         ObjC.Send(alert, ObjC.Sel("runModal"));
+        if (_experimentalCanvas) MacTextInputIsland.TraceStage("E2-error-modal-returned");
     }
 
     /// <inheritdoc />
@@ -1220,8 +1223,11 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         {
             if (shell._experimentalCanvas)
             {
+                MacTextInputIsland.TraceStage("D0-text-did-change-enter");
                 shell._canvas?.OnTextChanged();
+                MacTextInputIsland.TraceStage("D1-canvas-text-change-returned");
                 shell.ReplayCanvasTheme();
+                MacTextInputIsland.TraceStage("D2-text-did-change-returned");
                 return;
             }
             // AppKit may announce caret collapse before textDidChange. Do not let
@@ -1387,8 +1393,20 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         var shell = s_current;
         if (shell is null || !shell._experimentalCanvas || shell._canvas is null) return 1;
-        try { return shell._canvas.BeforeTextChange(range, replacement) ? (byte)1 : (byte)0; }
-        catch (Exception error) { shell.ShowError(error.Message); return 0; }
+        MacTextInputIsland.TraceStage("T0-before-text-change-enter");
+        try
+        {
+            var allowed = shell._canvas.BeforeTextChange(range, replacement);
+            MacTextInputIsland.TraceStage(allowed
+                ? "T1-before-text-change-allowed" : "T2-before-text-change-vetoed");
+            return allowed ? (byte)1 : (byte)0;
+        }
+        catch (Exception error)
+        {
+            MacTextInputIsland.TraceStage("T3-before-text-change-fault");
+            shell.ShowError(error.Message);
+            return 0;
+        }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
