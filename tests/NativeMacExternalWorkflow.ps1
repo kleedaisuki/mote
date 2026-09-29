@@ -159,7 +159,7 @@ tell application "System Events"
     keystroke "X"
     log "typed:sent-X"
     delay 0.2
-    return value of focused UI element of targetProcess
+    return value of attribute "AXValue" of focusedElement
 end tell
 "@
     $nativeText = Invoke-AppleScript $typeScript 'type-X'
