@@ -4,7 +4,8 @@
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
     [Parameter(Mandatory)][string] $Rid,
-    [string] $ReportPath
+    [string] $ReportPath,
+    [switch] $FragmentExperiment
 )
 
 Set-StrictMode -Version Latest
@@ -15,7 +16,8 @@ if ($Rid -notin @('win-x64', 'win-arm64')) { throw "Unsupported Windows RID: $Ri
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $cache = [IO.Path]::GetFullPath((Join-Path $root ".cache/windows-ax-external/$Rid"))
 $scratch = [IO.Path]::GetFullPath((Join-Path $root ".temp/windows-ax-external/$Rid"))
-$report = if ($ReportPath) { [IO.Path]::GetFullPath($ReportPath) } else { Join-Path $cache 'report.json' }
+$defaultReport = if ($FragmentExperiment) { 'fragment-report.json' } else { 'report.json' }
+$report = if ($ReportPath) { [IO.Path]::GetFullPath($ReportPath) } else { Join-Path $cache $defaultReport }
 $cacheRoot = [IO.Path]::GetFullPath((Join-Path $root '.cache'))
 if (-not $report.StartsWith($cacheRoot + [IO.Path]::DirectorySeparatorChar,
     [StringComparison]::OrdinalIgnoreCase)) {
@@ -33,7 +35,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Isolated WPF UIA probe build failed with $LASTEXITCODE." }
     $probe = Join-Path $output 'Release/net10.0-windows/WindowsAxExternalProbe.exe'
     if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) { throw "Probe executable missing: $probe" }
-    & $probe $exe $scratch $report
+    if ($FragmentExperiment) {
+        & $probe $exe $scratch $report '--uia-fragment-experimental'
+    }
+    else {
+        & $probe $exe $scratch $report
+    }
     exit $LASTEXITCODE
 }
 catch {

@@ -286,6 +286,31 @@ jobs:
           path: .cache/windows-ax-external/${{ matrix.rid }}/report.json
           if-no-files-found: warn
           retention-days: 14
+      # Paired opt-in fragment tree on the same published EXE; ARM64 and real
+      # screen-reader behavior remain unknown, so this is not a release gate.
+      - name: Diagnose Windows UIA fragment experiment (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/WindowsAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -Rid $rid `
+            -FragmentExperiment `
+            -ReportPath ".cache/windows-ax-external/$rid/fragment-report.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "UIA fragment experiment failed; inspect the uploaded $rid report."
+          }
+      - name: Upload Windows UIA fragment diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ax-fragment-${{ matrix.rid }}
+          path: .cache/windows-ax-external/${{ matrix.rid }}/fragment-report.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify macOS Launch Services can open the standalone executable
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh

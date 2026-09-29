@@ -27,13 +27,16 @@ internal static class Program
             return 2;
         }
 
-        if (args.Length != 3)
+        if (args.Length is < 3 or > 4 ||
+            (args.Length == 4 && args[3] != "--uia-fragment-experimental"))
         {
-            Console.Error.WriteLine("Usage: WindowsAxExternalProbe <published-mote.exe> <scratch-directory> <report.json>");
+            Console.Error.WriteLine("Usage: WindowsAxExternalProbe <published-mote.exe> <scratch-directory> <report.json> [--uia-fragment-experimental]");
             return 2;
         }
 
         var report = new ProbeReport();
+        var fragmentExperiment = args.Length == 4;
+        report.Mode = fragmentExperiment ? "fragment-experimental" : "canvas-baseline";
         var reportPath = Path.GetFullPath(args[2]);
         try
         {
@@ -42,7 +45,7 @@ internal static class Program
             if (!File.Exists(exe)) throw new FileNotFoundException("Published executable is missing", exe);
             Directory.CreateDirectory(scratch);
             report.ExecutableSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(exe)));
-            Run(exe, scratch, report);
+            Run(exe, scratch, report, fragmentExperiment);
         }
         catch (Exception exception)
         {
@@ -63,7 +66,7 @@ internal static class Program
     }
 
     /// <summary>Runs all checks against the real published process, retaining the original UIA proxy across the oversized call.</summary>
-    private static void Run(string exe, string scratch, ProbeReport report)
+    private static void Run(string exe, string scratch, ProbeReport report, bool fragmentExperiment)
     {
         var fixture = Path.Combine(scratch, "ax-many-lines.md");
         var source = string.Concat(Enumerable.Range(0, 9000).Select(index => $"row-{index:D6} hello\n"))
@@ -79,6 +82,7 @@ internal static class Program
             RedirectStandardError = true
         };
         start.ArgumentList.Add("--canvas-experimental");
+        if (fragmentExperiment) start.ArgumentList.Add("--uia-fragment-experimental");
         start.ArgumentList.Add(fixture);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Native editor did not start");
         report.ProcessId = process.Id;
@@ -90,7 +94,8 @@ internal static class Program
             WaitFor(() => Title(main).Contains("ax-many-lines", StringComparison.Ordinal) ? main : 0, process);
 
             var element = AutomationElement.FromHandle(canvas);
-            var text = WaitForPattern(canvas, process);
+            var sourceElement = WaitForSourceElement(canvas, process, fragmentExperiment);
+            var text = (TextPattern)sourceElement.GetCurrentPattern(TextPattern.Pattern);
             var originalRange = text.DocumentRange;
             var prefix = originalRange.GetText(128);
             report.Check("document-prefix-exact", prefix.Length == 128 && source.StartsWith(prefix, StringComparison.Ordinal),
@@ -102,18 +107,41 @@ internal static class Program
                 $"host={hostLength}; source={source.Length}");
 
             var hostElement = AutomationElement.FromHandle(input);
+            if (hostElement.TryGetCurrentPattern(TextPattern.Pattern, out var hostPattern))
+            {
+                if (fragmentExperiment)
+                {
+                    var hostPrefix = ((TextPattern)hostPattern).DocumentRange.GetText(128);
+                    report.HostPatternPrefixUtf16Length = hostPrefix.Length;
+                    report.Check("input-hwnd-routes-to-source-document",
+                        hostElement.Current.AutomationId == "mote.source.document" &&
+                        hostPrefix.Length == 128 && source.StartsWith(hostPrefix, StringComparison.Ordinal),
+                        $"id={hostElement.Current.AutomationId}; prefix={hostPrefix.Length}");
+                }
+                else
+                {
+                    report.HostPatternUtf16Length = ((TextPattern)hostPattern).DocumentRange.GetText(-1).Length;
+                    report.Check("baseline-input-has-only-bounded-text",
+                        report.HostPatternUtf16Length <= 16 * 1024 &&
+                        report.HostPatternUtf16Length < source.Length,
+                        $"host-uia={report.HostPatternUtf16Length}");
+                }
+            }
+            else report.Check("input-hwnd-has-text-pattern", false, "RichEdit/input HWND had no UIA TextPattern");
             var rawChild = TreeWalker.RawViewWalker.GetFirstChild(element);
             var controlChild = TreeWalker.ControlViewWalker.GetFirstChild(element);
             var contentChild = TreeWalker.ContentViewWalker.GetFirstChild(element);
+            var rawDocuments = DocumentsInView(element, TreeWalker.RawViewWalker);
+            var controlDocuments = DocumentsInView(element, TreeWalker.ControlViewWalker);
+            var contentDocuments = DocumentsInView(element, TreeWalker.ContentViewWalker);
             report.Tree = new TreeObservation(
-                Describe(element), Describe(hostElement), Describe(rawChild), Describe(controlChild),
-                Describe(contentChild), Describe(AutomationElement.FocusedElement));
-            if (hostElement.Current.ControlType == ControlType.Document &&
-                rawChild?.Current.ControlType == ControlType.Document &&
-                controlChild?.Current.ControlType == ControlType.Document &&
-                contentChild?.Current.ControlType == ControlType.Document)
+                Describe(element), Describe(sourceElement), Describe(hostElement), Describe(rawChild), Describe(controlChild),
+                Describe(contentChild), Describe(AutomationElement.FocusedElement),
+                element.Current.HasKeyboardFocus, sourceElement.Current.HasKeyboardFocus,
+                hostElement.Current.HasKeyboardFocus, rawDocuments, controlDocuments, contentDocuments);
+            if (rawDocuments.Count != 1 || controlDocuments.Count != 1 || contentDocuments.Count != 1)
             {
-                report.ReleaseBlockers.Add($"The source-backed canvas and bounded RichEdit input host are both Document nodes in Raw/Control/Content UIA views; focused={report.Tree.Focused}. Single-editor accessibility is not established.");
+                report.ReleaseBlockers.Add($"Expected one source-backed Document in each canvas subtree: Raw={rawDocuments.Count}, Control={controlDocuments.Count}, Content={contentDocuments.Count}; focused={report.Tree.Focused}. Single-editor accessibility is not established.");
             }
 
             var selectionBefore = text.GetSelection();
@@ -142,7 +170,8 @@ internal static class Program
             var cachedHealthy = TryReadPattern(text, report, "cached-after-oversize");
             report.Check("cached-pattern-usable-after-budget-failure", cachedHealthy,
                 cachedHealthy ? "selection and visible ranges returned" : "one or both cached calls failed");
-            var freshText = (TextPattern)AutomationElement.FromHandle(canvas).GetCurrentPattern(TextPattern.Pattern);
+            var freshText = (TextPattern)WaitForSourceElement(canvas, process, fragmentExperiment)
+                .GetCurrentPattern(TextPattern.Pattern);
             report.Check("fresh-pattern-usable-after-budget-failure",
                 TryReadPattern(freshText, report, "fresh-after-oversize"), "fresh proxy selection and visible ranges");
 
@@ -162,7 +191,8 @@ internal static class Program
                 "main HWND after New");
             report.Check("old-range-rejected-after-new", IsStale(originalRange, report, "after-new"),
                 "old source range must not resolve against new document");
-            var newRange = ((TextPattern)AutomationElement.FromHandle(canvas).GetCurrentPattern(TextPattern.Pattern)).DocumentRange;
+            var newRange = ((TextPattern)WaitForSourceElement(canvas, process, fragmentExperiment)
+                .GetCurrentPattern(TextPattern.Pattern)).DocumentRange;
             report.Check("new-document-empty", newRange.GetText(-1).Length == 0, "fresh same-HWND range");
 
             SendMessageW(main, WmClose, 0, 0);
@@ -222,8 +252,12 @@ internal static class Program
         }
     }
 
-    /// <summary>Finds the source-backed canvas pattern while its asynchronous document open settles.</summary>
-    private static TextPattern WaitForPattern(nint canvas, Process process)
+    /// <summary>
+    /// Finds the source Document by stable AutomationId in fragment mode, never by
+    /// generic Document type: RichEdit is also a Document but holds only an island.
+    /// </summary>
+    private static AutomationElement WaitForSourceElement(nint canvas, Process process,
+        bool fragmentExperiment)
     {
         var watch = Stopwatch.StartNew();
         while (watch.ElapsedMilliseconds < 10_000)
@@ -231,14 +265,43 @@ internal static class Program
             try
             {
                 var element = AutomationElement.FromHandle(canvas);
-                if (element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern))
-                    return (TextPattern)pattern;
+                var source = fragmentExperiment
+                    ? element.FindFirst(TreeScope.Descendants,
+                        new PropertyCondition(AutomationElement.AutomationIdProperty,
+                            "mote.source.document"))
+                    : element;
+                if (source is not null &&
+                    source.Current.ControlType == ControlType.Document &&
+                    source.TryGetCurrentPattern(TextPattern.Pattern, out _))
+                    return source;
             }
             catch (ElementNotAvailableException) { }
             if (process.HasExited) break;
             Thread.Sleep(50);
         }
-        throw new InvalidOperationException("Published canvas did not expose an external UIA TextPattern");
+        throw new InvalidOperationException(fragmentExperiment
+            ? "Published fragment did not expose source Document AutomationId mote.source.document and TextPattern"
+            : "Published canvas did not expose an external UIA TextPattern");
+    }
+
+    /// <summary>Enumerates every Document in one canvas subtree, including its root.</summary>
+    private static List<string> DocumentsInView(AutomationElement root, TreeWalker walker)
+    {
+        var documents = new List<string>();
+        var pending = new Queue<(AutomationElement Element, int Depth)>();
+        pending.Enqueue((root, 0));
+        var visited = 0;
+        while (pending.Count > 0)
+        {
+            var (element, depth) = pending.Dequeue();
+            if (++visited > 64) throw new InvalidOperationException("UIA canvas subtree exceeded 64 nodes");
+            if (element.Current.ControlType == ControlType.Document) documents.Add(Describe(element));
+            if (depth >= 4) continue;
+            for (var child = walker.GetFirstChild(element); child is not null;
+                child = walker.GetNextSibling(child))
+                pending.Enqueue((child, depth + 1));
+        }
+        return documents;
     }
 
     /// <summary>Polls a real HWND without accidentally accepting another editor process.</summary>
@@ -272,10 +335,14 @@ internal static class Program
         return new string(characters, 0, length);
     }
 
-    /// <summary>Records a UIA element's externally visible tree identity.</summary>
+    /// <summary>Records a UIA element's tree identity and semantic filtering properties.</summary>
     private static string Describe(AutomationElement? element) => element is null
         ? "none"
-        : $"{element.Current.ControlType.ProgrammaticName}:{element.Current.Name}:hwnd={element.Current.NativeWindowHandle}";
+        : $"runtime={string.Join('.', element.GetRuntimeId())};hwnd={element.Current.NativeWindowHandle};" +
+          $"type={element.Current.ControlType.ProgrammaticName};name={element.Current.Name};" +
+          $"id={element.Current.AutomationId};control={element.Current.IsControlElement};" +
+          $"content={element.Current.IsContentElement};focus={element.Current.HasKeyboardFocus};" +
+          $"text={element.TryGetCurrentPattern(TextPattern.Pattern, out _)}";
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowW(string className, string? title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowExW(nint parent, nint after, string className, string? title);
@@ -288,6 +355,7 @@ internal static class Program
 internal sealed class ProbeReport
 {
     public string Schema { get; } = "mote-windows-ax-external-v1";
+    public string Mode { get; set; } = "canvas-baseline";
     public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
     public DateTimeOffset CompletedUtc { get; set; }
     public string OsVersion { get; } = RuntimeInformation.OSDescription;
@@ -297,6 +365,8 @@ internal sealed class ProbeReport
     public string? SourceSha256 { get; set; }
     public int SourceUtf16Length { get; set; }
     public int HostUtf16Length { get; set; }
+    public int? HostPatternUtf16Length { get; set; }
+    public int? HostPatternPrefixUtf16Length { get; set; }
     public int ProcessId { get; set; }
     public OversizeObservation? Oversize { get; set; }
     public TreeObservation? Tree { get; set; }
@@ -331,5 +401,8 @@ internal sealed record Observation(string Stage, string Type, int HResult);
 internal sealed record OversizeObservation(string Type, int HResult, int? ReturnedUtf16Length, string? Message);
 
 /// <summary>Raw/Control/Content tree and focus identities for duplicate-Document diagnosis.</summary>
-internal sealed record TreeObservation(string Canvas, string Host, string RawChild,
-    string ControlChild, string ContentChild, string Focused);
+internal sealed record TreeObservation(string Canvas, string SourceDocument, string Host,
+    string RawChild, string ControlChild, string ContentChild, string Focused,
+    bool CanvasHasKeyboardFocus, bool SourceHasKeyboardFocus, bool HostHasKeyboardFocus,
+    IReadOnlyList<string> RawDocuments, IReadOnlyList<string> ControlDocuments,
+    IReadOnlyList<string> ContentDocuments);
