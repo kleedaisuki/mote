@@ -464,6 +464,8 @@ jobs:
           path: |
             .cache/benchmarks/native-canvas-gui-osx-arm64.jsonl
             .temp/benchmarks/native-canvas-gui/**/*.applescript
+            .temp/benchmarks/native-canvas-gui/**/*.stdout.txt
+            .temp/benchmarks/native-canvas-gui/**/*.stderr.txt
             .temp/benchmarks/native-canvas-gui/**/*-stdout.txt
             .temp/benchmarks/native-canvas-gui/**/*-stderr.txt
           if-no-files-found: warn
