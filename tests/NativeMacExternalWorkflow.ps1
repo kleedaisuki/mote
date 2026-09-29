@@ -40,6 +40,8 @@ $result = [ordered]@{
     error = ''
     method = 'external-System-Events-keyboard-and-native-clipboard'
     cjk_ime_tested = $false
+    foreground_observation = ''
+    foreground_observation_error = ''
 }
 
 # Run bounded AppleScript commands against the exact child PID, avoiding stale mote windows.
@@ -123,6 +125,30 @@ end tell
     if ($ready -cne 'AXTextArea') { throw "Unexpected native focus role: $ready" }
 }
 
+# Observe, but never gate or repair, the desktop-global foreground after the
+# existing PID/focused-TextArea readiness contract has passed. This helps
+# compare the default editor with the separate opt-in Canvas activation probe.
+function Observe-Foreground {
+    param([int] $ProcessId)
+    $script = @"
+tell application "System Events"
+    set targetProcess to first process whose unix id is $ProcessId
+    set targetFrontmost to frontmost of targetProcess
+    set globalPid to -1
+    try
+        set globalPid to unix id of first process whose frontmost is true
+    end try
+    set focusRole to "unknown"
+    try
+        set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
+        set focusRole to value of attribute "AXRole" of focusedElement
+    end try
+    return "target-frontmost=" & (targetFrontmost as text) & ";global-pid=" & (globalPid as text) & ";target-ax-role=" & focusRole
+end tell
+"@
+    return Invoke-AppleScript $script 'foreground-readonly'
+}
+
 function Start-Editor {
     $start = [Diagnostics.ProcessStartInfo]::new($exe)
     $start.WorkingDirectory = $root
@@ -149,6 +175,8 @@ try {
     $process = Start-Editor
     $stage = 'focus-original'
     Wait-EditorReady $process.Id 'focus-original'
+    try { $result.foreground_observation = Observe-Foreground $process.Id }
+    catch { $result.foreground_observation_error = $_.Exception.Message }
     $stage = 'type-X'
     $typeScript = @"
 tell application "System Events"
