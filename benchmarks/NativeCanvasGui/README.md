@@ -49,24 +49,44 @@ canvas allocation. `Win32Probe.cs` uses `WM_GETTEXTLENGTH` to inspect the child
 RichEdit; Windows [`GetWindowText` cannot read a control in another
 process](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowtexta).
 
-## First hosted macOS arm64 capability probe (non-gating)
+## Hosted macOS arm64 capability probe (non-gating)
 
 ```powershell
 ./benchmarks/NativeCanvasGui/Measure-MacCanvasGui.ps1 `
   -ExecutablePath src/Mote.Native/bin/Release/net10.0/osx-arm64/publish/mote
 ```
 
-The script drives the exact child PID through `System Events`, observes an AX
-focused text element, sends one `X`, uses Command-S, and applies the same full
-byte oracle. It attempts View → Next Page and records a before/after
+The script first runs a **1 MiB many-line control**, then the 100 MiB many-line
+and 50 MiB one-line cases. A control failure identifies AX/TCC/input trouble
+without conflating it with large-file load; every case still requires an
+independent exact-byte save oracle. It drives the exact child PID through
+`System Events`, observes an AX focused text element, sends one `X`, uses
+Command-S, and applies the same full byte oracle. It attempts View → Next Page
+for the 100 MiB case and records a before/after
 `AXVisibleCharacterRange` only as a *candidate* scroll marker. The custom
 canvas AX element may expose the **global** document length while its hidden
 `NSTextView` input island remains bounded; the script does **not** use AX text
 length as host-length evidence and never reads `AXValue`. Existing in-process
 AppKit clipboard tests establish a separate bounded-host property, not this
-external keyboard workflow. This AppleScript/AX path has not yet been run on
-the new interactive canvas on a target Mac; require an initial non-gating
-capability run and inspect TCC permission/hierarchy before promotion.
+external keyboard workflow.
+
+The [first hosted canvas attempt (`36576635105`)](https://github.com/kleedaisuki/mote/actions/runs/36576635105)
+timed out **before any external key or Save** in one opaque 100 MiB AX-ready
+AppleScript. It yielded no evidence that loading, focus, TCC, or edit was the
+cause. The revised probe retains schema version 1 and the outer `AX-focus`
+stage, but splits `readiness_step` into exact-PID AX process, expected synthetic
+window title, foreground activation, and focused element role. Each stage has
+a finite budget and separately records elapsed time, last safe observation,
+attempt count, and distinct process-launch, compile, execution, timeout, and
+child-exit status. Process visibility, window title, frontmost and focused-role
+budgets are 12, 20, 10 and 16 seconds respectively, with a 4-second bound on
+each `osascript` attempt and 10 seconds on compilation. Every
+AppleScript is compiled before execution; source, compiled script, and compiler
+and interpreter stdout/stderr for **each** attempt are kept under the failed
+case's repository-local `.temp/` directory. Title observations record only a
+match flag/count/length, not arbitrary window text, and no script reads
+`AXValue`. This is still a **non-gating diagnostic** until hosted evidence
+shows AX/TCC and the custom canvas hierarchy work end to end.
 
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS
