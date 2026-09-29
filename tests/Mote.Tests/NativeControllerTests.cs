@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Mote.Configuration;
+using Mote.Engine;
 using Mote.Formats;
 using Mote.Native;
+using Mote.Native.Viewport;
 using Mote.Themes;
 
 namespace Mote.Tests;
@@ -714,6 +716,160 @@ public sealed class NativeControllerTests
         Assert.Equal(visible.Tokens, shell.Analysis.Tokens);
     }
 
+    /// <summary>Visible rows beyond a long-line gap never expand the analysis bridge into that gap.</summary>
+    [Fact]
+    public async Task Canvas_controller_bounds_bridge_even_when_visible_slices_span_huge_gap()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("canvas-gap.txt");
+        var source = "first\n" + new string('x', 8 * 1024 * 1024) + "\nlast";
+        await File.WriteAllTextAsync(path, source);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.Length == source.Length);
+
+        var binding = shell.CanvasBinding!;
+        Assert.Equal(source.Length, binding.Snapshot.Length);
+        Assert.Contains(binding.Frame.Slices, slice => slice.SourceStart > 8 * 1024 * 1024);
+        Assert.InRange(binding.InputSourceText.Length, 0, CanvasInputWindowSelector.MaxLength);
+        Assert.NotNull(shell.CanvasSemantics);
+        Assert.InRange(shell.CanvasSemantics!.Coverage.Length, 0, NativeEditorController.PageSize);
+        Assert.True(shell.CanvasSemantics.Coverage.Length < source.Length / 16);
+
+        shell.ScrollCanvas(18); // Warm the callback before checking bounded copy work.
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        shell.ScrollCanvas(18);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Assert.InRange(allocated, 0, 2 * 1024 * 1024);
+        Assert.Equal(source.Length, shell.CanvasBinding!.Snapshot.Length);
+        Assert.DoesNotContain("discrete", shell.CanvasBinding.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Replacing repeated text uses the exact OS source transaction, not a guessed diff.</summary>
+    [Fact]
+    public async Task Canvas_selected_repeated_text_is_replaced_exactly_once()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("canvas-selection.txt");
+        await File.WriteAllTextAsync(path, "abc");
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.GetText() == "abc");
+        shell.SelectCanvas(0, 2);
+        var binding = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(binding.DocumentGeneration,
+            binding.BaseVersion, binding.BindingNonce, new TextChange(0, 2, "a"), 1));
+
+        Assert.Equal("ac", shell.CanvasBinding!.Snapshot.GetText());
+        Assert.Equal(1, shell.CanvasFrame!.SelectionActive);
+        Assert.Empty(shell.Errors);
+    }
+
+    /// <summary>A stale OS deletion disagreeing with global selection must not mutate source.</summary>
+    [Fact]
+    public async Task Canvas_selection_mismatch_rejects_and_rebinds_without_mutation()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("canvas-stale-selection.txt");
+        await File.WriteAllTextAsync(path, "abc");
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.GetText() == "abc");
+        shell.SelectCanvas(0, 2);
+        var before = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(before.DocumentGeneration,
+            before.BaseVersion, before.BindingNonce, new TextChange(0, 1, "a"), 1));
+
+        Assert.Equal("abc", shell.CanvasBinding!.Snapshot.GetText());
+        Assert.Equal(before.BaseVersion, shell.CanvasBinding.BaseVersion);
+        Assert.NotEqual(before.BindingNonce, shell.CanvasBinding.BindingNonce);
+        Assert.Contains(shell.Errors, error => error.Contains("mapped", StringComparison.Ordinal));
+    }
+
+    /// <summary>An OS-emitted global Delete works even when the active native host has empty text.</summary>
+    [Theory]
+    [InlineData("a\n\n", 2, false)]
+    [InlineData("a\n\n", 2, true)]
+    [InlineData("a\r\n\r\n", 3, false)]
+    [InlineData("a\r\n\r\n", 3, true)]
+    public async Task Canvas_global_delete_replaces_empty_host_selection_in_both_directions(
+        string source, int count, bool reverse)
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("canvas-empty-host-delete.txt");
+        await File.WriteAllTextAsync(path, source);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.GetText() == source);
+        shell.SelectCanvas(reverse ? count : 0, reverse ? 0 : count);
+        var binding = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(binding.DocumentGeneration,
+            binding.BaseVersion, binding.BindingNonce, new TextChange(0, count, ""), 0));
+
+        Assert.Equal(source[count..], shell.CanvasBinding!.Snapshot.GetText());
+        Assert.Equal(0, shell.CanvasFrame!.SelectionActive);
+        Assert.Empty(shell.Errors);
+    }
+
+    /// <summary>Oversized island transactions reject before mutation and preserve prior Undo history.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Canvas_undo_budget_rejects_large_insert_or_delete_without_data_loss(
+        bool largeDelete)
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("canvas-undo-budget.txt");
+        var original = largeDelete ? new string('q', 17 * 1024 * 1024) : "abc";
+        await File.WriteAllTextAsync(path, original);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.Length == original.Length);
+
+        var first = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(first.DocumentGeneration,
+            first.BaseVersion, first.BindingNonce, new TextChange(0, 0, "z"), 1));
+        var beforeRejected = shell.CanvasBinding!;
+        Assert.Equal(original.Length + 1, beforeRejected.Snapshot.Length);
+        Assert.Equal('z', beforeRejected.Snapshot.GetText(0, 1)[0]);
+
+        TextChange rejected;
+        int proposedCaret;
+        if (largeDelete)
+        {
+            var count = 16 * 1024 * 1024 + 1;
+            shell.SelectCanvas(0, count);
+            beforeRejected = shell.CanvasBinding!;
+            rejected = new TextChange(0, count, "");
+            proposedCaret = 0;
+        }
+        else
+        {
+            var huge = new string('x', 50 * 1024 * 1024);
+            rejected = new TextChange(0, 0, huge);
+            proposedCaret = huge.Length;
+        }
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(beforeRejected.DocumentGeneration,
+            beforeRejected.BaseVersion, beforeRejected.BindingNonce, rejected, proposedCaret));
+
+        var afterRejected = shell.CanvasBinding!;
+        Assert.Equal(beforeRejected.BaseVersion, afterRejected.BaseVersion);
+        Assert.Equal(original.Length + 1, afterRejected.Snapshot.Length);
+        Assert.Equal('z', afterRejected.Snapshot.GetText(0, 1)[0]);
+        Assert.NotEqual(beforeRejected.BindingNonce, afterRejected.BindingNonce);
+        Assert.Contains(shell.Errors, error => error.Contains("undo-history budget", StringComparison.Ordinal));
+        Assert.Equal(original, await File.ReadAllTextAsync(path));
+
+        shell.RequestUndo();
+        Assert.Equal(original.Length, shell.CanvasBinding!.Snapshot.Length);
+        Assert.Equal(original[0], shell.CanvasBinding.Snapshot.GetText(0, 1)[0]);
+    }
+
     /// <summary>Builds a controller with project-local, side-effect-free configuration.</summary>
     private static NativeEditorController NewController(FakeShell shell, string userHome, string? path)
     {
@@ -745,12 +901,14 @@ public sealed class NativeControllerTests
     private static string Escape(string value) => value.Replace("\r", "\\r").Replace("\n", "\\n");
 
     /// <summary>A deterministic event queue standing in for the native UI dispatcher.</summary>
-    private sealed class FakeShell(NativeLineEndingMode lineEndingMode) : INativeEditorShell
+    private sealed class FakeShell(NativeLineEndingMode lineEndingMode) : INativeCanvasShell
     {
         private readonly ConcurrentQueue<Action> _posted = new();
 
         /// <inheritdoc />
         public NativeLineEndingMode LineEndingMode { get; } = lineEndingMode;
+        /// <inheritdoc />
+        public bool CanvasEnabled { get; set; }
         /// <inheritdoc />
         public bool PrefersDark => true;
         /// <inheritdoc />
@@ -791,11 +949,27 @@ public sealed class NativeControllerTests
         public event EventHandler<NativeClosingEventArgs>? ClosingRequested;
         /// <inheritdoc />
         public event Action? Shown;
+        /// <inheritdoc />
+        public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
+        /// <inheritdoc />
+        public event Action<double>? CanvasScrollRequested;
+        /// <inheritdoc />
+        public event Action<double>? CanvasViewportResized;
+        /// <inheritdoc />
+        public event Action<int, int>? CanvasSelectionRequested;
 
         /// <summary>The current fake text viewport.</summary>
         public NativeDocumentView? Document { get; private set; }
         /// <summary>The current fake semantic presentation.</summary>
         public NativeAnalysisView? Analysis { get; private set; }
+        /// <summary>The latest bounded input-island binding in opt-in canvas mode.</summary>
+        public NativeCanvasBinding? CanvasBinding { get; private set; }
+        /// <summary>The latest source-backed canvas frame, including far source slices.</summary>
+        public CanvasFrame? CanvasFrame { get; private set; }
+        /// <summary>The latest absolute semantic facts offered to the canvas.</summary>
+        public NativeCanvasSemantics? CanvasSemantics { get; private set; }
+        /// <summary>A recoverable reason for withholding an unsafe input binding.</summary>
+        public string? CanvasInputError { get; private set; }
         /// <summary>All presentations, for stale-result assertions.</summary>
         public List<NativeAnalysisView> Analyses { get; } = [];
         /// <summary>All recoverable UI errors.</summary>
@@ -833,6 +1007,26 @@ public sealed class NativeControllerTests
         public void Run() => Shown?.Invoke();
         /// <inheritdoc />
         public void SetDocument(NativeDocumentView view) => Document = view;
+        /// <inheritdoc />
+        public void SetCanvasBinding(NativeCanvasBinding binding)
+        {
+            CanvasBinding = binding;
+            CanvasFrame = binding.Frame;
+            CanvasInputError = null;
+        }
+        /// <inheritdoc />
+        public void SetCanvasFrame(CanvasFrame frame) => CanvasFrame = frame;
+        /// <inheritdoc />
+        public void SetCanvasInputUnavailable(TextSnapshot snapshot, CanvasFrame frame, string reason)
+        {
+            CanvasBinding = null;
+            CanvasFrame = frame;
+            CanvasInputError = reason;
+        }
+        /// <inheritdoc />
+        public void SetCanvasChrome(string title, string status, bool isModified) { }
+        /// <inheritdoc />
+        public void SetCanvasSemantics(NativeCanvasSemantics semantics) => CanvasSemantics = semantics;
         /// <inheritdoc />
         public bool CommitPendingText()
         {
@@ -882,6 +1076,14 @@ public sealed class NativeControllerTests
 
         /// <summary>Raises one native text-edit notification.</summary>
         public void Edit(string text) => TextChanged?.Invoke(text);
+        /// <summary>Raises a final source-coordinate edit from the bound OS input host.</summary>
+        public void CommitCanvasEdit(CanvasCommittedEdit edit) => CanvasEditCommitted?.Invoke(edit);
+        /// <summary>Raises one canvas scroll delta without changing the editor document.</summary>
+        public void ScrollCanvas(double pixels) => CanvasScrollRequested?.Invoke(pixels);
+        /// <summary>Raises one canvas viewport resize.</summary>
+        public void ResizeCanvas(double height) => CanvasViewportResized?.Invoke(height);
+        /// <summary>Raises one pointer-resolved source selection.</summary>
+        public void SelectCanvas(int anchor, int active) => CanvasSelectionRequested?.Invoke(anchor, active);
         /// <summary>Raises the native Save command.</summary>
         public void RequestSave() => SaveRequested?.Invoke();
         /// <summary>Raises the native Save As command.</summary>
