@@ -159,6 +159,9 @@ tell application "System Events"
     keystroke "X"
     log "typed:sent-X"
     delay 0.2
+    -- The dirty marker changes the window title, invalidating AX references
+    -- previously resolved through the old title; reacquire from the PID.
+    set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
     return value of attribute "AXValue" of focusedElement
 end tell
 "@
