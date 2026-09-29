@@ -135,7 +135,18 @@ internal static class MacCanvasThemeProbe
         private void Tick()
         {
             if (_done) return;
-            if (DateTime.UtcNow >= _deadline) { Fail("deadline"); return; }
+            if (DateTime.UtcNow >= _deadline)
+            {
+                if (_stage == 0)
+                    Console.Error.WriteLine("Mac theme readiness: " +
+                        $"stamp={CurrentStampNullable() is not null};" +
+                        $"analysis={_shell.ProbeAnalysis is not null};" +
+                        $"analysis-ready={AnalysisReady()};" +
+                        $"heading={CurrentSource().Contains(Heading, StringComparison.Ordinal)};" +
+                        $"body={CurrentSource().Contains(Body, StringComparison.Ordinal)};");
+                Fail("deadline");
+                return;
+            }
             try
             {
                 switch (_stage)
@@ -216,7 +227,7 @@ internal static class MacCanvasThemeProbe
             Schedule();
         }
 
-        private bool Ready() => _shell.ProbeDocumentStamp is not null &&
+        private bool Ready() => CurrentStampNullable() is not null &&
             _shell.ProbeAnalysis is not null && AnalysisReady() &&
             CurrentSource().Contains(Heading, StringComparison.Ordinal) &&
             CurrentSource().Contains(Body, StringComparison.Ordinal);
@@ -227,7 +238,10 @@ internal static class MacCanvasThemeProbe
             (_mode == "canvas" ||
                 analysis.Tokens.Any(static token => token.Kind == "heading"));
 
-        private NativeDocumentStamp CurrentStamp() => _shell.ProbeDocumentStamp ?? default;
+        private NativeDocumentStamp? CurrentStampNullable() => _mode == "canvas"
+            ? _shell.ProbeCanvasStamp : _shell.ProbeDocumentStamp;
+
+        private NativeDocumentStamp CurrentStamp() => CurrentStampNullable() ?? default;
 
         private long CurrentVersion() => _mode == "canvas"
             ? _shell.ProbeCanvasVersion : CurrentStamp().Version;
@@ -258,15 +272,20 @@ internal static class MacCanvasThemeProbe
                 throw new InvalidOperationException("Theme analysis is absent.");
             var policy = ThemePolicies.Get(expectedId);
             var heading = analysis.PreviewSpans!.First(static span => span.Kind == "heading");
+            _check = $"{step}-preview-read";
             var preview = NativeColor(_shell.ProbePreviewView, heading.Start);
-            RequireColor(preview, policy.Palette.Accent);
+            _check = $"{step}-preview-color";
+            RequireColor(preview, policy.Palette.Accent, _check);
             ThemeColor? editor = null;
             if (_mode == "default")
             {
                 var token = analysis.Tokens.First(static token => token.Kind == "heading");
+                _check = $"{step}-editor-read";
                 editor = NativeColor(_shell.ProbeEditorView, token.Span.Start);
-                RequireColor(editor.Value, policy.SemanticColor("heading"));
+                _check = $"{step}-editor-color";
+                RequireColor(editor.Value, policy.SemanticColor("heading"), _check);
             }
+            _check = $"{step}-raster";
             var imageName = $"theme-{_mode}-{step}.png";
             var view = ObjC.Send(_shell.ProbeWindow, ObjC.Sel("contentView"));
             ObjC.Send(view, ObjC.Sel("displayIfNeeded"));
@@ -317,12 +336,17 @@ internal static class MacCanvasThemeProbe
             (int)Math.Round(MacOnScreenCanvasNative.SendDouble(color, ObjC.Sel(selector)) * 255),
             0, 255));
 
-        private static void RequireColor(ThemeColor actual, ThemeColor expected)
+        private static void RequireColor(ThemeColor actual, ThemeColor expected,
+            string check)
         {
             if (Math.Abs(actual.Red - expected.Red) > 1 ||
                 Math.Abs(actual.Green - expected.Green) > 1 ||
                 Math.Abs(actual.Blue - expected.Blue) > 1)
+            {
+                Console.Error.WriteLine($"Mac theme color {check}: " +
+                    $"actual={actual.ToHex()} expected={expected.ToHex()}.");
                 throw new InvalidOperationException("Native attributed foreground mismatches policy.");
+            }
         }
 
         private void Fail(string check)

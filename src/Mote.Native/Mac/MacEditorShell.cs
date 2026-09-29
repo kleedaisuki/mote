@@ -804,6 +804,10 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <summary>Stamp of the currently projected source document.</summary>
     internal NativeDocumentStamp? ProbeDocumentStamp => _pendingDocument?.Stamp;
 
+    /// <summary>Canvas source identity; canvas bindings do not create a default page view.</summary>
+    internal NativeDocumentStamp? ProbeCanvasStamp => _pendingCanvasBinding is { } binding
+        ? new NativeDocumentStamp(binding.DocumentGeneration, binding.BaseVersion) : null;
+
     /// <summary>Native editable view handle; only the diagnostic reads it.</summary>
     internal nint ProbeEditorView => _editor;
 
