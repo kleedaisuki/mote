@@ -30,7 +30,12 @@ function Invoke-BoundedDebugger {
     param([string] $Name, [string[]] $TargetArguments)
 
     $start = [Diagnostics.ProcessStartInfo]::new('/usr/bin/lldb')
-    foreach ($argument in @('--batch', '-o', 'run', '-o', 'bt all', '--', $exe) + $TargetArguments) {
+    # LLDB aborts later -o commands when `run` stops on a signal. -k executes
+    # only on crash, preserving the caller stack and ARM64 selector registers.
+    foreach ($argument in @('--batch', '-o', 'run', '-k', 'bt all',
+        '-k', 'register read x0 x1 x13 lr pc',
+        '-k', 'image lookup --address $lr',
+        '-k', 'disassemble --pc --count 8', '--', $exe) + $TargetArguments) {
         [void]$start.ArgumentList.Add($argument)
     }
     $start.WorkingDirectory = $root
@@ -65,7 +70,7 @@ function Invoke-BoundedDebugger {
                 else { 'no-signal-observed' }
             debugger_exit_code = $process.ExitCode
             target_signal = if ($signal.Success) { $signal.Groups[1].Value } else { '' }
-            backtrace_present = ($stdout + $stderr) -match 'frame #0|\* thread #'
+            backtrace_present = ($stdout + $stderr) -match 'frame #1:'
             stdout_chars = $stdout.Length
             stderr_chars = $stderr.Length
         }

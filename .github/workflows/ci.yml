@@ -522,6 +522,7 @@ jobs:
             .cache/ci-inventory/${{ matrix.rid }}/horizontal-stderr.txt
             .cache/horizontal-*/*.png
             .cache/horizontal-*/metrics.txt
+            .cache/horizontal-*/last-stage.txt
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

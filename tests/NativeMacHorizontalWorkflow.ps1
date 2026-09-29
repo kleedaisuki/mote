@@ -135,15 +135,20 @@ try {
     $start.RedirectStandardError = $true
     $process = [Diagnostics.Process]::Start($start)
     try {
-        if (-not $process.WaitForExit(300000)) {
+        $outTask = $process.StandardOutput.ReadToEndAsync()
+        $errTask = $process.StandardError.ReadToEndAsync()
+        $timedOut = -not $process.WaitForExit(300000)
+        if ($timedOut) {
             $process.Kill($true)
             $process.WaitForExit()
-            throw 'Mac horizontal workflow timed out after five minutes.'
         }
-        $out = $process.StandardOutput.ReadToEnd().Trim()
-        $err = $process.StandardError.ReadToEnd().Trim()
+        $out = $outTask.GetAwaiter().GetResult().Trim()
+        $err = $errTask.GetAwaiter().GetResult().Trim()
+        if ($out.Length -gt 32768) { $out = $out.Substring(0, 32768) + "`n<truncated>" }
+        if ($err.Length -gt 32768) { $err = $err.Substring(0, 32768) + "`n<truncated>" }
         [IO.File]::WriteAllText($stdout, $out)
         [IO.File]::WriteAllText($stderr, $err)
+        if ($timedOut) { throw 'Mac horizontal workflow timed out after five minutes.' }
         if ($process.ExitCode -ne 0) { throw "Mac horizontal probe exited $($process.ExitCode): $err" }
         if ($out -cne 'mote-native-mac-horizontal-ready') {
             throw "Unexpected Mac horizontal success marker: $out"
