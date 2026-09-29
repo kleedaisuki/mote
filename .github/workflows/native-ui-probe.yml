@@ -50,3 +50,9 @@ jobs:
           if result.returncode != 0:
               raise SystemExit(result.returncode)
           PY
+          echo '=== Launch Services bare-file probe (non-gating) ==='
+          if open -a "$out/SingleBinaryAppKit" --args --window; then
+            echo 'open -a bare Mach-O accepted'
+          else
+            echo 'open -a bare Mach-O rejected'
+          fi
