@@ -52,7 +52,10 @@ try {
     [IO.File]::WriteAllText($stderr, $textErr, $utf8)
     if ($process.ExitCode -ne 0) { throw "Native AppKit workflow exited $($process.ExitCode): $textErr" }
     if ($textOut.Trim() -cne 'mote-native-mac-workflow-ready') {
-        throw "Unexpected native AppKit workflow output: $textOut"
+        $outputState = if (Test-Path -LiteralPath $output -PathType Leaf) {
+            "exists ($(([IO.FileInfo]$output).Length) bytes)"
+        } else { 'missing' }
+        throw "Unexpected native AppKit workflow stdout (exit=$($process.ExitCode), output=$outputState): '$textOut'; stderr: '$textErr'"
     }
     if (-not (Test-Path -LiteralPath $output -PathType Leaf)) { throw 'Save As output was not created.' }
     $actualBytes = [IO.File]::ReadAllBytes($output)
