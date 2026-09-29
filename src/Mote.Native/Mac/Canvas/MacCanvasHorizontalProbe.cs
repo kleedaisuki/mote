@@ -302,15 +302,38 @@ internal static class MacCanvasHorizontalProbe
                         break;
                     case 6 when _shell.ProbeCanvasSnapshot?.GetText() == "abc" &&
                         _shell.ProbeCanvasFrame is { } smallFrame:
+                        _check = "S6-bounded";
                         CheckBounded(smallFrame);
                         var smallHost = _shell.ProbeCanvasHostGeometry(0);
                         var smallCaret = _shell.GetCanvasCaretGeometry(smallFrame, 0);
-                        if (smallHost is not { Aligned: true, Hidden: false } ||
-                            smallCaret is not { IsVisible: true } ||
-                            !_shell.ProbeCanvasInputFocused ||
-                            smallHost.Value.NativeX - smallHost.Value.ClipX < 0 ||
+                        _metrics.Add($"small-frame-version={smallFrame.Version}");
+                        _metrics.Add($"small-source-version={_shell.ProbeCanvasSnapshot!.Version}");
+                        _metrics.Add($"small-host-present={smallHost is not null}");
+                        _metrics.Add($"small-host-aligned={smallHost?.Aligned}");
+                        _metrics.Add($"small-host-hidden={smallHost?.Hidden}");
+                        _metrics.Add($"small-caret-present={smallCaret is not null}");
+                        _metrics.Add($"small-caret-visible={smallCaret?.IsVisible}");
+                        _metrics.Add($"small-input-focused={_shell.ProbeCanvasInputFocused}");
+                        if (smallHost is { } measuredHost)
+                            _metrics.Add($"small-host-caret-local-x={(measuredHost.NativeX - measuredHost.ClipX).ToString("F3", CultureInfo.InvariantCulture)}");
+                        if (smallCaret is { } measuredCaret)
+                            _metrics.Add($"small-source-caret-local-x={measuredCaret.X.ToString("F3", CultureInfo.InvariantCulture)}");
+                        _check = "S6-host-present";
+                        if (smallHost is null)
+                            throw new InvalidOperationException("Short input ribbon geometry is unknown.");
+                        _check = "S6-host-aligned-visible";
+                        if (!smallHost.Value.Aligned || smallHost.Value.Hidden)
+                            throw new InvalidOperationException("Short input ribbon is not aligned and visible.");
+                        _check = "S6-source-caret";
+                        if (smallCaret is not { IsVisible: true })
+                            throw new InvalidOperationException("Short source caret is not visible.");
+                        _check = "S6-first-responder";
+                        if (!_shell.ProbeCanvasInputFocused)
+                            throw new InvalidOperationException("Short input ribbon lost first responder.");
+                        _check = "S6-ribbon-caret-bounds";
+                        if (smallHost.Value.NativeX - smallHost.Value.ClipX < 0 ||
                             smallHost.Value.NativeX - smallHost.Value.ClipX > CanvasWidth() - 148)
-                            throw new InvalidOperationException("Short input ribbon is not usable.");
+                            throw new InvalidOperationException("Short input caret is outside the ribbon.");
                         _metrics.Add($"small-host-native-x={smallHost.Value.NativeX.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"small-host-clip-x={smallHost.Value.ClipX.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"small-caret-x={smallCaret.Value.X.ToString("F3", CultureInfo.InvariantCulture)}");
