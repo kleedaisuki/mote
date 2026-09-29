@@ -212,6 +212,271 @@ public sealed class IncrementalPolicyTests
         AssertEquivalent(policy.Analyze(after.GetText()), Full(session, after, [edit]));
     }
 
+    /// <summary>JSON sessions preserve escaped-key semantics and recover from invalid Unicode escapes.</summary>
+    [Theory]
+    [InlineData("{\"a\":1,\"\\u0061\":2}", "JSON_DUPLICATE_KEY")]
+    [InlineData("{\"x\":\"\\uD800\"}", "JSON_STRING")]
+    [InlineData("{\"x\":\"\\uDC00\"}", "JSON_STRING")]
+    public void Json_small_full_session_matches_oracle_and_reports_semantic_error(string source, string code)
+    {
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Json);
+        using var session = policy.CreateSession();
+        var actual = Full(session, document.Snapshot, []);
+        AssertEquivalent(policy.Analyze(source), actual);
+        Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == code);
+    }
+
+    /// <summary>A valid UTF-16 surrogate pair in JSON escapes is one decoded scalar, not an error.</summary>
+    [Fact]
+    public void Json_session_accepts_valid_escaped_surrogate_pair()
+    {
+        const string source = "{\"x\":\"\\uD83D\\uDE00\"}";
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Json);
+        using var session = policy.CreateSession();
+        var actual = Full(session, document.Snapshot, []);
+        AssertEquivalent(policy.Analyze(source), actual);
+        Assert.Empty(actual.Diagnostics);
+        Assert.Contains(Shape(actual.Root), node => node.Contains("😀", StringComparison.Ordinal));
+    }
+
+    /// <summary>Off-screen malformed JSON remains globally diagnosed without a full tree projection.</summary>
+    [Fact]
+    public void Json_large_full_session_counts_offscreen_invalid_surrogate()
+    {
+        var source = "{\"pad\":\"" + new string('x', 1024 * 1024 + 16) + "\",\"bad\":\"\\uD800\"}";
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Json)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 32), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Complete, actual.Completeness);
+        Assert.Equal(1, actual.TotalDiagnosticCount);
+        Assert.Equal(new TextSpan(0, source.Length), actual.Coverage);
+        Assert.Empty(actual.Diagnostics);
+        Assert.True(actual.Root.Children.Count < 4);
+    }
+
+    /// <summary>Two undecodable JSON keys must not collapse to a spurious empty-key duplicate.</summary>
+    [Fact]
+    public void Json_invalid_surrogate_keys_do_not_invent_duplicate_or_complete_claim()
+    {
+        const string source = "{\"\\uD800\":1,\"\\uD801\":2}";
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Json);
+        using var session = policy.CreateSession();
+        var legacy = policy.Analyze(source);
+        var actual = Full(session, document.Snapshot, []);
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        Assert.Contains(legacy.Diagnostics, diagnostic => diagnostic.Code == "JSON_STRING");
+        Assert.DoesNotContain(legacy.Diagnostics, diagnostic => diagnostic.Code == "JSON_DUPLICATE_KEY");
+        Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "JSON_STRING");
+        Assert.DoesNotContain(actual.Diagnostics, diagnostic => diagnostic.Code == "JSON_DUPLICATE_KEY");
+    }
+
+    /// <summary>Small YAML sessions agree with the source-anchored oracle on canonical keys and aliases.</summary>
+    [Theory]
+    [InlineData("0xB: a\n11: b\n", "yaml.duplicate-key")]
+    [InlineData("a: &anchor 1\nb: *anchor\n", null)]
+    public void Yaml_small_full_session_matches_oracle(string source, string? diagnosticCode)
+    {
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml);
+        using var session = policy.CreateSession();
+        var actual = Full(session, document.Snapshot, []);
+        AssertEquivalent(policy.Analyze(source), actual);
+        if (diagnosticCode is not null)
+            Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == diagnosticCode);
+    }
+
+    /// <summary>An early YAML syntax abort cannot certify unseen aliases or key equality.</summary>
+    [Theory]
+    [InlineData("value: [a, b\nlater: *missing\n")]
+    [InlineData("value: [a, b\n0xB: x\n11: y\n")]
+    public void Yaml_small_syntax_abort_does_not_claim_global_completeness(string source)
+    {
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml);
+        using var session = policy.CreateSession();
+        var legacy = policy.Analyze(source);
+        Assert.Contains(legacy.Diagnostics, diagnostic => diagnostic.Code == "yaml.syntax");
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 8), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "yaml.syntax");
+        Assert.True(actual.Coverage.Length < source.Length);
+    }
+
+    /// <summary>Streaming YAML finds duplicate keys and undefined aliases beyond the viewport.</summary>
+    [Fact]
+    public void Yaml_large_full_session_reports_offscreen_semantics_at_absolute_offsets()
+    {
+        var source = "0xB: a\n" + string.Concat(Enumerable.Repeat("# padding\n", 110_000)) +
+            "11: b\nmissing: *absent\n";
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 32), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Complete, actual.Completeness);
+        Assert.Equal(2, actual.TotalDiagnosticCount);
+        Assert.Equal(new TextSpan(0, source.Length), actual.Coverage);
+        Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "yaml.duplicate-key" &&
+            diagnostic.Span.Start == source.LastIndexOf("11: b", StringComparison.Ordinal));
+        Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "yaml.undefined-alias" &&
+            diagnostic.Span.Start == source.LastIndexOf("*absent", StringComparison.Ordinal));
+    }
+
+    /// <summary>Large YAML syntax errors and giant scalar lines must not claim global completeness.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Yaml_large_session_downgrades_unverifiable_full_analysis(bool giantScalar)
+    {
+        var source = giantScalar
+            ? "value: " + new string('x', 1024 * 1024 + 1) + "\n"
+            : string.Concat(Enumerable.Repeat("# padding\n", 110_000)) + "value: [a, b\n";
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 16), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        if (giantScalar)
+            Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "yaml.streaming-limit");
+        else
+            Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "yaml.syntax");
+    }
+
+    /// <summary>Large YAML viewport-only analysis stays explicitly provisional.</summary>
+    [Fact]
+    public void Yaml_large_visible_session_does_not_assert_document_validity()
+    {
+        var source = string.Concat(Enumerable.Repeat("# padding\n", 110_000)) + "bad: *missing\n";
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 32), AnalysisScope.Visible));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        Assert.True(actual.Coverage.Length < source.Length);
+    }
+
+    /// <summary>Dense anchors trigger bounded preflight without an invented undefined-alias error.</summary>
+    [Fact]
+    public void Yaml_many_unique_anchors_preflight_bounded_and_no_false_alias()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        var baselineHeap = GC.GetTotalMemory(forceFullCollection: true);
+        var source = string.Concat(Enumerable.Range(0, 120_000)
+            .Select(index => $"- &a{index:D6} x\n")) + "- *a000000\n";
+        Assert.True(source.Length > 1024 * 1024);
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 32), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "yaml.streaming-limit");
+        Assert.DoesNotContain(actual.Diagnostics, diagnostic => diagnostic.Code == "yaml.undefined-alias");
+        Assert.True(actual.Root.Children.Count < 2049);
+        var retainedHeap = GC.GetTotalMemory(forceFullCollection: true);
+        Assert.True(retainedHeap - baselineHeap < 64L * 1024 * 1024,
+            $"Unexpected retained managed heap after bounded YAML analysis: {retainedHeap - baselineHeap} bytes.");
+    }
+
+    /// <summary>Small TOML sessions retain the exact semantic tree through Unicode and multiline syntax.</summary>
+    [Theory]
+    [InlineData("title = '猫😀'\n[section]\nvalues = [1, 2]\n", null)]
+    [InlineData("description = \"\"\"hello\nworld\"\"\"\n[[items]]\nname = 'one'\n[[items]]\nname = 'two'\n", null)]
+    public void Toml_small_full_session_matches_oracle(string source, string? diagnosticCode)
+    {
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml);
+        using var session = policy.CreateSession();
+        var actual = Full(session, document.Snapshot, []);
+        AssertEquivalent(policy.Analyze(source), actual);
+        if (diagnosticCode is not null)
+            Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == diagnosticCode);
+    }
+
+    /// <summary>Tomlyn may stop at an early error, so later ownership cannot be certified.</summary>
+    [Theory]
+    [InlineData("x = ???\nb = 1\nb = 2\n")]
+    [InlineData("a = 1\na = 2\n")]
+    public void Toml_small_invalid_document_does_not_claim_complete_ownership(string source)
+    {
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml);
+        using var session = policy.CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, Math.Min(8, source.Length)), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        Assert.Contains(actual.Diagnostics, diagnostic => diagnostic.Code == "TOML_PARSE");
+    }
+
+    /// <summary>Only a bounded, independently verified large TOML subset may claim Complete.</summary>
+    [Fact]
+    public void Toml_large_full_session_certifies_bounded_valid_assignments()
+    {
+        var value = new string('x', 100);
+        var source = string.Concat(Enumerable.Range(0, 40_000).Select(index => $"k{index:D5} = \"{value}\"\n"));
+        Assert.True(source.Length > 4 * 1024 * 1024);
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 32), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Complete, actual.Completeness);
+        Assert.Equal(0, actual.TotalDiagnosticCount);
+        Assert.Equal(new TextSpan(0, source.Length), actual.Coverage);
+        Assert.True(actual.Root.Children.Count < 40_000);
+    }
+
+    /// <summary>Offscreen ownership conflicts or array-tables cannot be silently certified in large TOML.</summary>
+    [Theory]
+    [InlineData("k00000 = 0\n")]
+    [InlineData("[[items]]\nname = 'x'\n")]
+    public void Toml_large_full_session_downgrades_uncertain_ownership(string suffix)
+    {
+        var value = new string('x', 100);
+        var source = string.Concat(Enumerable.Range(0, 40_000).Select(index => $"k{index:D5} = \"{value}\"\n")) + suffix;
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 32), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        Assert.True(actual.Coverage.Length < source.Length);
+    }
+
+    /// <summary>Cancellation and missing edit history must not cause any structural session to reuse stale facts.</summary>
+    [Theory]
+    [InlineData(DocumentKind.Json, "{\"value\":1}")]
+    [InlineData(DocumentKind.Toml, "value = 1\n")]
+    [InlineData(DocumentKind.Yaml, "value: 1\n")]
+    public void Structural_session_cancellation_and_gap_rebuild_from_snapshot(DocumentKind kind, string source)
+    {
+        using var document = new Document(source);
+        var policy = (IIncrementalDocumentPolicy)DocumentPolicies.ForKind(kind);
+        using var session = policy.CreateSession();
+        AssertEquivalent(policy.Analyze(source), Full(session, document.Snapshot, []));
+        var before = document.Snapshot;
+        var at = source.IndexOf('1');
+        var change = new TextChange(at, 1, "2");
+        var after = document.Apply(change);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => Full(session, after,
+            [new VersionedEdit(before.Version, after.Version, change)], canceled.Token));
+        AssertEquivalent(policy.Analyze(after.GetText()), Full(session, after,
+            [new VersionedEdit(before.Version, after.Version, change)]));
+        document.Apply(new TextChange(at, 1, "3"));
+        AssertEquivalent(policy.Analyze(document.Snapshot.GetText()), Full(session, document.Snapshot, []));
+    }
+
     /// <summary>Requests all semantics and projection for a small authoritative snapshot.</summary>
     private static DocumentAnalysis Full(IFormatSession session, TextSnapshot snapshot,
         IReadOnlyList<VersionedEdit> changes, CancellationToken cancellationToken = default) =>

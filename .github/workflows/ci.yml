@@ -99,6 +99,14 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Native GUI smoke exited with code $($process.ExitCode): $(Get-Content '.temp/ci-smoke/ui-stderr.txt' -Raw)" }
           if ($output.Trim() -ne 'mote-native-gui-ready') { throw "Unexpected native GUI smoke output: $output" }
           Write-Host "Native GUI initialized and closed cleanly: $executable"
+      - name: Verify real Win32 open-edit-save-reopen workflow
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote.exe"
+          & ./tests/NativeWindowsWorkflow.ps1 -ExecutablePath $executable
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows GUI workflow failed with code $LASTEXITCODE" }
       - name: Verify macOS Launch Services can open the standalone executable
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh
@@ -107,6 +115,13 @@ jobs:
           $executable = (Resolve-Path "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote").Path
           & open -W -a $executable --args --smoke-gui
           if ($LASTEXITCODE -ne 0) { throw "Launch Services rejected standalone mote (exit $LASTEXITCODE)." }
+      - name: Verify in-process AppKit open-edit-save-new-reopen workflow
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote"
+          & ./tests/NativeMacWorkflow.ps1 -ExecutablePath $executable
       - name: Inventory Native AOT publish payload
         shell: pwsh
         run: |
@@ -152,6 +167,15 @@ jobs:
           & .github/scripts/check-windows-imports.ps1 `
             -Executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
             -Report ".cache/ci-inventory/$rid/imports.json"
+      - name: Probe hosted macOS external Accessibility automation
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacAccessibilityProbe.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/mac-accessibility.json"
       - name: Upload native dependency inventory
         uses: actions/upload-artifact@v4
         with:
