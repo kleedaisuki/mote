@@ -26,7 +26,7 @@ The adapter must apply `ControlForeground` to buttons and active tabs and
 Inheriting the token foreground over `SelectionBackground` can make a formally
 valid palette unreadable. The color contrast validator checks text against the
 ordinary editor surface and active-line surface, preview, panel, controls,
-selection, and essential non-text boundaries. Passing these checks is **not**
+selection, preview semantic colors, and essential non-text boundaries. Passing these checks is **not**
 a claim of complete UI accessibility; platform focus, disabled states, dialogs,
 screen reader semantics and applied styles still need UI-level validation.
 
