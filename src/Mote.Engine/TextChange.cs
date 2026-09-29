@@ -4,7 +4,11 @@ namespace Mote.Engine;
 /// <param name="Start">Zero-based UTF-16 offset of the first replaced code unit.</param>
 /// <param name="DeleteLength">Number of UTF-16 code units removed.</param>
 /// <param name="InsertText">Text inserted at <paramref name="Start"/>; never null.</param>
-/// <remarks>Offsets deliberately match .NET strings and native text controls. A change may split a surrogate pair; callers that need Unicode scalar boundaries must enforce them.</remarks>
+/// <remarks>
+/// Offsets deliberately match .NET strings and native text controls. This value type does not
+/// validate boundaries; <see cref="Document.Apply"/> rejects edits that split a UTF-16 surrogate pair.
+/// Other consumers must enforce their own boundary rules.
+/// </remarks>
 public readonly record struct TextChange(int Start, int DeleteLength, string InsertText);
 
 /// <summary>Describes a committed document mutation.</summary>
