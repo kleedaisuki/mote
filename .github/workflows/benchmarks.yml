@@ -65,11 +65,25 @@ jobs:
           }
           $rows = @(Get-Content '.cache/benchmarks/results.jsonl')
           if ($rows.Count -ne 21) { throw "Expected 21 isolated benchmark rows, got $($rows.Count)." }
+      # Allocation is measured only around the synchronous semantic session, after the
+      # synthetic 100 MiB corpus has been generated and opened. Wall time/RSS are recorded,
+      # never thresholded on shared runners. This still uses a separate benchmark process.
+      - name: Guard 100 MiB JSON unique-key semantic allocation
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'Mote.Benchmarks.exe' } else { 'Mote.Benchmarks' }
+          $exe = (Resolve-Path ".temp/benchmarks/engine-$rid/$name").Path
+          & $exe 100 --json-key-index
+          if ($LASTEXITCODE -ne 0) { throw "JSON unique-key allocation guard failed ($LASTEXITCODE)." }
       - name: Upload raw engine timing and peak-working-set samples
         uses: actions/upload-artifact@v4
         with:
           name: native-aot-engine-${{ matrix.rid }}
-          path: .cache/benchmarks/results.jsonl
+          path: |
+            .cache/benchmarks/results.jsonl
+            .cache/benchmarks/json-key-index.jsonl
           if-no-files-found: error
           retention-days: 30
 

@@ -57,14 +57,48 @@ function Invoke-AppleScript {
         if (-not $command.WaitForExit(15000)) {
             $command.Kill()
             $command.WaitForExit()
-            throw "AppleScript $Name timed out."
+            $timedOutLog = $command.StandardError.ReadToEnd().Trim()
+            [IO.File]::WriteAllText((Join-Path $scratch "$Name.stderr.txt"), $timedOutLog, $utf8)
+            throw "AppleScript $Name timed out; partial log: $timedOutLog"
         }
         $stdout = $command.StandardOutput.ReadToEnd().Trim()
         $stderr = $command.StandardError.ReadToEnd().Trim()
+        [IO.File]::WriteAllText((Join-Path $scratch "$Name.stdout.txt"), $stdout, $utf8)
+        [IO.File]::WriteAllText((Join-Path $scratch "$Name.stderr.txt"), $stderr, $utf8)
         if ($command.ExitCode -ne 0) { throw "AppleScript $Name exited $($command.ExitCode): $stderr" }
         return $stdout
     }
     finally { $command.Dispose() }
+}
+
+# A window title alone is insufficient: wait for the NSTextView to be the actual
+# focused AX element before sending a non-idempotent keystroke. Only this known
+# activation/readiness state is retried; a failed typing or Save is never replayed.
+function Wait-EditorReady {
+    param([int] $ProcessId, [string] $Name)
+    $script = @"
+tell application "System Events"
+    set targetProcess to first process whose unix id is $ProcessId
+    repeat with attempt from 1 to 80
+        try
+            set frontmost of targetProcess to true
+            if exists window 1 of targetProcess then
+                if name of window 1 of targetProcess contains "note.txt" then
+                    set focusRole to role of focused UI element of targetProcess
+                    if focusRole contains "TextArea" then
+                        log "ready:window-and-AXTextArea"
+                        return "AXTextArea"
+                    end if
+                end if
+            end if
+        end try
+        delay 0.1
+    end repeat
+    error "mote window or focused NSTextView did not become ready"
+end tell
+"@
+    $ready = Invoke-AppleScript $script $Name
+    if ($ready -cne 'AXTextArea') { throw "Unexpected native focus role: $ready" }
 }
 
 function Start-Editor {
@@ -91,24 +125,40 @@ function Wait-FileChange {
 try {
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Executable not found: $exe" }
     $process = Start-Editor
-    $stage = 'keyboard-edit-and-save'
-    $editScript = @"
+    $stage = 'focus-original'
+    Wait-EditorReady $process.Id 'focus-original'
+    $stage = 'type-X'
+    $typeScript = @"
 tell application "System Events"
     set targetProcess to first process whose unix id is $($process.Id)
     set frontmost of targetProcess to true
-    repeat with attempt from 1 to 80
-        if exists window 1 of targetProcess then
-            if name of window 1 of targetProcess contains "note.txt" then exit repeat
-        end if
-        delay 0.1
-    end repeat
-    if not (exists window 1 of targetProcess) then error "mote did not expose a window"
+    if role of focused UI element of targetProcess does not contain "TextArea" then error "editor lost native focus"
     keystroke "X"
+    log "typed:sent-X"
     delay 0.2
-    keystroke "s" using command down
+    return value of focused UI element of targetProcess
 end tell
 "@
-    [void](Invoke-AppleScript $editScript 'edit-save')
+    $nativeText = Invoke-AppleScript $typeScript 'type-X'
+    # osascript trims stdout, so this diagnostic check ignores the final newline;
+    # disk bytes and reopened clipboard below remain exact and unnormalized.
+    $normalizedNative = $nativeText.TrimEnd()
+    $expectedBase = $source.TrimEnd()
+    if ($normalizedNative.Length -ne $expectedBase.Length + 1 -or
+        $normalizedNative.Replace('X', '') -cne $expectedBase) {
+        throw "Native focused text did not gain exactly one X (length $($nativeText.Length))."
+    }
+    $stage = 'command-S'
+    $saveScript = @"
+tell application "System Events"
+    set targetProcess to first process whose unix id is $($process.Id)
+    set frontmost of targetProcess to true
+    keystroke "s" using command down
+    log "save:sent-command-S"
+end tell
+"@
+    [void](Invoke-AppleScript $saveScript 'command-S')
+    $stage = 'persisted-disk'
     $saved = Wait-FileChange
     $savedBytes = [IO.File]::ReadAllBytes($file)
     if ([Convert]::ToHexString($savedBytes) -cne [Convert]::ToHexString($utf8.GetBytes($saved))) {
@@ -128,6 +178,8 @@ end tell
     if ($process.ExitCode -ne 0) { throw "Original editor exited $($process.ExitCode)." }
     $process.Dispose()
     $process = Start-Editor
+    $stage = 'focus-reopened'
+    Wait-EditorReady $process.Id 'focus-reopened'
     $stage = 'reopen-and-copy'
     $copyStart = [Diagnostics.ProcessStartInfo]::new('/usr/bin/pbcopy')
     $copyStart.UseShellExecute = $false
@@ -145,13 +197,7 @@ end tell
 tell application "System Events"
     set targetProcess to first process whose unix id is $($process.Id)
     set frontmost of targetProcess to true
-    repeat with attempt from 1 to 80
-        if exists window 1 of targetProcess then
-            if name of window 1 of targetProcess contains "note.txt" then exit repeat
-        end if
-        delay 0.1
-    end repeat
-    if not (exists window 1 of targetProcess) then error "reopened mote did not expose a window"
+    if role of focused UI element of targetProcess does not contain "TextArea" then error "reopened editor lost native focus"
     keystroke "a" using command down
     keystroke "c" using command down
 end tell
@@ -193,6 +239,36 @@ end tell
 catch {
     $result.status = 'external-workflow-unverified'
     $result.error = $_.Exception.Message
+    if ($process -and -not $process.HasExited) {
+        try {
+            $axState = @"
+tell application "System Events"
+    set targetProcess to first process whose unix id is $($process.Id)
+    return "window=" & name of window 1 of targetProcess & " ; focused-role=" & role of focused UI element of targetProcess & " ; tree=" & (entire contents of window 1 of targetProcess as text)
+end tell
+"@
+            $observed = Invoke-AppleScript $axState 'failure-ax-state'
+            [IO.File]::WriteAllText((Join-Path $scratch 'failure-ax-tree.txt'), $observed, $utf8)
+        }
+        catch {
+            [IO.File]::WriteAllText((Join-Path $scratch 'failure-ax-error.txt'),
+                $_.Exception.Message, $utf8)
+        }
+        try {
+            $capture = [Diagnostics.ProcessStartInfo]::new('/usr/sbin/screencapture')
+            $capture.UseShellExecute = $false
+            [void]$capture.ArgumentList.Add('-x')
+            [void]$capture.ArgumentList.Add('-m')
+            [void]$capture.ArgumentList.Add((Join-Path $scratch 'failure-screen.png'))
+            $screenshot = [Diagnostics.Process]::Start($capture)
+            if (-not $screenshot.WaitForExit(5000)) { $screenshot.Kill(); $screenshot.WaitForExit() }
+            $screenshot.Dispose()
+        }
+        catch {
+            [IO.File]::WriteAllText((Join-Path $scratch 'failure-screen-error.txt'),
+                $_.Exception.Message, $utf8)
+        }
+    }
 }
 finally {
     $result.stage = $stage
