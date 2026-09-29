@@ -14,7 +14,7 @@ $inventory = Join-Path $root ".cache/ci-inventory/$RuntimeIdentifier"
 New-Item -ItemType Directory -Force $temp, $inventory | Out-Null
 $id = [guid]::NewGuid().ToString('N')
 $input = Join-Path $temp "canvas-ax-in-$id.txt"
-$home = Join-Path $temp "canvas-ax-home-$id"
+$probeHome = Join-Path $temp "canvas-ax-home-$id"
 $report = Join-Path $inventory 'mac-canvas-ax.json'
 $metrics = Join-Path $inventory 'mac-canvas-ax-metrics.txt'
 $stdoutPath = Join-Path $inventory 'mac-canvas-ax-stdout.txt'
@@ -52,7 +52,7 @@ try {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    $start.Environment['MOTE_HOME'] = $home
+    $start.Environment['MOTE_HOME'] = $probeHome
     [void]$start.ArgumentList.Add('--check-native-mac-canvas-ax')
     [void]$start.ArgumentList.Add($input)
     $process = [Diagnostics.Process]::Start($start)

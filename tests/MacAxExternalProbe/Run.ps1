@@ -33,6 +33,7 @@ $result = [ordered]@{
     editor_pid = $null
     fixture_utf16_length = $null
     fixture_sha256 = $null
+    swift_typecheck_passed = $false
     swift_exit_code = $null
     swift_report = $null
     error = ''
@@ -54,7 +55,11 @@ try {
     $result.fixture_sha256 = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
 
     $client = Join-Path $scratch 'mote-ax-probe'
-    $compileLog = & /usr/bin/xcrun swiftc -O (Join-Path $PSScriptRoot 'Probe.swift') -o $client 2>&1
+    $swiftSource = Join-Path $PSScriptRoot 'Probe.swift'
+    $typecheckLog = & /usr/bin/xcrun swiftc -typecheck $swiftSource 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "swiftc -typecheck failed: $($typecheckLog -join [Environment]::NewLine)" }
+    $result.swift_typecheck_passed = $true
+    $compileLog = & /usr/bin/xcrun swiftc -O $swiftSource -o $client 2>&1
     if ($LASTEXITCODE -ne 0) { throw "swiftc failed: $($compileLog -join [Environment]::NewLine)" }
 
     $start = [Diagnostics.ProcessStartInfo]::new($exe)

@@ -50,7 +50,9 @@ final class Probe {
     }
 
     private func rangeValue(_ object: AnyObject?) -> CFRange? {
-        guard let value = object as? AXValue, AXValueGetType(value) == .cfRange else { return nil }
+        guard let object, CFGetTypeID(object) == AXValueGetTypeID() else { return nil }
+        let value = unsafeBitCast(object, to: AXValue.self)
+        guard AXValueGetType(value) == .cfRange else { return nil }
         var range = CFRange(location: 0, length: 0)
         return AXValueGetValue(value, .cfRange, &range) ? range : nil
     }
@@ -169,8 +171,9 @@ final class Probe {
                 ancestryHasWrongPID = true
             }
             if role == "AXApplication" { reachedApplication = true; break }
-            guard let parent = attribute(ancestor, "AXParent").1 as? AXUIElement else { break }
-            ancestor = parent
+            guard let parent = attribute(ancestor, "AXParent").1,
+                  CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            ancestor = unsafeBitCast(parent, to: AXUIElement.self)
         }
         record("provider-parent-pid-tree", reachedApplication && !ancestryHasWrongPID &&
                ancestry.contains("AXWindow"), "roles=\(ancestry.joined(separator: ">"))")

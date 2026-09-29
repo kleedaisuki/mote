@@ -2,6 +2,8 @@
 
 `Run.ps1` compiles `Probe.swift` with the host Xcode toolchain and starts the
 **published** `mote` executable as a separate process in opt-in canvas mode.
+It first runs `xcrun swiftc -typecheck`; compile errors are classified as
+`probe-error` and persisted before any editor process is launched.
 The Swift client connects only through `AXUIElementCreateApplication(pid)` and
 macOS Accessibility APIs. It does not call mote internals or use an in-process
 selector hook. The deterministic fixture and compiler binary stay under the

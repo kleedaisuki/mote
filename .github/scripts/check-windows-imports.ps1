@@ -38,9 +38,10 @@ foreach ($line in $lines[($heading + 1)..($lines.Count - 1)]) {
 if ($imports.Count -eq 0) { throw 'No PE imports were parsed; refusing to assume the binary is self-contained.' }
 
 # This deliberately small allowlist makes each newly linked OS API an explicit, reviewed change.
+# UIA's BSTR/SAFEARRAY interop calls the Windows OS Ole Automation library.
 $systemDlls = @(
     'advapi32.dll', 'bcrypt.dll', 'comdlg32.dll', 'gdi32.dll', 'kernel32.dll',
-    'ole32.dll', 'shell32.dll', 'user32.dll'
+    'ole32.dll', 'oleaut32.dll', 'shell32.dll', 'user32.dll'
 )
 $unexpected = @($imports | Where-Object {
     $_ -notin $systemDlls -and $_ -notmatch '^(api-ms-win|ext-ms-win)-[a-z0-9-]+\.dll$'
