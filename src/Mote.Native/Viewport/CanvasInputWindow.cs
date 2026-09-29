@@ -31,9 +31,10 @@ internal sealed class CanvasInputWindowBoundaryException(int caret, string messa
 /// Window edges are extended grapheme boundaries according to .NET StringInfo.
 /// A local break is accepted as a segmentation reset only when the preceding
 /// scalar cannot carry RI parity, ZWJ, or extender/linker context; otherwise the
-/// selector scans backward at most MaxLength units and segments forward. A cluster
-/// or dependency exceeding that bound produces a typed failure. This protects
-/// source integrity, but does not certify native font shaping or bidi geometry.
+/// selector scans backward at most the requested window length and segments
+/// forward. A cluster or dependency exceeding that bound produces a typed
+/// failure. This protects source integrity, but does not certify native font
+/// shaping or bidi geometry.
 /// </summary>
 internal static class CanvasInputWindowSelector
 {
@@ -48,31 +49,46 @@ internal static class CanvasInputWindowSelector
     /// The caret is inside a grapheme, or a safe window cannot be proven within
     /// <see cref="MaxLength"/> UTF-16 units.
     /// </exception>
-    internal static CanvasInputWindow Select(TextSnapshot snapshot, int caret)
+    internal static CanvasInputWindow Select(TextSnapshot snapshot, int caret) =>
+        Select(snapshot, caret, MaxLength);
+
+    /// <summary>
+    /// Returns a single-line, grapheme-safe input window no longer than
+    /// <paramref name="maxLength"/> UTF-16 units. Platforms may request less
+    /// than 16 Ki to stay inside native text-layout width limits. Valid bounds
+    /// are 2 through <see cref="MaxLength"/> inclusive.
+    /// </summary>
+    /// <exception cref="CanvasInputWindowBoundaryException">
+    /// The caret is inside a grapheme, or its cluster/context cannot be certified
+    /// within the requested window length.
+    /// </exception>
+    internal static CanvasInputWindow Select(TextSnapshot snapshot, int caret, int maxLength)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (maxLength is < 2 or > MaxLength)
+            throw new ArgumentOutOfRangeException(nameof(maxLength));
         if ((uint)caret > (uint)snapshot.Length)
             throw new ArgumentOutOfRangeException(nameof(caret));
         var line = snapshot.GetLineIndexFromOffset(caret);
         var start = snapshot.GetLineStartOffset(line);
         var end = ContentEnd(snapshot, line, start);
         var clampedCaret = Math.Clamp(caret, start, end);
-        var caretBoundary = PreviousCertifiedBoundary(snapshot, clampedCaret, start, end, caret);
+        var caretBoundary = PreviousCertifiedBoundary(snapshot, clampedCaret, start, end, caret, maxLength);
         if (caretBoundary != clampedCaret)
             throw new CanvasInputWindowBoundaryException(caret,
                 "The input caret is inside an extended grapheme cluster.");
 
-        var idealStart = Math.Max(start, clampedCaret - MaxLength / 2);
-        var windowStart = PreviousCertifiedBoundary(snapshot, idealStart, start, end, caret);
-        if (clampedCaret - windowStart > MaxLength)
+        var idealStart = Math.Max(start, clampedCaret - maxLength / 2);
+        var windowStart = PreviousCertifiedBoundary(snapshot, idealStart, start, end, caret, maxLength);
+        if (clampedCaret - windowStart > maxLength)
             windowStart = clampedCaret;
-        var windowEnd = LastBoundaryWithinLimit(snapshot, windowStart, end, clampedCaret, caret);
+        var windowEnd = LastBoundaryWithinLimit(snapshot, windowStart, end, clampedCaret, caret, maxLength);
         if (windowEnd == clampedCaret && clampedCaret < end && windowStart < clampedCaret)
         {
             // The first cluster after the caret may fit only after discarding left
             // context; prefer a complete forward cluster to a misleading empty tail.
             windowStart = clampedCaret;
-            windowEnd = LastBoundaryWithinLimit(snapshot, windowStart, end, clampedCaret, caret);
+            windowEnd = LastBoundaryWithinLimit(snapshot, windowStart, end, clampedCaret, caret, maxLength);
         }
         return new CanvasInputWindow(windowStart, snapshot.GetText(windowStart, windowEnd - windowStart));
     }
@@ -87,7 +103,7 @@ internal static class CanvasInputWindowSelector
     }
 
     private static int PreviousCertifiedBoundary(TextSnapshot snapshot, int offset,
-        int lineStart, int lineEnd, int caret)
+        int lineStart, int lineEnd, int caret, int maxLength)
     {
         var probe = SnapSurrogateBackward(snapshot, offset, lineStart);
         if (probe == lineEnd || probe == lineStart) return probe;
@@ -96,7 +112,7 @@ internal static class CanvasInputWindowSelector
             var previous = PreviousScalarStart(snapshot, probe, lineStart);
             if (IsCertifiedBreak(snapshot, previous, probe, lineEnd)) break;
             probe = previous;
-            if (offset - probe > MaxLength)
+            if (offset - probe > maxLength)
                 throw new CanvasInputWindowBoundaryException(caret,
                     "The grapheme context exceeds the bounded input window.");
         }
@@ -119,15 +135,15 @@ internal static class CanvasInputWindowSelector
     }
 
     private static int LastBoundaryWithinLimit(TextSnapshot snapshot, int start,
-        int lineEnd, int caretBoundary, int caret)
+        int lineEnd, int caretBoundary, int caret, int maxLength)
     {
         if (start == lineEnd) return start;
         // Four lookahead units include a complete scalar beyond the maximum window,
         // so a cluster ending at the cap is not mistaken for a truncated cluster.
-        var contextLength = Math.Min((long)lineEnd - start, MaxLength + 4L);
+        var contextLength = Math.Min((long)lineEnd - start, maxLength + 4L);
         var context = snapshot.GetText(start, (int)contextLength);
         var starts = StringInfo.ParseCombiningCharacters(context);
-        var limit = Math.Min(lineEnd, start + MaxLength);
+        var limit = (int)Math.Min(lineEnd, (long)start + maxLength);
         var last = start;
         foreach (var relative in starts)
         {

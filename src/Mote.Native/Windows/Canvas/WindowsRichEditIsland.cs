@@ -26,15 +26,24 @@ internal sealed class WindowsRichEditIsland : IDisposable
 {
     private const string ClassName = "MoteInteractiveCanvas";
     private const int InputId = 301;
+    /// <summary>Maximum safe single-line RichEdit projection before native layout limits.</summary>
+    internal const int MaxInputLength = 2048;
     private const int InputHardLimit = 32 * 1024;
     private const uint CommitMessage = Win32.WM_APP + 41;
     private const uint SelectionMessage = Win32.WM_APP + 42;
     private const uint ClearSuppressedBackspaceMessage = Win32.WM_APP + 43;
     private const uint WmImeComposition = 0x010F;
     private const uint WmGetObject = 0x003D;
+    private const uint WmMouseHWheel = 0x020E;
+    private const uint WmHScroll = 0x0114;
+    private const int EmPosFromChar = 0x00D6;
+    private const int EmGetScrollPos = 0x04DD;
+    private const int EmSetScrollPos = 0x04DE;
+    private const int MkShift = 0x0004;
     private const uint GcsResultString = 0x0800;
     private const int ScrollRange = 1_000_000;
     private const float TextLeft = 24;
+    private const int InputLabelWidth = 180;
     private static readonly Win32.WindowProcedure WindowProcedure = Dispatch;
     private static readonly Win32.SubclassProcedure InputProcedure = InputSubclass;
     private static WindowsRichEditIsland? _creating;
@@ -70,7 +79,9 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private bool _selectionQueued;
     private bool _dragging;
     private bool _suppressBackspaceChar;
+    private bool _bodyResizeDeferred;
     private int _dragAnchor;
+    private int _publishedBodyHeight;
     private PendingEditSelection? _pendingEditSelection;
     private bool _faulted;
     private bool _disposed;
@@ -107,16 +118,18 @@ internal sealed class WindowsRichEditIsland : IDisposable
             try
             {
                 _window = Win32.CreateWindowExW(0, ClassName, "",
-                    Win32.WS_CHILD | Win32.WS_VISIBLE | Win32.WS_CLIPCHILDREN | Win32.WS_VSCROLL,
+                    Win32.WS_CHILD | Win32.WS_VISIBLE | Win32.WS_CLIPCHILDREN |
+                    Win32.WS_VSCROLL | Win32.WS_HSCROLL,
                     0, 0, 1, 1, parent, 0, instance, 0);
             }
             finally { _creating = null; }
             if (_window == 0)
                 throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create interactive canvas.");
-            _input = Win32.CreateWindowExW(Win32.WS_EX_CLIENTEDGE, "RICHEDIT50W", "",
+            _input = Win32.CreateWindowExW(0, "RICHEDIT50W", "",
                 Win32.WS_CHILD | Win32.WS_VISIBLE | Win32.WS_TABSTOP |
-                Win32.ES_MULTILINE | Win32.ES_WANTRETURN | Win32.ES_NOHIDESEL,
-                24, 0, 300, 54, _window, (nint)InputId, instance, 0);
+                Win32.ES_MULTILINE | Win32.ES_WANTRETURN | Win32.ES_NOHIDESEL |
+                Win32.ES_AUTOHSCROLL,
+                24, 0, 300, 24, _window, (nint)InputId, instance, 0);
             if (_input == 0)
                 throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create RichEdit input island.");
             Win32.SendMessageW(_input, Win32.EM_EXLIMITTEXT, 0, (nint)InputHardLimit);
@@ -139,6 +152,52 @@ internal sealed class WindowsRichEditIsland : IDisposable
     /// <summary>Whether native IME preedit owns the input island.</summary>
     internal bool IsComposing => _composition;
 
+    /// <summary>Document pixels; the remaining bottom strip is a separate OS input ribbon.</summary>
+    private int BodyHeight => Math.Max(0, _height - RibbonHeight);
+
+    /// <summary>A visible input row plus separator, independent of source-row painting.</summary>
+    private int RibbonHeight => Math.Max(24, (int)Math.Ceiling(LineHeight) + 8);
+
+    /// <summary>
+    /// Measures a caret against the same bounded row transform used for paint
+    /// and pointer hit-testing; source-window membership alone is insufficient.
+    /// </summary>
+    internal CanvasCaretGeometry? GetCaretGeometry(CanvasFrame frame, int sourceOffset)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        var snapshot = _snapshot;
+        if (_height <= RibbonHeight || snapshot is null || !ReferenceEquals(frame, _frame) ||
+            frame.Version != snapshot.Version || frame.RowWindows.IsDefaultOrEmpty ||
+            frame.RowWindows.Length != frame.Slices.Count ||
+            sourceOffset < 0 || sourceOffset > snapshot.Length) return null;
+        for (var index = 0; index < frame.Slices.Count; index++)
+        {
+            var row = frame.Slices[index];
+            if (sourceOffset < row.SourceStart ||
+                sourceOffset > row.SourceStart + row.SourceLength) continue;
+            if (!TryRowOrigin(snapshot, frame, index, out var origin)) return null;
+            var hit = _geometry.HitTest(snapshot, row, sourceOffset);
+            var x = origin + hit.X;
+            var visible = x >= TextLeft && x < _width - 8 &&
+                hit.Y >= 0 && hit.Y + hit.Height <= BodyHeight;
+            if (visible && sourceOffset == frame.SelectionActive &&
+                _binding is { } binding &&
+                sourceOffset >= binding.InputSourceStart &&
+                sourceOffset <= binding.InputSourceStart + binding.InputSourceText.Length)
+            {
+                // The input ribbon intentionally has a different coordinate
+                // space. Prove its physical OS caret is visible, but never
+                // pretend its X/Y equals the source canvas glyph position.
+                if (!TryInputCaretPoint(sourceOffset, out var native) ||
+                    native.X < 0 || native.X >= Math.Max(1, _width - _inputX - 4) ||
+                    native.Y < 0 || native.Y >= RibbonHeight)
+                    return null;
+            }
+            return new CanvasCaretGeometry(x, hit.Y, hit.Height, visible);
+        }
+        return null;
+    }
+
     /// <summary>Settles a queued ordinary edit before save/new/close, vetoing IME preedit.</summary>
     internal bool FlushPendingText()
     {
@@ -155,6 +214,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
     internal event Action<CanvasCommittedEdit>? EditCommitted;
     /// <summary>A wheel/scrollbar delta in logical pixels.</summary>
     internal event Action<double>? ScrollRequested;
+    /// <summary>A DirectWrite-resolved horizontal source edge for the controller.</summary>
+    internal event Action<CanvasHorizontalAnchorRequest>? HorizontalAnchorRequested;
     /// <summary>The current view height in logical pixels.</summary>
     internal event Action<double>? ViewportResized;
     /// <summary>Global UTF-16 source pointer selection.</summary>
@@ -179,6 +240,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
             ? new WindowsUiaBridgePrototype(document, viewport, _input,
                 fragmentExperiment: true)
             : new WindowsUiaBridgePrototype(document, viewport);
+        _uiaBridge.SetSourceBodyClientHeight(BodyHeight);
+        _publishedBodyHeight = BodyHeight;
         _uiaResponder = responderOverride ?? _uiaBridge.HandleGetObject;
     }
 
@@ -188,7 +251,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
         if (_faulted) return;
         ArgumentNullException.ThrowIfNull(binding);
         if (_composition) throw new InvalidOperationException("IME composition owns the input island.");
-        if (binding.InputSourceText.Length > 16 * 1024 ||
+        if (binding.InputSourceText.Length > MaxInputLength ||
             binding.InputSourceText.Contains('\r') || binding.InputSourceText.Contains('\n') ||
             binding.InputSourceStart < 0 ||
             binding.InputSourceStart > binding.Snapshot.Length - binding.InputSourceText.Length ||
@@ -236,8 +299,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
         _selectionQueued = false;
         if (!_composition)
         {
-            PlaceInput();
             if (_binding is not null) SetNativeSelection(frame.SelectionAnchor, frame.SelectionActive);
+            PlaceInput();
         }
         UpdateScrollbar();
         Invalidate();
@@ -286,7 +349,32 @@ internal sealed class WindowsRichEditIsland : IDisposable
         _theme = theme;
         SetInputAppearance(theme);
         PlaceInput();
+        PublishBodyHeight();
         Invalidate();
+    }
+
+    /// <summary>
+    /// Publishes one body boundary with monotonic UIA/frame ordering: expand
+    /// provider bounds before the larger frame, shrink after the smaller frame.
+    /// </summary>
+    private void PublishBodyHeight()
+    {
+        var height = BodyHeight;
+        if (height > _publishedBodyHeight)
+            _uiaBridge?.SetSourceBodyClientHeight(height);
+        ViewportResized?.Invoke(height);
+        if (height <= _publishedBodyHeight)
+            _uiaBridge?.SetSourceBodyClientHeight(height);
+        _publishedBodyHeight = height;
+    }
+
+    /// <summary>Settles a deferred resize only after OS IME releases its candidate.</summary>
+    private void FinishDeferredBodyResize()
+    {
+        if (!_bodyResizeDeferred) return;
+        _bodyResizeDeferred = false;
+        PlaceInput();
+        PublishBodyHeight();
     }
 
     /// <summary>Resizes the child surface without rebinding native input text.</summary>
@@ -340,9 +428,11 @@ internal sealed class WindowsRichEditIsland : IDisposable
                 _width = Math.Max(1, (int)(ushort)((long)lParam & 0xFFFF));
                 _height = Math.Max(1, (int)(ushort)(((long)lParam >> 16) & 0xFFFF));
                 ReleaseBitmap();
-                PlaceInput();
+                if (_height <= RibbonHeight) SuspendPointerDrag();
+                if (!_composition) PlaceInput();
                 UpdateScrollbar();
-                ViewportResized?.Invoke(_height);
+                if (_composition) _bodyResizeDeferred = true;
+                else PublishBodyHeight();
                 Invalidate();
                 return 0;
             case CanvasWin32.WmPaint:
@@ -351,15 +441,30 @@ internal sealed class WindowsRichEditIsland : IDisposable
             case WmGetObject when _uiaBridge is not null:
                 return HandleAccessibilityGetObject(window, wParam, lParam);
             case CanvasWin32.WmMouseWheel:
-                if (!_composition)
-                    ScrollRequested?.Invoke(-((short)(((ulong)wParam >> 16) & 0xFFFF)) /
+                if (!_composition && BodyHeight > 0)
+                {
+                    var delta = (short)(((ulong)wParam >> 16) & 0xFFFF);
+                    if (((ulong)wParam & MkShift) != 0)
+                        PanHorizontal(-delta / 120d * 3 * LineHeight);
+                    else ScrollRequested?.Invoke(-delta / 120d * 3 * LineHeight);
+                }
+                return 0;
+            case WmMouseHWheel:
+                if (!_composition && BodyHeight > 0)
+                    PanHorizontal((short)(((ulong)wParam >> 16) & 0xFFFF) /
                         120d * 3 * LineHeight);
                 return 0;
             case CanvasWin32.WmVScroll:
-                if (!_composition) ScrollRequested?.Invoke(ScrollDelta((int)(wParam & 0xFFFF)));
+                if (!_composition && BodyHeight > 0)
+                    ScrollRequested?.Invoke(ScrollDelta((int)(wParam & 0xFFFF)));
+                return 0;
+            case WmHScroll:
+                if (!_composition && BodyHeight > 0) HorizontalScrollbar((int)(wParam & 0xFFFF));
                 return 0;
             case CanvasWin32.WmLButtonDown:
                 if (_composition) return 0;
+                if (_height <= RibbonHeight) return 0;
+                if ((short)(((long)lParam >> 16) & 0xFFFF) >= BodyHeight) return 0;
                 _dragging = true;
                 _dragAnchor = HitSource(lParam);
                 CanvasWin32.SetCapture(window);
@@ -405,6 +510,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
                     {
                         _composition = false;
                         QueueCommit();
+                        FinishDeferredBodyResize();
                     }
                 }
                 return 0;
@@ -532,18 +638,26 @@ internal sealed class WindowsRichEditIsland : IDisposable
         if ((message == CanvasWin32.WmLButtonDown || message == CanvasWin32.WmLButtonUp ||
              message == CanvasWin32.WmMouseMove && island._dragging))
         {
-            // The visible input overlay must not turn a global canvas drag into a
-            // page-local RichEdit selection. Translate its client point to canvas.
-            var x = (short)((long)lParam & 0xFFFF) + island._inputX;
-            var y = (short)(((long)lParam >> 16) & 0xFFFF) + island._inputY;
-            var point = (nint)((ushort)x | (uint)(ushort)y << 16);
-            island.HandleMessage(island._window, message, wParam, point);
+            // The ribbon is input focus, not a second source selection surface.
+            // A user changes the canonical caret on the canvas above it.
+            if (message == CanvasWin32.WmLButtonDown) Win32.SetFocus(window);
             return 0;
         }
         if (message == CanvasWin32.WmMouseWheel)
         {
-            if (!island._composition)
-                island.ScrollRequested?.Invoke(-((short)(((ulong)wParam >> 16) & 0xFFFF)) /
+            if (!island._composition && island.BodyHeight > 0)
+            {
+                var delta = (short)(((ulong)wParam >> 16) & 0xFFFF);
+                if (((ulong)wParam & MkShift) != 0)
+                    island.PanHorizontal(-delta / 120d * 3 * island.LineHeight);
+                else island.ScrollRequested?.Invoke(-delta / 120d * 3 * island.LineHeight);
+            }
+            return 0;
+        }
+        if (message == WmMouseHWheel)
+        {
+            if (!island._composition && island.BodyHeight > 0)
+                island.PanHorizontal((short)(((ulong)wParam >> 16) & 0xFFFF) /
                     120d * 3 * island.LineHeight);
             return 0;
         }
@@ -561,6 +675,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
         {
             island._composition = false;
             island.QueueCommit();
+            island.FinishDeferredBodyResize();
         }
         if (message == Win32.WM_NCDESTROY)
             Win32.RemoveWindowSubclass(window, InputProcedure, subclassId);
@@ -755,24 +870,50 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private void PlaceInput()
     {
         if (_input == 0 || _binding is null) return;
+        // The focused OS editor occupies an explicit ribbon, never the source
+        // canvas. No independently shaped host glyphs can cover a source row.
+        var inputHeight = Math.Max(18, RibbonHeight - 4);
         var active = _frame?.SelectionActive ?? _binding.Active;
-        ViewportSlice? target = null;
-        if (_frame is not null)
-        {
-            foreach (var slice in _frame.Slices)
-            {
-                if (active < slice.SourceStart ||
-                    active > slice.SourceStart + slice.SourceLength) continue;
-                target = slice;
-                break;
-            }
-        }
-        var y = target is { } row ? (int)Math.Round(row.TopY) : _height - (int)(LineHeight * 3 + 8);
-        _inputX = 24;
-        _inputY = Math.Clamp(y, 0, Math.Max(0, _height - (int)(LineHeight * 3 + 8)));
+        _inputX = Math.Min(InputLabelWidth, Math.Max(0, _width / 3));
+        _inputY = Math.Min(_height - 1, BodyHeight + 2);
+        var inputWidth = Math.Max(1, _width - _inputX - 4);
         Win32.MoveWindow(_input, _inputX, _inputY,
-            Math.Max(120, _width - _inputX - 18), (int)(LineHeight * 3 + 8), true);
+            inputWidth, inputHeight, true);
+        if (!TryInputCaretPoint(active, out var native)) return;
+        if (native.X < 8 || native.X >= inputWidth - 16)
+        {
+            var scroll = new NativePoint();
+            SendMessagePoint(_input, EmGetScrollPos, 0, ref scroll);
+            scroll.X = Math.Max(0, scroll.X + native.X - Math.Min(16, inputWidth / 4));
+            SendMessagePoint(_input, EmSetScrollPos, 0, ref scroll);
+        }
     }
+
+    /// <summary>Reads RichEdit's real caret position in the bounded host client area.</summary>
+    private bool TryInputCaretPoint(int sourceOffset, out NativePoint point)
+    {
+        point = default;
+        if (_input == 0 || _binding is not { } binding ||
+            sourceOffset < binding.InputSourceStart ||
+            sourceOffset > binding.InputSourceStart + binding.InputSourceText.Length)
+            return false;
+        var display = _projection.ToDisplay(sourceOffset - binding.InputSourceStart);
+        var native = _offsets.ToNative(display);
+        SendMessageCaretPoint(_input, EmPosFromChar, ref point, native);
+        return point.X != -1 && point.Y != -1;
+    }
+
+    /// <summary>POINTL used by RichEdit caret and pixel-scroll messages.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { internal int X; internal int Y; }
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendMessageCaretPoint(nint window, int message,
+        ref NativePoint point, int nativeIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendMessagePoint(nint window, int message,
+        nuint unused, ref NativePoint point);
 
     /// <summary>
     /// Routes the exact checked plain-text clipboard payload straight to the controller.
@@ -893,9 +1034,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
     {
         if (_input == 0) return;
         Win32.SendMessageW(_input, Win32.EM_SETBKGNDCOLOR, 0,
-            (nint)(uint)(theme.Palette.EditorBackground.Red |
-                theme.Palette.EditorBackground.Green << 8 |
-                theme.Palette.EditorBackground.Blue << 16));
+            (nint)ColorRef(theme.Palette.PanelBackground));
         var old = _inputFont;
         var family = theme.Typography.EditorFontFamilies.Split(',', 2)[0].Trim();
         _inputFont = Win32.CreateFontW(-(int)Math.Round(theme.Typography.EditorFontSize * 96 / 72),
@@ -936,21 +1075,44 @@ internal sealed class WindowsRichEditIsland : IDisposable
     {
         var frame = _frame;
         var snapshot = _snapshot;
-        if (frame is null || snapshot is null || frame.Slices.Count == 0) return 0;
-        var x = Math.Max(0, (short)((long)lParam & 0xFFFF) - TextLeft);
-        var y = Math.Clamp((short)(((long)lParam >> 16) & 0xFFFF), 0, _height - 1);
-        ViewportSlice? match = null;
-        foreach (var slice in frame.Slices)
+        if (BodyHeight == 0 || frame is null || snapshot is null ||
+            frame.Slices.Count == 0) return _frame?.SelectionActive ?? 0;
+        var screenX = (short)((long)lParam & 0xFFFF);
+        var y = Math.Clamp((short)(((long)lParam >> 16) & 0xFFFF), 0, BodyHeight - 1);
+        var rowIndex = frame.Slices.Count - 1;
+        for (var index = 0; index < frame.Slices.Count; index++)
         {
+            var slice = frame.Slices[index];
             if (y < slice.TopY || y >= slice.TopY + slice.Height) continue;
-            match = slice;
+            rowIndex = index;
             break;
         }
-        var row = match ?? frame.Slices[^1];
+        var row = frame.Slices[rowIndex];
         if (row.SourceLength == 0) return row.SourceStart;
-        var hit = _geometry.HitTestPoint(snapshot, row, x, y);
+        if (!TryRowOrigin(snapshot, frame, rowIndex, out var origin))
+            return row.SourceStart;
+        var hit = _geometry.HitTestPoint(snapshot, row, screenX - origin, y);
         var offset = hit.SourceStart + (hit.IsTrailing ? hit.SourceLength : 0);
         return Math.Clamp(offset, row.SourceStart, row.SourceStart + row.SourceLength);
+    }
+
+    /// <summary>Derives the one screen transform shared by paint, hit-test and caret proof.</summary>
+    private bool TryRowOrigin(TextSnapshot snapshot, CanvasFrame frame,
+        int index, out float origin)
+    {
+        origin = TextLeft;
+        if (frame.RowWindows.IsDefaultOrEmpty) return true; // Legacy probe frame.
+        if (frame.RowWindows.Length != frame.Slices.Count) return false;
+        var window = frame.RowWindows[index];
+        var row = frame.Slices[index];
+        if (window.Slice != row ||
+            window.LeftEdgeSourceBoundary < row.SourceStart ||
+            window.LeftEdgeSourceBoundary > row.SourceStart + row.SourceLength)
+            return false;
+        if (row.SourceLength == 0) return true;
+        var anchor = _geometry.HitTest(snapshot, row, window.LeftEdgeSourceBoundary);
+        origin = TextLeft - anchor.X - (float)window.IntraClusterPixels;
+        return float.IsFinite(origin);
     }
 
     private void Paint()
@@ -964,18 +1126,23 @@ internal sealed class WindowsRichEditIsland : IDisposable
             _painter.Begin();
             var frame = _frame;
             var snapshot = _snapshot;
-            if (frame is not null && snapshot is not null && frame.Version == snapshot.Version)
+            if (BodyHeight > 0 && frame is not null && snapshot is not null &&
+                frame.Version == snapshot.Version)
             {
-                foreach (var row in frame.Slices)
+                for (var index = 0; index < frame.Slices.Count; index++)
                 {
+                    var row = frame.Slices[index];
                     if (row.SourceLength > 16 * 1024)
                         throw new InvalidOperationException("Canvas attempted to shape an unbounded slice.");
-                    var selected = DrawSelection(snapshot, row, frame);
+                    if (!TryRowOrigin(snapshot, frame, index, out var origin)) continue;
+                    var selected = DrawSelection(snapshot, row, frame, origin);
                     _painter.Text(snapshot.GetText(row.SourceStart, row.SourceLength),
-                        TextLeft, (float)row.TopY, selected, ColorsFor(row));
-                    DrawDiagnostics(snapshot, row);
+                        origin, (float)row.TopY, selected, ColorsFor(row));
+                    DrawDiagnostics(snapshot, row, origin);
+                    DrawSourceCaret(snapshot, row, frame, origin);
                 }
             }
+            PaintRibbon();
             _painter.End();
             if (!CanvasWin32.BitBlt(dc, 0, 0, _width, _height,
                 _memoryDc, 0, 0, CanvasWin32.Srccopy))
@@ -983,6 +1150,23 @@ internal sealed class WindowsRichEditIsland : IDisposable
         }
         finally { CanvasWin32.EndPaint(_window, ref paint); }
     }
+
+    /// <summary>Overpaints the reserved ribbon with a single Direct2D glyph renderer.</summary>
+    private void PaintRibbon()
+    {
+        var body = BodyHeight;
+        _painter.Fill(0, body, _width, _height, _theme.Palette.PanelBackground);
+        _painter.Fill(0, body, _width, Math.Min(_height, body + 1),
+            _theme.Palette.Border);
+        if (body == 0) return; // Tiny window: input-only until enlarged.
+        var active = _frame?.SelectionActive ?? _binding?.Active ?? 0;
+        var label = _inputX < 150 ? "Input" : $"Input @ {active:N0}";
+        _painter.Text(label, 8, body + 4, null,
+            [new WindowsCanvasColorSpan(0, label.Length, _theme.Palette.MutedForeground)]);
+    }
+
+    private static uint ColorRef(ThemeColor color) =>
+        (uint)(color.Red | color.Green << 8 | color.Blue << 16);
 
     private IReadOnlyList<WindowsCanvasColorSpan>? ColorsFor(ViewportSlice row)
     {
@@ -1006,7 +1190,23 @@ internal sealed class WindowsRichEditIsland : IDisposable
         return spans;
     }
 
-    private void DrawDiagnostics(TextSnapshot snapshot, ViewportSlice row)
+    /// <summary>Shows the canonical source caret even though OS text input lives in the ribbon.</summary>
+    private void DrawSourceCaret(TextSnapshot snapshot, ViewportSlice row,
+        CanvasFrame frame, float origin)
+    {
+        if (frame.SelectionLength != 0) return;
+        var active = frame.SelectionActive;
+        var end = row.SourceStart + row.SourceLength;
+        if (active < row.SourceStart || active > end ||
+            active == end && row.HasHiddenSuffix) return;
+        var local = row.SourceLength == 0 ? 0 : _geometry.HitTest(snapshot, row, active).X;
+        var x = origin + local;
+        if (x < TextLeft || x >= _width - 8) return;
+        _painter.Fill(x, (float)row.TopY + 2, x + 2,
+            (float)(row.TopY + row.Height - 2), _theme.Palette.Cursor);
+    }
+
+    private void DrawDiagnostics(TextSnapshot snapshot, ViewportSlice row, float origin)
     {
         var semantics = _semantics;
         if (semantics is null || semantics.Version != snapshot.Version ||
@@ -1027,14 +1227,14 @@ internal sealed class WindowsRichEditIsland : IDisposable
                 DiagnosticSeverity.Warning => _theme.Palette.Warning,
                 _ => _theme.Palette.Info
             };
-            _painter.DiagnosticUnderline(TextLeft + Math.Min(left, right),
+            _painter.DiagnosticUnderline(origin + Math.Min(left, right),
                 (float)(row.TopY + row.Height - 3),
-                TextLeft + Math.Max(left, right), color);
+                origin + Math.Max(left, right), color);
         }
     }
 
     private (float Left, float Top, float Right, float Bottom)? DrawSelection(
-        TextSnapshot snapshot, ViewportSlice row, CanvasFrame frame)
+        TextSnapshot snapshot, ViewportSlice row, CanvasFrame frame, float origin)
     {
         var endSelection = frame.SelectionStart + frame.SelectionLength;
         var endContent = row.SourceStart + row.SourceLength;
@@ -1045,8 +1245,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
         {
             var left = _geometry.HitTest(snapshot, row, start);
             var right = _geometry.HitTest(snapshot, row, end);
-            bounds = (TextLeft + Math.Min(left.X, right.X), (float)row.TopY,
-                TextLeft + Math.Max(left.X, right.X), (float)(row.TopY + row.Height));
+            bounds = (origin + Math.Min(left.X, right.X), (float)row.TopY,
+                origin + Math.Max(left.X, right.X), (float)(row.TopY + row.Height));
             _painter.Selection(bounds.Value.Left, bounds.Value.Top,
                 bounds.Value.Right, bounds.Value.Bottom);
         }
@@ -1055,8 +1255,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
         if (!row.HasHiddenSuffix && next > endContent &&
             frame.SelectionStart < next && endSelection > endContent)
         {
-            var right = row.SourceLength == 0 ? TextLeft :
-                TextLeft + _geometry.HitTest(snapshot, row, endContent).X;
+            var right = row.SourceLength == 0 ? origin :
+                origin + _geometry.HitTest(snapshot, row, endContent).X;
             _painter.Selection(right, (float)row.TopY,
                 Math.Max(right + 8, _width - 8), (float)(row.TopY + row.Height));
         }
@@ -1068,16 +1268,125 @@ internal sealed class WindowsRichEditIsland : IDisposable
         var frame = _frame;
         var snapshot = _snapshot;
         if (frame is null || snapshot is null) return 0;
-        var total = Math.Max(_height, snapshot.LineCount * LineHeight);
+        var total = Math.Max(BodyHeight, snapshot.LineCount * LineHeight);
         return command switch
         {
             0 => -LineHeight, 1 => LineHeight,
-            2 => -_height, 3 => _height,
+            2 => -BodyHeight, 3 => BodyHeight,
             4 or 5 => ThumbDelta(total, frame.ScrollY),
             6 => -frame.ScrollY,
-            7 => total - _height - frame.ScrollY,
+            7 => total - BodyHeight - frame.ScrollY,
             _ => 0
         };
+    }
+
+    /// <summary>Converts a local wheel/page displacement to a bounded source edge.</summary>
+    private void PanHorizontal(double pixels)
+    {
+        if (!double.IsFinite(pixels) || pixels == 0 || _composition ||
+            _frame is not { } frame || _snapshot is not { } snapshot ||
+            _binding is null || frame.RowWindows.IsDefaultOrEmpty) return;
+        var index = 0;
+        for (var i = 0; i < frame.RowWindows.Length; i++)
+        {
+            if (frame.RowWindows[i].Slice.SourceLength == 0) continue;
+            index = i;
+            if (snapshot.GetLineStartOffset(frame.Slices[i].Line) ==
+                frame.Horizontal.ReferenceLineStart) break;
+        }
+        var row = frame.Slices[index];
+        if (row.SourceLength == 0 || !TryRowOrigin(snapshot, frame, index, out var origin)) return;
+        var localX = (float)(TextLeft + pixels - origin);
+        var lineStart = snapshot.GetLineStartOffset(row.Line);
+        var contentEnd = LineContentEnd(snapshot, row.Line);
+        var first = _geometry.HitTest(snapshot, row, row.SourceStart);
+        var last = _geometry.HitTest(snapshot, row, row.SourceStart + row.SourceLength);
+        if (localX < first.X && row.HasHiddenPrefix)
+        {
+            var previous = Math.Max(lineStart, row.SourceStart - 64);
+            RequestHorizontal(snapshot, frame, previous, 0);
+            return;
+        }
+        if (localX > last.X && row.HasHiddenSuffix)
+        {
+            RequestHorizontal(snapshot, frame,
+                Math.Min(contentEnd, row.SourceStart + row.SourceLength), 0);
+            return;
+        }
+        var hit = _geometry.HitTestPoint(snapshot, row, localX,
+            (float)(row.TopY + row.Height * 0.5));
+        if (hit.BidiLevel % 2 != 0) return; // Visual RTL edge needs explicit affinity proof.
+        var source = Math.Clamp(hit.SourceStart, row.SourceStart,
+            row.SourceStart + row.SourceLength);
+        var residual = Math.Max(0, localX - hit.X);
+        if (hit.SourceLength > 0 && residual >= hit.Width)
+        {
+            source = Math.Min(contentEnd, hit.SourceStart + hit.SourceLength);
+            residual = 0;
+        }
+        RequestHorizontal(snapshot, frame, source, residual);
+    }
+
+    /// <summary>Maps OS scrollbar commands to source-bound horizontal requests.</summary>
+    private void HorizontalScrollbar(int command)
+    {
+        var frame = _frame;
+        var snapshot = _snapshot;
+        if (frame is null || snapshot is null || _binding is null) return;
+        var line = snapshot.GetLineIndexFromOffset(frame.Horizontal.SourceBoundary);
+        var start = snapshot.GetLineStartOffset(line);
+        var end = LineContentEnd(snapshot, line);
+        if (end == start) return;
+        switch (command)
+        {
+            case 0: PanHorizontal(-32); return;
+            case 1: PanHorizontal(32); return;
+            case 2: PanHorizontal(-Math.Max(32, _width - TextLeft - 32)); return;
+            case 3: PanHorizontal(Math.Max(32, _width - TextLeft - 32)); return;
+            case 6: RequestHorizontal(snapshot, frame, start, 0); return;
+            case 7: RequestHorizontal(snapshot, frame, end, 0); return;
+            case 4 or 5:
+                var info = new CanvasWin32.ScrollInfo
+                {
+                    Size = (uint)Marshal.SizeOf<CanvasWin32.ScrollInfo>(), Mask = 0x10
+                };
+                if (!CanvasWin32.GetScrollInfo(_window, 0, ref info)) return;
+                var offset = start + (int)Math.Round((end - start) *
+                    Math.Clamp(info.TrackPosition / (double)ScrollRange, 0, 1));
+                RequestHorizontal(snapshot, frame, offset, 0);
+                return;
+        }
+    }
+
+    /// <summary>Publishes only a versioned, grapheme-certified source boundary.</summary>
+    private void RequestHorizontal(TextSnapshot snapshot, CanvasFrame frame,
+        int sourceBoundary, double residual)
+    {
+        if (_composition || _binding is not { } binding ||
+            frame.Version != binding.BaseVersion ||
+            sourceBoundary == frame.Horizontal.SourceBoundary &&
+            Math.Abs(residual - frame.Horizontal.IntraClusterPixels) < 0.01) return;
+        try
+        {
+            // The pure viewport protects scalar/CRLF seams. The native input
+            // selector additionally certifies a bounded grapheme boundary.
+            _ = CanvasInputWindowSelector.Select(snapshot, sourceBoundary);
+        }
+        catch (CanvasInputWindowBoundaryException) { return; }
+        HorizontalAnchorRequested?.Invoke(new CanvasHorizontalAnchorRequest(
+            binding.DocumentGeneration, frame.Version, sourceBoundary,
+            HorizontalCaretAffinity.Leading, residual));
+    }
+
+    /// <summary>Returns the logical line end without its preserved CR/LF delimiter.</summary>
+    private static int LineContentEnd(TextSnapshot snapshot, int line)
+    {
+        if (line == snapshot.LineCount - 1) return snapshot.Length;
+        var start = snapshot.GetLineStartOffset(line);
+        var end = snapshot.GetLineStartOffset(line + 1);
+        if (end > start && snapshot.GetText(end - 1, 1)[0] == '\n') end--;
+        if (end > start && snapshot.GetText(end - 1, 1)[0] == '\r') end--;
+        return end;
     }
 
     private double ThumbDelta(double total, double scrollY)
@@ -1093,15 +1402,35 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private void UpdateScrollbar()
     {
         if (_window == 0 || _snapshot is null || _frame is null) return;
-        var total = Math.Max(_height, _snapshot.LineCount * LineHeight);
+        var total = Math.Max(BodyHeight, _snapshot.LineCount * LineHeight);
         var info = new CanvasWin32.ScrollInfo
         {
             Size = (uint)Marshal.SizeOf<CanvasWin32.ScrollInfo>(), Mask = 0x17,
             Minimum = 0, Maximum = ScrollRange,
-            Page = (uint)Math.Clamp(_height / total * ScrollRange, 1, ScrollRange),
+            Page = (uint)Math.Clamp(BodyHeight / total * ScrollRange, 1, ScrollRange),
             Position = (int)Math.Clamp(_frame.ScrollY / total * ScrollRange, 0, ScrollRange)
         };
         CanvasWin32.SetScrollInfo(_window, 1, ref info, true);
+
+        // A source-proportional thumb is deliberately not a pixel-width claim:
+        // measuring an entire 50 MiB logical line would defeat bounded shaping.
+        var line = _snapshot.GetLineIndexFromOffset(_frame.Horizontal.SourceBoundary);
+        var start = _snapshot.GetLineStartOffset(line);
+        var end = LineContentEnd(_snapshot, line);
+        var length = Math.Max(1, end - start);
+        var visibleSource = _frame.RowWindows.IsDefaultOrEmpty ? 1 :
+            Math.Max(1, _frame.RowWindows[0].Slice.SourceLength);
+        var horizontal = new CanvasWin32.ScrollInfo
+        {
+            Size = (uint)Marshal.SizeOf<CanvasWin32.ScrollInfo>(), Mask = 0x17,
+            Minimum = 0, Maximum = ScrollRange,
+            Page = (uint)Math.Clamp(visibleSource / (double)length * ScrollRange,
+                1, ScrollRange),
+            Position = (int)Math.Clamp(
+                (_frame.Horizontal.SourceBoundary - start) / (double)length * ScrollRange,
+                0, ScrollRange)
+        };
+        CanvasWin32.SetScrollInfo(_window, 0, ref horizontal, true);
     }
 
     private void EnsureBitmap()

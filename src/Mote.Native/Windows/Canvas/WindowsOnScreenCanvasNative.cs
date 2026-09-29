@@ -195,6 +195,15 @@ internal sealed unsafe class WindowsCanvasPainter : IDisposable
         fill(_renderTarget, &rect, _selectionBrush);
     }
 
+    /// <summary>Fills a themed non-document panel with the existing Direct2D brush cache.</summary>
+    internal void Fill(float left, float top, float right, float bottom, ThemeColor color)
+    {
+        if (right <= left || bottom <= top) return;
+        var rect = new RectF { Left = left, Top = top, Right = right, Bottom = bottom };
+        var fill = (delegate* unmanaged[Stdcall]<nint, RectF*, nint, void>)Slot(_renderTarget, 17);
+        fill(_renderTarget, &rect, SemanticBrush(color));
+    }
+
     /// <summary>Draws a severity-colored two-pixel diagnostic mark on a visible glyph run.</summary>
     internal void DiagnosticUnderline(float left, float top, float right, ThemeColor color)
     {

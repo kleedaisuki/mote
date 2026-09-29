@@ -281,6 +281,69 @@ internal sealed class AccessibleDocument
             priorLine = slice.Line;
             priorEnd = slice.SourceStart + slice.SourceLength;
         }
+        ValidateHorizontal(frame, snapshot);
+    }
+
+    /// <summary>
+    /// Rejects mixed-pass row metadata before a provider can infer geometry from
+    /// a frame. Legacy hand-built frames may omit rows, but not carry a stale or
+    /// internally inconsistent horizontal source anchor.
+    /// </summary>
+    private static void ValidateHorizontal(CanvasFrame frame, TextSnapshot snapshot)
+    {
+        var anchor = frame.Horizontal;
+        if ((uint)anchor.SourceBoundary > (uint)snapshot.Length ||
+            (uint)anchor.ReferenceLineStart > (uint)snapshot.Length ||
+            !Enum.IsDefined(anchor.Affinity) ||
+            !double.IsFinite(anchor.IntraClusterPixels) || anchor.IntraClusterPixels < 0 ||
+            anchor.MeasuredXFromStart is { } x && (!double.IsFinite(x) || x < 0))
+            throw new ArgumentException("Horizontal anchor is outside the source or pixel domain.", nameof(frame));
+
+        var line = snapshot.GetLineIndexFromOffset(anchor.SourceBoundary);
+        var lineStart = snapshot.GetLineStartOffset(line);
+        var contentEnd = LineContentEnd(snapshot, line);
+        if (anchor.ReferenceLineStart != lineStart ||
+            anchor.SourceBoundary > contentEnd ||
+            SplitsSurrogate(snapshot, anchor.SourceBoundary) ||
+            anchor.SourceBoundary == contentEnd && anchor.IntraClusterPixels != 0)
+            throw new ArgumentException("Horizontal anchor must be a source-content scalar edge.", nameof(frame));
+
+        var rows = frame.RowWindows;
+        if (rows.IsDefault)
+            throw new ArgumentException("Horizontal row collection must be initialized.", nameof(frame));
+        if (rows.IsEmpty) return;
+        if (rows.Length != frame.Slices.Count)
+            throw new ArgumentException("Horizontal rows must align with painted slices.", nameof(frame));
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var row = rows[i];
+            var slice = frame.Slices[i];
+            var end = slice.SourceStart + slice.SourceLength;
+            if (row.Slice != slice ||
+                row.LeftEdgeSourceBoundary < slice.SourceStart ||
+                row.LeftEdgeSourceBoundary > end ||
+                row.LeftEdgeSourceBoundary > LineContentEnd(snapshot, slice.Line) ||
+                SplitsSurrogate(snapshot, row.LeftEdgeSourceBoundary) ||
+                !Enum.IsDefined(row.Affinity) ||
+                !double.IsFinite(row.IntraClusterPixels) || row.IntraClusterPixels < 0)
+                throw new ArgumentException("Horizontal row must match its source slice and pixel domain.", nameof(frame));
+        }
+    }
+
+    /// <summary>Gets a line's source-content end without materializing a long line.</summary>
+    private static int LineContentEnd(TextSnapshot snapshot, int line)
+    {
+        if (line + 1 == snapshot.LineCount) return snapshot.Length;
+        var next = snapshot.GetLineStartOffset(line + 1);
+        return next >= 2 && snapshot.GetText(next - 2, 2) == "\r\n" ? next - 2 : next - 1;
+    }
+
+    /// <summary>Rejects a UTF-16 boundary inside a scalar pair.</summary>
+    private static bool SplitsSurrogate(TextSnapshot snapshot, int boundary)
+    {
+        if (boundary <= 0 || boundary >= snapshot.Length) return false;
+        var seam = snapshot.GetText(boundary - 1, 2);
+        return char.IsHighSurrogate(seam[0]) && char.IsLowSurrogate(seam[1]);
     }
 
     private static bool IsVisibleDelimiter(TextSnapshot snapshot, int start, int end)

@@ -107,6 +107,11 @@ public sealed class WindowsUiaFragmentExperimentTests
                 new AccessibleDocument(new AccessibleCanvasState(9, source.Snapshot, frame)),
                 new ViewportStub());
             var root = new UiaFragmentRootObject(core, hwnd);
+            root.BindWindow(hwnd);
+            root.SetSourceBodyClientHeight(0);
+            Assert.Equal(0, root.SourceBodyBounds.Height);
+            root.SetSourceBodyClientHeight(1);
+            Assert.Equal(root.CanvasBounds.Height, root.SourceBodyBounds.Height);
             var ownerThread = GetWindowThreadProcessId(hwnd, 0);
             Assert.NotEqual(0u, ownerThread);
             Assert.NotEqual(ownerThread, GetCurrentThreadId());

@@ -37,6 +37,73 @@ Chinese Pinyin candidate placement/cancel, UIA ranges outside the island,
 Windows Arm64 interactive input and physical frame latency remain separate
 release gates. Do not infer those from synthetic window messages.
 
+Horizontal canvas navigation is source-anchored, not a 50 MiB pixel-width
+measurement. Each visible row derives one DirectWrite origin from its bounded
+`HorizontalRowWindow`; paint, pointer hit-testing, selection, diagnostics and
+caret geometry use that same transform. `WM_MOUSEHWHEEL`, Shift+wheel and the
+horizontal scrollbar request version-tagged source boundaries; the scrollbar
+thumb is source-proportional and therefore approximate for variable-width text.
+The active RichEdit host additionally uses native caret pixel geometry. A
+DirectWrite-visible caret is reported as *unknown*, not visible, if native
+`EM_POSFROMCHAR` disagrees with it. On a 16 Ki ASCII host, RichEdit's multiline
+default wrapped source offset 3000 to Y=1233; `ES_AUTOHSCROLL` removed that
+early wrap, but a far index still crossed an internal line-width limit. The
+Windows controller therefore must bind a shorter platform-specific input
+interval. Real IME candidate placement remains unverified and must not be
+inferred from synthetic caret messages. Win32 contracts: [rich-edit styles],
+[caret coordinates], and [pixel scroll position].
+
+The input control is borderless and one visual row tall. The current opt-in
+experiment reserves a themed **bottom input ribbon** outside the source canvas;
+the canvas is the sole glyph painter for document rows, while the physical
+RichEdit caret and IME candidate stay in the explicitly labeled input strip.
+The ribbon shrinks the source viewport by one row. A tiny window whose client
+height cannot contain both becomes input-only until enlarged: source paint and
+source hit-test are suppressed and caret visibility is unknown, rather than
+letting the two regions silently overlap. `ViewportResized` reports the actual
+nonnegative body height, including zero; the controller's zero-height frame has
+no painted source slices. Reflow is deferred during IME preedit.
+This is a reversible diagnostic UX experiment, not a settled product layout:
+the candidate appears away from its source-text caret.
+
+Why the ribbon is being tested: a focused HWND probe on Windows build 26200
+compared the actual
+RichEdit `EM_POSFROMCHAR` positions (mapped into canvas client coordinates)
+with DirectWrite hit tests on 41 valid grapheme boundaries surrounding the
+active caret in a repeated `iW中🧪éمرحبا\t` line. The active caret was aligned,
+but nearby glyph positions diverged by as much as **63.3 px**; offsets visible
+inside the canvas also diverged. Two independent glyph painters must not both
+draw this row in a promoted editor. An active-row sole RichEdit painter could
+be reconsidered if it can cover the source window and own syntax/diagnostics,
+but the 2 Ki host alone does not establish that. The opt-in mode must not be
+described as default-ready without physical candidate and visual acceptance.
+
+The historical differential used the one-row overlay AOT SHA-256
+`93CBA034818E0CB9CA9371E8B5D4C4FD7C9AFCEA476BB0C83084A2ABFB7DD190`:
+for each of 41 `CanvasInputWindowSelector`-certified boundaries in active ±24,
+it compared `EM_POSFROMCHAR` + `MapWindowPoints(input,canvas)` with
+`DirectWrite.HitTest(source)` + the same row origin. The current focused HWND
+probe `.temp/WindowsHorizontalProbe/Probe.csproj` instead verifies that the
+new ribbon host is physically below the mixed-script source caret, so those
+two coordinate spaces must **not** be directly equated.
+The strict-one-file win-x64 AOT external workflow
+`tests/NativeWindowsHorizontalWorkflow.ps1` passed with binary SHA-256
+`93CBA034818E0CB9CA9371E8B5D4C4FD7C9AFCEA476BB0C83084A2ABFB7DD190`
+on Windows build 26200. Its 50 MiB unique tail selection copied source offset
+52,428,677 (43 UTF-16 units), then replaced that interval, saved and reopened
+with exact bytes; the RichEdit mirror remained at or below 2048 UTF-16 units.
+The earlier one-row overlay AOT corrected physical canvas PNGs are under
+`.temp/windows-horizontal/e138dbb44fda44898a8a705cb25d8351/` (old
+three-row host) and `.temp/windows-horizontal/a3f5a0040d534108b081b31feec19df0/`
+(one-row overlay host). These predate the bottom-ribbon experiment. A first
+new-binary clipboard-copy attempt timed out before a
+same-binary retry and three later runs passed; the intermittent failure is not
+explained and the external workflow remains diagnostic rather than a CI gate.
+
+[rich-edit styles]: https://learn.microsoft.com/en-us/windows/win32/controls/rich-edit-control-styles
+[caret coordinates]: https://learn.microsoft.com/en-us/windows/win32/controls/em-posfromchar
+[pixel scroll position]: https://learn.microsoft.com/en-us/windows/win32/controls/em-setscrollpos
+
 `WindowsDirectWriteCanvas` is a read-only platform geometry adapter for the
 source-backed `ViewportSlice` model. It copies at most 16 Ki UTF-16 code units
 from one immutable snapshot into an OS `IDWriteTextLayout`; the slice excludes

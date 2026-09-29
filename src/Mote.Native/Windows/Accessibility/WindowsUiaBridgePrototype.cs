@@ -138,6 +138,17 @@ internal sealed partial class WindowsUiaBridgePrototype
         finally { Marshal.Release(pointer); }
     }
 
+    /// <summary>
+    /// Publishes the physical source-body height in canvas client coordinates.
+    /// Zero means the tiny window paints only the native input ribbon. The
+    /// diagnostic fragment converts these units to UIA screen coordinates.
+    /// </summary>
+    internal void SetSourceBodyClientHeight(int height)
+    {
+        if (height < 0) throw new ArgumentOutOfRangeException(nameof(height));
+        _fragmentRoot?.SetSourceBodyClientHeight(height);
+    }
+
     /// <summary>Releases UIA's HWND-to-provider event map when the window is destroyed.</summary>
     internal void Close(nint hwnd)
     {

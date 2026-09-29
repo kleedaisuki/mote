@@ -69,6 +69,16 @@ internal partial interface IRawElementProviderHwndOverrideAbi
 [StructLayout(LayoutKind.Sequential)]
 internal readonly record struct UiaWin32Rect(int Left, int Top, int Right, int Bottom);
 
+/// <summary>Mutable Win32 POINT for client-to-screen coordinate mapping.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct UiaWin32Point
+{
+    /// <summary>Horizontal coordinate in the caller's DPI context.</summary>
+    internal int X;
+    /// <summary>Vertical coordinate in the caller's DPI context.</summary>
+    internal int Y;
+}
+
 /// <summary>Native GUITHREADINFO for a focus query against the input HWND's own thread.</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct UiaGuiThreadInfo
@@ -107,6 +117,7 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
     private readonly nint _inputHwnd;
     private readonly UiaFragmentDocumentObject _document;
     private nint _canvasHwnd;
+    private int _sourceBodyClientHeight = -1;
 
     /// <summary>Creates a stable two-node fragment for one canvas/input pair.</summary>
     internal UiaFragmentRootObject(WindowsTextProviderCore core, nint inputHwnd)
@@ -121,6 +132,16 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
 
     /// <summary>Associates the fragment with its actual canvas HWND.</summary>
     internal void BindWindow(nint hwnd) => _canvasHwnd = hwnd;
+
+    /// <summary>
+    /// Receives the source-body height in the canvas HWND's client coordinates.
+    /// A zero-height body is input-only; a negative value is never published.
+    /// </summary>
+    internal void SetSourceBodyClientHeight(int height)
+    {
+        if (height < 0) throw new ArgumentOutOfRangeException(nameof(height));
+        Volatile.Write(ref _sourceBodyClientHeight, height);
+    }
 
     /// <summary>Invalidates retained COM objects while the shared source stays publishable.</summary>
     internal void Detach() => _core.Detach();
@@ -156,15 +177,28 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
         inputThread != 0 && inputThread == foregroundThread &&
         inputHwnd != 0 && focusedHwnd == inputHwnd;
 
-    /// <summary>Gets the canvas rectangle for both the Pane and logical Document.</summary>
-    internal UiaRect CanvasBounds
+    /// <summary>Gets the complete canvas Pane extent in screen coordinates.</summary>
+    internal UiaRect CanvasBounds => ScreenBoundsForClientHeight(-1);
+
+    /// <summary>Gets only the physically painted source body, excluding the ribbon.</summary>
+    internal UiaRect SourceBodyBounds =>
+        ScreenBoundsForClientHeight(Volatile.Read(ref _sourceBodyClientHeight));
+
+    private UiaRect ScreenBoundsForClientHeight(int requestedHeight)
     {
-        get
-        {
-            if (_canvasHwnd == 0 || !GetWindowRect(_canvasHwnd, out var native)) return default;
-            return new UiaRect(native.Left, native.Top,
-                Math.Max(0, native.Right - native.Left), Math.Max(0, native.Bottom - native.Top));
-        }
+        if (_canvasHwnd == 0 || !GetClientRect(_canvasHwnd, out var client)) return default;
+        var clientHeight = Math.Max(0, client.Bottom - client.Top);
+        var bodyHeight = requestedHeight < 0 ? clientHeight :
+            Math.Clamp(requestedHeight, 0, clientHeight);
+        var topLeft = new UiaWin32Point { X = client.Left, Y = client.Top };
+        var bottomRight = new UiaWin32Point { X = client.Right, Y = client.Top + bodyHeight };
+        if (!ClientToScreen(_canvasHwnd, ref topLeft) ||
+            !ClientToScreen(_canvasHwnd, ref bottomRight)) return default;
+        // These points share the canvas caller's DPI context. UIA physical-pixel
+        // parity at 144/192 DPI remains a target-host gate, not an assumption.
+        return new UiaRect(topLeft.X, topLeft.Y,
+            Math.Max(0, bottomRight.X - topLeft.X),
+            Math.Max(0, bottomRight.Y - topLeft.Y));
     }
 
     /// <inheritdoc />
@@ -266,10 +300,9 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
     {
         provider = 0;
         if (!_core.IsAttached) return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE;
-        var bounds = CanvasBounds;
-        if (x < bounds.Left || y < bounds.Top || x >= bounds.Left + bounds.Width ||
-            y >= bounds.Top + bounds.Height) return 0;
-        return UiaFragmentPointers.Get(_document, typeof(IRawElementProviderFragmentAbi).GUID,
+        if (!Contains(CanvasBounds, x, y)) return 0;
+        var element = Contains(SourceBodyBounds, x, y) ? (object)_document : this;
+        return UiaFragmentPointers.Get(element, typeof(IRawElementProviderFragmentAbi).GUID,
             out provider);
     }
 
@@ -293,11 +326,18 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
             out provider);
     }
 
+    private static bool Contains(UiaRect rect, double x, double y) =>
+        rect.Width > 0 && rect.Height > 0 && x >= rect.Left && y >= rect.Top &&
+        x < rect.Left + rect.Width && y < rect.Top + rect.Height;
+
     [LibraryImport("Uiautomationcore.dll")]
     private static partial int UiaHostProviderFromHwnd(nint hwnd, out nint provider);
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool GetWindowRect(nint hwnd, out UiaWin32Rect rectangle);
+    private static partial bool GetClientRect(nint hwnd, out UiaWin32Rect rectangle);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ClientToScreen(nint hwnd, ref UiaWin32Point point);
     [LibraryImport("user32.dll", EntryPoint = "SetFocus")]
     private static partial nint SetFocusHwnd(nint hwnd);
     [LibraryImport("user32.dll")]
@@ -400,7 +440,7 @@ internal sealed partial class UiaFragmentDocumentObject : IRawElementProviderSim
     {
         rectangle = default;
         if (!_core.IsAttached) return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE;
-        rectangle = _root.CanvasBounds;
+        rectangle = _root.SourceBodyBounds;
         return 0;
     }
 

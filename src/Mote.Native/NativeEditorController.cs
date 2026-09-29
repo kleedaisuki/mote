@@ -101,6 +101,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         {
             canvasShell.CanvasEditCommitted += CanvasEdited;
             canvasShell.CanvasScrollRequested += CanvasScrolled;
+            canvasShell.CanvasHorizontalAnchorRequested += CanvasHorizontalAnchorRequested;
             canvasShell.CanvasViewportResized += CanvasResized;
             canvasShell.CanvasSelectionRequested += CanvasSelected;
             canvasShell.CanvasAccessibilityFailed += CanvasAccessibilityFailed;
@@ -598,6 +599,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             MoteTelemetry.Record(TelemetryEvent.EditCommitted,
                 dimensions: Dimensions(_document.Snapshot));
             ShowDocument();
+            EnsureCanvasCaretVisible(newCaret);
             ScheduleAnalysis(mark);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -617,10 +619,35 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         ScheduleAnalysis();
     }
 
+    /// <summary>
+    /// Applies one versioned, platform-shaped horizontal edge without changing
+    /// document contents or the global selection. An IME-owned host is never
+    /// repositioned under an active candidate.
+    /// </summary>
+    private void CanvasHorizontalAnchorRequested(CanvasHorizontalAnchorRequest request)
+    {
+        if (_canvas is null || _canvasShell is null || _disposed ||
+            _canvasShell.IsCanvasComposing ||
+            request.DocumentGeneration != _canvasGeneration ||
+            request.BaseVersion != _document.Snapshot.Version) return;
+        try
+        {
+            _canvas.SetHorizontalAnchor(request.SourceBoundary, request.Affinity,
+                request.IntraClusterPixels);
+        }
+        catch (ArgumentException)
+        {
+            // A stale or non-grapheme platform edge must never alter source state.
+            return;
+        }
+        ShowDocument();
+        ScheduleAnalysis();
+    }
+
     /// <summary>Recomputes only visible geometry after a native view resize.</summary>
     private void CanvasResized(double height)
     {
-        if (_canvas is null || !double.IsFinite(height) || height <= 0) return;
+        if (_canvas is null || !double.IsFinite(height) || height < 0) return;
         _canvas.Resize(height);
         ShowDocument();
         ScheduleAnalysis();
@@ -683,18 +710,17 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 preserveSourceFocus: true);
         }
         ShowDocument();
-        if (_lastCanvasFrame is not { } published ||
-            !ContainsPaintedBoundary(published, range.Start))
+        if (!EnsureCanvasCaretVisible(range.Start))
             return AccessibleRevealResult.NotVisible;
         ScheduleAnalysis();
         return AccessibleRevealResult.Revealed;
     }
 
     /// <summary>
-    /// A successful accessibility reveal must include the requested source
-    /// boundary in a bounded painted slice, not merely the logical row.
+    /// A bounded source slice is necessary for a caret, but not proof that
+    /// its glyph falls inside the physical viewport.
     /// </summary>
-    private static bool ContainsPaintedBoundary(CanvasFrame frame, int sourceOffset)
+    private static bool ContainsShapedBoundary(CanvasFrame frame, int sourceOffset)
     {
         foreach (var slice in frame.Slices)
         {
@@ -889,8 +915,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             var activeSource = _navigation.Active;
             // Visible rows may contain unpainted gaps inside an exceptionally
             // long line. The first/last slice envelope is not a caret oracle.
-            if (!ContainsPaintedBoundary(frame, activeSource)) canvas.Reveal(activeSource);
+            if (!ContainsShapedBoundary(frame, activeSource)) canvas.Reveal(activeSource);
             ShowDocument();
+            EnsureCanvasCaretVisible(activeSource);
             ScheduleAnalysis();
             return;
         }
@@ -902,6 +929,24 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _requestedCaretSource = caret;
         ShowDocument();
         ScheduleAnalysis();
+    }
+
+    /// <summary>
+    /// Requires exact-version OS glyph geometry before claiming a caret is
+    /// visible. If it is shaped but horizontally clipped, one source-anchored
+    /// rebase is allowed; unknown geometry never becomes false success.
+    /// </summary>
+    private bool EnsureCanvasCaretVisible(int sourceOffset)
+    {
+        if (_canvas is null || _canvasShell is null ||
+            _lastCanvasFrame is not { } frame) return false;
+        var proof = _canvasShell.GetCanvasCaretGeometry(frame, sourceOffset);
+        if (proof is { IsVisible: true }) return true;
+        if (proof is null || _canvasShell.IsCanvasComposing) return false;
+        _canvas.AnchorHorizontalAtSource(sourceOffset);
+        ShowDocument();
+        return _lastCanvasFrame is { } rebased &&
+            _canvasShell.GetCanvasCaretGeometry(rebased, sourceOffset) is { IsVisible: true };
     }
 
     private void ProjectSelectionOrMoveToPage()
@@ -1005,7 +1050,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         if (needsBinding)
         {
             CanvasInputWindow input;
-            try { input = CanvasInputWindowSelector.Select(snapshot, _navigation.Active); }
+            try
+            {
+                input = CanvasInputWindowSelector.Select(snapshot, _navigation.Active,
+                    shell.MaxCanvasInputLength);
+            }
             catch (CanvasInputWindowBoundaryException)
             {
                 // Do not offer a half-grapheme context to the OS input method.

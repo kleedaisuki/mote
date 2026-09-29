@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Mote.Engine;
 
 namespace Mote.Native.Viewport;
@@ -24,11 +25,13 @@ internal readonly record struct ViewportSlice(
 /// </summary>
 internal sealed class ContinuousViewport
 {
+    private const int MaxSourceWindowLength = 16 * 1024;
     private readonly SparseHeightIndex _heights = new();
     private readonly int _maxSliceLength;
     private TextSnapshot _snapshot;
     private double _baseHeight;
     private ViewportAnchor _anchor;
+    private HorizontalAnchor _horizontal;
 
     /// <summary>Creates a no-wrap viewport with a bounded UTF-16 shaping request size.</summary>
     /// <example><code>var view = new ContinuousViewport(document.Snapshot, 18, 4096);
@@ -38,10 +41,12 @@ internal sealed class ContinuousViewport
     {
         _snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         ValidateHeight(lineHeight, nameof(lineHeight));
-        if (maxSliceLength < 2) throw new ArgumentOutOfRangeException(nameof(maxSliceLength));
+        if (maxSliceLength is < 2 or > MaxSourceWindowLength)
+            throw new ArgumentOutOfRangeException(nameof(maxSliceLength));
         _baseHeight = lineHeight;
         _maxSliceLength = maxSliceLength;
         _anchor = new ViewportAnchor(0, 0);
+        _horizontal = new HorizontalAnchor(0, 0, HorizontalCaretAffinity.Leading, 0, null);
     }
 
     /// <summary>Immutable snapshot against which all coordinates are interpreted.</summary>
@@ -50,8 +55,8 @@ internal sealed class ContinuousViewport
     /// <summary>Current source anchor and fractional row offset.</summary>
     internal ViewportAnchor TopAnchor => _anchor;
 
-    /// <summary>Current horizontal pixel offset, interpreted by a platform shaper.</summary>
-    internal double HorizontalOffset { get; private set; }
+    /// <summary>Source-backed left edge; its reference column survives vertical scroll.</summary>
+    internal HorizontalAnchor HorizontalAnchor => _horizontal;
 
     /// <summary>Baseline height for an unmeasured logical row.</summary>
     internal double LineHeight => _baseHeight;
@@ -65,11 +70,46 @@ internal sealed class ContinuousViewport
     /// <summary>Absolute Y coordinate of the viewport top under current measurements.</summary>
     internal double ScrollY => GetDocumentY(_anchor.SourceOffset) + _anchor.IntraRowY;
 
-    /// <summary>Changes only the horizontal viewport state; source content is not copied.</summary>
-    internal void SetHorizontalOffset(double pixels)
+    /// <summary>
+    /// Atomically changes horizontal source edge and local pixel residual. The
+    /// platform shaper must supply a grapheme-safe edge and normalize residual
+    /// against a measured cluster; this pure model checks UTF-16/CRLF safety.
+    /// </summary>
+    internal void SetHorizontalAnchor(int sourceBoundary,
+        HorizontalCaretAffinity affinity = HorizontalCaretAffinity.Leading,
+        double intraClusterPixels = 0, double? measuredXFromStart = null)
     {
-        if (!double.IsFinite(pixels) || pixels < 0) throw new ArgumentOutOfRangeException(nameof(pixels));
-        HorizontalOffset = pixels;
+        if ((uint)sourceBoundary > (uint)_snapshot.Length)
+            throw new ArgumentOutOfRangeException(nameof(sourceBoundary));
+        if (!Enum.IsDefined(affinity)) throw new ArgumentOutOfRangeException(nameof(affinity));
+        if (!double.IsFinite(intraClusterPixels) || intraClusterPixels < 0)
+            throw new ArgumentOutOfRangeException(nameof(intraClusterPixels));
+        if (measuredXFromStart is { } x && (!double.IsFinite(x) || x < 0))
+            throw new ArgumentOutOfRangeException(nameof(measuredXFromStart));
+        var line = _snapshot.GetLineIndexFromOffset(sourceBoundary);
+        var lineStart = _snapshot.GetLineStartOffset(line);
+        var contentEnd = GetLineContentEnd(line, lineStart);
+        if (sourceBoundary > contentEnd || SplitsSurrogate(sourceBoundary))
+            throw new ArgumentException("Horizontal source edge must be inside line content at a UTF-16 scalar boundary.",
+                nameof(sourceBoundary));
+        if (sourceBoundary == contentEnd && intraClusterPixels != 0)
+            throw new ArgumentException("A line-end edge has no following cluster for a pixel residual.",
+                nameof(intraClusterPixels));
+        _horizontal = new HorizontalAnchor(lineStart, sourceBoundary, affinity,
+            intraClusterPixels, measuredXFromStart);
+    }
+
+    /// <summary>
+    /// Projects a source request inside a delimiter or surrogate pair to the
+    /// preceding visible scalar edge without changing the requested source offset.
+    /// </summary>
+    internal int ClampToLineContentBoundary(int sourceOffset)
+    {
+        if ((uint)sourceOffset > (uint)_snapshot.Length)
+            throw new ArgumentOutOfRangeException(nameof(sourceOffset));
+        var line = _snapshot.GetLineIndexFromOffset(sourceOffset);
+        var start = _snapshot.GetLineStartOffset(line);
+        return SnapStart(Math.Min(sourceOffset, GetLineContentEnd(line, start)), start);
     }
 
     /// <summary>Anchors a source boundary, preserving interior offsets including CRLF seams.</summary>
@@ -106,6 +146,7 @@ internal sealed class ContinuousViewport
         ValidateHeight(lineHeight, nameof(lineHeight));
         _baseHeight = lineHeight;
         _heights.Clear();
+        _horizontal = _horizontal with { IntraClusterPixels = 0, MeasuredXFromStart = null };
         ScrollToSource(_anchor.SourceOffset, _anchor.IntraRowY);
     }
 
@@ -136,15 +177,32 @@ internal sealed class ContinuousViewport
         if (after.Length != expectedLength)
             throw new ArgumentException("Snapshot length does not match the committed change.", nameof(after));
 
-        var oldOffset = _anchor.SourceOffset;
-        var end = change.Start + change.DeleteLength;
-        var newOffset = oldOffset < change.Start ? oldOffset :
-            oldOffset <= end ? change.Start + change.InsertLength :
-            oldOffset + change.InsertLength - change.DeleteLength;
+        var newOffset = TransformRight(_anchor.SourceOffset, change);
+        var horizontalOffset = _horizontal.SourceBoundary;
+        var newHorizontalBoundary = TransformRight(horizontalOffset, change);
+        var oldReferenceLine = _snapshot.GetLineIndexFromOffset(horizontalOffset);
+        var changedLine = _snapshot.GetLineIndexFromOffset(change.Start);
+        var oldLineCount = _snapshot.LineCount;
+        var transformedReferenceStart = TransformRight(_horizontal.ReferenceLineStart, change);
+        var editDoesNotTouchReference = oldReferenceLine != changedLine &&
+            (change.Start + change.DeleteLength < horizontalOffset || change.Start > horizontalOffset);
+        var affinity = _horizontal.Affinity;
         var intraRowY = _anchor.IntraRowY;
         _snapshot = after;
         _heights.Clear();
         ScrollToSource(Math.Clamp(newOffset, 0, after.Length), intraRowY);
+        var horizontalLine = after.GetLineIndexFromOffset(Math.Clamp(newHorizontalBoundary, 0, after.Length));
+        var horizontalStart = after.GetLineStartOffset(horizontalLine);
+        var horizontalEnd = GetLineContentEnd(horizontalLine, horizontalStart);
+        var safeHorizontal = SnapStart(Math.Min(newHorizontalBoundary, horizontalEnd), horizontalStart);
+        // A join/split can leave the caret offset transformed correctly while
+        // changing the contextual glyph next to it. Preserve the pixel residual
+        // only when the reference line survives the edit unchanged in structure.
+        var preserveResidual = editDoesNotTouchReference &&
+            transformedReferenceStart == horizontalStart &&
+            (change.Start > horizontalOffset || oldLineCount == after.LineCount);
+        _horizontal = new HorizontalAnchor(horizontalStart, safeHorizontal, affinity,
+            preserveResidual && safeHorizontal < horizontalEnd ? _horizontal.IntraClusterPixels : 0, null);
     }
 
     /// <summary>Compatibility adapter for callers that still hold an inserted-text change.</summary>
@@ -215,7 +273,47 @@ internal sealed class ContinuousViewport
         return result;
     }
 
-    private int GetLineContentEnd(int line, int start)
+    /// <summary>
+    /// Resolves one bounded source window for each visible row from the shared
+    /// horizontal source column. This is a source-window contract, not pixel
+    /// shaping: a platform must certify contextual seams before claiming exact
+    /// caret, selection, or accessibility geometry.
+    /// </summary>
+    internal ImmutableArray<HorizontalRowWindow> GetHorizontalRows(
+        double viewportHeight, int maxRows = 512)
+    {
+        if (!double.IsFinite(viewportHeight) || viewportHeight < 0)
+            throw new ArgumentOutOfRangeException(nameof(viewportHeight));
+        if (maxRows < 0) throw new ArgumentOutOfRangeException(nameof(maxRows));
+        var rows = ImmutableArray.CreateBuilder<HorizontalRowWindow>(Math.Min(maxRows, 64));
+        var column = _horizontal.SourceBoundary - _horizontal.ReferenceLineStart;
+        var referenceLine = _snapshot.GetLineIndexFromOffset(_horizontal.SourceBoundary);
+        var line = _snapshot.GetLineIndexFromOffset(_anchor.SourceOffset);
+        var y = -_anchor.IntraRowY;
+        while (line < _snapshot.LineCount && y < viewportHeight && rows.Count < maxRows)
+        {
+            var start = _snapshot.GetLineStartOffset(line);
+            var end = GetLineContentEnd(line, start);
+            var left = SnapStart(start + Math.Min(column, end - start), start);
+            var sliceStart = end - start <= _maxSliceLength ? start :
+                Math.Max(start, left - Math.Min(64, _maxSliceLength / 8));
+            sliceStart = SnapStart(sliceStart, start);
+            var sliceEnd = SnapEnd(Math.Min(end, sliceStart + _maxSliceLength), sliceStart, end);
+            var height = GetRowHeight(line);
+            var slice = new ViewportSlice(line, sliceStart, sliceEnd - sliceStart,
+                y, height, sliceStart > start, sliceEnd < end);
+            var residual = left == end && line != referenceLine
+                ? 0 : _horizontal.IntraClusterPixels;
+            rows.Add(new HorizontalRowWindow(slice, left, _horizontal.Affinity, residual));
+            y += height;
+            line++;
+        }
+
+        return rows.ToImmutable();
+    }
+
+    /// <summary>Returns a logical line's source content end, excluding its preserved delimiter.</summary>
+    internal int GetLineContentEnd(int line, int start)
     {
         if (line == _snapshot.LineCount - 1) return _snapshot.Length;
         var end = _snapshot.GetLineStartOffset(line + 1);
@@ -231,6 +329,13 @@ internal sealed class ContinuousViewport
         return char.IsHighSurrogate(pair[0]) && char.IsLowSurrogate(pair[1]) ? offset - 1 : offset;
     }
 
+    private bool SplitsSurrogate(int offset)
+    {
+        if (offset <= 0 || offset >= _snapshot.Length) return false;
+        var pair = _snapshot.GetText(offset - 1, 2);
+        return char.IsHighSurrogate(pair[0]) && char.IsLowSurrogate(pair[1]);
+    }
+
     private int SnapEnd(int offset, int start, int lineEnd)
     {
         if (offset >= lineEnd || offset <= start) return offset;
@@ -240,6 +345,14 @@ internal sealed class ContinuousViewport
     }
 
     private double GetRowHeight(int line) => _baseHeight + _heights.GetDelta(line);
+
+    private static int TransformRight(int offset, TextChangeRange change)
+    {
+        var end = change.Start + change.DeleteLength;
+        return offset < change.Start ? offset :
+            offset <= end ? change.Start + change.InsertLength :
+            offset + change.InsertLength - change.DeleteLength;
+    }
 
     private static void ValidateHeight(double height, string name)
     {

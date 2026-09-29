@@ -1,4 +1,5 @@
 using Mote.Engine;
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Mote.Native;
 using Mote.Native.Accessibility;
@@ -340,6 +341,84 @@ public sealed class AccessibilityDocumentTests
         var range = provider.DocumentRange;
         model.Invalidate();
         return (provider, range, weak);
+    }
+
+    /// <summary>Published horizontal rows must be from exactly the same source resolution.</summary>
+    [Fact]
+    public void Horizontal_rows_reject_mixed_slices_edges_and_nonfinite_residuals()
+    {
+        using var source = new Document("abc\r\n😀xyz\nlast");
+        var canvas = new CanvasInteraction(source.Snapshot, 20, 100, maxSliceLength: 16);
+        var frame = canvas.Frame();
+        Assert.Equal(3, frame.RowWindows.Length);
+        var model = new AccessibleDocument(new AccessibleCanvasState(1, source.Snapshot, frame));
+        Assert.Equal(source.Snapshot.Length, model.DocumentRange.End);
+
+        void Reject(CanvasFrame bad) => Assert.Throws<ArgumentException>(() =>
+            new AccessibleDocument(new AccessibleCanvasState(1, source.Snapshot, bad)));
+
+        Reject(frame with { RowWindows = ImmutableArray.Create(frame.RowWindows[0]) });
+        Reject(frame with { RowWindows = frame.RowWindows.SetItem(0,
+            frame.RowWindows[0] with { Slice = frame.RowWindows[0].Slice with { SourceLength = 2 } }) });
+        Reject(frame with { RowWindows = frame.RowWindows.SetItem(0,
+            frame.RowWindows[0] with { LeftEdgeSourceBoundary = 4 }) });
+        Reject(frame with { RowWindows = frame.RowWindows.SetItem(1,
+            frame.RowWindows[1] with { LeftEdgeSourceBoundary = 6 }) }); // Emoji scalar seam.
+        Reject(frame with { RowWindows = frame.RowWindows.SetItem(0,
+            frame.RowWindows[0] with { IntraClusterPixels = double.NaN }) });
+    }
+
+    /// <summary>Malformed horizontal anchors cannot replace an atomic accessible publication.</summary>
+    [Fact]
+    public void Horizontal_anchor_checks_reference_content_and_pixel_domain_before_publish()
+    {
+        using var source = new Document("abc\r\n😀xyz\nlast");
+        var frame = new CanvasInteraction(source.Snapshot, 20, 100).Frame();
+        var model = new AccessibleDocument(new AccessibleCanvasState(4, source.Snapshot, frame));
+
+        void Reject(HorizontalAnchor anchor) => Assert.Throws<ArgumentException>(() =>
+            model.Publish(new AccessibleCanvasState(5, source.Snapshot,
+                frame with { Horizontal = anchor })));
+
+        Reject(frame.Horizontal with { ReferenceLineStart = 5 });
+        Reject(frame.Horizontal with { SourceBoundary = 4 }); // CRLF delimiter interior.
+        Reject(frame.Horizontal with { ReferenceLineStart = 5, SourceBoundary = 6 }); // Emoji scalar seam.
+        Reject(frame.Horizontal with { IntraClusterPixels = double.PositiveInfinity });
+        Reject(frame.Horizontal with { MeasuredXFromStart = double.NaN });
+        Assert.Equal(4, model.Generation);
+        Assert.Equal(source.Snapshot.Length, model.DocumentRange.End);
+    }
+
+    /// <summary>
+    /// A zero-height input-only ribbon cannot expose nominal source rows; normal
+    /// body restoration republishes visible ranges without changing source.
+    /// </summary>
+    [Fact]
+    public void Zero_body_frame_is_unpainted_then_restores_visible_source_ranges()
+    {
+        using var source = new Document("first\nsecond");
+        var canvas = new CanvasInteraction(source.Snapshot, 20, 0);
+        var empty = canvas.Frame();
+        Assert.Empty(empty.Slices);
+        Assert.True(empty.RowWindows.IsEmpty);
+        var model = new AccessibleDocument(new AccessibleCanvasState(1, source.Snapshot, empty));
+        var mac = new MacAccessibilityTextCore(model, new ViewportStub());
+        var only = Assert.Single(model.VisibleRanges());
+        Assert.Equal(0, only.Length);
+        Assert.Equal(0, mac.VisibleCharacterRange.Length);
+
+        canvas.Resize(40);
+        model.Publish(new AccessibleCanvasState(1, source.Snapshot, canvas.Frame()));
+        Assert.NotEmpty(canvas.Frame().Slices);
+        Assert.Contains(model.VisibleRanges(), range => range.Length > 0);
+        Assert.True(mac.VisibleCharacterRange.Length > 0);
+
+        canvas.Resize(0);
+        model.Publish(new AccessibleCanvasState(1, source.Snapshot, canvas.Frame()));
+        Assert.Empty(canvas.Frame().Slices);
+        Assert.Equal(0, Assert.Single(model.VisibleRanges()).Length);
+        Assert.Equal(0, mac.VisibleCharacterRange.Length);
+        Assert.Equal(source.Snapshot.Length, model.DocumentRange.End);
     }
 
     private static AccessibleCanvasState Bind(TextSnapshot snapshot, int anchor, int active,

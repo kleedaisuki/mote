@@ -768,6 +768,39 @@ public sealed class NativeControllerTests
         Assert.Empty(shell.Errors);
     }
 
+    /// <summary>A ribbon-only physical height publishes no source rows, then restores them.</summary>
+    [Fact]
+    public async Task Canvas_zero_body_resize_keeps_global_selection_and_document_version()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("tiny-canvas.txt");
+        await File.WriteAllTextAsync(path, "alpha\nbeta\n");
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.GetText() == "alpha\nbeta\n");
+        shell.SelectCanvas(1, 7);
+        var before = shell.CanvasFrame!;
+        Assert.NotEmpty(before.Slices);
+
+        shell.ResizeCanvas(0);
+        var hidden = shell.CanvasFrame!;
+        Assert.Empty(hidden.Slices);
+        Assert.Empty(hidden.RowWindows);
+        Assert.Equal(before.Version, hidden.Version);
+        Assert.Equal((before.SelectionAnchor, before.SelectionActive),
+            (hidden.SelectionAnchor, hidden.SelectionActive));
+        Assert.Equal("alpha\nbeta\n", shell.CanvasBinding!.Snapshot.GetText());
+
+        shell.ResizeCanvas(100);
+        var restored = shell.CanvasFrame!;
+        Assert.NotEmpty(restored.Slices);
+        Assert.Equal(before.Version, restored.Version);
+        Assert.Equal((before.SelectionAnchor, before.SelectionActive),
+            (restored.SelectionAnchor, restored.SelectionActive));
+        Assert.Empty(shell.Errors);
+    }
+
     /// <summary>A stale OS deletion disagreeing with global selection must not mutate source.</summary>
     [Fact]
     public async Task Canvas_selection_mismatch_rejects_and_rebinds_without_mutation()
@@ -954,6 +987,7 @@ public sealed class NativeControllerTests
             initial.BaseVersion, initial.BindingNonce, new TextChange(0, 0, source), source.Length));
         var target = source.IndexOf("line11000", StringComparison.Ordinal);
         var current = accessible.MakeRange(target, target + "line11000".Length);
+        shell.CanvasGeometryProbe = ProveVisibleSourceSlice;
         var before = shell.CanvasFrame;
 
         Assert.Equal(AccessibleRevealResult.StaleRange, viewport.TryReveal(stale, true));
@@ -990,6 +1024,7 @@ public sealed class NativeControllerTests
 
         shell.RequestNew();
         var freshRange = accessible.MakeRange(0, 0);
+        shell.CanvasGeometryProbe = ProveVisibleSourceSlice;
         Assert.Equal(oldRange.Version, freshRange.Version);
         Assert.NotEqual(oldRange.Generation, freshRange.Generation);
         var frame = shell.CanvasFrame;
@@ -1016,12 +1051,66 @@ public sealed class NativeControllerTests
         var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
         var range = accessible.MakeRange(target, target + 1);
         var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
+        shell.CanvasGeometryProbe = ProveVisibleSourceSlice;
         Assert.Equal(AccessibleRevealResult.Revealed, viewport.TryReveal(range, alignToTop: false));
         Assert.Contains(shell.CanvasFrame!.Slices, slice => slice.SourceStart <= target &&
             target < slice.SourceStart + slice.SourceLength);
         Assert.All(shell.CanvasFrame.Slices, slice => Assert.InRange(slice.SourceLength, 0, 16 * 1024));
         Assert.InRange(shell.CanvasBinding!.InputSourceText.Length, 0, 16 * 1024);
         Assert.Equal("x", accessible.GetText(range));
+    }
+
+    /// <summary>A 16 Ki source slice does not prove a caret at column 3,000 fits in 600 screen pixels.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Canvas_accessibility_reveal_requires_current_frame_pixel_proof(bool visibleAfterRebase)
+    {
+        using var temp = new RepoTemp();
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, null);
+        controller.Run();
+        shell.ResizeCanvas(600);
+        var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
+        var stale = accessible.MakeRange(0, 0);
+        var first = shell.CanvasBinding!;
+        var source = new string('a', 16 * 1024);
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(first.DocumentGeneration,
+            first.BaseVersion, first.BindingNonce, new TextChange(0, 0, source), source.Length));
+        const int target = 3000;
+        var range = accessible.MakeRange(target, target + 1);
+        var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
+        Assert.Contains(shell.CanvasFrame!.Slices, slice => slice.SourceStart <= target &&
+            target < slice.SourceStart + slice.SourceLength);
+        var version = shell.CanvasBinding!.BaseVersion;
+        var calls = 0;
+        shell.CanvasGeometryProbe = (frame, offset) =>
+        {
+            calls++;
+            Assert.Equal(target, offset);
+            return new CanvasCaretGeometry(3000, 0, 20,
+                visibleAfterRebase && frame.Horizontal.SourceBoundary == target);
+        };
+
+        var before = shell.CanvasFrame;
+        Assert.Equal(AccessibleRevealResult.StaleRange, viewport.TryReveal(stale, true));
+        shell.IsCanvasComposing = true;
+        Assert.Equal(AccessibleRevealResult.CompositionBlocked, viewport.TryReveal(range, true));
+        shell.IsCanvasComposing = false;
+        Assert.Same(before, shell.CanvasFrame);
+        Assert.Equal(0, calls);
+
+        var result = viewport.TryReveal(range, true);
+        Assert.Equal(visibleAfterRebase ? AccessibleRevealResult.Revealed : AccessibleRevealResult.NotVisible,
+            result);
+        Assert.Equal(2, calls);
+        Assert.Equal(target, shell.CanvasFrame!.Horizontal.SourceBoundary);
+        Assert.Equal(version, shell.CanvasBinding!.BaseVersion);
+        Assert.Equal(source.Length, shell.CanvasBinding.Snapshot.Length);
+        Assert.Equal("a", shell.CanvasBinding.Snapshot.GetText(target, 1));
+        Assert.All(shell.CanvasFrame.RowWindows, row =>
+            Assert.InRange(row.Slice.SourceLength, 0, 16 * 1024));
+        Assert.Empty(shell.Errors);
     }
 
     /// <summary>An unpaintable CRLF interior must not be falsely reported as revealed.</summary>
@@ -1071,6 +1160,7 @@ public sealed class NativeControllerTests
         var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
         var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
         var beginning = accessible.MakeRange(600, 601);
+        shell.CanvasGeometryProbe = ProveVisibleSourceSlice;
         Assert.Equal(AccessibleRevealResult.Revealed, viewport.TryReveal(beginning, alignToTop: true));
         Assert.DoesNotContain(shell.CanvasFrame!.Slices, slice => Contains(slice, target + 1));
         Assert.Contains(shell.CanvasFrame.Slices, slice => slice.SourceStart > target + 1);
@@ -1150,6 +1240,13 @@ public sealed class NativeControllerTests
         Assert.Empty(shell.Errors);
     }
 
+    /// <summary>Opt-in fake OS proof for tests that intentionally certify a painted source edge.</summary>
+    private static CanvasCaretGeometry? ProveVisibleSourceSlice(CanvasFrame frame, int sourceOffset) =>
+        frame.Slices.Any(slice => sourceOffset >= slice.SourceStart &&
+            (sourceOffset < slice.SourceStart + slice.SourceLength ||
+             sourceOffset == slice.SourceStart + slice.SourceLength && !slice.HasHiddenSuffix))
+            ? new CanvasCaretGeometry(0, 0, 20, true) : null;
+
     /// <summary>Builds a controller with project-local, side-effect-free configuration.</summary>
     private static NativeEditorController NewController(FakeShell shell, string userHome, string? path)
     {
@@ -1189,6 +1286,8 @@ public sealed class NativeControllerTests
         public NativeLineEndingMode LineEndingMode { get; } = lineEndingMode;
         /// <inheritdoc />
         public bool CanvasEnabled { get; set; }
+        /// <inheritdoc />
+        public int MaxCanvasInputLength { get; set; } = CanvasInputWindowSelector.MaxLength;
         /// <inheritdoc />
         public bool IsCanvasComposing { get; set; }
         /// <inheritdoc />
@@ -1240,6 +1339,8 @@ public sealed class NativeControllerTests
         /// <inheritdoc />
         public event Action<int, int>? CanvasSelectionRequested;
         /// <inheritdoc />
+        public event Action<CanvasHorizontalAnchorRequest>? CanvasHorizontalAnchorRequested;
+        /// <inheritdoc />
         public event Action? CanvasAccessibilityFailed;
 
         /// <summary>The current fake text viewport.</summary>
@@ -1258,6 +1359,8 @@ public sealed class NativeControllerTests
         public IAccessibleViewport? CanvasAccessibilityViewport { get; private set; }
         /// <summary>Models an OS accessibility provider that cannot attach.</summary>
         public bool RejectAccessibilityAttach { get; set; }
+        /// <summary>An explicit fake OS glyph-geometry oracle; null means visibility is unproven.</summary>
+        public Func<CanvasFrame, int, CanvasCaretGeometry?>? CanvasGeometryProbe { get; set; }
         /// <summary>The latest canvas chrome status, including recoverable AX failure.</summary>
         public string? CanvasStatus { get; private set; }
         /// <summary>A recoverable reason for withholding an unsafe input binding.</summary>
@@ -1327,6 +1430,9 @@ public sealed class NativeControllerTests
             CanvasAccessibilityViewport = viewport;
         }
         /// <inheritdoc />
+        public CanvasCaretGeometry? GetCanvasCaretGeometry(CanvasFrame frame, int sourceOffset) =>
+            ReferenceEquals(frame, CanvasFrame) ? CanvasGeometryProbe?.Invoke(frame, sourceOffset) : null;
+        /// <inheritdoc />
         public bool CommitPendingText()
         {
             CommitCalls++;
@@ -1383,6 +1489,9 @@ public sealed class NativeControllerTests
         public void ResizeCanvas(double height) => CanvasViewportResized?.Invoke(height);
         /// <summary>Raises one pointer-resolved source selection.</summary>
         public void SelectCanvas(int anchor, int active) => CanvasSelectionRequested?.Invoke(anchor, active);
+        /// <summary>Raises one source-bound horizontal pan request from a shaped platform edge.</summary>
+        public void AnchorCanvasHorizontally(CanvasHorizontalAnchorRequest request) =>
+            CanvasHorizontalAnchorRequested?.Invoke(request);
         /// <summary>Raises a recoverable native AX provider fault.</summary>
         public void FailCanvasAccessibility() => CanvasAccessibilityFailed?.Invoke();
         /// <summary>Raises the native Save command.</summary>
@@ -1478,7 +1587,8 @@ public sealed class NativeControllerTests
                 await Task.Delay(10);
             }
             Pump();
-            Assert.True(condition(), "Timed out waiting for a native-controller state transition.");
+            Assert.True(condition(),
+                $"Timed out waiting for a native-controller state transition; analysis={Analysis?.Status ?? "<none>"}; shell-errors={Errors.Count}.");
         }
     }
 }

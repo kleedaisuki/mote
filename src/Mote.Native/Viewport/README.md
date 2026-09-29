@@ -4,7 +4,7 @@
 
 ## Coordinate and ownership contract
 
-- The immutable `TextSnapshot` remains the only text source. Persistent coordinates are global UTF-16 offsets. `ViewportAnchor` retains an interior source offset and a fractional intra-row pixel offset; horizontal pixels are separate state.
+- The immutable `TextSnapshot` remains the only text source. Persistent coordinates are global UTF-16 offsets. `ViewportAnchor` retains an interior source offset and a fractional intra-row pixel offset. `HorizontalAnchor` is one source boundary, caret affinity, and local pixel residual; there is no independently mutable global horizontal pixel scalar.
 - No-wrap gives each logical line one implicit row. Only deviations from the base row height have nodes in `SparseHeightIndex`. A theme color repaint need not call `Reflow`; a font, DPI, tab, or wrap change does, invalidating all measurements while keeping the source anchor.
 - An edit transforms the anchor with right affinity and clears measured heights. This conservative invalidation prevents stale line identities or geometry. A later layout implementation may retain unaffected measurements using versioned dependency checks.
 - A source reveal also retains a bounded shaping-focus offset independently of
@@ -16,14 +16,10 @@
   canvas; a logical row being visible is insufficient for a clipped long line.
 - `GetVisibleSlices` returns at most `maxSlices` source intervals, each at most `maxSliceLength` UTF-16 units, excluding line delimiters. A 50 MiB line yields a focused window, **not** a complete line or exact global horizontal geometry. The platform shaper may read only these bounded intervals using `Snapshot.GetText(start, length)` and must explicitly request adjacent context/windows to validate shaping seams.
 - These are *logical-row* slices. Glyph shaping, grapheme-aware caret stops, bidi hit-testing, soft wrapping, and precise horizontal scroll metrics remain platform-layout work. Do not use the current slices as a claim of complete Unicode geometry or exact wrapped-line positions.
-- `ContinuousViewport.SetHorizontalOffset` is currently model-only: the opt-in
-  canvas has no wired horizontal wheel/scrollbar/Shift-wheel command, and
-  `CanvasFrame` does not yet carry a measured horizontal source anchor. Thus a
-  50 MiB unbroken line can be opened and edited around the caret, but cannot
-  be claimed continuously navigable across its width. A follow-up must map
-  native horizontal input to bounded source-window requests, maintain exact
-  source-coordinate selection/caret across rebases, and prove visible remote
-  segments on both target OSes without shaping the full line.
+- Horizontal P0: `ContinuousViewport.SetHorizontalAnchor` accepts a platform-resolved source boundary, visual affinity, and local pixel residual together. The setter rejects CRLF/delimiter interiors, surrogate-pair interiors, invalid affinities, and non-finite/negative residuals. It cannot establish grapheme or shaping safety: the OS shaper must supply a cluster edge and normalize residual against measured cluster advance. `MeasuredXFromStart` remains null unless a caller genuinely measures the entire prefix; the model never scans a 50 MiB line to estimate it.
+- `GetHorizontalRows` resolves each visible row from the reference line's source column, clamping to row content. It keeps at most 16 Ki UTF-16 units per row and a bounded prefix around the row's left-edge source boundary. `CanvasInteraction.Frame()` computes that row set **once**; both its immutable `RowWindows` and compatibility `Slices` derive from it. Vertical scroll/resize preserve the reference anchor; edits transform it with right affinity and clear potentially stale measurements. `Reveal` shifts it only when the target is outside its bounded row interval and returns `SourceWindowMoved` or `NeedsPixelVisibilityProof`. **Neither result claims physical caret visibility**: the platform shell must query current-version shaped caret geometry against the actual viewport, reanchor once if needed, and decline AX/TryReveal success if visibility remains unproved. This is essential for 16 Ki source windows whose pixel width can dwarf the viewport and for bidi text, whose visible source positions need not form one contiguous interval.
+- A native canvas body can have **zero height** when the window is tiny or occluded. `CanvasInteraction.Resize(0)` (and construction at height zero) retains source, selection, and scroll anchors but produces a frame with empty `RowWindows` and `Slices`; accessibility must not advertise any source as visible. Negative or non-finite heights remain invalid. Do not substitute a one-pixel viewport to make layout code run.
+- This is a **source/window invariant, not a completed horizontal UI**. Pixel-wheel normalization, local shaper `x(anchor)` transforms for paint/hit-test/selection/diagnostics/AX, scrollbar behavior, contextual seam parity, and real IME testing are still platform integration gates. The source-column fallback for other rows is not an exact equal-pixel-X promise, and a bounded source slice can contain text beyond the physically painted width until the shaper clips it.
 
 ## Bounded input island
 

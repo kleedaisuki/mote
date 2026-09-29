@@ -93,6 +93,12 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public bool CanvasEnabled => _experimentalCanvas;
 
+    /// <summary>
+    /// Keeps the visible RichEdit input line below its native long-line layout
+    /// width; the engine and DirectWrite canvas still own arbitrary file lines.
+    /// </summary>
+    public int MaxCanvasInputLength => WindowsRichEditIsland.MaxInputLength;
+
     /// <inheritdoc />
     public bool IsCanvasComposing => _canvasIsland?.IsComposing ?? false;
 
@@ -100,6 +106,12 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
     /// <inheritdoc />
     public event Action<double>? CanvasScrollRequested;
+    /// <inheritdoc />
+    public event Action<CanvasHorizontalAnchorRequest>? CanvasHorizontalAnchorRequested;
+
+    /// <summary>Publishes a measured platform target without inventing a pixel offset.</summary>
+    private void PublishHorizontalRequest(CanvasHorizontalAnchorRequest request) =>
+        CanvasHorizontalAnchorRequested?.Invoke(request);
     /// <inheritdoc />
     public event Action<double>? CanvasViewportResized;
     /// <inheritdoc />
@@ -296,6 +308,13 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(viewport);
         _canvasIsland.AttachAccessibility(document, viewport);
+    }
+
+    /// <inheritdoc />
+    public CanvasCaretGeometry? GetCanvasCaretGeometry(CanvasFrame frame, int sourceOffset)
+    {
+        if (!_experimentalCanvas || _canvasIsland is null) return null;
+        return _canvasIsland.GetCaretGeometry(frame, sourceOffset);
     }
 
     /// <inheritdoc />
@@ -603,6 +622,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 _uiaFragmentExperimental);
             _canvasIsland.EditCommitted += edit => CanvasEditCommitted?.Invoke(edit);
             _canvasIsland.ScrollRequested += delta => CanvasScrollRequested?.Invoke(delta);
+            _canvasIsland.HorizontalAnchorRequested += PublishHorizontalRequest;
             _canvasIsland.ViewportResized += height => CanvasViewportResized?.Invoke(height);
             _canvasIsland.SelectionRequested += (anchor, active) =>
                 CanvasSelectionRequested?.Invoke(anchor, active);

@@ -50,6 +50,11 @@ public sealed class CanvasInputWindowTests
         Assert.True(window.SourceStart > 0);
         Assert.True(window.SourceEnd < size);
         Assert.Equal(new string('x', window.SourceText.Length), window.SourceText);
+
+        var smaller = CanvasInputWindowSelector.Select(document.Snapshot, caret, 2048);
+        Assert.InRange(smaller.SourceText.Length, 1, 2048);
+        Assert.InRange(caret, smaller.SourceStart, smaller.SourceEnd);
+        Assert.Equal(new string('x', smaller.SourceText.Length), smaller.SourceText);
     }
 
     /// <summary>Neither edge of the native window may bisect an astral Unicode scalar.</summary>
@@ -135,5 +140,48 @@ public sealed class CanvasInputWindowTests
         Assert.Equal(5, canvas.Frame().SelectionActive);
         Assert.Equal(after.Version, canvas.Frame().Version);
         Assert.Equal("Xabc\ndef", after.GetText());
+    }
+
+    /// <summary>A configurable 2 Ki island still honors whole Unicode graphemes at both edges.</summary>
+    [Theory]
+    [InlineData("a\u0301", 2)]
+    [InlineData("👩‍💻", 5)]
+    [InlineData("🇨🇳", 4)]
+    public void Custom_2048_window_preserves_combining_zwj_and_flag_clusters(string grapheme, int units)
+    {
+        const int limit = 2048;
+        var startAt = limit / 2 - units / 2;
+        var source = new string('x', startAt) + grapheme + new string('y', 10_000);
+        using var document = new Document(source);
+        var window = CanvasInputWindowSelector.Select(document.Snapshot, limit, limit);
+        Assert.InRange(window.SourceText.Length, 1, limit);
+        Assert.Equal(startAt, window.SourceStart);
+        Assert.StartsWith(grapheme, window.SourceText);
+
+        var endAt = limit - units / 2;
+        using var endDocument = new Document(new string('x', endAt) + grapheme + "tail");
+        var endWindow = CanvasInputWindowSelector.Select(endDocument.Snapshot, 0, limit);
+        Assert.Equal(endAt, endWindow.SourceEnd);
+        Assert.DoesNotContain(grapheme, endWindow.SourceText, StringComparison.Ordinal);
+    }
+
+    /// <summary>Custom limits validate both API bounds and recoverably reject over-budget clusters.</summary>
+    [Fact]
+    public void Custom_island_limit_rejects_out_of_range_or_overbudget_grapheme()
+    {
+        using var small = new Document("a\r\nb");
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CanvasInputWindowSelector.Select(small.Snapshot, 0, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CanvasInputWindowSelector.Select(small.Snapshot, 0, 16_385));
+        var crlf = CanvasInputWindowSelector.Select(small.Snapshot, 2, 2048);
+        Assert.DoesNotContain('\r', crlf.SourceText);
+        Assert.DoesNotContain('\n', crlf.SourceText);
+
+        using var giant = new Document("a" + new string('\u0301', 2048));
+        Assert.Throws<CanvasInputWindowBoundaryException>(() =>
+            CanvasInputWindowSelector.Select(giant.Snapshot, 0, 2048));
+        Assert.InRange(CanvasInputWindowSelector.Select(giant.Snapshot, 0).SourceText.Length,
+            1, CanvasInputWindowSelector.MaxLength);
     }
 }

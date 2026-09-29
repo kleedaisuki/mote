@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Mote.Engine;
 
 namespace Mote.Native.Viewport;
@@ -11,6 +12,16 @@ internal sealed record CanvasFrame(
     int SelectionAnchor,
     int SelectionActive)
 {
+    /// <summary>Source-backed horizontal position used to resolve this frame.</summary>
+    internal HorizontalAnchor Horizontal { get; init; }
+
+    /// <summary>
+    /// Immutable row windows from the same resolution pass as <see cref="Slices"/>.
+    /// Legacy manually constructed frames may leave this empty until adapted.
+    /// </summary>
+    internal ImmutableArray<HorizontalRowWindow> RowWindows { get; init; } =
+        ImmutableArray<HorizontalRowWindow>.Empty;
+
     /// <summary>First selected UTF-16 source boundary.</summary>
     internal int SelectionStart => Math.Min(SelectionAnchor, SelectionActive);
 
@@ -35,15 +46,17 @@ internal sealed class CanvasInteraction
     private readonly NativeNavigationModel _selection;
     private readonly ContinuousViewport _viewport;
     private double _viewportHeight;
-    private int? _focusSourceOffset;
     private bool _dragging;
 
-    /// <summary>Creates a source-backed canvas with no per-document line objects.</summary>
+    /// <summary>
+    /// Creates a source-backed canvas with no per-document line objects. A zero
+    /// body height is valid and produces no visible rows until layout expands.
+    /// </summary>
     internal CanvasInteraction(TextSnapshot snapshot, double lineHeight,
         double viewportHeight, int maxSliceLength = 4096,
         NativeNavigationModel? selection = null)
     {
-        if (!double.IsFinite(viewportHeight) || viewportHeight <= 0)
+        if (!double.IsFinite(viewportHeight) || viewportHeight < 0)
             throw new ArgumentOutOfRangeException(nameof(viewportHeight));
         _viewport = new ContinuousViewport(snapshot, lineHeight, maxSliceLength);
         _selection = selection ?? new NativeNavigationModel();
@@ -59,36 +72,71 @@ internal sealed class CanvasInteraction
     /// <summary>Current scroll anchor; wheel and drag never trigger page replacement.</summary>
     internal ViewportAnchor TopAnchor => _viewport.TopAnchor;
 
+    /// <summary>Source-bound left edge that survives vertical scrolling and resizing.</summary>
+    internal HorizontalAnchor HorizontalAnchor => _viewport.HorizontalAnchor;
+
+    /// <summary>
+    /// Accepts a platform-resolved horizontal caret edge and local pixel residual.
+    /// The platform is responsible for grapheme-safe hit-testing and normalization.
+    /// </summary>
+    internal void SetHorizontalAnchor(int sourceBoundary,
+        HorizontalCaretAffinity affinity = HorizontalCaretAffinity.Leading,
+        double intraClusterPixels = 0, double? measuredXFromStart = null) =>
+        _viewport.SetHorizontalAnchor(sourceBoundary, affinity, intraClusterPixels, measuredXFromStart);
+
+    /// <summary>
+    /// Reanchors after a current-version OS geometry probe reports an offscreen
+    /// caret. Only the view edge is snapped around delimiters/surrogates; the
+    /// requested source offset and global selection are never rewritten.
+    /// </summary>
+    internal void AnchorHorizontalAtSource(int sourceOffset) =>
+        _viewport.SetHorizontalAnchor(_viewport.ClampToLineContentBoundary(sourceOffset));
+
     /// <summary>Visible area height in device-independent pixels.</summary>
     internal double ViewportHeight => _viewportHeight;
 
-    /// <summary>Updates only visible geometry on a native view resize.</summary>
+    /// <summary>
+    /// Updates only visible geometry on a native view resize. Zero height means
+    /// no row is painted or exposed as visible; source/selection state remains.
+    /// </summary>
     internal void Resize(double viewportHeight)
     {
-        if (!double.IsFinite(viewportHeight) || viewportHeight <= 0)
+        if (!double.IsFinite(viewportHeight) || viewportHeight < 0)
             throw new ArgumentOutOfRangeException(nameof(viewportHeight));
         _viewportHeight = viewportHeight;
     }
 
     /// <summary>
     /// Moves through adjacent logical rows without changing source version or
-    /// selection. Ordinary user scrolling releases any remote long-line focus;
-    /// an accessibility bottom alignment preserves it for the next frame.
+    /// selection or the source-bound horizontal anchor. The optional flag remains
+    /// for existing callers; horizontal focus is now always persistent.
     /// </summary>
     internal void ScrollBy(double pixels, bool preserveSourceFocus = false)
     {
         _viewport.ScrollBy(pixels);
-        if (!preserveSourceFocus) _focusSourceOffset = null;
     }
 
     /// <summary>
-    /// Reveals a source boundary and retains it as the bounded shaping focus,
-    /// even if a subsequent vertical alignment places an earlier row at top.
+    /// Moves the vertical source anchor and conditionally shifts the horizontal
+    /// source window. Membership in a bounded source slice does not prove that
+    /// the caret is inside the physical pixel viewport, particularly for 16 Ki
+    /// rows, variable-width glyphs, or bidirectional text. The shell must inspect
+    /// current-version shaped caret geometry before claiming a completed reveal.
     /// </summary>
-    internal void Reveal(int sourceOffset)
+    internal HorizontalRevealStatus Reveal(int sourceOffset)
     {
         _viewport.ScrollToSource(sourceOffset);
-        _focusSourceOffset = sourceOffset;
+        var line = Snapshot.GetLineIndexFromOffset(sourceOffset);
+        foreach (var row in _viewport.GetHorizontalRows(_viewportHeight, MaxVisibleSlices))
+        {
+            var slice = row.Slice;
+            var sliceEnd = slice.SourceStart + slice.SourceLength;
+            if (slice.Line == line && sourceOffset >= slice.SourceStart &&
+                (sourceOffset < sliceEnd || sourceOffset == sliceEnd && !slice.HasHiddenSuffix))
+                return HorizontalRevealStatus.NeedsPixelVisibilityProof;
+        }
+        AnchorHorizontalAtSource(sourceOffset);
+        return HorizontalRevealStatus.SourceWindowMoved;
     }
 
     /// <summary>
@@ -99,7 +147,6 @@ internal sealed class CanvasInteraction
     internal void ApplyEdit(TextSnapshot after, TextChangeRange change)
     {
         _viewport.ApplyEdit(after, change);
-        _focusSourceOffset = null;
     }
 
     /// <summary>Compatibility adapter for callers that still hold an inserted-text change.</summary>
@@ -128,12 +175,22 @@ internal sealed class CanvasInteraction
     /// <summary>Ends pointer capture without collapsing the global selection.</summary>
     internal void EndSelection() => _dragging = false;
 
-    /// <summary>Returns only bounded source intervals near the current scroll anchor.</summary>
-    internal CanvasFrame Frame() => new(Snapshot.Version, _viewport.TopAnchor,
-        _viewport.ScrollY,
-        _viewport.GetVisibleSlices(_viewportHeight, MaxVisibleSlices,
-            focusSourceOffset: _focusSourceOffset ?? _viewport.TopAnchor.SourceOffset),
-        _selection.Anchor, _selection.Active);
+    /// <summary>
+    /// Publishes one immutable row resolution. The compatibility Slices collection
+    /// is projected from these exact rows, never independently re-queried.
+    /// </summary>
+    internal CanvasFrame Frame()
+    {
+        var rows = _viewport.GetHorizontalRows(_viewportHeight, MaxVisibleSlices);
+        var slices = ImmutableArray.CreateBuilder<ViewportSlice>(rows.Length);
+        foreach (var row in rows) slices.Add(row.Slice);
+        return new CanvasFrame(Snapshot.Version, _viewport.TopAnchor, _viewport.ScrollY,
+            slices.MoveToImmutable(), _selection.Anchor, _selection.Active)
+        {
+            Horizontal = _viewport.HorizontalAnchor,
+            RowWindows = rows,
+        };
+    }
 
     /// <summary>Streams the selected original source without a second text model.</summary>
     internal void WriteSelection(TextWriter writer) => _selection.WriteSelection(Snapshot, writer);

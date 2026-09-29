@@ -18,12 +18,17 @@ internal sealed unsafe class MacTextInputIsland
 {
     private const string ViewClass = "MoteInteractiveCanvasView";
     private const string InputClass = "MoteInteractiveCanvasInputView";
+    private const string HostScrollClass = "MoteInteractiveCanvasHostScrollView";
     private const int MaxInputLength = 16 * 1024;
     private const double LeftInset = 12;
+    private const double RibbonHeight = 36;
+    private const double RibbonLabelWidth = 140;
+    private const string ObjcRuntime = "/usr/lib/libobjc.A.dylib";
     private static MacTextInputIsland? s_current;
 
     private readonly Action<CanvasCommittedEdit> _edit;
     private readonly Action<double> _scroll;
+    private readonly Action<CanvasHorizontalAnchorRequest> _horizontal;
     private readonly Action<double> _resize;
     private readonly Action<int, int> _selection;
     private readonly Action<string> _error;
@@ -36,6 +41,7 @@ internal sealed unsafe class MacTextInputIsland
     private IThemePolicy? _theme;
     private nint _view;
     private nint _hostScroll;
+    private nint _ribbonLabel;
     private nint _editor;
     private nint _font;
     private nint _fontAttribute;
@@ -48,9 +54,11 @@ internal sealed unsafe class MacTextInputIsland
     private ObjC.Range? _replacementRangeBeforeEdit;
     private double _width;
     private double _height;
+    private double _reportedBodyHeight = -1;
     private bool _pendingResize;
     private int _dragAnchor;
     private bool _reportedFailure;
+    private bool _hostAligned;
     private bool _userSelectionPending;
     private int _selectionRepairCount;
     private int _selectionNotifications;
@@ -58,12 +66,22 @@ internal sealed unsafe class MacTextInputIsland
     private int _selectionUserEvents;
     private string _lastSelectionOutcome = "none";
 
+    [DllImport(ObjcRuntime, EntryPoint = "objc_msgSend")]
+    private static extern ObjC.Rect SendGlyphRectDirect(nint receiver, nint selector,
+        ObjC.Range glyphRange, nint textContainer);
+
+    [DllImport(ObjcRuntime, EntryPoint = "objc_msgSend_stret")]
+    private static extern void SendGlyphRectStret(out ObjC.Rect result,
+        nint receiver, nint selector, ObjC.Range glyphRange, nint textContainer);
+
     /// <summary>Creates callbacks that keep document mutations in the controller.</summary>
     internal MacTextInputIsland(Action<CanvasCommittedEdit> edit, Action<double> scroll,
-        Action<double> resize, Action<int, int> selection, Action<string> error)
+        Action<CanvasHorizontalAnchorRequest> horizontal, Action<double> resize,
+        Action<int, int> selection, Action<string> error)
     {
         _edit = edit;
         _scroll = scroll;
+        _horizontal = horizontal;
         _resize = resize;
         _selection = selection;
         _error = error;
@@ -75,11 +93,97 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>The source-backed NSView that may own the opt-in AX element.</summary>
     internal nint CanvasView => _view;
 
+    /// <summary>The actually painted source region in the canvas view's coordinates.</summary>
+    internal ObjC.Rect BodyRect => new(0, Math.Min(RibbonHeight, _height),
+        _width, Math.Max(0, _height - RibbonHeight));
+
+    /// <summary>Publishes the actual source-body height before AX attaches to a frame.</summary>
+    internal void PublishBodyHeight()
+    {
+        if (_view == 0) return;
+        var rect = MacOnScreenCanvasNative.GetRect(_view, ObjC.Sel("bounds"));
+        var changedBounds = false;
+        if (rect.Size.Width >= 0 && rect.Size.Height >= 0 &&
+            (rect.Size.Width != _width || rect.Size.Height != _height))
+        {
+            _width = rect.Size.Width;
+            _height = rect.Size.Height;
+            changedBounds = true;
+        }
+        var composing = IsComposing;
+        if (composing) _pendingResize = true;
+        var body = BodyHeight;
+        var changedBody = Math.Abs(_reportedBodyHeight - body) > 0.01;
+        // Shrink the source frame before its AX rectangle; on growth, expand
+        // the AX rectangle first. Either intermediate state is conservative.
+        if (changedBody && _reportedBodyHeight >= 0 && body < _reportedBodyHeight)
+        {
+            _reportedBodyHeight = body;
+            _resize(body);
+            if (changedBounds) ViewGeometryChanged?.Invoke();
+        }
+        else
+        {
+            if (changedBounds) ViewGeometryChanged?.Invoke();
+            if (changedBody)
+            {
+                _reportedBodyHeight = body;
+                _resize(body);
+            }
+        }
+        if (!composing) PlaceHost();
+    }
+
+    /// <summary>
+    /// Measures a current-version source caret with the same bounded CoreText
+    /// row transform used for paint and hit testing. Ambiguous visual edges do
+    /// not become false visibility proofs.
+    /// </summary>
+    internal CanvasCaretGeometry? GetCaretGeometry(CanvasFrame frame, int sourceOffset)
+    {
+        if (!ReferenceEquals(frame, _frame) || _snapshot is null || _font == 0 ||
+            frame.Version != _snapshot.Version || sourceOffset < 0 ||
+            sourceOffset > _snapshot.Length) return null;
+        foreach (var row in frame.RowWindows)
+        {
+            var slice = row.Slice;
+            if (sourceOffset < slice.SourceStart ||
+                sourceOffset > slice.SourceStart + slice.SourceLength) continue;
+            if (slice.HasHiddenSuffix &&
+                sourceOffset == slice.SourceStart + slice.SourceLength) return null;
+            if (slice.HasHiddenPrefix && sourceOffset == slice.SourceStart)
+            {
+                var lineStart = _snapshot.GetLineStartOffset(slice.Line);
+                var lineEnd = slice.Line + 1 < _snapshot.LineCount
+                    ? _snapshot.GetLineStartOffset(slice.Line + 1) : _snapshot.Length;
+                if (SnapGraphemeAt(_snapshot, lineStart, lineEnd, sourceOffset) !=
+                    sourceOffset) return null;
+            }
+            var text = _snapshot.GetText(slice.SourceStart, slice.SourceLength);
+            if (!IsGraphemeBoundary(text, sourceOffset - slice.SourceStart)) return null;
+            CanvasCaretGeometry? result = null;
+            WithLine(text, line =>
+            {
+                if (!TryRowOrigin(line, row, text, out var origin) ||
+                    !TryCaretOffset(line, sourceOffset - slice.SourceStart, out var x)) return;
+                var screenX = origin + x;
+                var inViewport = screenX >= LeftInset && screenX <= _width &&
+                    slice.TopY >= 0 && slice.TopY < Math.Max(0, _height - RibbonHeight);
+                result = new CanvasCaretGeometry(screenX, slice.TopY, slice.Height,
+                    inViewport);
+            });
+            return result;
+        }
+        return null;
+    }
+
     /// <summary>Raised after AppKit changes the canvas view bounds.</summary>
     internal event Action? ViewGeometryChanged;
 
     /// <summary>Whether the OS currently owns provisional candidate text.</summary>
     internal bool IsComposing => _editor != 0 && ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0;
+
+    private double BodyHeight => Math.Max(0, _height - RibbonHeight);
 
     /// <summary>Probe-only native selected range and event-origin summary.</summary>
     internal string ProbeSelectionTrace
@@ -96,6 +200,25 @@ internal sealed unsafe class MacTextInputIsland
 
     /// <summary>Whether a native callback fault has disabled the bounded host.</summary>
     internal bool ProbeInputDisabled => _reportedFailure && _binding is null;
+
+    /// <summary>Bounded host alignment and local TextKit clip telemetry for target-host QA.</summary>
+    internal (bool Aligned, bool Hidden, double NativeX, double ClipX)?
+        ProbeHostGeometry(int sourceOffset)
+    {
+        if (_binding is null || _hostScroll == 0) return null;
+        var local = sourceOffset - _binding.InputSourceStart;
+        if (!TryNativeCaretX(local, out var nativeX)) return null;
+        var clip = ObjC.Send(_hostScroll, ObjC.Sel("contentView"));
+        var clipX = MacOnScreenCanvasNative.GetRect(clip, ObjC.Sel("bounds")).Origin.X;
+        return (_hostAligned, ObjC.Send(_hostScroll, ObjC.Sel("isHidden")) != 0,
+            nativeX, clipX);
+    }
+
+    /// <summary>Drives the same bounded pan and inverse hit test as native AppKit callbacks.</summary>
+    internal void ProbePanHorizontal(double pixels) => PanHorizontal(pixels);
+
+    /// <summary>Returns the global UTF-16 source edge selected by canvas hit testing.</summary>
+    internal int ProbeHitSource(double x, double topY) => HitSource(x, topY);
 
     /// <summary>Injects one unarmed AppKit selection echo for a hosted fail-closed probe.</summary>
     internal void ProbeProgrammaticSelectionEcho(int start, int length)
@@ -133,14 +256,17 @@ internal sealed unsafe class MacTextInputIsland
             ObjC.Sel("initWithFrame:"), frame);
         if (_view == 0) throw new InvalidOperationException("AppKit could not create the canvas.");
         ObjC.Send(_view, ObjC.Sel("setAutoresizingMask:"), (nint)18);
-        _hostScroll = ObjC.Send(ObjC.Send(ObjC.Class("NSScrollView"), ObjC.Sel("alloc")),
-            ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 0, _width, 24));
+        _hostScroll = ObjC.Send(ObjC.Send(ObjC.Class(RegisterHostScrollClass()), ObjC.Sel("alloc")),
+            ObjC.Sel("initWithFrame:"), new ObjC.Rect(RibbonLabelWidth, 4,
+                Math.Max(1, _width - RibbonLabelWidth - 8), RibbonHeight - 8));
         ObjC.Send(_hostScroll, ObjC.Sel("setBorderType:"), 0);
         // The clip view still scrolls the caret into view programmatically;
         // a scrollbar would consume almost the entire one-row input island.
         ObjC.Send(_hostScroll, ObjC.Sel("setHasHorizontalScroller:"), 0);
         ObjC.Send(_hostScroll, ObjC.Sel("setAutohidesScrollers:"), 1);
-        ObjC.Send(_hostScroll, ObjC.Sel("setAutoresizingMask:"), (nint)2);
+        // Explicitly resize after composition: AppKit's autoresizing would
+        // otherwise move the candidate rectangle while marked text is owned.
+        ObjC.Send(_hostScroll, ObjC.Sel("setAutoresizingMask:"), (nint)0);
         _editor = ObjC.Send(ObjC.Send(ObjC.Class(RegisterInputClass()), ObjC.Sel("alloc")),
             ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 0, _width, 24));
         if (_editor == 0) throw new InvalidOperationException("AppKit could not create the input host.");
@@ -158,6 +284,10 @@ internal sealed unsafe class MacTextInputIsland
         ObjC.Send(_editor, ObjC.Sel("setMaxSize:"), new ObjC.Size(1_000_000_000, 24));
         ObjC.Send(_editor, ObjC.Sel("setTextContainerInset:"), new ObjC.Size(LeftInset, 1));
         var container = ObjC.Send(_editor, ObjC.Sel("textContainer"));
+        // NSTextContainer defaults to another 5 DIP on each line fragment.
+        // The canvas already owns the 12-DIP inset; retaining both makes an
+        // unscrollable short line appear permanently misaligned.
+        ObjC.Send(container, ObjC.Sel("setLineFragmentPadding:"), 0d);
         ObjC.Send(container, ObjC.Sel("setContainerSize:"), new ObjC.Size(1_000_000_000, 24));
         ObjC.Send(container, ObjC.Sel("setWidthTracksTextView:"), 0);
         ObjC.Send(_editor, ObjC.Sel("setAutomaticQuoteSubstitutionEnabled:"), 0);
@@ -166,6 +296,17 @@ internal sealed unsafe class MacTextInputIsland
         ObjC.Send(_editor, ObjC.Sel("setContinuousSpellCheckingEnabled:"), 0);
         ObjC.Send(_hostScroll, ObjC.Sel("setDocumentView:"), _editor);
         ObjC.Send(_view, ObjC.Sel("addSubview:"), _hostScroll);
+        _ribbonLabel = ObjC.Send(ObjC.Send(ObjC.Class("NSTextField"), ObjC.Sel("alloc")),
+            ObjC.Sel("initWithFrame:"), new ObjC.Rect(8, 7,
+                RibbonLabelWidth - 16, RibbonHeight - 12));
+        ObjC.Send(_ribbonLabel, ObjC.Sel("setEditable:"), 0);
+        ObjC.Send(_ribbonLabel, ObjC.Sel("setSelectable:"), 0);
+        ObjC.Send(_ribbonLabel, ObjC.Sel("setBezeled:"), 0);
+        ObjC.Send(_ribbonLabel, ObjC.Sel("setDrawsBackground:"), 0);
+        ObjC.Send(_ribbonLabel, ObjC.Sel("setFont:"), ObjC.Send(ObjC.Class("NSFont"),
+            ObjC.Sel("systemFontOfSize:"), 11d));
+        ObjC.Send(_ribbonLabel, ObjC.Sel("setStringValue:"), ObjC.String("Input @ 0"));
+        ObjC.Send(_view, ObjC.Sel("addSubview:"), _ribbonLabel);
         return _view;
     }
 
@@ -218,8 +359,8 @@ internal sealed unsafe class MacTextInputIsland
     }
 
     /// <summary>
-    /// Shows an immutable source snapshot without a text host when no safe
-    /// bounded grapheme input window exists. Old native callbacks become inert.
+    /// Shows an immutable source snapshot with a disabled but visible ribbon
+    /// when no safe bounded grapheme input window exists. Old callbacks are inert.
     /// </summary>
     internal void SetUnavailable(TextSnapshot snapshot, CanvasFrame frame, string reason)
     {
@@ -236,14 +377,33 @@ internal sealed unsafe class MacTextInputIsland
         _replacementRangeBeforeEdit = null;
         _snapshot = snapshot;
         _frame = frame;
-        if (_hostScroll != 0) ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 1);
+        _hostAligned = false;
+        if (_editor != 0)
+        {
+            _setting = true;
+            try
+            {
+                ObjC.Send(_editor, ObjC.Sel("setEditable:"), 0);
+                ObjC.Send(_editor, ObjC.Sel("setString:"), ObjC.String(string.Empty));
+                ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 0);
+                SetRibbonLabel("Input unavailable");
+            }
+            finally { _setting = false; }
+        }
         Invalidate();
     }
 
     /// <summary>Updates paint and global selection without touching native text.</summary>
     internal void SetFrame(CanvasFrame frame)
     {
-        if (IsComposing) return;
+        if (IsComposing)
+        {
+            // Viewport geometry may change under a marked candidate, but the
+            // NSTextView ribbon and its text/selection remain untouched.
+            _frame = frame;
+            Invalidate();
+            return;
+        }
         CancelUserSelectionGesture();
         _selectionRepairCount = 0;
         _frame = frame;
@@ -276,12 +436,21 @@ internal sealed unsafe class MacTextInputIsland
         _trueValue = MacOnScreenCanvasNative.BooleanTrue;
         if (_font == 0 || _fontAttribute == 0 || _contextColorAttribute == 0 || _trueValue == 0)
             throw new InvalidOperationException("CoreText could not resolve the canvas font.");
-        var font = ObjC.Send(ObjC.Class("NSFont"), ObjC.Sel("monospacedSystemFontOfSize:weight:"),
-            theme.Typography.EditorFontSize, 0d);
+        var font = ObjC.Send(ObjC.Class("NSFont"), ObjC.Sel("fontWithName:size:"),
+            ObjC.String(family), theme.Typography.EditorFontSize);
+        if (font == 0)
+            font = ObjC.Send(ObjC.Class("NSFont"),
+                ObjC.Sel("monospacedSystemFontOfSize:weight:"),
+                theme.Typography.EditorFontSize, 0d);
         ObjC.Send(_editor, ObjC.Sel("setFont:"), font);
         ObjC.Send(_editor, ObjC.Sel("setTextColor:"), Color(theme.Palette.EditorForeground));
-        ObjC.Send(_editor, ObjC.Sel("setBackgroundColor:"), Color(theme.Palette.EditorBackground));
+        ObjC.Send(_editor, ObjC.Sel("setBackgroundColor:"), Color(theme.Palette.PanelBackground));
         ObjC.Send(_editor, ObjC.Sel("setInsertionPointColor:"), Color(theme.Palette.Cursor));
+        ObjC.Send(_hostScroll, ObjC.Sel("setBackgroundColor:"),
+            Color(theme.Palette.PanelBackground));
+        if (_ribbonLabel != 0)
+            ObjC.Send(_ribbonLabel, ObjC.Sel("setTextColor:"),
+                Color(theme.Palette.MutedForeground));
         PlaceHost();
         Invalidate();
     }
@@ -388,7 +557,7 @@ internal sealed unsafe class MacTextInputIsland
     {
         if (!_pendingResize || IsComposing) return;
         _pendingResize = false;
-        _resize(_height);
+        PublishBodyHeight();
     }
 
     /// <summary>
@@ -505,34 +674,80 @@ internal sealed unsafe class MacTextInputIsland
         return after.Substring(start, after.Length - start - tail);
     }
 
-    private void PlaceHost(bool preserveComposition = false)
+    /// <summary>
+    /// Keeps the OS text client in one always-visible bottom input ribbon.
+    /// Source panning never moves this view or its IME candidate rectangle.
+    /// </summary>
+    private void PlaceHost()
     {
-        if (_editor == 0 || _binding is null || _frame is null ||
-            (IsComposing && !preserveComposition) ||
+        if (_editor == 0 || _binding is null || _frame is null || IsComposing ||
             _frame.Version != _binding.Snapshot.Version) return;
-        var line = _binding.Snapshot.GetLineIndexFromOffset(_binding.InputSourceStart);
-        foreach (var slice in _frame.Slices)
+        ObjC.Send(_hostScroll, ObjC.Sel("setFrame:"), new ObjC.Rect(
+            RibbonLabelWidth, 4, Math.Max(1, _width - RibbonLabelWidth - 8),
+            RibbonHeight - 8));
+        ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 0);
+        ObjC.Send(_editor, ObjC.Sel("setEditable:"), 1);
+        SetRibbonLabel($"Input @ {_binding.Active.ToString("N0", CultureInfo.InvariantCulture)}");
+        var projected = ProjectedHostSelection();
+        _setting = true;
+        try
         {
-            if (slice.Line != line) continue;
-            var height = Math.Max(20, slice.Height);
-            ObjC.Send(_hostScroll, ObjC.Sel("setFrame:"),
-                new ObjC.Rect(0, _height - slice.TopY - height, _width, height));
-            ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 0);
-            // Keep the actual NSTextView/candidate rect attached on resize;
-            // marked text and selection remain entirely owned by AppKit.
-            if (IsComposing) return;
-            var projected = ProjectedHostSelection();
-            _setting = true;
-            try
-            {
-                ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), projected);
-                ObjC.Send(_editor, ObjC.Sel("scrollRangeToVisible:"),
-                    new ObjC.Range(projected.Location + projected.Length, 0));
-            }
-            finally { _setting = false; }
-            return;
+            ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), projected);
+            ObjC.Send(_editor, ObjC.Sel("sizeToFit"));
+            ObjC.Send(_editor, ObjC.Sel("scrollRangeToVisible:"),
+                new ObjC.Range(projected.Location + projected.Length, 0));
+            var local = checked((int)(projected.Location + projected.Length));
+            var clip = ObjC.Send(_hostScroll, ObjC.Sel("contentView"));
+            var clipX = MacOnScreenCanvasNative.GetRect(clip,
+                ObjC.Sel("bounds")).Origin.X;
+            _hostAligned = TryNativeCaretX(local, out var x) &&
+                x - clipX >= 0 && x - clipX <= _width - RibbonLabelWidth - 8;
         }
-        ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 1);
+        finally { _setting = false; }
+    }
+
+    private void SetRibbonLabel(string value)
+    {
+        if (_ribbonLabel != 0)
+            ObjC.Send(_ribbonLabel, ObjC.Sel("setStringValue:"), ObjC.String(value));
+    }
+
+    /// <summary>Gets a bounded native glyph edge in NSTextView local coordinates.</summary>
+    private bool TryNativeCaretX(int local, out double x)
+    {
+        x = 0;
+        if (_editor == 0 || _binding is null || local < 0 ||
+            local > _binding.InputSourceText.Length) return false;
+        var origin = MacOnScreenCanvasNative.SendPoint(_editor,
+            ObjC.Sel("textContainerOrigin"));
+        if (local == 0 && _binding.InputSourceText.Length == 0)
+        {
+            x = origin.X;
+            return double.IsFinite(x);
+        }
+        var container = ObjC.Send(_editor, ObjC.Sel("textContainer"));
+        var layout = ObjC.Send(_editor, ObjC.Sel("layoutManager"));
+        if (container == 0 || layout == 0) return false;
+        ObjC.Send(layout, ObjC.Sel("ensureLayoutForTextContainer:"), container);
+        var atEnd = local == _binding.InputSourceText.Length;
+        var character = atEnd ? local - 1 : local;
+        if (character < 0) return false;
+        var glyph = checked((nuint)ObjC.Send(layout,
+            ObjC.Sel("glyphIndexForCharacterAtIndex:"), (nint)character));
+        var rect = RuntimeInformation.ProcessArchitecture == Architecture.X64
+            ? GetGlyphRectStret(layout, glyph, container)
+            : SendGlyphRectDirect(layout, ObjC.Sel("boundingRectForGlyphRange:inTextContainer:"),
+                new ObjC.Range(glyph, 1), container);
+        x = origin.X + rect.Origin.X + (atEnd ? rect.Size.Width : 0);
+        return double.IsFinite(x) && x >= 0;
+    }
+
+    private static ObjC.Rect GetGlyphRectStret(nint layout, nuint glyph, nint container)
+    {
+        SendGlyphRectStret(out var rect, layout,
+            ObjC.Sel("boundingRectForGlyphRange:inTextContainer:"),
+            new ObjC.Range(glyph, 1), container);
+        return rect;
     }
 
     private ObjC.Range ProjectedHostSelection()
@@ -557,64 +772,82 @@ internal sealed unsafe class MacTextInputIsland
             ObjC.Sel("currentContext")), ObjC.Sel("CGContext"));
         if (context == 0) return;
         var rect = MacOnScreenCanvasNative.GetRect(_view, ObjC.Sel("bounds"));
-        if (rect.Size.Height > 0 && rect.Size.Width > 0 &&
-            (rect.Size.Height != _height || rect.Size.Width != _width))
-        {
-            _height = rect.Size.Height;
-            _width = rect.Size.Width;
-            ViewGeometryChanged?.Invoke();
-            if (IsComposing) _pendingResize = true;
-            else _resize(_height);
-            PlaceHost(preserveComposition: true);
-        }
+        if (rect.Size.Height != _height || rect.Size.Width != _width ||
+            Math.Abs(_reportedBodyHeight - BodyHeight) > 0.01)
+            PublishBodyHeight();
         var palette = _theme?.Palette;
         Fill(context, palette?.EditorBackground ?? new ThemeColor(30, 30, 30),
             new ObjC.Rect(0, 0, _width, _height));
+        var ribbon = Math.Min(RibbonHeight, _height);
+        Fill(context, palette?.PanelBackground ?? new ThemeColor(37, 37, 38),
+            new ObjC.Rect(0, 0, _width, ribbon));
+        if (_height > RibbonHeight)
+        {
+            var border = palette?.Border ?? new ThemeColor(70, 70, 70);
+            MacOnScreenCanvasNative.SetStrokeColor(context, border.Red / 255d,
+                border.Green / 255d, border.Blue / 255d, 1);
+            MacOnScreenCanvasNative.SetLineWidth(context, 1);
+            MacOnScreenCanvasNative.MoveToPoint(context, 0, RibbonHeight - 0.5);
+            MacOnScreenCanvasNative.AddLineToPoint(context, _width, RibbonHeight - 0.5);
+            MacOnScreenCanvasNative.StrokePath(context);
+        }
         if (_frame is not { } frame || _snapshot is not { } snapshot || _font == 0 ||
             frame.Version != snapshot.Version) return;
-        foreach (var slice in frame.Slices)
+        if (frame.RowWindows.Length != frame.Slices.Count) return;
+        var paintedBody = Math.Max(0, _height - RibbonHeight);
+        if (paintedBody == 0) return;
+        MacOnScreenCanvasNative.SaveState(context);
+        try
         {
+          MacOnScreenCanvasNative.ClipToRect(context,
+              new ObjC.Rect(LeftInset, RibbonHeight,
+                  Math.Max(0, _width - LeftInset), paintedBody));
+          foreach (var row in frame.RowWindows)
+          {
+            var slice = row.Slice;
             if (slice.SourceLength > MaxInputLength)
                 throw new InvalidOperationException("Canvas row exceeds the bounded shaping interval.");
-            // The opaque native input host paints its own caret row and is the
-            // only text-input/accessibility owner for that bounded source span.
-            if (_binding is { } binding &&
-                slice.Line == snapshot.GetLineIndexFromOffset(binding.InputSourceStart) &&
-                ObjC.Send(_hostScroll, ObjC.Sel("isHidden")) == 0) continue;
             var text = snapshot.GetText(slice.SourceStart, slice.SourceLength);
             if (text.Length == 0)
             {
-                DrawSelection(context, frame, slice, 0);
+                var emptyOrigin = LeftInset - row.IntraClusterPixels;
+                DrawSelection(context, frame, slice, 0, emptyOrigin);
                 if (_semantics is { } emptySemantics && emptySemantics.Version == frame.Version)
-                    DrawDiagnostics(context, 0, slice, 0, emptySemantics);
+                    DrawDiagnostics(context, 0, slice, 0, emptyOrigin, emptySemantics);
+                DrawSourceCaret(context, frame, slice, 0, emptyOrigin, text);
                 continue;
             }
             WithLine(text, line =>
             {
-                var selected = DrawSelection(context, frame, slice, line);
+                if (!TryRowOrigin(line, row, text, out var origin)) return;
+                var selected = DrawSelection(context, frame, slice, line, origin);
                 var baseline = _height - slice.TopY - 4 - (_theme?.Typography.EditorFontSize ?? 13);
-                DrawLine(context, line, baseline,
+                DrawLine(context, line, origin, baseline,
                     palette?.EditorForeground ?? new ThemeColor(216, 218, 223));
                 if (_semantics is { } semantic && semantic.Version == frame.Version)
-                    DrawSemantic(context, line, slice, baseline, semantic);
+                    DrawSemantic(context, line, slice, origin, baseline, semantic);
                 if (selected is { } selectedRect)
                 {
                     MacOnScreenCanvasNative.SaveState(context);
                     try
                     {
                         MacOnScreenCanvasNative.ClipToRect(context, selectedRect);
-                        DrawLine(context, line, baseline,
+                        DrawLine(context, line, origin, baseline,
                             palette?.SelectionForeground ?? new ThemeColor(255, 255, 255));
                     }
                     finally { MacOnScreenCanvasNative.RestoreState(context); }
                 }
                 if (_semantics is { } diagnostics && diagnostics.Version == frame.Version)
-                    DrawDiagnostics(context, line, slice, baseline, diagnostics);
+                    DrawDiagnostics(context, line, slice, origin, baseline, diagnostics);
+                DrawSourceCaret(context, frame, slice, line, origin, text);
             });
+          }
         }
+        finally { MacOnScreenCanvasNative.RestoreState(context); }
     }
 
-    private void DrawSemantic(nint context, nint line, ViewportSlice slice, double baseline,
+    private void DrawSemantic(nint context, nint line, ViewportSlice slice,
+        double origin, double baseline,
         NativeCanvasSemantics semantics)
     {
         if (_theme is null) return;
@@ -631,17 +864,17 @@ internal sealed unsafe class MacTextInputIsland
             try
             {
                 MacOnScreenCanvasNative.ClipToRect(context,
-                    new ObjC.Rect(LeftInset + Math.Min(first, last),
+                    new ObjC.Rect(origin + Math.Min(first, last),
                         _height - slice.TopY - slice.Height,
                         Math.Max(1, Math.Abs(last - first)), slice.Height));
-                DrawLine(context, line, baseline, _theme.SemanticColor(token.Kind));
+                DrawLine(context, line, origin, baseline, _theme.SemanticColor(token.Kind));
             }
             finally { MacOnScreenCanvasNative.RestoreState(context); }
         }
     }
 
     private void DrawDiagnostics(nint context, nint line, ViewportSlice slice,
-        double baseline, NativeCanvasSemantics semantics)
+        double origin, double baseline, NativeCanvasSemantics semantics)
     {
         if (_theme is null) return;
         var sliceEnd = slice.SourceStart + slice.SourceLength;
@@ -666,7 +899,7 @@ internal sealed unsafe class MacTextInputIsland
             MacOnScreenCanvasNative.SetStrokeColor(context, color.Red / 255d,
                 color.Green / 255d, color.Blue / 255d, 1);
             MacOnScreenCanvasNative.SetLineWidth(context, 1.5);
-            var x = LeftInset + Math.Min(first, last);
+            var x = origin + Math.Min(first, last);
             var width = Math.Max(6, Math.Abs(last - first));
             var y = line == 0 ? _height - slice.TopY - slice.Height + 2 : baseline - 2;
             MacOnScreenCanvasNative.MoveToPoint(context, x, y);
@@ -676,7 +909,7 @@ internal sealed unsafe class MacTextInputIsland
     }
 
     private ObjC.Rect? DrawSelection(nint context, CanvasFrame frame,
-        ViewportSlice slice, nint line)
+        ViewportSlice slice, nint line, double origin)
     {
         var palette = _theme?.Palette;
         var background = palette?.SelectionBackground ?? new ThemeColor(38, 79, 120);
@@ -689,7 +922,7 @@ internal sealed unsafe class MacTextInputIsland
         {
             var first = CoreTextNative.OffsetForIndex(line, start - slice.SourceStart, out _);
             var last = CoreTextNative.OffsetForIndex(line, end - slice.SourceStart, out _);
-            selected = new ObjC.Rect(LeftInset + Math.Min(first, last), y,
+            selected = new ObjC.Rect(origin + Math.Min(first, last), y,
                 Math.Max(1, Math.Abs(last - first)), slice.Height);
             Fill(context, background, selected.Value);
         }
@@ -701,7 +934,7 @@ internal sealed unsafe class MacTextInputIsland
             if (delimiterStart < delimiterEnd && frame.SelectionStart < delimiterEnd &&
                 frame.SelectionStart + frame.SelectionLength > delimiterStart)
             {
-                var x = LeftInset + (line == 0 ? 0 : CoreTextNative.OffsetForIndex(
+                var x = origin + (line == 0 ? 0 : CoreTextNative.OffsetForIndex(
                     line, slice.SourceLength, out _));
                 Fill(context, background, new ObjC.Rect(x, y, 9, slice.Height));
             }
@@ -709,46 +942,84 @@ internal sealed unsafe class MacTextInputIsland
         return selected;
     }
 
-    private void DrawLine(nint context, nint line, double baseline, ThemeColor color)
+    private void DrawLine(nint context, nint line, double origin,
+        double baseline, ThemeColor color)
     {
         FillColor(context, color);
         MacOnScreenCanvasNative.SetTextMatrix(context,
             new MacOnScreenCanvasNative.Affine(1, 0, 0, 1, 0, 0));
-        CoreTextNative.SetTextPosition(context, LeftInset, baseline);
+        CoreTextNative.SetTextPosition(context, origin, baseline);
         CoreTextNative.LineDraw(line, context);
+    }
+
+    /// <summary>Shows the source caret in the canvas while AppKit owns input in the ribbon.</summary>
+    private void DrawSourceCaret(nint context, CanvasFrame frame, ViewportSlice slice,
+        nint line, double origin, string text)
+    {
+        if (frame.SelectionLength != 0 || _theme is null) return;
+        var local = frame.SelectionActive - slice.SourceStart;
+        if (!IsGraphemeBoundary(text, local) ||
+            local == text.Length && slice.HasHiddenSuffix) return;
+        var x = origin + (line == 0 ? 0 : CoreTextNative.OffsetForIndex(line, local, out _));
+        if (x < LeftInset || x > _width) return;
+        var color = _theme.Palette.Cursor;
+        MacOnScreenCanvasNative.SetStrokeColor(context, color.Red / 255d,
+            color.Green / 255d, color.Blue / 255d, 1);
+        MacOnScreenCanvasNative.SetLineWidth(context, 1.5);
+        var bottom = _height - slice.TopY - slice.Height + 2;
+        MacOnScreenCanvasNative.MoveToPoint(context, x, bottom);
+        MacOnScreenCanvasNative.AddLineToPoint(context, x, bottom + slice.Height - 4);
+        MacOnScreenCanvasNative.StrokePath(context);
     }
 
     private int HitSource(double x, double topY)
     {
         if (_frame is not { } frame || _snapshot is not { } snapshot ||
-            frame.Slices.Count == 0) return 0;
-        var slice = frame.Slices[0];
+            frame.RowWindows.Length == 0 || topY < 0 ||
+            topY >= Math.Max(0, _height - RibbonHeight)) return -1;
+        var row = frame.RowWindows[0];
         var found = false;
-        foreach (var row in frame.Slices)
+        foreach (var candidate in frame.RowWindows)
         {
-            if (topY < row.TopY || topY >= row.TopY + row.Height) continue;
-            slice = row;
+            if (topY < candidate.Slice.TopY ||
+                topY >= candidate.Slice.TopY + candidate.Slice.Height) continue;
+            row = candidate;
             found = true;
             break;
         }
-        if (!found && topY >= slice.TopY) slice = frame.Slices[^1];
+        if (!found && topY >= row.Slice.TopY) row = frame.RowWindows[^1];
+        var slice = row.Slice;
         var text = snapshot.GetText(slice.SourceStart, slice.SourceLength);
         if (text.Length == 0) return slice.SourceStart;
         var local = 0;
         WithLine(text, line =>
         {
+            if (!TryRowOrigin(line, row, text, out var origin)) return;
             var index = CoreTextNative.IndexForPosition(line,
-                new CoreTextNative.Point(Math.Max(0, x - LeftInset), 0));
+                new CoreTextNative.Point(Math.Max(0, x - origin), 0));
             local = checked((int)Math.Clamp(index, 0, text.Length));
         });
-        var snapped = 0;
-        foreach (var boundary in StringInfo.ParseCombiningCharacters(text))
+        var snapped = local;
+        if (!IsAscii(text))
         {
-            if (boundary > local) break;
-            snapped = boundary;
+            snapped = 0;
+            foreach (var boundary in StringInfo.ParseCombiningCharacters(text))
+            {
+                if (boundary > local) break;
+                snapped = boundary;
+            }
+            if (local == text.Length) snapped = local;
         }
-        if (local == text.Length) snapped = local;
         var source = slice.SourceStart + snapped;
+        if ((source == slice.SourceStart && slice.HasHiddenPrefix) ||
+            (source == slice.SourceStart + slice.SourceLength && slice.HasHiddenSuffix))
+        {
+            var lineStart = snapshot.GetLineStartOffset(slice.Line);
+            var lineEnd = slice.Line + 1 < snapshot.LineCount
+                ? snapshot.GetLineStartOffset(slice.Line + 1) : snapshot.Length;
+            source = SnapGraphemeAt(snapshot, lineStart, lineEnd, source) ??
+                frame.SelectionActive;
+        }
         if (source > 0 && source < snapshot.Length)
         {
             var pair = snapshot.GetText(source - 1, 2);
@@ -756,6 +1027,167 @@ internal sealed unsafe class MacTextInputIsland
                 pair[0] == '\r' && pair[1] == '\n') source--;
         }
         return source;
+    }
+
+    /// <summary>Maps one bounded shaped row to the immutable frame's left edge.</summary>
+    private static bool TryRowOrigin(nint line, HorizontalRowWindow row, string text,
+        out double origin)
+    {
+        var local = row.LeftEdgeSourceBoundary - row.Slice.SourceStart;
+        if (local < 0 || local > row.Slice.SourceLength ||
+            !IsGraphemeBoundary(text, local) ||
+            !double.IsFinite(row.IntraClusterPixels) || row.IntraClusterPixels < 0)
+        {
+            origin = 0;
+            return false;
+        }
+        var edge = CoreTextNative.OffsetForIndex(line, local, out _);
+        origin = LeftInset - edge - row.IntraClusterPixels;
+        return double.IsFinite(origin);
+    }
+
+    private static bool IsGraphemeBoundary(string text, int local)
+    {
+        if (local < 0 || local > text.Length) return false;
+        if (local == text.Length) return true;
+        if (IsAscii(text)) return true;
+        return Array.BinarySearch(StringInfo.ParseCombiningCharacters(text), local) >= 0;
+    }
+
+    private static bool IsAscii(string text)
+    {
+        foreach (var character in text)
+            if (character > 0x7f) return false;
+        return true;
+    }
+
+    /// <summary>Rejects a dual-edge bidirectional caret rather than guessing its visual side.</summary>
+    private static bool TryCaretOffset(nint line, int local, out double x)
+    {
+        x = CoreTextNative.OffsetForIndex(line, local, out var secondary);
+        return double.IsFinite(x) && double.IsFinite(secondary) &&
+            Math.Abs(x - secondary) < 0.25;
+    }
+
+    /// <summary>
+    /// Converts one device-independent horizontal scroll step into a source
+    /// anchor plus a local cluster residual; no whole-line prefix is shaped.
+    /// </summary>
+    private void PanHorizontal(double pixels)
+    {
+        if (!double.IsFinite(pixels) || pixels == 0 || IsComposing ||
+            _binding is not { } binding || _frame is not { } frame ||
+            _snapshot is not { } snapshot || _font == 0) return;
+        var referenceLine = snapshot.GetLineIndexFromOffset(frame.Horizontal.SourceBoundary);
+        var target = frame.RowWindows.FirstOrDefault(row => row.Slice.Line == referenceLine);
+        if (target.Slice.Height <= 0 && frame.RowWindows.Length > 0)
+            target = frame.RowWindows[0];
+        foreach (var row in frame.RowWindows)
+        {
+            if (row != target) continue;
+            var slice = row.Slice;
+            var text = snapshot.GetText(slice.SourceStart, slice.SourceLength);
+            if (text.Length == 0) return;
+            WithLine(text, line =>
+            {
+                var edgeIndex = row.LeftEdgeSourceBoundary - slice.SourceStart;
+                if (edgeIndex < 0 || edgeIndex > text.Length ||
+                    !TryCaretOffset(line, edgeIndex, out var edge)) return;
+                var desired = edge + row.IntraClusterPixels + pixels;
+                var end = CoreTextNative.OffsetForIndex(line, text.Length, out _);
+                if (!double.IsFinite(end) || end < 0) return;
+                if (desired < 0 && slice.HasHiddenPrefix)
+                {
+                    // Cross the bounded left seam by reanchoring; the next
+                    // frame supplies its own local shaping context.
+                    var lineStart = snapshot.GetLineStartOffset(slice.Line);
+                    var start = Math.Max(lineStart, slice.SourceStart - 128);
+                    var previous = snapshot.GetText(start, slice.SourceStart - start);
+                    var clusters = StringInfo.ParseCombiningCharacters(previous);
+                    if (clusters.Length == 0 || clusters[^1] == 0 && start > lineStart) return;
+                    SendHorizontal(binding, start + clusters[^1], 0);
+                    return;
+                }
+                if (desired > end && slice.HasHiddenSuffix)
+                {
+                    var lineStart = snapshot.GetLineStartOffset(slice.Line);
+                    var lineEnd = slice.Line + 1 < snapshot.LineCount
+                        ? snapshot.GetLineStartOffset(slice.Line + 1) : snapshot.Length;
+                    var safe = SnapGraphemeAt(snapshot, lineStart, lineEnd,
+                        slice.SourceStart + text.Length);
+                    if (safe is { } boundary) SendHorizontal(binding, boundary, 0);
+                    return;
+                }
+                desired = Math.Clamp(desired, 0, end);
+                if (desired >= end - 0.01)
+                {
+                    var boundary = slice.SourceStart + text.Length;
+                    if (slice.HasHiddenSuffix)
+                    {
+                        var lineStart = snapshot.GetLineStartOffset(slice.Line);
+                        var lineEnd = slice.Line + 1 < snapshot.LineCount
+                            ? snapshot.GetLineStartOffset(slice.Line + 1) : snapshot.Length;
+                        var safe = SnapGraphemeAt(snapshot, lineStart, lineEnd, boundary);
+                        if (safe is null) return;
+                        boundary = safe.Value;
+                    }
+                    SendHorizontal(binding, boundary, 0);
+                    return;
+                }
+                var hit = checked((int)Math.Clamp(CoreTextNative.IndexForPosition(line,
+                    new CoreTextNative.Point(desired, 0)), 0, text.Length));
+                var ascii = IsAscii(text);
+                var boundaries = ascii ? null : StringInfo.ParseCombiningCharacters(text);
+                var position = ascii ? hit : Array.BinarySearch(boundaries!, hit);
+                if (position < 0) position = ~position - 1;
+                position = Math.Max(0, position);
+                var local = ascii ? position : boundaries![position];
+                var x = CoreTextNative.OffsetForIndex(line, local, out var secondary);
+                if (!double.IsFinite(x) || !double.IsFinite(secondary) ||
+                    Math.Abs(x - secondary) >= 0.25) return;
+                if (x > desired && position > 0)
+                {
+                    --position;
+                    local = ascii ? position : boundaries![position];
+                    x = CoreTextNative.OffsetForIndex(line, local, out secondary);
+                }
+                if (!double.IsFinite(x) || Math.Abs(x - secondary) >= 0.25) return;
+                var next = ascii ? Math.Min(text.Length, position + 1) :
+                    position + 1 < boundaries!.Length ? boundaries![position + 1] : text.Length;
+                var nextX = CoreTextNative.OffsetForIndex(line, next, out secondary);
+                if (!double.IsFinite(nextX) || Math.Abs(nextX - secondary) >= 0.25 ||
+                    nextX < x) return;
+                var residual = Math.Clamp(desired - x, 0, Math.Max(0, nextX - x));
+                if (next > local && residual >= nextX - x - 0.01)
+                {
+                    SendHorizontal(binding, slice.SourceStart + next, 0);
+                    return;
+                }
+                if (local == edgeIndex && Math.Abs(residual - row.IntraClusterPixels) < 0.01)
+                    return;
+                SendHorizontal(binding, slice.SourceStart + local, residual);
+            });
+            return;
+        }
+    }
+
+    private void SendHorizontal(NativeCanvasBinding binding, int boundary, double residual) =>
+        _horizontal(new CanvasHorizontalAnchorRequest(binding.DocumentGeneration,
+            binding.BaseVersion, boundary, HorizontalCaretAffinity.Leading, residual));
+
+    private static int? SnapGraphemeAt(TextSnapshot snapshot, int lineStart,
+        int lineEnd, int boundary)
+    {
+        var start = Math.Max(lineStart, boundary - 128);
+        var end = Math.Min(lineEnd, boundary + 128);
+        var text = snapshot.GetText(start, end - start);
+        var edges = StringInfo.ParseCombiningCharacters(text);
+        var local = boundary - start;
+        var position = Array.BinarySearch(edges, local);
+        if (position < 0) position = ~position - 1;
+        if (local == text.Length) return boundary;
+        if (position < 0 || (position == 0 && start > lineStart)) return null;
+        return start + edges[position];
     }
 
     private void WithLine(string text, Action<nint> draw)
@@ -823,6 +1255,7 @@ internal sealed unsafe class MacTextInputIsland
         var local = MacOnScreenCanvasNative.SendPoint(_view,
             ObjC.Sel("convertPoint:fromView:"), window, 0);
         var source = HitSource(local.X, _height - local.Y);
+        if (source < 0) return;
         if (!extend) _dragAnchor = source;
         _selection(_dragAnchor, source);
     }
@@ -892,7 +1325,14 @@ internal sealed unsafe class MacTextInputIsland
         try
         {
             if (_editor != 0) ObjC.Send(_editor, ObjC.Sel("setEditable:"), 0);
-            if (_hostScroll != 0) ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 1);
+            if (_editor != 0)
+            {
+                _setting = true;
+                try { ObjC.Send(_editor, ObjC.Sel("setString:"), ObjC.String(string.Empty)); }
+                finally { _setting = false; }
+            }
+            if (_hostScroll != 0) ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 0);
+            SetRibbonLabel("Input stopped");
             Invalidate();
         }
         catch { /* Keep callback unwind safe even if AppKit is already failing. */ }
@@ -931,8 +1371,20 @@ internal sealed unsafe class MacTextInputIsland
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&InputMouseDown, "v@:@");
         Add(cls, "mouseDragged:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&InputMouseDragged, "v@:@");
+        Add(cls, "scrollWheel:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ScrollWheel, "v@:@");
         ObjC.RegisterClassPair(cls);
         return InputClass;
+    }
+
+    private static string RegisterHostScrollClass()
+    {
+        var cls = ObjC.AllocateClassPair(ObjC.Class("NSScrollView"), HostScrollClass, 0);
+        if (cls == 0) return HostScrollClass;
+        Add(cls, "scrollWheel:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ScrollWheel, "v@:@");
+        ObjC.RegisterClassPair(cls);
+        return HostScrollClass;
     }
 
     private static void ForwardInputEvent(nint self, nint selector, nint eventObject)
@@ -961,15 +1413,19 @@ internal sealed unsafe class MacTextInputIsland
     private static void ScrollWheel(nint self, nint selector, nint eventObject)
     {
         var current = s_current;
-        if (current is null || current.IsComposing) return;
+        if (current is null || current.IsComposing || current.BodyHeight <= 0) return;
         current.InvokeSafely(() =>
         {
             var delta = MacOnScreenCanvasNative.SendDouble(eventObject,
                 ObjC.Sel("scrollingDeltaY"));
+            var horizontal = MacOnScreenCanvasNative.SendDouble(eventObject,
+                ObjC.Sel("scrollingDeltaX"));
             var precise = ObjC.Send(eventObject, ObjC.Sel("hasPreciseScrollingDeltas")) != 0;
             var lineHeight = Math.Max(1, (current._theme?.Typography.EditorFontSize ?? 13) *
                 (current._theme?.Typography.LineHeightMultiplier ?? 1.4));
-            current._scroll(-delta * (precise ? 1 : lineHeight));
+            var scale = precise ? 1 : lineHeight;
+            if (horizontal != 0) current.PanHorizontal(-horizontal * scale);
+            if (delta != 0) current._scroll(-delta * scale);
         });
     }
 

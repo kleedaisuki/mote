@@ -75,12 +75,20 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public bool CanvasEnabled => _experimentalCanvas;
 
     /// <inheritdoc />
+    public int MaxCanvasInputLength => CanvasInputWindowSelector.MaxLength;
+
+    /// <inheritdoc />
     public bool IsCanvasComposing => _experimentalCanvas && _canvas?.IsComposing == true;
 
     /// <inheritdoc />
     public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
     /// <inheritdoc />
     public event Action<double>? CanvasScrollRequested;
+    /// <inheritdoc />
+    public event Action<CanvasHorizontalAnchorRequest>? CanvasHorizontalAnchorRequested;
+
+    private void RequestHorizontalAnchor(CanvasHorizontalAnchorRequest request) =>
+        CanvasHorizontalAnchorRequested?.Invoke(request);
     /// <inheritdoc />
     public event Action<double>? CanvasViewportResized;
     /// <inheritdoc />
@@ -176,6 +184,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 if (_pendingSelection is { } selection) SetSelection(selection.Anchor, selection.Active);
                 ObjC.Send(_window, ObjC.Sel("makeKeyAndOrderFront:"), 0);
                 ObjC.Send(_application, ObjC.Sel("activateIgnoringOtherApps:"), 1);
+                if (_experimentalCanvas) Post(() => _canvas?.PublishBodyHeight());
                 Post(() => Shown?.Invoke());
                 ObjC.Send(_application, ObjC.Sel("run"));
             }
@@ -333,6 +342,10 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     }
 
     /// <inheritdoc />
+    public CanvasCaretGeometry? GetCanvasCaretGeometry(CanvasFrame frame, int sourceOffset) =>
+        _experimentalCanvas ? _canvas?.GetCaretGeometry(frame, sourceOffset) : null;
+
+    /// <inheritdoc />
     public void SetCanvasAccessibility(AccessibleDocument document,
         IAccessibleViewport viewport)
     {
@@ -345,7 +358,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         provider.Faulted += QueueAccessibilityFault;
         try
         {
-            provider.Attach(_canvas.CanvasView, _canvas.Editor);
+            provider.Attach(_canvas.CanvasView, _canvas.Editor, _canvas.BodyRect);
             _accessibility = provider;
         }
         catch
@@ -677,6 +690,30 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <summary>Current bounded host source start for diagnostic probe telemetry.</summary>
     internal int ProbeCanvasInputStart => _pendingCanvasBinding?.InputSourceStart ?? -1;
+    /// <summary>Latest immutable source-backed frame delivered to the native canvas.</summary>
+    internal CanvasFrame? ProbeCanvasFrame => _pendingCanvasFrame;
+    /// <summary>Live source-backed canvas NSView for bounded raster probes.</summary>
+    internal nint ProbeCanvasView => _canvas?.CanvasView ?? 0;
+    /// <summary>Actual source paint rectangle, excluding the reserved input ribbon.</summary>
+    internal ObjC.Rect ProbeCanvasBodyRect => _canvas?.BodyRect ?? new ObjC.Rect(0, 0, 0, 0);
+    /// <summary>Synchronizes a probe-only native frame resize with the source viewport.</summary>
+    internal void ProbeCanvasPublishBodyHeight() => _canvas?.PublishBodyHeight();
+    /// <summary>Same horizontal source transition used by native scrollWheel callbacks.</summary>
+    internal void ProbeCanvasPanHorizontal(double pixels) => _canvas?.ProbePanHorizontal(pixels);
+    /// <summary>Same CoreText inverse source hit-test used by canvas pointer callbacks.</summary>
+    internal int ProbeCanvasHitSource(double x, double topY) =>
+        _canvas?.ProbeHitSource(x, topY) ?? -1;
+    /// <summary>Native host local glyph and clip geometry, without document text.</summary>
+    internal (bool Aligned, bool Hidden, double NativeX, double ClipX)?
+        ProbeCanvasHostGeometry(int sourceOffset) => _canvas?.ProbeHostGeometry(sourceOffset);
+    /// <summary>Probe-only tagged direct source jump, not a synthetic pixel width.</summary>
+    internal void ProbeCanvasHorizontalAnchor(int sourceOffset)
+    {
+        if (_pendingCanvasBinding is not { } binding) return;
+        RequestHorizontalAnchor(new CanvasHorizontalAnchorRequest(
+            binding.DocumentGeneration, binding.BaseVersion, sourceOffset,
+            HorizontalCaretAffinity.Leading, 0));
+    }
 
     /// <summary>Current input binding nonce for diagnostic probe telemetry.</summary>
     internal long ProbeCanvasNonce => _pendingCanvasBinding?.BindingNonce ?? -1;
@@ -687,6 +724,41 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <summary>Top-level AppKit window for in-process accessibility tree traversal.</summary>
     internal nint ProbeWindow => _window;
+    /// <summary>AppKit activation state, independent of external AX focus projection.</summary>
+    internal (bool AppActive, nint ActivationPolicy, bool WindowKey,
+        bool WindowVisible, bool EditorFirstResponder) ProbeAppKitFocus =>
+        (_application != 0 && ObjC.Send(_application, ObjC.Sel("isActive")) != 0,
+            _application == 0 ? (nint)(-1) : ObjC.Send(_application, ObjC.Sel("activationPolicy")),
+            _window != 0 && ObjC.Send(_window, ObjC.Sel("isKeyWindow")) != 0,
+            _window != 0 && ObjC.Send(_window, ObjC.Sel("isVisible")) != 0,
+            _window != 0 && _editor != 0 &&
+                ObjC.Send(_window, ObjC.Sel("firstResponder")) == _editor);
+
+    /// <summary>Read-only AX focus routing diagnostics; reports roles, never document text.</summary>
+    internal string ProbeCanvasAxFocusTrace
+    {
+        get
+        {
+            var proxy = _accessibility?.Element ?? 0;
+            if (proxy == 0) return "proxy=unavailable";
+            static nint Focused(nint receiver, string selector) =>
+                receiver != 0 && ObjC.Send(receiver, ObjC.Sel("respondsToSelector:"),
+                    ObjC.Sel(selector)) != 0
+                    ? ObjC.Send(receiver, ObjC.Sel(selector)) : 0;
+            static string Role(nint value) => value != 0 &&
+                ObjC.Send(value, ObjC.Sel("respondsToSelector:"),
+                    ObjC.Sel("accessibilityRole")) != 0
+                ? ObjC.ManagedString(ObjC.Send(value, ObjC.Sel("accessibilityRole")))
+                : "none";
+            var canvas = Focused(_canvas?.CanvasView ?? 0, "accessibilityFocusedUIElement");
+            var window = Focused(_window, "accessibilityFocusedUIElement");
+            var app = Focused(_application, "accessibilityApplicationFocusedUIElement");
+            return $"proxy-focused={ObjC.Send(proxy, ObjC.Sel("isAccessibilityFocused")) != 0};" +
+                $"canvas={Role(canvas)}/{canvas == proxy};" +
+                $"window={Role(window)}/{window == proxy};" +
+                $"app={Role(app)}/{app == proxy}";
+        }
+    }
 
     /// <summary>Controller-visible canvas status for AX fault-recovery probes.</summary>
     internal string ProbeCanvasStatus => _statusText;
@@ -780,6 +852,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         _window = ObjC.Send(ObjC.Send(ObjC.Class("NSWindow"), ObjC.Sel("alloc")),
             ObjC.Sel("initWithContentRect:styleMask:backing:defer:"),
             new ObjC.Rect(120, 100, 1120, 760), WindowStyle, 2, 0);
+        if (_experimentalCanvas)
+            ObjC.Send(_window, ObjC.Sel("setContentMinSize:"), new ObjC.Size(420, 120));
         ObjC.Send(_window, ObjC.Sel("setReleasedWhenClosed:"), 0);
         ObjC.Send(_window, ObjC.Sel("setDelegate:"), _delegate);
         ObjC.Send(_window, ObjC.Sel("setTitle:"), ObjC.String("mote"));
@@ -796,6 +870,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             _canvas = new MacTextInputIsland(
                 edit => CanvasEditCommitted?.Invoke(edit),
                 delta => CanvasScrollRequested?.Invoke(delta),
+                RequestHorizontalAnchor,
                 height => CanvasViewportResized?.Invoke(height),
                 (anchor, active) => CanvasSelectionRequested?.Invoke(anchor, active),
                 message =>
@@ -805,7 +880,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 });
             _canvas.ViewGeometryChanged += () =>
             {
-                try { _accessibility?.UpdateFrameFromView(); }
+                try { _accessibility?.UpdateBodyRect(_canvas.BodyRect); }
                 catch (Exception error) { QueueAccessibilityFault(error); }
             };
             editorScroll = _canvas.CreateView(new ObjC.Rect(0, 0, 730, 730));

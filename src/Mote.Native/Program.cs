@@ -42,6 +42,13 @@ internal static class Program
             if (result == 0) Console.WriteLine("mote-native-mac-canvas-ax-ready");
             return result;
         }
+        if (args.Length == 4 && args[0] == "--check-native-mac-horizontal")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            var result = Mac.Canvas.MacCanvasHorizontalProbe.Run(args[1], args[2], args[3]);
+            if (result == 0) Console.WriteLine("mote-native-mac-horizontal-ready");
+            return result;
+        }
         if (args.Length == 3 && args[0] == "--check-native-mac-workflow")
         {
             if (!OperatingSystem.IsMacOS())
@@ -63,6 +70,7 @@ internal static class Program
             Console.WriteLine("Experimental AppKit clipboard diagnostic: --check-native-mac-canvas-clipboard <input> <output>");
             Console.WriteLine("Experimental AppKit global-delete diagnostic: --check-native-mac-canvas-delete <input>");
             Console.WriteLine("Experimental AppKit AX tree diagnostic: --check-native-mac-canvas-ax <input>");
+            Console.WriteLine("Experimental AppKit horizontal diagnostic: --check-native-mac-horizontal <short-line> <long-line> <output-dir>");
             Console.WriteLine("On-screen read-only canvas: --check-native-canvas-window <100MiB-many-line-file> <50MiB-one-line-file> <output-dir> <theme-id>");
             return 0;
         }

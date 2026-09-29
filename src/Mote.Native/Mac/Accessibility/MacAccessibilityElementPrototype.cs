@@ -28,6 +28,8 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     private nint _canvasView;
     private nint _inputEditor;
     private nint _previousChildren;
+    private ObjC.Rect _bodyRect;
+    private bool _hasBodyRect;
     private bool _inputWasAccessible;
     private int _faultReported;
 
@@ -36,6 +38,12 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     /// provider detachment on the AppKit UI thread without disabling input.
     /// </summary>
     internal event Action<Exception>? Faulted;
+
+    /// <summary>
+    /// Attached source element for target-host selector diagnostics only. The
+    /// caller must not retain it beyond Dispose or mutate its AX tree.
+    /// </summary>
+    internal nint Element => _element;
 
     /// <summary>Creates a source-backed AppKit element without materializing the document.</summary>
     internal MacAccessibilityElementPrototype(AccessibleDocument document,
@@ -48,17 +56,26 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     /// Attaches one logical AX text-area child to the canvas and hides the
     /// bounded NSTextView from the AX tree without changing keyboard focus.
     /// </summary>
-    internal nint Attach(nint canvasView, nint inputEditor)
+    internal nint Attach(nint canvasView, nint inputEditor,
+        ObjC.Rect? initialBodyRect = null)
     {
         if (canvasView == 0 || inputEditor == 0)
             throw new ArgumentException("Canvas and input views must exist before AX attachment.");
         if (s_current is not null) throw new InvalidOperationException("Only one AX prototype may be attached.");
+        // Validate before recording an owned input view: failed attachment must
+        // not let Dispose change its pre-existing accessibility flag.
+        if (initialBodyRect is { } initial) ValidateBodyRect(canvasView, initial);
         RegisterClass();
         s_current = this;
         try
         {
             _canvasView = canvasView;
             _inputEditor = inputEditor;
+            if (initialBodyRect is { } body)
+            {
+                _bodyRect = body;
+                _hasBodyRect = true;
+            }
             _previousChildren = ObjC.Send(canvasView, ObjC.Sel("accessibilityChildren"));
             if (_previousChildren != 0)
                 ObjC.Send(_previousChildren, ObjC.Sel("retain"));
@@ -83,12 +100,42 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
         }
     }
 
+    /// <summary>
+    /// Sets the physically painted source body in canvas-local coordinates.
+    /// The input ribbon is not part of the source text area's AX frame.
+    /// </summary>
+    internal void UpdateBodyRect(ObjC.Rect bodyRect)
+    {
+        if (_element == 0 || _canvasView == 0)
+            throw new InvalidOperationException("AX body geometry requires an attached canvas.");
+        ValidateBodyRect(_canvasView, bodyRect);
+        ObjC.Send(_element, ObjC.Sel("setAccessibilityFrameInParentSpace:"), bodyRect);
+        _bodyRect = bodyRect;
+        _hasBodyRect = true;
+    }
+
     /// <summary>Refreshes parent-space AX geometry after the canvas resizes or reflows.</summary>
     internal void UpdateFrameFromView()
     {
         if (_element == 0 || _canvasView == 0) return;
-        var bounds = MacOnScreenCanvasNative.GetRect(_canvasView, ObjC.Sel("bounds"));
-        ObjC.Send(_element, ObjC.Sel("setAccessibilityFrameInParentSpace:"), bounds);
+        var frame = _hasBodyRect ? _bodyRect :
+            MacOnScreenCanvasNative.GetRect(_canvasView, ObjC.Sel("bounds"));
+        ObjC.Send(_element, ObjC.Sel("setAccessibilityFrameInParentSpace:"), frame);
+    }
+
+    private static void ValidateBodyRect(nint canvasView, ObjC.Rect rect)
+    {
+        var bounds = MacOnScreenCanvasNative.GetRect(canvasView, ObjC.Sel("bounds"));
+        const double tolerance = 0.001;
+        if (!double.IsFinite(rect.Origin.X) || !double.IsFinite(rect.Origin.Y) ||
+            !double.IsFinite(rect.Size.Width) || !double.IsFinite(rect.Size.Height) ||
+            rect.Size.Width < 0 || rect.Size.Height < 0 ||
+            rect.Origin.X < bounds.Origin.X - tolerance ||
+            rect.Origin.Y < bounds.Origin.Y - tolerance ||
+            rect.Origin.X + rect.Size.Width > bounds.Origin.X + bounds.Size.Width + tolerance ||
+            rect.Origin.Y + rect.Size.Height > bounds.Origin.Y + bounds.Size.Height + tolerance)
+            throw new ArgumentOutOfRangeException(nameof(rect),
+                "AX source body must stay within the canvas view bounds.");
     }
 
     /// <summary>Releases the one owned AppKit element and unmanaged callback root.</summary>
@@ -103,6 +150,8 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
         if (_previousChildren != 0) ObjC.Send(_previousChildren, ObjC.Sel("release"));
         if (_element != 0) ObjC.Send(_element, ObjC.Sel("release"));
         _element = _canvasView = _inputEditor = _previousChildren = 0;
+        _bodyRect = default;
+        _hasBodyRect = false;
     }
 
     private static void RegisterClass()
