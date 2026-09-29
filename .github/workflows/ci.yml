@@ -262,6 +262,27 @@ jobs:
           path: .cache/ci-inventory/win-x64/windows-config-runtime.json
           if-no-files-found: warn
           retention-days: 14
+      # A separate WPF client exercises the real published UIA provider. Known
+      # duplicate Document nodes remain a release blocker, not a skipped check.
+      - name: Diagnose external Windows UIA canvas provider (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/WindowsAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -Rid $rid `
+            -ReportPath ".cache/windows-ax-external/$rid/report.json"
+      - name: Upload external Windows UIA diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ax-external-${{ matrix.rid }}
+          path: .cache/windows-ax-external/${{ matrix.rid }}/report.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify macOS Launch Services can open the standalone executable
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh
@@ -320,6 +341,27 @@ jobs:
             .temp/canvas-delete-*.txt
           if-no-files-found: warn
           retention-days: 14
+      - name: Diagnose in-process macOS canvas AX selector (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacCanvasAxWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload in-process macOS canvas AX diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-ax-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-ax.json
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-ax*.txt
+            .temp/canvas-ax-in-*.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Diagnose macOS native config and trace placement (non-gating)
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh
@@ -356,6 +398,26 @@ jobs:
           name: mac-accessibility-${{ matrix.rid }}
           path: .cache/ci-inventory/${{ matrix.rid }}/mac-accessibility.json
           if-no-files-found: error
+      # A separately compiled Swift process traverses the published canvas AX
+      # tree. The first host run is diagnostic; TCC denials have their own JSON.
+      - name: Diagnose external macOS canvas AX provider (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/MacAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/mac-ax-external.json"
+      - name: Upload external macOS canvas AX diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-ax-external-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-ax-external.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify external macOS keyboard edit-save-reopen workflow
         if: always() && startsWith(matrix.rid, 'osx-')
         shell: pwsh
