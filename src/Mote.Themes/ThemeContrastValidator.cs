@@ -28,6 +28,10 @@ public static class ThemeContrastValidator
         Check("editor text", palette.EditorForeground, palette.EditorBackground, 4.5);
         Check("editor text on active line", palette.EditorForeground, palette.ActiveLineBackground, 4.5);
         Check("preview text", palette.PreviewForeground, palette.PreviewBackground, 4.5);
+        Check("preview muted text", palette.MutedForeground, palette.PreviewBackground, 4.5);
+        Check("preview accent text", palette.Accent, palette.PreviewBackground, 4.5);
+        Check("preview information text", palette.Info, palette.PreviewBackground, 4.5);
+        Check("preview error text", palette.Error, palette.PreviewBackground, 4.5);
         Check("secondary text", palette.MutedForeground, palette.PanelBackground, 4.5);
         Check("gutter text", palette.GutterForeground, palette.EditorBackground, 4.5);
         Check("selection text", palette.SelectionForeground, palette.SelectionBackground, 4.5);
@@ -44,6 +48,8 @@ public static class ThemeContrastValidator
             Check($"semantic {kind}", theme.SemanticColor(kind), palette.EditorBackground, 4.5);
             Check($"semantic {kind} on active line", theme.SemanticColor(kind),
                 palette.ActiveLineBackground, 4.5);
+            Check($"preview semantic {kind}", theme.SemanticColor(kind),
+                palette.PreviewBackground, 4.5);
         }
         return issues;
 

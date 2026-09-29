@@ -67,6 +67,16 @@ public sealed class ThemePolicyTests
             issue => issue.Role == "button and active-tab text");
     }
 
+    /// <summary>Native previews apply semantic colors on a distinct surface, not the editor surface.</summary>
+    [Fact]
+    public void ValidatorRejectsUnreadablePreviewSemanticColor()
+    {
+        var good = ThemePolicies.Get(ThemePolicies.DarkId);
+        var bad = new BadPreviewTheme(good);
+        Assert.Contains(ThemeContrastValidator.Validate(bad),
+            issue => issue.Role == "preview semantic key");
+    }
+
     /// <summary>Color serialization is exact and rejects alpha, malformed or ambiguous strings.</summary>
     [Fact]
     public void ColorHexRoundTripsAndRejectsMalformedValues()
@@ -87,6 +97,20 @@ public sealed class ThemePolicyTests
         public ThemePalette Palette { get; } = source.Palette with
         {
             ControlForeground = source.Palette.ControlBackground
+        };
+        public ThemeTypography Typography => source.Typography;
+        public ThemeSpacing Spacing => source.Spacing;
+        public ThemeColor SemanticColor(string kind) => source.SemanticColor(kind);
+    }
+
+    private sealed class BadPreviewTheme(IThemePolicy source) : IThemePolicy
+    {
+        public string Id => "bad-preview-test-theme";
+        public string DisplayName => "Bad preview test theme";
+        public bool IsDark => source.IsDark;
+        public ThemePalette Palette { get; } = source.Palette with
+        {
+            PreviewBackground = source.SemanticColor("key")
         };
         public ThemeTypography Typography => source.Typography;
         public ThemeSpacing Spacing => source.Spacing;
