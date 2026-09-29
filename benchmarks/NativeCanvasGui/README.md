@@ -60,9 +60,20 @@ The script first runs a **1 MiB many-line control**, then the 100 MiB many-line
 and 50 MiB one-line cases. A control failure identifies AX/TCC/input trouble
 without conflating it with large-file load; every case still requires an
 independent exact-byte save oracle. It drives the exact child PID through
-`System Events`, observes an AX focused text element, sends one `X`, uses
-Command-S, and applies the same full byte oracle. It attempts View → Next Page
-for the 100 MiB case and records a before/after
+`System Events` and a separately compiled, exact-PID ApplicationServices AX
+observer. Before any keyboard input, it requires a unique source-backed
+`AXTextArea` with the exact source length, its `AXFocused=true` (the native
+provider derives this from the hidden `NSTextView` being the window's actual
+first responder), and an exact-PID focused window whose title matches the
+synthetic fixture. It does **not** gate solely on `System Events` `frontmost`.
+The helper also records `NSWorkspace.frontmostApplication`'s numeric PID as a
+diagnostic, not an uncalibrated hard gate on this hosted session.
+It then sends **only non-mutating Shift+Right** and requires the source-backed
+selection to change exactly `0/0→0/1`; Left must restore `0/0` before the
+single `X`, Command-S, full streaming byte oracle, and fresh-process reopen
+with the saved source length. Any ambiguity aborts **before the text key**;
+the process is terminated without a global Command-W shortcut. The 100 MiB
+case attempts View → Next Page and records a before/after
 `AXVisibleCharacterRange` only as a *candidate* scroll marker. The custom
 canvas AX element may expose the **global** document length while its hidden
 `NSTextView` input island remains bounded; the script does **not** use AX text
@@ -75,12 +86,12 @@ timed out **before any external key or Save** in one opaque 100 MiB AX-ready
 AppleScript. It yielded no evidence that loading, focus, TCC, or edit was the
 cause. The revised probe retains schema version 1 and the outer `AX-focus`
 stage, but splits `readiness_step` into exact-PID AX process, expected synthetic
-window title, foreground activation, and focused element role. Each stage has
-a finite budget and separately records elapsed time, last safe observation,
-attempt count, and distinct process-launch, compile, execution, timeout, and
-child-exit status. Process visibility, window title, frontmost and focused-role
-budgets are 12, 20, 10 and 16 seconds respectively, with a 4-second bound on
-each `osascript` attempt and 10 seconds on compilation. Every
+window title, foreground observation, and source-proxy first-responder gate.
+Each stage records elapsed time, last safe observation, attempt count, and
+distinct process-launch, compile, execution, timeout, and child-exit status.
+Process visibility and window title have 12- and 20-second budgets; each
+`osascript` attempt is bounded by 4 seconds. The Swift AX observer is compiled
+once before the editor is launched; every
 AppleScript is compiled before execution; source, compiled script, and compiler
 and interpreter stdout/stderr for **each** attempt are kept under the failed
 case's repository-local `.temp/` directory. Title observations record only a
@@ -92,22 +103,28 @@ The [second hosted attempt (`36578393670`)](https://github.com/kleedaisuki/mote/
 localized the first **1 MiB control** failure: the exact-PID AX process was
 visible after 883.5 ms, its expected window title matched after 1,462.9 ms,
 but `set frontmost` was followed by `frontmost=false` on all 27 observations
-within the 10-second foreground budget. No focused role, key, or Save was
-reached; this is not evidence of a 100 MiB load regression. The strict default
-editor keyboard probe sets frontmost but does not assert that property, so this
-alone does not establish whether the canvas is activation-broken or the hosted
-property is misleading. The [read-only follow-up (`36579476337`)](https://github.com/kleedaisuki/mote/actions/runs/36579476337)
+within the former 10-second foreground gate. No focused role, key, or Save was
+reached; this is not evidence of a 100 MiB load regression. The [read-only follow-up (`36579476337`)](https://github.com/kleedaisuki/mote/actions/runs/36579476337)
 again matched the 1 MiB control's window (1,879.3 ms), then saw 23
 `not-frontmost` attempts; the actual foreground process was **Finder PID 357**,
 and mote's `AXFocusedUIElement` had role **`AXScrollArea`**, not `AXTextArea`.
-The gate correctly sent **no keyboard input** to Finder. This is not just a
-misleading frontmost-property result, but it still cannot distinguish a hosted
-activation/session limitation from a canvas-specific first-responder defect.
+The former gate correctly sent **no keyboard input** when routing was
+unproven, but this did not distinguish a hosted activation/session limitation
+from a canvas-specific first-responder defect.
 A macOS arm64 Native AOT job uploaded this non-gating artifact; the overall
 workflow's separate test jobs failed, so the run URL is not a release pass.
-A same-run default-editor foreground/focus control, or an AppKit activation
-probe, is the next discriminating check. No 100 MiB open/edit measurement was
-obtained from either attempt.
+In [run `36591084601`](https://github.com/kleedaisuki/mote/actions/runs/36591084601),
+the strict **default** editor completed external X → Save → reopen while its
+read-only `System Events` foreground observation still said
+`target-frontmost=false;global-pid=378`; its actual focused AX role was
+`AXTextArea`. The separate Canvas 1 MiB control again matched process/window
+but saw Finder as foreground and `AXScrollArea`. Thus `System Events`
+frontmost/global PID is a **false-negative for a known successful keyboard
+workflow** and cannot be the sole Canvas gate. Conversely, an AX scroll-area
+role does not prove the hidden input island is first responder. The new
+source-proxy focus + non-mutating selection challenge is designed to separate
+those cases without risking a text key to an unverified target. It has **not
+yet been hosted**; there is still no 100 MiB external edit/Save claim.
 
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS

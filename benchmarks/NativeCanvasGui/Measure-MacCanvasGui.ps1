@@ -139,21 +139,100 @@ function Wait-AxStage {
     throw "readiness-timeout: $Name after $BudgetMs ms; status=$($Result.last_automation_status); observation=$($Result.readiness_observation); last_error=$($Result.last_automation_error)"
 }
 
-# A custom canvas AX text element may expose the entire document. Never read AXValue.
-function Get-VisibleRange {
-    param([int] $ProcessId, [string] $Name)
-    $script = @"
-tell application "System Events"
-    set targetProcess to first process whose unix id is $ProcessId
-    set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
-    try
-        return (value of attribute "AXVisibleCharacterRange" of focusedElement) as string
-    on error errorMessage number errorNumber
-        return "unavailable-error-" & errorNumber
-    end try
-end tell
-"@
-    return Invoke-AppleScript $script $Name
+# Compile one bounded, text-free ApplicationServices observer before launching mote.
+function Compile-AxGate {
+    $output = Join-Path $scratch 'canvas-ax-gate'
+    $start = [Diagnostics.ProcessStartInfo]::new('/usr/bin/xcrun')
+    foreach ($arg in @('swiftc', '-O', (Join-Path $PSScriptRoot 'CanvasAxGate.swift'),
+            '-o', $output)) { [void]$start.ArgumentList.Add($arg) }
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $compiler = [Diagnostics.Process]::Start($start)
+    try {
+        $timedOut = -not $compiler.WaitForExit(90000)
+        if ($timedOut) {
+            try { $compiler.Kill($true) }
+            catch [InvalidOperationException] { }
+            [void]$compiler.WaitForExit()
+        }
+        $stdout = $compiler.StandardOutput.ReadToEnd()
+        $stderr = $compiler.StandardError.ReadToEnd()
+        [IO.File]::WriteAllText((Join-Path $scratch 'ax-gate-compile.stdout.txt'), $stdout, $utf8)
+        [IO.File]::WriteAllText((Join-Path $scratch 'ax-gate-compile.stderr.txt'), $stderr, $utf8)
+        if ($timedOut) { throw 'ax-gate-compile-timeout: swiftc exceeded 90 seconds.' }
+        if ($compiler.ExitCode -ne 0) { throw "ax-gate-compile-error: $stderr" }
+        return $output
+    }
+    finally { $compiler.Dispose() }
+}
+
+# The helper returns only numeric/focus/range metadata, never AXValue or source text.
+function Read-AxGate {
+    param([int] $ProcessId, [int] $ExpectedLength, [string] $FileName, [string] $Name)
+    $start = [Diagnostics.ProcessStartInfo]::new($script:axGate)
+    foreach ($arg in @([string]$ProcessId, [string]$ExpectedLength, $FileName)) {
+        [void]$start.ArgumentList.Add($arg)
+    }
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $probe = [Diagnostics.Process]::Start($start)
+    try {
+        $timedOut = -not $probe.WaitForExit(5000)
+        if ($timedOut) {
+            try { $probe.Kill($true) }
+            catch [InvalidOperationException] { }
+            [void]$probe.WaitForExit()
+        }
+        $stdout = $probe.StandardOutput.ReadToEnd().Trim()
+        $stderr = $probe.StandardError.ReadToEnd().Trim()
+        [IO.File]::WriteAllText((Join-Path $scratch "$Name.stdout.txt"), $stdout, $utf8)
+        [IO.File]::WriteAllText((Join-Path $scratch "$Name.stderr.txt"), $stderr, $utf8)
+        if ($timedOut) { throw "ax-gate-timeout: $Name" }
+        if ($probe.ExitCode -ne 0 -or -not $stdout) {
+            throw "ax-gate-error: $Name exited $($probe.ExitCode): $stderr"
+        }
+        return $stdout | ConvertFrom-Json
+    }
+    finally { $probe.Dispose() }
+}
+
+# Reject stale/wrong-process proxies before every potentially routed input.
+function Assert-AxGate {
+    param($Gate, [int] $ProcessId, [int] $ExpectedLength,
+        [int] $SelectionStart, [int] $SelectionLength)
+    if ($Gate.status -cne 'observed' -or $Gate.trusted -ne $true -or
+        $Gate.requestedPid -ne $ProcessId -or $Gate.applicationPid -ne $ProcessId -or
+        $Gate.focusedWindowPid -ne $ProcessId -or
+        $Gate.focusedWindowMatches -ne $true -or $Gate.sourceCandidates -ne 1 -or
+        $Gate.sourceLength -ne $ExpectedLength -or $Gate.proxyFocused -ne $true -or
+        $Gate.selectionStart -ne $SelectionStart -or
+        $Gate.selectionLength -ne $SelectionLength) {
+        throw "ax-gate-unverified: expected PID=$ProcessId, length=$ExpectedLength, selection=$SelectionStart/$SelectionLength; observed=$($Gate|ConvertTo-Json -Compress)"
+    }
+}
+
+# Poll only the source-backed selection, never retry a non-idempotent key.
+function Wait-AxSelection {
+    param([int] $ProcessId, [int] $ExpectedLength, [string] $FileName,
+        [string] $Name, [int] $Start, [int] $Length)
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $attempt = 0
+    while ($timer.ElapsedMilliseconds -lt 4000) {
+        $attempt++
+        $gate = Read-AxGate $ProcessId $ExpectedLength $FileName `
+            ('{0}.attempt-{1:D2}' -f $Name, $attempt)
+        if ($gate.selectionStart -eq $Start -and $gate.selectionLength -eq $Length) {
+            Assert-AxGate $gate $ProcessId $ExpectedLength $Start $Length
+            return $gate
+        }
+        if ($gate.proxyFocused -ne $true -or $gate.focusedWindowMatches -ne $true) {
+            throw "routing-focus-lost: $Name; observed=$($gate|ConvertTo-Json -Compress)"
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "routing-selection-timeout: $Name expected=$Start/$Length after 4 seconds."
 }
 
 function Wait-FileLength {
@@ -210,10 +289,15 @@ function Invoke-Case {
         ax_process_ms = $null
         ax_window_ms = $null
         ax_frontmost_ms = $null
+        system_events_frontmost = ''
         ax_focused_role = $null
         focus_diagnostic_error = ''
         foreground_process_observation = ''
         foreground_process_error = ''
+        source_ax_gate_before = $null
+        source_ax_gate_after_shift = $null
+        source_ax_gate_after_left = $null
+        routing_probe_status = 'not-run'
         open_to_ax_focus_ms = $null
         edit_to_dirty_automation_ms = $null
         edit_to_save_automation_ms = $null
@@ -225,11 +309,14 @@ function Invoke-Case {
         working_set_at_focus_bytes = $null
         working_set_after_save_bytes = $null
         observed_peak_working_set_bytes = $null
+        reopen_source_chars = $null
+        reopen_observed_ms = $null
         error_kind = ''
         error = ''
     }
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $child = $null
+    $reopened = $null
     try {
         try { $child = [Diagnostics.Process]::Start($start) }
         catch { throw "process-launch-error: $($_.Exception.Message)" }
@@ -276,35 +363,35 @@ tell application "System Events"
     return "role=" & roleName
 end tell
 "@
+        # System Events foreground has reported false while the default editor's
+        # exact external keyboard workflow succeeded. Observe it, do not gate on it.
         try {
-            [void](Wait-AxStage $child $result "$Name-ax-frontmost" $frontScript 'frontmost' 10000)
+            $result.system_events_frontmost = Invoke-AppleScript $frontScript `
+                "$Name-ax-frontmost" 4000
         }
-        catch {
-            $foregroundError = $_.Exception.Message
-            # Diagnostic only: inspect AX role once even if focus activation is
-            # unavailable. Never dispatch an edit or Save without foreground.
-            try {
-                $result.ax_focused_role = Invoke-AppleScript $focusScript `
-                    "$Name-ax-focus-readonly" 4000
-            }
-            catch { $result.focus_diagnostic_error = $_.Exception.Message }
-            $frontWhoScript = @"
+        catch { $result.last_automation_error = $_.Exception.Message }
+        $result.ax_frontmost_ms = $watch.Elapsed.TotalMilliseconds
+        $result.readiness_step = 'focused-role-observation'
+        try {
+            $result.ax_focused_role = Invoke-AppleScript $focusScript `
+                "$Name-ax-focus-readonly" 4000
+        }
+        catch { $result.focus_diagnostic_error = $_.Exception.Message }
+        $frontWhoScript = @"
 tell application "System Events"
     set foregroundProcess to first process whose frontmost is true
     return "pid=" & (unix id of foregroundProcess) & ";name=" & (name of foregroundProcess)
 end tell
 "@
-            try {
-                $result.foreground_process_observation = Invoke-AppleScript `
-                    $frontWhoScript "$Name-foreground-process-readonly" 4000
-            }
-            catch { $result.foreground_process_error = $_.Exception.Message }
-            throw $foregroundError
+        try {
+            $result.foreground_process_observation = Invoke-AppleScript `
+                $frontWhoScript "$Name-foreground-process-readonly" 4000
         }
-        $result.ax_frontmost_ms = $watch.Elapsed.TotalMilliseconds
-        $result.readiness_step = 'focused-role'
-        $role = Wait-AxStage $child $result "$Name-ax-focus" $focusScript 'role=*TextArea*' 16000
-        $result.ax_focused_role = $role
+        catch { $result.foreground_process_error = $_.Exception.Message }
+        $result.readiness_step = 'source-proxy-first-responder'
+        $before = Read-AxGate $child.Id ([int]$originalLength) $fileName "$Name-gate-before"
+        $result.source_ax_gate_before = $before
+        Assert-AxGate $before $child.Id ([int]$originalLength) 0 0
         $result.readiness_step = 'complete'
         $result.open_to_ax_focus_ms = $watch.Elapsed.TotalMilliseconds
         $child.Refresh()
@@ -312,8 +399,42 @@ end tell
             [long]$child.WorkingSet64
         } else { $null }
         if ($Name -eq 'many') {
-            $result.ax_visible_range_before = Get-VisibleRange $child.Id "$Name-range-before"
+            $result.ax_visible_range_before = "$($before.visibleStart)/$($before.visibleLength)"
         }
+
+        # Harmless routing challenge: only a source-backed selection transition
+        # can authorize a subsequent mutating X key. Finder may own the stale
+        # System Events foreground property on hosted runners.
+        $result.stage = 'routing-probe'
+        $shiftScript = @"
+tell application "System Events"
+    set targetProcess to first process whose unix id is $($child.Id)
+    set frontmost of targetProcess to true
+    key code 124 using shift down
+    return "shift-right-sent"
+end tell
+"@
+        if ((Invoke-AppleScript $shiftScript "$Name-shift-right") -cne 'shift-right-sent') {
+            throw 'routing-shift-dispatch-error: Shift-Right was not dispatched.'
+        }
+        $afterShift = Wait-AxSelection $child.Id ([int]$originalLength) `
+            $fileName "$Name-gate-after-shift" 0 1
+        $result.source_ax_gate_after_shift = $afterShift
+        $leftScript = @"
+tell application "System Events"
+    set targetProcess to first process whose unix id is $($child.Id)
+    set frontmost of targetProcess to true
+    key code 123
+    return "left-sent"
+end tell
+"@
+        if ((Invoke-AppleScript $leftScript "$Name-left") -cne 'left-sent') {
+            throw 'routing-left-dispatch-error: Left was not dispatched.'
+        }
+        $afterLeft = Wait-AxSelection $child.Id ([int]$originalLength) `
+            $fileName "$Name-gate-after-left" 0 0
+        $result.source_ax_gate_after_left = $afterLeft
+        $result.routing_probe_status = 'source-selection-0/0-to-0/1-to-0/0'
 
         $result.stage = 'small-edit'
         $editAt = $watch.Elapsed.TotalMilliseconds
@@ -321,8 +442,6 @@ end tell
 tell application "System Events"
     set targetProcess to first process whose unix id is $($child.Id)
     set frontmost of targetProcess to true
-    set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
-    if (value of attribute "AXRole" of focusedElement) does not contain "TextArea" then error "canvas lost AX focus"
     keystroke "X"
     repeat with attempt from 1 to 100
         if name of window 1 of targetProcess contains " •" then return "dirty"
@@ -335,6 +454,9 @@ end tell
             throw 'External text-input edit was not acknowledged.'
         }
         $result.edit_to_dirty_automation_ms = $watch.Elapsed.TotalMilliseconds - $editAt
+        $afterEdit = Read-AxGate $child.Id ([int]($originalLength + 1)) `
+            $fileName "$Name-gate-after-edit"
+        Assert-AxGate $afterEdit $child.Id ([int]($originalLength + 1)) 1 0
         $result.stage = 'save'
         $saveScript = @"
 tell application "System Events"
@@ -369,9 +491,11 @@ end tell
             if ((Invoke-AppleScript $pageScript "$Name-next-page") -cne 'page-sent') {
                 throw 'Native Next Page menu command was not dispatched.'
             }
-            $result.ax_visible_range_after = Get-VisibleRange $child.Id "$Name-range-after"
-            $result.vertical_scroll_status = if ($result.ax_visible_range_before -notlike 'unavailable*' -and
-                $result.ax_visible_range_after -notlike 'unavailable*' -and
+            $afterPage = Read-AxGate $child.Id ([int]($originalLength + 1)) `
+                $fileName "$Name-gate-after-page"
+            $result.ax_visible_range_after = "$($afterPage.visibleStart)/$($afterPage.visibleLength)"
+            $result.vertical_scroll_status = if ($null -ne $before.visibleStart -and
+                $null -ne $afterPage.visibleStart -and
                 $result.ax_visible_range_after -cne $result.ax_visible_range_before) {
                 'AX-visible-range-changed-after-native-menu;not-pixel-verified'
             } else { 'menu-dispatched-but-anchor-unverified' }
@@ -379,20 +503,41 @@ end tell
         $child.Refresh()
         $peak = [long]$child.PeakWorkingSet64
         $result.observed_peak_working_set_bytes = if ($peak -gt 0) { $peak } else { $null }
-        $result.stage = 'close'
-        $closeScript = @"
-tell application "System Events"
-    set targetProcess to first process whose unix id is $($child.Id)
-    set frontmost of targetProcess to true
-    keystroke "w" using command down
-    return "close-sent"
-end tell
-"@
-        if ((Invoke-AppleScript $closeScript "$Name-close") -cne 'close-sent' -or
-            -not $child.WaitForExit(15000) -or $child.ExitCode -ne 0) {
-            throw 'Native canvas did not close cleanly.'
+        $result.stage = 'reopen'
+        # Avoid another global keyboard shortcut after Save. Terminate the
+        # disposable test process, then read the same exact saved file anew.
+        $child.Kill($true)
+        [void]$child.WaitForExit(15000)
+        $reopened = [Diagnostics.Process]::Start($start)
+        if ($null -eq $reopened) { throw 'reopen-launch-error: Could not reopen saved canvas.' }
+        $reopenAt = $watch.Elapsed.TotalMilliseconds
+        $reopenTimer = [Diagnostics.Stopwatch]::StartNew()
+        $reopenAttempt = 0
+        while ($reopenTimer.ElapsedMilliseconds -lt 20000) {
+            $reopened.Refresh()
+            if ($reopened.HasExited) {
+                throw "reopen-exited: saved canvas exited $($reopened.ExitCode)."
+            }
+            $reopenAttempt++
+            $reopenGate = Read-AxGate $reopened.Id ([int]($originalLength + 1)) `
+                $fileName ('{0}-reopen-gate-{1:D2}' -f $Name, $reopenAttempt)
+            if ($reopenGate.applicationPid -eq $reopened.Id -and
+                $reopenGate.sourceCandidates -eq 1 -and
+                $reopenGate.sourceLength -eq $originalLength + 1) {
+                $result.reopen_source_chars = $reopenGate.sourceLength
+                $result.reopen_observed_ms = $watch.Elapsed.TotalMilliseconds - $reopenAt
+                break
+            }
+            Start-Sleep -Milliseconds 150
         }
-        $result.status = 'external-open-edit-save-passed'
+        if ($null -eq $result.reopen_source_chars) {
+            throw 'reopen-source-timeout: saved source proxy did not load within 20 seconds.'
+        }
+        if (-not [MoteCanvasFixture]::HasOnePrefixedEdit($file, $originalLength,
+            $originalHash)) {
+            throw 'reopen-bytes-error: saved bytes changed during fresh reopen.'
+        }
+        $result.status = 'external-open-edit-save-reopen-passed'
         $result.stage = 'complete'
     }
     catch {
@@ -403,6 +548,17 @@ end tell
         throw
     }
     finally {
+        if ($null -ne $reopened) {
+            if (-not $reopened.HasExited) {
+                try { $reopened.Kill($true); [void]$reopened.WaitForExit() }
+                catch [InvalidOperationException] { }
+            }
+            [IO.File]::WriteAllText((Join-Path $scratch "$Name-reopen-stdout.txt"),
+                $reopened.StandardOutput.ReadToEnd(), $utf8)
+            [IO.File]::WriteAllText((Join-Path $scratch "$Name-reopen-stderr.txt"),
+                $reopened.StandardError.ReadToEnd(), $utf8)
+            $reopened.Dispose()
+        }
         if ($null -ne $child) {
             if (-not $child.HasExited) {
                 try { $child.Kill($true); [void]$child.WaitForExit() }
@@ -422,6 +578,7 @@ end tell
 
 $allPassed = $false
 try {
+    $script:axGate = Compile-AxGate
     # A small exact-byte control separates AX/TCC/input failure from large-file loading.
     foreach ($name in 'control', 'many', 'long') { Invoke-Case $name }
     $allPassed = $true
