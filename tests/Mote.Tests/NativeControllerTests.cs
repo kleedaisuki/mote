@@ -815,16 +815,17 @@ public sealed class NativeControllerTests
         Assert.Empty(shell.Errors);
     }
 
-    /// <summary>Oversized island transactions reject before mutation and preserve prior Undo history.</summary>
+    /// <summary>Large canvas edits remain exact and undoable alongside earlier small edits.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Canvas_undo_budget_rejects_large_insert_or_delete_without_data_loss(
+    public async Task Canvas_large_edit_preserves_full_undo_redo_history(
         bool largeDelete)
     {
         using var temp = new RepoTemp();
         var path = temp.File("canvas-undo-budget.txt");
         var original = largeDelete ? new string('q', 17 * 1024 * 1024) : "abc";
+        var afterSmallText = "z" + original;
         await File.WriteAllTextAsync(path, original);
         var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
         using var controller = NewController(shell, temp.Path, path);
@@ -834,40 +835,96 @@ public sealed class NativeControllerTests
         var first = shell.CanvasBinding!;
         shell.CommitCanvasEdit(new CanvasCommittedEdit(first.DocumentGeneration,
             first.BaseVersion, first.BindingNonce, new TextChange(0, 0, "z"), 1));
-        var beforeRejected = shell.CanvasBinding!;
-        Assert.Equal(original.Length + 1, beforeRejected.Snapshot.Length);
-        Assert.Equal('z', beforeRejected.Snapshot.GetText(0, 1)[0]);
+        var beforeLarge = shell.CanvasBinding!;
+        Assert.Equal(first.BaseVersion + 1, beforeLarge.BaseVersion);
+        Assert.Equal(original.Length + 1, beforeLarge.Snapshot.Length);
+        Assert.Equal("z", beforeLarge.Snapshot.GetText(0, 1));
 
-        TextChange rejected;
+        TextChange large;
         int proposedCaret;
         if (largeDelete)
         {
             var count = 16 * 1024 * 1024 + 1;
             shell.SelectCanvas(0, count);
-            beforeRejected = shell.CanvasBinding!;
-            rejected = new TextChange(0, count, "");
+            beforeLarge = shell.CanvasBinding!;
+            large = new TextChange(0, count, "");
             proposedCaret = 0;
         }
         else
         {
             var huge = new string('x', 50 * 1024 * 1024);
-            rejected = new TextChange(0, 0, huge);
+            large = new TextChange(0, 0, huge);
             proposedCaret = huge.Length;
         }
-        shell.CommitCanvasEdit(new CanvasCommittedEdit(beforeRejected.DocumentGeneration,
-            beforeRejected.BaseVersion, beforeRejected.BindingNonce, rejected, proposedCaret));
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(beforeLarge.DocumentGeneration,
+            beforeLarge.BaseVersion, beforeLarge.BindingNonce, large, proposedCaret));
 
-        var afterRejected = shell.CanvasBinding!;
-        Assert.Equal(beforeRejected.BaseVersion, afterRejected.BaseVersion);
-        Assert.Equal(original.Length + 1, afterRejected.Snapshot.Length);
-        Assert.Equal('z', afterRejected.Snapshot.GetText(0, 1)[0]);
-        Assert.NotEqual(beforeRejected.BindingNonce, afterRejected.BindingNonce);
-        Assert.Contains(shell.Errors, error => error.Contains("undo-history budget", StringComparison.Ordinal));
+        var afterLarge = shell.CanvasBinding!;
+        Assert.Equal(beforeLarge.BaseVersion + 1, afterLarge.BaseVersion);
+        AssertLargeState(afterLarge.Snapshot, largeDelete, original.Length);
+        Assert.Empty(shell.Errors);
         Assert.Equal(original, await File.ReadAllTextAsync(path));
 
         shell.RequestUndo();
-        Assert.Equal(original.Length, shell.CanvasBinding!.Snapshot.Length);
-        Assert.Equal(original[0], shell.CanvasBinding.Snapshot.GetText(0, 1)[0]);
+        var afterLargeUndo = shell.CanvasBinding!;
+        Assert.Equal(afterLarge.BaseVersion + 1, afterLargeUndo.BaseVersion);
+        AssertSnapshotMatches(afterLargeUndo.Snapshot, afterSmallText);
+
+        shell.RequestUndo();
+        var afterSmallUndo = shell.CanvasBinding!;
+        Assert.Equal(afterLargeUndo.BaseVersion + 1, afterSmallUndo.BaseVersion);
+        AssertSnapshotMatches(afterSmallUndo.Snapshot, original);
+
+        shell.RequestRedo();
+        var afterSmallRedo = shell.CanvasBinding!;
+        Assert.Equal(afterSmallUndo.BaseVersion + 1, afterSmallRedo.BaseVersion);
+        AssertSnapshotMatches(afterSmallRedo.Snapshot, afterSmallText);
+
+        shell.RequestRedo();
+        var afterLargeRedo = shell.CanvasBinding!;
+        Assert.Equal(afterSmallRedo.BaseVersion + 1, afterLargeRedo.BaseVersion);
+        AssertLargeState(afterLargeRedo.Snapshot, largeDelete, original.Length);
+        Assert.Empty(shell.Errors);
+        Assert.Equal(original, await File.ReadAllTextAsync(path));
+    }
+
+    /// <summary>Checks exact UTF-16 source units through rope chunks without flattening the snapshot.</summary>
+    private static void AssertSnapshotMatches(TextSnapshot snapshot, string expected)
+    {
+        Assert.Equal(expected.Length, snapshot.Length);
+        var offset = 0;
+        foreach (var chunk in snapshot.GetChunks())
+        {
+            Assert.True(chunk.Span.SequenceEqual(expected.AsSpan(offset, chunk.Length)));
+            offset += chunk.Length;
+        }
+        Assert.Equal(expected.Length, offset);
+    }
+
+    /// <summary>Checks every code unit without allocating a second giant contiguous string.</summary>
+    private static void AssertLargeState(TextSnapshot snapshot, bool largeDelete, int originalLength)
+    {
+        var expectedLength = largeDelete ? originalLength - 16 * 1024 * 1024 : 50 * 1024 * 1024 + originalLength + 1;
+        Assert.Equal(expectedLength, snapshot.Length);
+        var offset = 0;
+        foreach (var chunk in snapshot.GetChunks())
+        {
+            var span = chunk.Span;
+            if (largeDelete)
+            {
+                Assert.Equal(-1, span.IndexOfAnyExcept('q'));
+            }
+            else
+            {
+                const int insertedLength = 50 * 1024 * 1024;
+                var uniformLength = Math.Clamp(insertedLength - offset, 0, span.Length);
+                Assert.Equal(-1, span[..uniformLength].IndexOfAnyExcept('x'));
+                for (var i = uniformLength; i < span.Length; i++)
+                    Assert.Equal("zabc"[offset + i - insertedLength], span[i]);
+            }
+            offset += span.Length;
+        }
+        Assert.Equal(expectedLength, offset);
     }
 
     /// <summary>Builds a controller with project-local, side-effect-free configuration.</summary>

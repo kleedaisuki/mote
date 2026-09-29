@@ -1,7 +1,6 @@
 # Probe published Native AOT AppKit canvas paste through the real NSPasteboard.
-# The binary internally checks 40 Ki direct paste/Undo, explicit nonmutating
-# rejection of a non-undoable 50 MiB paste, bounded host text, repeated-text
-# selection, and Save/reopen. This is an
+# The binary internally checks exact 40 Ki and 50 MiB direct pastes, Undo/Redo,
+# bounded host text, repeated-text selection, and Save/reopen. This is an
 # in-process AppKit workflow, not an external keyboard or IME test.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
@@ -33,7 +32,7 @@ $result = [ordered]@{
     input_sha256_unchanged = $false
     exact_bomless_utf8 = $false
     error = ''
-    scope = 'in-process-AppKit-NSPasteboard-40Ki-accepted-50MiB-undo-budget-rejected-selection-save-reopen-not-external-IME'
+    scope = 'in-process-AppKit-NSPasteboard-40Ki-and-50MiB-accepted-undo-redo-selection-save-reopen-not-external-IME'
 }
 
 try {
@@ -52,10 +51,10 @@ try {
     $start.RedirectStandardError = $true
     $process = [Diagnostics.Process]::Start($start)
     try {
-        if (-not $process.WaitForExit(180000)) {
+        if (-not $process.WaitForExit(300000)) {
             $process.Kill()
             $process.WaitForExit()
-            throw 'Mac canvas clipboard workflow timed out after three minutes.'
+            throw 'Mac canvas clipboard workflow timed out after five minutes.'
         }
         $out = $process.StandardOutput.ReadToEnd().Trim()
         $err = $process.StandardError.ReadToEnd().Trim()

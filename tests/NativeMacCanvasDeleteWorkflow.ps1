@@ -1,5 +1,6 @@
 # Exercise explicit empty-host global Delete/Backspace in the published AppKit probe.
-# The binary drives real NSTextView commands and verifies source/Undo internally;
+# The binary drives real NSTextView commands, verifies source/Undo, and injects
+# synthetic selection echoes to require fail-closed behavior internally;
 # this script independently retains exact input bytes and the CLI result.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
@@ -21,7 +22,7 @@ $result = [ordered]@{
     rid = $RuntimeIdentifier
     cases = @()
     error = ''
-    scope = 'in-process-AppKit-empty-host-forward-reverse-global-delete-and-undo-not-external-IME'
+    scope = 'in-process-AppKit-empty-host-forward-reverse-global-delete-undo-and-synthetic-echo-fail-closed-not-external-IME'
 }
 
 try {
