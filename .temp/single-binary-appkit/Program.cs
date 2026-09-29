@@ -5,6 +5,9 @@ internal static class Program
 {
     private const string ObjC = "/usr/lib/libobjc.A.dylib";
 
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "dlopen")]
+    private static extern nint DlOpen([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+
     /// <summary>AppKit rectangle passed by value to Objective-C initializers.</summary>
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct Rect(double X, double Y, double Width, double Height);
@@ -56,6 +59,13 @@ internal static class Program
     private static int Main(string[] args)
     {
         if (!OperatingSystem.IsMacOS()) return 99;
+
+        // Bare AOT programs do not link AppKit until the system framework is explicitly loaded.
+        if (DlOpen("/System/Library/Frameworks/AppKit.framework/AppKit", 2) == 0)
+        {
+            Console.Error.WriteLine("Could not load the system AppKit framework.");
+            return 2;
+        }
 
         var textViewClass = GetClass("NSTextView");
         var inputClient = GetProtocol("NSTextInputClient");
