@@ -1,0 +1,107 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:edit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        x:Class="Mote.Desktop.MainWindow"
+        Title="mote"
+        Width="1050" Height="620"
+        MinWidth="680" MinHeight="440"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource MoteWindowBackground}">
+  <Window.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource MotePreviewForeground}" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Margin" Value="0,0,8,0" />
+      <Setter Property="Padding" Value="12,6" />
+      <Setter Property="Foreground" Value="{DynamicResource MoteControlForeground}" />
+      <Setter Property="Background" Value="{DynamicResource MoteControlBackground}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource MoteBorder}" />
+    </Style>
+    <Style Selector="TabItem">
+      <Setter Property="Foreground" Value="{DynamicResource MoteControlForeground}" />
+      <Setter Property="Background" Value="{DynamicResource MotePanelBackground}" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Padding" Value="12,8" />
+    </Style>
+    <Style Selector="ListBoxItem">
+      <Setter Property="Foreground" Value="{DynamicResource MotePreviewForeground}" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+  </Window.Styles>
+  <Grid RowDefinitions="Auto,Auto,*,Auto">
+    <Border Grid.Row="0" Background="{DynamicResource MotePanelBackground}" BorderBrush="{DynamicResource MoteBorder}" BorderThickness="0,0,0,1" Padding="16,10">
+      <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="mote" FontWeight="Bold" FontSize="19" Foreground="{DynamicResource MoteAccent}" />
+          <TextBlock x:Name="FileTitle" Text="Untitled" Margin="18,4,0,0" FontSize="13" />
+          <TextBlock x:Name="DirtyMark" Text="" Margin="3,4,0,0" Foreground="{DynamicResource MoteWarning}" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" x:Name="FilePathText" Text="" TextTrimming="CharacterEllipsis"
+                   HorizontalAlignment="Center" MaxWidth="540" Foreground="{DynamicResource MoteMutedForeground}" FontSize="11" />
+        <TextBlock Grid.Column="2" x:Name="FormatLabel" Text="Plain text" FontSize="11"
+                   Foreground="{DynamicResource MoteAccent}" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+    <Border Grid.Row="1" Background="{DynamicResource MotePanelBackground}" BorderBrush="{DynamicResource MoteBorder}" BorderThickness="0,0,0,1" Padding="12,7">
+      <StackPanel Orientation="Horizontal">
+        <Button x:Name="NewButton" Content="New" Click="NewClicked" />
+        <Button x:Name="OpenButton" Content="Open…" Click="OpenClicked" />
+        <Button x:Name="SaveButton" Content="Save" Click="SaveClicked" />
+        <Button x:Name="SaveAsButton" Content="Save As…" Click="SaveAsClicked" />
+        <Border Width="1" Height="25" Background="{DynamicResource MoteBorder}" Margin="7,0,15,0" />
+        <Button x:Name="UndoButton" Content="Undo" Click="UndoClicked" />
+        <Button x:Name="RedoButton" Content="Redo" Click="RedoClicked" />
+        <Button x:Name="FormatButton" Content="Format" Click="FormatClicked" />
+        <Border Width="1" Height="25" Background="{DynamicResource MoteBorder}" Margin="7,0,15,0" />
+        <Button x:Name="InspectButton" Content="Inspect" Click="InspectClicked" />
+        <Button x:Name="CopyHtmlButton" Content="Copy HTML" Click="CopyHtmlClicked" />
+        <Border Width="1" Height="25" Background="{DynamicResource MoteBorder}" Margin="7,0,15,0" />
+        <Button x:Name="PreviousChunkButton" Content="← Page" Click="PreviousChunkClicked" IsVisible="False" />
+        <Button x:Name="NextChunkButton" Content="Page →" Click="NextChunkClicked" IsVisible="False" />
+      </StackPanel>
+    </Border>
+    <Grid Grid.Row="2" ColumnDefinitions="*,330">
+      <Border Grid.Column="0" BorderBrush="{DynamicResource MoteBorder}" BorderThickness="0,0,1,0">
+        <edit:TextEditor x:Name="Editor"
+                         ShowLineNumbers="True"
+                         FontFamily="Cascadia Code,Consolas,Menlo,monospace"
+                         FontSize="13"
+                         Background="{DynamicResource MoteEditorBackground}"
+                         Foreground="{DynamicResource MoteEditorForeground}" />
+      </Border>
+      <Grid Grid.Column="1" RowDefinitions="Auto,*" Background="{DynamicResource MotePanelBackground}">
+        <Border Padding="14,11" BorderBrush="{DynamicResource MoteBorder}" BorderThickness="0,0,0,1">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Text="INSPECTOR" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource MoteMutedForeground}" />
+            <TextBlock x:Name="ProblemCount" Text="0 problems" Margin="12,0,0,0" FontSize="11" Foreground="{DynamicResource MoteMutedForeground}" />
+          </StackPanel>
+        </Border>
+        <TabControl Grid.Row="1" x:Name="InspectorTabs" Background="Transparent"
+                    Foreground="{DynamicResource MotePreviewForeground}" FontSize="12">
+          <TabItem Header="Diagnostics">
+            <ListBox x:Name="DiagnosticsList" Background="Transparent" BorderThickness="0"
+                     SelectionChanged="DiagnosticSelected" />
+          </TabItem>
+          <TabItem Header="Structure">
+            <ListBox x:Name="StructureList" Background="Transparent" BorderThickness="0"
+                     SelectionChanged="StructureSelected" />
+          </TabItem>
+          <TabItem Header="Rendered">
+            <ScrollViewer>
+              <StackPanel x:Name="RenderedPanel" Margin="18,14" Spacing="8" />
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
+      </Grid>
+    </Grid>
+    <Border Grid.Row="3" Background="{DynamicResource MotePanelBackground}" BorderBrush="{DynamicResource MoteBorder}" BorderThickness="0,1,0,0" Padding="12,6">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+        <TextBlock x:Name="StatusText" Text="Ready" FontSize="11" Foreground="{DynamicResource MoteMutedForeground}" />
+        <TextBlock Grid.Column="1" x:Name="TraceStatus" Text="" Margin="14,0,0,0" FontSize="11" Foreground="{DynamicResource MoteWarning}" />
+        <TextBlock Grid.Column="2" x:Name="PositionText" Text="Ln 1, Col 1" Margin="14,0,0,0" FontSize="11" Foreground="{DynamicResource MoteMutedForeground}" />
+        <TextBlock Grid.Column="3" x:Name="SizeText" Text="0 chars" Margin="14,0,0,0" FontSize="11" Foreground="{DynamicResource MoteMutedForeground}" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
