@@ -99,8 +99,9 @@ internal partial interface ITextRangeProviderAbi
 }
 
 /// <summary>
-/// Opt-in Win32 UIA registration probe. A shell may call HandleGetObject from
-/// WM_GETOBJECT and Close from WM_DESTROY; this is not wired into the product.
+/// Opt-in Win32 UIA registration probe. The experimental canvas shell calls
+/// HandleGetObject from WM_GETOBJECT and Close from WM_DESTROY; default page
+/// editing does not use this incomplete provider.
 /// </summary>
 /// <remarks>
 /// This prototype sketches an AOT-compatible COM registration path and exact
@@ -132,7 +133,17 @@ internal sealed partial class WindowsUiaBridgePrototype
     /// <summary>Releases UIA's HWND-to-provider event map when the window is destroyed.</summary>
     internal void Close(nint hwnd)
     {
-        _provider.Invalidate();
+        DetachRegistration(hwnd);
+    }
+
+    /// <summary>
+    /// Removes this HWND's UIA registration after a provider fault without
+    /// invalidating the controller-shared document or disabling native input.
+    /// Retained COM ranges from this bridge become unavailable immediately.
+    /// </summary>
+    internal void DetachRegistration(nint hwnd)
+    {
+        _provider.Detach();
         UiaReturnRawElementProvider(hwnd, 0, 0, 0);
         _provider.BindWindow(0);
     }
@@ -220,8 +231,8 @@ internal sealed partial class UiaEditorObject : IRawElementProviderSimpleAbi, IT
     /// <summary>Captures the source provider, not the bounded input island.</summary>
     internal UiaEditorObject(WindowsTextProviderCore core) => _core = core;
 
-    /// <summary>Rejects retained COM range reads after this window closes.</summary>
-    internal void Invalidate() => _core.Invalidate();
+    /// <summary>Rejects retained COM range reads from this detached bridge.</summary>
+    internal void Detach() => _core.Detach();
 
     /// <summary>Binds the HWND whose default provider supplies native window metadata.</summary>
     internal void BindWindow(nint window) => _window = window;
@@ -232,6 +243,11 @@ internal sealed partial class UiaEditorObject : IRawElementProviderSimpleAbi, IT
     /// <inheritdoc />
     public int GetPatternProvider(int patternId, out nint provider)
     {
+        if (!_core.IsAttached)
+        {
+            provider = 0;
+            return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE;
+        }
         provider = patternId == 10014
             ? UiaComInterface.Pointer(this, typeof(ITextProviderAbi).GUID) : 0;
         return 0;
@@ -241,6 +257,7 @@ internal sealed partial class UiaEditorObject : IRawElementProviderSimpleAbi, IT
     public int GetPropertyValue(int propertyId, out UiaVariant value)
     {
         value = default;
+        if (!_core.IsAttached) return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE;
         if (propertyId == 30003) { value.Type = 3; value.Integer = 50030; }
         else if (propertyId == 30005)
         {
@@ -258,6 +275,11 @@ internal sealed partial class UiaEditorObject : IRawElementProviderSimpleAbi, IT
     /// <inheritdoc />
     public int GetHostRawElementProvider(out nint provider)
     {
+        if (!_core.IsAttached)
+        {
+            provider = 0;
+            return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE;
+        }
         if (_window == 0) { provider = 0; return 0; }
         return UiaHostProviderFromHwnd(_window, out provider);
     }
@@ -266,12 +288,20 @@ internal sealed partial class UiaEditorObject : IRawElementProviderSimpleAbi, IT
     private static partial int UiaHostProviderFromHwnd(nint hwnd, out nint provider);
 
     /// <inheritdoc />
-    public int GetSelection(out nint ranges) =>
-        UiaComInterface.Ranges(_core, [_core.Selection], out ranges);
+    public int GetSelection(out nint ranges)
+    {
+        ranges = 0;
+        try { return UiaComInterface.Ranges(_core, [_core.Selection], out ranges); }
+        catch (InvalidOperationException) { return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE; }
+    }
 
     /// <inheritdoc />
-    public int GetVisibleRanges(out nint ranges) =>
-        UiaComInterface.Ranges(_core, _core.GetVisibleRanges(), out ranges);
+    public int GetVisibleRanges(out nint ranges)
+    {
+        ranges = 0;
+        try { return UiaComInterface.Ranges(_core, _core.GetVisibleRanges(), out ranges); }
+        catch (InvalidOperationException) { return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE; }
+    }
 
     /// <inheritdoc />
     public int RangeFromChild(nint child, out nint range)
@@ -290,9 +320,15 @@ internal sealed partial class UiaEditorObject : IRawElementProviderSimpleAbi, IT
     /// <inheritdoc />
     public int GetDocumentRange(out nint range)
     {
-        range = UiaComInterface.Pointer(new UiaRangeObject(_core, _core.DocumentRange),
-            typeof(ITextRangeProviderAbi).GUID);
-        return 0;
+        range = 0;
+        try
+        {
+            range = UiaComInterface.Pointer(new UiaRangeObject(_core, _core.DocumentRange),
+                typeof(ITextRangeProviderAbi).GUID);
+            return 0;
+        }
+        catch (InvalidOperationException) { return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE; }
+        catch (OutOfMemoryException) { return WindowsTextResult.E_OUTOFMEMORY; }
     }
 
     /// <inheritdoc />
@@ -318,9 +354,16 @@ internal sealed partial class UiaRangeObject : ITextRangeProviderAbi
     /// <inheritdoc />
     public int Clone(out nint range)
     {
-        range = UiaComInterface.Pointer(new UiaRangeObject(_core, _range),
-            typeof(ITextRangeProviderAbi).GUID);
-        return 0;
+        range = 0;
+        try
+        {
+            _core.ValidateRange(_range);
+            range = UiaComInterface.Pointer(new UiaRangeObject(_core, _range),
+                typeof(ITextRangeProviderAbi).GUID);
+            return 0;
+        }
+        catch (InvalidOperationException) { return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE; }
+        catch (OutOfMemoryException) { return WindowsTextResult.E_OUTOFMEMORY; }
     }
 
     /// <inheritdoc />
@@ -375,7 +418,18 @@ internal sealed partial class UiaRangeObject : ITextRangeProviderAbi
 
     private int ScrollCurrentIntoView(bool alignToTop)
     {
-        try { return _core.ScrollIntoView(_range, alignToTop) ? 0 : E_FAIL; }
+        try
+        {
+            return _core.ScrollIntoView(_range, alignToTop) switch
+            {
+                AccessibleRevealResult.Revealed => 0,
+                AccessibleRevealResult.StaleRange => WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+                AccessibleRevealResult.CompositionBlocked or AccessibleRevealResult.NotVisible or
+                    AccessibleRevealResult.WrongThread =>
+                    WindowsTextResult.UIA_E_INVALIDOPERATION, // Never claim false success.
+                _ => E_FAIL
+            };
+        }
         catch (InvalidOperationException) { return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE; }
         catch (ArgumentOutOfRangeException) { return WindowsTextResult.E_INVALIDARG; }
     }

@@ -1,5 +1,6 @@
 using Mote.Engine;
 using Mote.Formats;
+using Mote.Native.Accessibility;
 using Mote.Native.Viewport;
 
 namespace Mote.Native;
@@ -59,6 +60,8 @@ internal interface INativeCanvasShell : INativeEditorShell
     /// modes, but the existing editor remains the default when false.
     /// </summary>
     bool CanvasEnabled { get; }
+    /// <summary>Whether the OS input method currently owns provisional text.</summary>
+    bool IsCanvasComposing { get; }
 
     /// <summary>One OS-confirmed source edit from the current input binding.</summary>
     event Action<CanvasCommittedEdit>? CanvasEditCommitted;
@@ -68,6 +71,11 @@ internal interface INativeCanvasShell : INativeEditorShell
     event Action<double>? CanvasViewportResized;
     /// <summary>A pointer-resolved global source anchor and active boundary.</summary>
     event Action<int, int>? CanvasSelectionRequested;
+    /// <summary>
+    /// A registered AX/UIA adapter failed after attachment and was detached.
+    /// Failure must not disable the text-input host or mutate the document.
+    /// </summary>
+    event Action? CanvasAccessibilityFailed;
 
     /// <summary>Rebinds the OS input island only after composition has settled.</summary>
     void SetCanvasBinding(NativeCanvasBinding binding);
@@ -82,4 +90,9 @@ internal interface INativeCanvasShell : INativeEditorShell
     void SetCanvasChrome(string title, string status, bool isModified);
     /// <summary>Publishes version-tagged absolute semantic colors to the canvas.</summary>
     void SetCanvasSemantics(NativeCanvasSemantics semantics);
+    /// <summary>
+    /// Attaches a single source-backed AX/UIA document after the native canvas
+    /// and input host exist; default native-control mode never calls this.
+    /// </summary>
+    void SetCanvasAccessibility(AccessibleDocument document, IAccessibleViewport viewport);
 }

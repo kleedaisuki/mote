@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Mote.Native.Accessibility;
+using Mote.Native.Mac.Accessibility;
 using Mote.Native.Mac.Canvas;
 using Mote.Native.Viewport;
 using Mote.Themes;
@@ -29,6 +31,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private nint _preview;
     private nint _status;
     private MacTextInputIsland? _canvas;
+    private MacAccessibilityElementPrototype? _accessibility;
+    private int _uiThreadId;
+    private int _accessibilityFaultScheduled;
     private NativeCanvasBinding? _pendingCanvasBinding;
     private CanvasFrame? _pendingCanvasFrame;
     private NativeCanvasSemantics? _pendingCanvasSemantics;
@@ -70,6 +75,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public bool CanvasEnabled => _experimentalCanvas;
 
     /// <inheritdoc />
+    public bool IsCanvasComposing => _experimentalCanvas && _canvas?.IsComposing == true;
+
+    /// <inheritdoc />
     public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
     /// <inheritdoc />
     public event Action<double>? CanvasScrollRequested;
@@ -77,6 +85,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public event Action<double>? CanvasViewportResized;
     /// <inheritdoc />
     public event Action<int, int>? CanvasSelectionRequested;
+    /// <inheritdoc />
+    public event Action? CanvasAccessibilityFailed;
 
     /// <inheritdoc />
     public NativeLineEndingMode LineEndingMode => NativeLineEndingMode.Preserve;
@@ -139,6 +149,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public void Run()
     {
         if (s_current is not null) throw new InvalidOperationException("Only one macOS editor shell may run per process.");
+        _uiThreadId = Environment.CurrentManagedThreadId;
         s_current = this;
         try
         {
@@ -168,9 +179,17 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 Post(() => Shown?.Invoke());
                 ObjC.Send(_application, ObjC.Sel("run"));
             }
-            finally { ObjC.Send(pool, ObjC.Sel("release")); }
+            finally
+            {
+                // The AX element retains AppKit view references. Tear it down
+                // on this UI thread before either native view or pool goes away.
+                _accessibility?.Dispose();
+                _accessibility = null;
+                _canvas?.Dispose();
+                ObjC.Send(pool, ObjC.Sel("release"));
+            }
         }
-        finally { _canvas?.Dispose(); s_current = null; }
+        finally { s_current = null; }
     }
 
     /// <inheritdoc />
@@ -311,6 +330,73 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
         _pendingCanvasSemantics = semantics;
         _canvas?.SetSemantics(semantics);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasAccessibility(AccessibleDocument document,
+        IAccessibleViewport viewport)
+    {
+        if (!_experimentalCanvas || _canvas is null ||
+            _canvas.CanvasView == 0 || _canvas.Editor == 0)
+            throw new InvalidOperationException("The opt-in canvas views are not ready for AX.");
+        if (_accessibility is not null)
+            throw new InvalidOperationException("The canvas AX element is already attached.");
+        var provider = new MacAccessibilityElementPrototype(document, viewport);
+        provider.Faulted += QueueAccessibilityFault;
+        try
+        {
+            provider.Attach(_canvas.CanvasView, _canvas.Editor);
+            _accessibility = provider;
+        }
+        catch
+        {
+            provider.Dispose();
+            throw;
+        }
+    }
+
+    private void AccessibilityFaulted()
+    {
+        Interlocked.Exchange(ref _accessibilityFaultScheduled, 0);
+        if (Environment.CurrentManagedThreadId != _uiThreadId)
+        {
+            Post(AccessibilityFaulted);
+            return;
+        }
+        if (_accessibility is null) return;
+        try { _accessibility.Dispose(); }
+        catch { /* Faulted AX must not disable the native text input host. */ }
+        _accessibility = null;
+        try { CanvasAccessibilityFailed?.Invoke(); }
+        catch
+        {
+            try { ShowError("Accessibility became unavailable; editing remains available."); }
+            catch { /* No exception may unwind through an AppKit IMP. */ }
+        }
+    }
+
+    private void QueueAccessibilityFault(Exception error)
+    {
+        if (Interlocked.Exchange(ref _accessibilityFaultScheduled, 1) != 0 || _delegate == 0)
+            return;
+        // Never release an AX element while one of its Objective-C selector
+        // callbacks is still on the stack, even when the callback is on UI.
+        try
+        {
+            if (Environment.CurrentManagedThreadId == _uiThreadId)
+                ObjC.Send(_delegate, ObjC.Sel("performSelector:withObject:afterDelay:"),
+                    ObjC.Sel("moteDetachAccessibility:"), 0, 0d);
+            else
+                ObjC.Send(_delegate,
+                    ObjC.Sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+                    ObjC.Sel("moteDetachAccessibility:"), 0, 0);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _accessibilityFaultScheduled, 0);
+            try { Post(AccessibilityFaulted); }
+            catch { Console.Error.WriteLine("Canvas accessibility unavailable; editing remains available."); }
+        }
     }
 
     /// <inheritdoc />
@@ -599,6 +685,31 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     internal string ProbeCanvasNativeSelectionTrace =>
         _canvas?.ProbeSelectionTrace ?? "canvas-unavailable";
 
+    /// <summary>Top-level AppKit window for in-process accessibility tree traversal.</summary>
+    internal nint ProbeWindow => _window;
+
+    /// <summary>Controller-visible canvas status for AX fault-recovery probes.</summary>
+    internal string ProbeCanvasStatus => _statusText;
+
+    /// <summary>Whether the optional AX provider is currently attached.</summary>
+    internal bool ProbeCanvasAccessibilityAttached => _accessibility is not null;
+
+    /// <summary>Whether the bounded text host remains editable after AX-only failure.</summary>
+    internal bool ProbeCanvasInputEditable => _editor != 0 &&
+        ObjC.Send(_editor, ObjC.Sel("isEditable")) != 0;
+
+    /// <summary>Whether AppKit still focuses the real NSTextView input client.</summary>
+    internal bool ProbeCanvasInputFocused => _window != 0 && _editor != 0 &&
+        ObjC.Send(_window, ObjC.Sel("firstResponder")) == _editor;
+
+    /// <summary>The bounded input host is hidden only from the opt-in AX tree.</summary>
+    internal bool ProbeCanvasInputAccessible => _editor != 0 &&
+        ObjC.Send(_editor, ObjC.Sel("isAccessibilityElement")) != 0;
+
+    /// <summary>Injects a deferred AX-only fault through the production detach path.</summary>
+    internal void ProbeCanvasAccessibilityFault() =>
+        QueueAccessibilityFault(new InvalidOperationException("probe-injected AX fault"));
+
     /// <summary>Whether repeated native selection echoes visibly disabled editing.</summary>
     internal bool ProbeCanvasInputDisabled => _canvas?.ProbeInputDisabled ?? false;
 
@@ -692,6 +803,11 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                     if (_probeCaptureCanvasErrors) _probeCanvasError = message;
                     else Post(() => ShowError(message));
                 });
+            _canvas.ViewGeometryChanged += () =>
+            {
+                try { _accessibility?.UpdateFrameFromView(); }
+                catch (Exception error) { QueueAccessibilityFault(error); }
+            };
             editorScroll = _canvas.CreateView(new ObjC.Rect(0, 0, 730, 730));
             _editor = _canvas.Editor;
         }
@@ -968,6 +1084,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         Add(cls, "applicationShouldTerminate:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, nint>)&ApplicationShouldTerminate, "q@:@");
         Add(cls, "moteDrainPosted:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&DrainPosted, "v@:@");
+        Add(cls, "moteDetachAccessibility:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&DetachAccessibility,
+            "v@:@");
         Add(cls, "moteNew:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&New, "v@:@");
         Add(cls, "moteOpen:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Open, "v@:@");
         Add(cls, "moteSave:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Save, "v@:@");
@@ -1241,6 +1360,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         var shell = s_current;
         if (shell is null) return;
         while (shell._posted.TryDequeue(out var action)) shell.Notify(action);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void DetachAccessibility(nint self, nint selector, nint sender)
+    {
+        try { s_current?.AccessibilityFaulted(); }
+        catch { /* Never unwind a managed error through an AppKit selector. */ }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

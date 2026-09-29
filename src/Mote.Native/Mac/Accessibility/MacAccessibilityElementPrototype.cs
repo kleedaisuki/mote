@@ -29,6 +29,13 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     private nint _inputEditor;
     private nint _previousChildren;
     private bool _inputWasAccessible;
+    private int _faultReported;
+
+    /// <summary>
+    /// Reports one unexpected native-selector failure. The shell must schedule
+    /// provider detachment on the AppKit UI thread without disabling input.
+    /// </summary>
+    internal event Action<Exception>? Faulted;
 
     /// <summary>Creates a source-backed AppKit element without materializing the document.</summary>
     internal MacAccessibilityElementPrototype(AccessibleDocument document,
@@ -88,7 +95,7 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     public void Dispose()
     {
         if (s_current == this) s_current = null;
-        _core.Invalidate();
+        _core.Detach();
         if (_inputEditor != 0)
             ObjC.Send(_inputEditor, ObjC.Sel("setAccessibilityElement:"), _inputWasAccessible ? 1 : 0);
         if (_canvasView != 0)
@@ -141,42 +148,76 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     private static MacAccessibilityElementPrototype? Current(nint self) =>
         s_current is { } owner && owner._element == self ? owner : null;
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static nint Role(nint self, nint selector) =>
-        Current(self) is null ? 0 : ObjC.String("AXTextArea");
+    private static void ReportFault(nint self, Exception exception)
+    {
+        var owner = Current(self);
+        if (owner is null || Interlocked.Exchange(ref owner._faultReported, 1) != 0) return;
+        try { owner.Faulted?.Invoke(exception); }
+        catch { /* A shell fault handler must not unwind through Objective-C. */ }
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static nint Label(nint self, nint selector) =>
-        Current(self) is null ? 0 : ObjC.String("Mote editor");
+    private static nint Role(nint self, nint selector)
+    {
+        try { return Current(self) is null ? 0 : ObjC.String("AXTextArea"); }
+        catch (Exception ex) { ReportFault(self, ex); return 0; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static nint Label(nint self, nint selector)
+    {
+        try { return Current(self) is null ? 0 : ObjC.String("Mote editor"); }
+        catch (Exception ex) { ReportFault(self, ex); return 0; }
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static byte IsFocused(nint self, nint selector)
     {
-        if (Current(self) is not { } owner || owner._inputEditor == 0) return 0;
-        var window = ObjC.Send(owner._inputEditor, ObjC.Sel("window"));
-        return window != 0 && ObjC.Send(window, ObjC.Sel("firstResponder")) == owner._inputEditor
-            ? (byte)1 : (byte)0;
+        try
+        {
+            if (Current(self) is not { } owner || owner._inputEditor == 0) return 0;
+            var window = ObjC.Send(owner._inputEditor, ObjC.Sel("window"));
+            return window != 0 && ObjC.Send(window, ObjC.Sel("firstResponder")) == owner._inputEditor
+                ? (byte)1 : (byte)0;
+        }
+        catch (Exception ex) { ReportFault(self, ex); return 0; }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SetFocused(nint self, nint selector, byte focused)
     {
-        if (focused == 0 || Current(self) is not { } owner || owner._inputEditor == 0) return;
-        var window = ObjC.Send(owner._inputEditor, ObjC.Sel("window"));
-        if (window != 0) ObjC.Send(window, ObjC.Sel("makeFirstResponder:"), owner._inputEditor);
+        try
+        {
+            if (focused == 0 || Current(self) is not { } owner || owner._inputEditor == 0) return;
+            var window = ObjC.Send(owner._inputEditor, ObjC.Sel("window"));
+            if (window != 0) ObjC.Send(window, ObjC.Sel("makeFirstResponder:"), owner._inputEditor);
+        }
+        catch (Exception ex) { ReportFault(self, ex); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static nint NumberOfCharacters(nint self, nint selector) =>
-        Current(self)?._core.CharacterCount ?? 0;
+    private static nint NumberOfCharacters(nint self, nint selector)
+    {
+        try { return Current(self)?._core.CharacterCount ?? 0; }
+        catch (InvalidOperationException) { return 0; }
+        catch (Exception ex) { ReportFault(self, ex); return 0; }
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static ObjC.Range SelectedRange(nint self, nint selector) =>
-        Current(self) is { } owner ? NativeRange(owner._core.SelectedTextRange) : new(0, 0);
+    private static ObjC.Range SelectedRange(nint self, nint selector)
+    {
+        try { return Current(self) is { } owner ? NativeRange(owner._core.SelectedTextRange) : new(0, 0); }
+        catch (InvalidOperationException) { return new(0, 0); }
+        catch (Exception ex) { ReportFault(self, ex); return new(0, 0); }
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static ObjC.Range VisibleRange(nint self, nint selector) =>
-        Current(self) is { } owner ? NativeRange(owner._core.VisibleCharacterRange) : new(0, 0);
+    private static ObjC.Range VisibleRange(nint self, nint selector)
+    {
+        try { return Current(self) is { } owner ? NativeRange(owner._core.VisibleCharacterRange) : new(0, 0); }
+        catch (InvalidOperationException) { return new(0, 0); }
+        catch (Exception ex) { ReportFault(self, ex); return new(0, 0); }
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static nint StringForRange(nint self, nint selector, ObjC.Range range)
@@ -194,6 +235,7 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
         catch (ArgumentOutOfRangeException) { return 0; }
         catch (AccessibleRequestTooLargeException) { return 0; }
         catch (InvalidOperationException) { return 0; }
+        catch (Exception ex) { ReportFault(self, ex); return 0; }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -202,6 +244,8 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
         if (Current(self) is not { } owner || index < 0 || index > int.MaxValue) return -1;
         try { return owner._core.LineForIndex((int)index); }
         catch (ArgumentOutOfRangeException) { return -1; }
+        catch (InvalidOperationException) { return -1; }
+        catch (Exception ex) { ReportFault(self, ex); return -1; }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -211,5 +255,7 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
             return new(nuint.MaxValue, 0);
         try { return NativeRange(owner._core.RangeForLine((int)line)); }
         catch (ArgumentOutOfRangeException) { return new(nuint.MaxValue, 0); }
+        catch (InvalidOperationException) { return new(nuint.MaxValue, 0); }
+        catch (Exception ex) { ReportFault(self, ex); return new(nuint.MaxValue, 0); }
     }
 }

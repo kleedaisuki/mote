@@ -4,6 +4,7 @@ using Mote.Engine;
 using Mote.Formats;
 using Mote.Telemetry;
 using Mote.Themes;
+using Mote.Native.Accessibility;
 using Mote.Native.Viewport;
 
 namespace Mote.Native;
@@ -12,13 +13,15 @@ namespace Mote.Native;
 /// Composes the canonical document engine with one bounded native text viewport.
 /// The platform shell never owns persistence state or a second document model.
 /// </summary>
-internal sealed class NativeEditorController : IDisposable
+internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 {
     internal const int PageSize = 64 * 1024;
     internal const int PageSlack = 8 * 1024;
     private const int FullAnalysisLimit = 2 * 1024 * 1024;
     private readonly INativeEditorShell _shell;
     private readonly INativeCanvasShell? _canvasShell;
+    private readonly AccessibleDocument? _accessibleDocument;
+    private readonly int _uiThreadId = Environment.CurrentManagedThreadId;
     private readonly MoteConfiguration _configuration;
     private readonly IThemePolicy _theme;
     private readonly string? _startupPath;
@@ -43,6 +46,7 @@ internal sealed class NativeEditorController : IDisposable
     private NativeIdleFullAnalysis? _idleFullAnalysis;
     private NativeAnalysisView? _visibleSessionAnalysis;
     private NativeTextProjection? _projection;
+    private CanvasFrame? _lastCanvasFrame;
     private CancellationTokenSource? _analysisCancellation;
     private long _analysisSerial;
     private int _pageStart;
@@ -52,6 +56,7 @@ internal sealed class NativeEditorController : IDisposable
     private long _formatSerial;
     private string _operationStatus = "";
     private bool _saving;
+    private volatile bool _accessibilityUnavailable;
     private bool _disposed;
 
     /// <summary>Wires platform events to engine transactions and static format policies.</summary>
@@ -65,7 +70,11 @@ internal sealed class NativeEditorController : IDisposable
         _theme = theme;
         _startupPath = startupPath;
         if (_canvasShell is not null)
+        {
             _canvas = NewCanvas(_document.Snapshot);
+            _accessibleDocument = new AccessibleDocument(new AccessibleCanvasState(
+                _canvasGeneration, _document.Snapshot, _canvas.Frame()));
+        }
         _sessionDriver = CreateSessionDriver(_policy);
         _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
         _document.Changed += DocumentChanged;
@@ -94,6 +103,7 @@ internal sealed class NativeEditorController : IDisposable
             canvasShell.CanvasScrollRequested += CanvasScrolled;
             canvasShell.CanvasViewportResized += CanvasResized;
             canvasShell.CanvasSelectionRequested += CanvasSelected;
+            canvasShell.CanvasAccessibilityFailed += CanvasAccessibilityFailed;
         }
     }
 
@@ -113,6 +123,7 @@ internal sealed class NativeEditorController : IDisposable
         _sessionDriver?.Dispose();
         _findCancellation?.Cancel();
         _findCancellation?.Dispose();
+        _accessibleDocument?.Invalidate();
         _document.Dispose();
     }
 
@@ -120,6 +131,17 @@ internal sealed class NativeEditorController : IDisposable
     {
         _shell.SetTheme(_theme);
         ShowDocument();
+        if (_canvasShell is not null)
+        {
+            try { _canvasShell.SetCanvasAccessibility(_accessibleDocument!, this); }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                // AX is not allowed to make the opt-in editor itself unusable.
+                // Keep the failure visible, but do not disclose paths or text.
+                _accessibilityUnavailable = true;
+                ShowDocument();
+            }
+        }
         ScheduleAnalysis();
         if (_startupPath is not null) StartOpen(_startupPath);
     }
@@ -619,6 +641,71 @@ internal sealed class NativeEditorController : IDisposable
         ShowDocument();
     }
 
+    /// <summary>
+    /// Keeps a detached provider failure visible across subsequent Open/New
+    /// without allowing an accessibility callback to unwind through the OS.
+    /// </summary>
+    private void CanvasAccessibilityFailed()
+    {
+        if (_disposed) return;
+        _accessibilityUnavailable = true;
+        Post(() => { if (!_disposed) ShowDocument(); });
+    }
+
+    /// <summary>
+    /// Reveals one version-bound source interval for an OS accessibility
+    /// provider without ever settling or moving an active IME composition.
+    /// A successful result includes a synchronous matching frame publication.
+    /// </summary>
+    public AccessibleRevealResult TryReveal(AccessibleRange range, bool alignToTop)
+    {
+        if (Environment.CurrentManagedThreadId != _uiThreadId)
+            return AccessibleRevealResult.WrongThread;
+        if (_disposed || _canvas is null || _canvasShell is null)
+            return AccessibleRevealResult.StaleRange;
+        var snapshot = _document.Snapshot;
+        if (range.Generation != _canvasGeneration || range.Version != snapshot.Version ||
+            range.Start < 0 || range.End < range.Start || range.End > snapshot.Length)
+            return AccessibleRevealResult.StaleRange;
+        // Neither half of CRLF nor a surrogate interior is a painted caret
+        // boundary; fail before moving the viewport at all.
+        if (SafeBoundary(snapshot, range.Start, backwards: true) != range.Start)
+            return AccessibleRevealResult.NotVisible;
+        if (_canvasShell.IsCanvasComposing)
+            return AccessibleRevealResult.CompositionBlocked;
+
+        _canvas.Reveal(range.Start);
+        if (!alignToTop)
+        {
+            var rowHeight = Math.Max(12, _theme.Typography.EditorFontSize *
+                _theme.Typography.LineHeightMultiplier);
+            _canvas.ScrollBy(-Math.Max(0, _canvas.ViewportHeight - rowHeight),
+                preserveSourceFocus: true);
+        }
+        ShowDocument();
+        if (_lastCanvasFrame is not { } published ||
+            !ContainsPaintedBoundary(published, range.Start))
+            return AccessibleRevealResult.NotVisible;
+        ScheduleAnalysis();
+        return AccessibleRevealResult.Revealed;
+    }
+
+    /// <summary>
+    /// A successful accessibility reveal must include the requested source
+    /// boundary in a bounded painted slice, not merely the logical row.
+    /// </summary>
+    private static bool ContainsPaintedBoundary(CanvasFrame frame, int sourceOffset)
+    {
+        foreach (var slice in frame.Slices)
+        {
+            var end = slice.SourceStart + slice.SourceLength;
+            if (sourceOffset >= slice.SourceStart &&
+                (sourceOffset < end || sourceOffset == end && !slice.HasHiddenSuffix))
+                return true;
+        }
+        return false;
+    }
+
     private void Find()
     {
         if (!_shell.CommitPendingText()) return;
@@ -856,7 +943,9 @@ internal sealed class NativeEditorController : IDisposable
         var health = MoteTelemetry.Health;
         var traceWarning = health.SinkFaulted || health.DroppedRecords > 0
             ? " · Trace degraded" : "";
-        var statusSuffix = warnings + traceWarning +
+        var accessibilityWarning = _accessibilityUnavailable
+            ? " · Accessibility provider unavailable" : "";
+        var statusSuffix = warnings + traceWarning + accessibilityWarning +
             (_operationStatus.Length == 0 ? "" : " · " + _operationStatus);
         if (_canvasShell is not null)
         {
@@ -890,6 +979,9 @@ internal sealed class NativeEditorController : IDisposable
         var canvas = _canvas!;
         var shell = _canvasShell!;
         var frame = canvas.Frame();
+        _lastCanvasFrame = frame;
+        _accessibleDocument!.Publish(new AccessibleCanvasState(
+            _canvasGeneration, snapshot, frame));
         var firstVisible = frame.Slices.Count == 0
             ? Math.Clamp(frame.TopAnchor.SourceOffset, 0, snapshot.Length)
             : frame.Slices[0].SourceStart;

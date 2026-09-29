@@ -7,6 +7,7 @@ using Mote.Themes;
 using Mote.Native.Viewport;
 using Mote.Native.Windows.Canvas;
 using Mote.Engine;
+using Mote.Native.Accessibility;
 
 namespace Mote.Native.Windows;
 
@@ -86,6 +87,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public bool CanvasEnabled => _experimentalCanvas;
 
     /// <inheritdoc />
+    public bool IsCanvasComposing => _canvasIsland?.IsComposing ?? false;
+
+    /// <inheritdoc />
     public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
     /// <inheritdoc />
     public event Action<double>? CanvasScrollRequested;
@@ -93,6 +97,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public event Action<double>? CanvasViewportResized;
     /// <inheritdoc />
     public event Action<int, int>? CanvasSelectionRequested;
+    /// <inheritdoc />
+    public event Action? CanvasAccessibilityFailed;
 
     /// <inheritdoc />
     public NativeLineEndingMode LineEndingMode => NativeLineEndingMode.CrLf;
@@ -273,6 +279,16 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
         if (_window != 0) Win32.SetWindowTextW(_window, title);
         UpdateStatus(status);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasAccessibility(AccessibleDocument document, IAccessibleViewport viewport)
+    {
+        if (!_experimentalCanvas || _canvasIsland is null)
+            throw new InvalidOperationException("Accessibility requires a visible experimental canvas.");
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(viewport);
+        _canvasIsland.AttachAccessibility(document, viewport);
     }
 
     /// <inheritdoc />
@@ -587,6 +603,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 UpdateStatus(message);
                 ShowError(message);
             };
+            _canvasIsland.AccessibilityFaulted += () => CanvasAccessibilityFailed?.Invoke();
             if (_pendingCanvasBinding is not null) _canvasIsland.Bind(_pendingCanvasBinding);
             if (_pendingCanvasFrame is not null) _canvasIsland.SetFrame(_pendingCanvasFrame);
             if (_pendingCanvasSemantics is not null) _canvasIsland.SetSemantics(_pendingCanvasSemantics);

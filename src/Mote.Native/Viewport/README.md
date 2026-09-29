@@ -7,8 +7,23 @@
 - The immutable `TextSnapshot` remains the only text source. Persistent coordinates are global UTF-16 offsets. `ViewportAnchor` retains an interior source offset and a fractional intra-row pixel offset; horizontal pixels are separate state.
 - No-wrap gives each logical line one implicit row. Only deviations from the base row height have nodes in `SparseHeightIndex`. A theme color repaint need not call `Reflow`; a font, DPI, tab, or wrap change does, invalidating all measurements while keeping the source anchor.
 - An edit transforms the anchor with right affinity and clears measured heights. This conservative invalidation prevents stale line identities or geometry. A later layout implementation may retain unaffected measurements using versioned dependency checks.
+- A source reveal also retains a bounded shaping-focus offset independently of
+  the *vertical* top anchor. Bottom-aligning an offscreen point may put earlier
+  rows at the top; a 100 Ki-character target line must still request its slice
+  around the target, not around the unrelated top row. Ordinary user scrolling
+  releases that focus. Accessibility reports a successful reveal only after
+  checking the target boundary against the frame actually published to the
+  canvas; a logical row being visible is insufficient for a clipped long line.
 - `GetVisibleSlices` returns at most `maxSlices` source intervals, each at most `maxSliceLength` UTF-16 units, excluding line delimiters. A 50 MiB line yields a focused window, **not** a complete line or exact global horizontal geometry. The platform shaper may read only these bounded intervals using `Snapshot.GetText(start, length)` and must explicitly request adjacent context/windows to validate shaping seams.
 - These are *logical-row* slices. Glyph shaping, grapheme-aware caret stops, bidi hit-testing, soft wrapping, and precise horizontal scroll metrics remain platform-layout work. Do not use the current slices as a claim of complete Unicode geometry or exact wrapped-line positions.
+- `ContinuousViewport.SetHorizontalOffset` is currently model-only: the opt-in
+  canvas has no wired horizontal wheel/scrollbar/Shift-wheel command, and
+  `CanvasFrame` does not yet carry a measured horizontal source anchor. Thus a
+  50 MiB unbroken line can be opened and edited around the caret, but cannot
+  be claimed continuously navigable across its width. A follow-up must map
+  native horizontal input to bounded source-window requests, maintain exact
+  source-coordinate selection/caret across rebases, and prove visible remote
+  segments on both target OSes without shaping the full line.
 
 ## Bounded input island
 

@@ -28,8 +28,7 @@ public sealed class WindowsUiaBridgePrototypeTests
         var snapshot = document.Snapshot;
         var frame = new CanvasFrame(snapshot.Version, new ViewportAnchor(0, 0), 0,
             [new ViewportSlice(0, 0, 5, 0, 16, false, false)], 0, 0);
-        var binding = new NativeCanvasBinding(1, snapshot.Version, 1, snapshot, frame,
-            0, "", 0, 0, "Test", "", false);
+        var binding = new AccessibleCanvasState(1, snapshot, frame);
         var core = new WindowsTextProviderCore(new AccessibleDocument(binding), new ViewportStub());
         var editor = new UiaEditorObject(core);
         var provider = UiaComInterface.Pointer(editor, typeof(ITextProviderAbi).GUID);
@@ -54,13 +53,13 @@ public sealed class WindowsUiaBridgePrototypeTests
             try
             {
                 var getText = Marshal.GetDelegateForFunctionPointer<GetTextDelegate>(Slot(range, 12));
-                Assert.Equal(WindowsTextResult.E_OUTOFMEMORY,
+                Assert.Equal(WindowsTextResult.UIA_E_INVALIDOPERATION,
                     getText(range, -1, out var oversized));
                 Assert.Equal(0, oversized);
                 Assert.Equal(0, getText(range, 10, out var bstr));
                 try { Assert.Equal("first\nxxxx", Marshal.PtrToStringBSTR(bstr)); }
                 finally { Marshal.FreeBSTR(bstr); }
-                core.Invalidate();
+                core.Detach();
                 Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
                     getText(range, 10, out var closedText));
                 Assert.Equal(0, closedText);
@@ -84,6 +83,7 @@ public sealed class WindowsUiaBridgePrototypeTests
 
     private sealed class ViewportStub : IAccessibleViewport
     {
-        public bool TryScrollIntoView(AccessibleRange range, bool alignToTop) => true;
+        public AccessibleRevealResult TryReveal(AccessibleRange range, bool alignToTop) =>
+            AccessibleRevealResult.Revealed;
     }
 }

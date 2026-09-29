@@ -4,6 +4,8 @@ using System.Runtime.Versioning;
 using System.Text;
 using Mote.Engine;
 using Mote.Formats;
+using Mote.Native.Accessibility;
+using Mote.Native.Windows.Accessibility;
 using Mote.Native.Viewport;
 using Mote.Themes;
 
@@ -29,6 +31,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private const uint SelectionMessage = Win32.WM_APP + 42;
     private const uint ClearSuppressedBackspaceMessage = Win32.WM_APP + 43;
     private const uint WmImeComposition = 0x010F;
+    private const uint WmGetObject = 0x003D;
     private const uint GcsResultString = 0x0800;
     private const int ScrollRange = 1_000_000;
     private const float TextLeft = 24;
@@ -54,6 +57,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private TextSnapshot? _snapshot;
     private CanvasFrame? _frame;
     private NativeCanvasSemantics? _semantics;
+    private WindowsUiaBridgePrototype? _uiaBridge;
+    private Func<nint, nuint, nint, nint>? _uiaResponder;
     private NativeTextProjection _projection = new("", NativeLineEndingMode.CrLf);
     private RichEditOffsetMap _offsets = new("");
     private bool _settingText;
@@ -153,6 +158,23 @@ internal sealed class WindowsRichEditIsland : IDisposable
     internal event Action<int, int>? SelectionRequested;
     /// <summary>First native callback failure; input is disabled before notification.</summary>
     internal event Action<string>? Faulted;
+    /// <summary>An AX-only failure detached the provider without disabling text input.</summary>
+    internal event Action? AccessibilityFaulted;
+
+    /// <summary>
+    /// Registers the one source-backed UIA element on this canvas HWND. The bounded
+    /// RichEdit remains a native input host, never the provider's document text.
+    /// </summary>
+    internal void AttachAccessibility(AccessibleDocument document, IAccessibleViewport viewport,
+        Func<nint, nuint, nint, nint>? responderOverride = null)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(viewport);
+        if (_window == 0) throw new InvalidOperationException("Canvas HWND is not ready.");
+        if (_uiaBridge is not null) throw new InvalidOperationException("UIA is already attached.");
+        _uiaBridge = new WindowsUiaBridgePrototype(document, viewport);
+        _uiaResponder = responderOverride ?? _uiaBridge.HandleGetObject;
+    }
 
     /// <summary>Replaces only the bounded input interval after composition has ended.</summary>
     internal void Bind(NativeCanvasBinding binding)
@@ -320,6 +342,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
             case CanvasWin32.WmPaint:
                 Paint();
                 return 0;
+            case WmGetObject when _uiaBridge is not null:
+                return HandleAccessibilityGetObject(window, wParam, lParam);
             case CanvasWin32.WmMouseWheel:
                 if (!_composition)
                     ScrollRequested?.Invoke(-((short)(((ulong)wParam >> 16) & 0xFFFF)) /
@@ -394,11 +418,48 @@ internal sealed class WindowsRichEditIsland : IDisposable
                 _suppressBackspaceChar = false;
                 return 0;
             case CanvasWin32.WmDestroy:
-                _window = 0;
-                _input = 0;
+                try { _uiaBridge?.Close(window); }
+                catch (Exception) { NotifyAccessibilityFault(); }
+                finally
+                {
+                    _uiaBridge = null;
+                    _uiaResponder = null;
+                    _window = 0;
+                    _input = 0;
+                }
                 return 0;
             default:
                 return Win32.DefWindowProcW(window, message, wParam, lParam);
+        }
+    }
+
+    private nint HandleAccessibilityGetObject(nint window, nuint wParam, nint lParam)
+    {
+        try { return _uiaResponder!(window, wParam, lParam); }
+        catch (Exception)
+        {
+            // AX is an optional adapter. A COM/UIA fault must never pass through
+            // the generic native-input FailClosed path or consume the document.
+            // Detach first: UIA may have retained a partial HWND registration.
+            try { _uiaBridge?.DetachRegistration(window); }
+            catch
+            {
+                // The provider-local lifetime token is invalidated before OS
+                // unregistration; even a failing cleanup cannot unwind to user32.
+            }
+            _uiaResponder = null;
+            _uiaBridge = null;
+            NotifyAccessibilityFault();
+            return 0;
+        }
+    }
+
+    private void NotifyAccessibilityFault()
+    {
+        try { AccessibilityFaulted?.Invoke(); }
+        catch
+        {
+            // A UIA callback must not unwind through user32 into editor input.
         }
     }
 

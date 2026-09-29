@@ -4,6 +4,7 @@ using Mote.Configuration;
 using Mote.Engine;
 using Mote.Formats;
 using Mote.Native;
+using Mote.Native.Accessibility;
 using Mote.Native.Viewport;
 using Mote.Themes;
 
@@ -927,6 +928,177 @@ public sealed class NativeControllerTests
         Assert.Equal(expectedLength, offset);
     }
 
+    /// <summary>AX reveal is versioned, synchronous, UI-thread-bound, and must not disturb IME composition.</summary>
+    [Fact]
+    public async Task Canvas_accessibility_reveal_rejects_stale_thread_and_composition_without_mirroring_text()
+    {
+        using var temp = new RepoTemp();
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, null);
+        controller.Run();
+        var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
+        var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
+        var stale = accessible.MakeRange(0, 0);
+
+        var source = string.Concat(Enumerable.Range(0, 12_000).Select(i => $"line{i:D5}\n"));
+        var initial = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(initial.DocumentGeneration,
+            initial.BaseVersion, initial.BindingNonce, new TextChange(0, 0, source), source.Length));
+        var target = source.IndexOf("line11000", StringComparison.Ordinal);
+        var current = accessible.MakeRange(target, target + "line11000".Length);
+        var before = shell.CanvasFrame;
+
+        Assert.Equal(AccessibleRevealResult.StaleRange, viewport.TryReveal(stale, true));
+        Assert.Same(before, shell.CanvasFrame);
+        shell.IsCanvasComposing = true;
+        Assert.Equal(AccessibleRevealResult.CompositionBlocked, viewport.TryReveal(current, true));
+        Assert.Same(before, shell.CanvasFrame);
+        shell.IsCanvasComposing = false;
+
+        Assert.Equal(AccessibleRevealResult.Revealed, viewport.TryReveal(current, true));
+        Assert.Contains(shell.CanvasFrame!.Slices, slice => slice.SourceStart <= target &&
+            target < slice.SourceStart + slice.SourceLength);
+        Assert.Equal(current.Version, shell.CanvasBinding!.BaseVersion);
+        Assert.InRange(shell.CanvasBinding.InputSourceText.Length, 0, 16 * 1024);
+        Assert.Equal("line11000", accessible.GetText(current));
+
+        var published = shell.CanvasFrame;
+        var offThread = await Task.Run(() => viewport.TryReveal(current, true));
+        Assert.Equal(AccessibleRevealResult.WrongThread, offThread);
+        Assert.Same(published, shell.CanvasFrame);
+    }
+
+    /// <summary>A stale range from a previous document fails even when version numbers happen to match.</summary>
+    [Fact]
+    public void Canvas_accessibility_reveal_rejects_same_version_from_previous_document()
+    {
+        using var temp = new RepoTemp();
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, null);
+        controller.Run();
+        var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
+        var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
+        var oldRange = accessible.MakeRange(0, 0);
+
+        shell.RequestNew();
+        var freshRange = accessible.MakeRange(0, 0);
+        Assert.Equal(oldRange.Version, freshRange.Version);
+        Assert.NotEqual(oldRange.Generation, freshRange.Generation);
+        var frame = shell.CanvasFrame;
+        Assert.Equal(AccessibleRevealResult.StaleRange, viewport.TryReveal(oldRange, true));
+        Assert.Same(frame, shell.CanvasFrame);
+        Assert.Equal(AccessibleRevealResult.Revealed, viewport.TryReveal(freshRange, true));
+    }
+
+    /// <summary>Bottom-aligned reveal must paint the requested slice, not just scroll to its logical row.</summary>
+    [Fact]
+    public void Canvas_accessibility_bottom_reveal_paints_middle_of_long_line_with_bounded_slices()
+    {
+        using var temp = new RepoTemp();
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, null);
+        controller.Run();
+        shell.ResizeCanvas(200);
+        var source = string.Concat(Enumerable.Repeat("short\n", 100)) + new string('x', 100_000);
+        var initial = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(initial.DocumentGeneration,
+            initial.BaseVersion, initial.BindingNonce, new TextChange(0, 0, source), source.Length));
+
+        const int target = 50_600;
+        var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
+        var range = accessible.MakeRange(target, target + 1);
+        var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
+        Assert.Equal(AccessibleRevealResult.Revealed, viewport.TryReveal(range, alignToTop: false));
+        Assert.Contains(shell.CanvasFrame!.Slices, slice => slice.SourceStart <= target &&
+            target < slice.SourceStart + slice.SourceLength);
+        Assert.All(shell.CanvasFrame.Slices, slice => Assert.InRange(slice.SourceLength, 0, 16 * 1024));
+        Assert.InRange(shell.CanvasBinding!.InputSourceText.Length, 0, 16 * 1024);
+        Assert.Equal("x", accessible.GetText(range));
+    }
+
+    /// <summary>An unpaintable CRLF interior must not be falsely reported as revealed.</summary>
+    [Fact]
+    public void Canvas_accessibility_reveal_reports_unpaintable_crlf_interior()
+    {
+        using var temp = new RepoTemp();
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, null);
+        controller.Run();
+        var initial = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(initial.DocumentGeneration,
+            initial.BaseVersion, initial.BindingNonce, new TextChange(0, 0, "a\r\nb"), 4));
+
+        var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
+        var interior = accessible.MakeRange(2, 2);
+        var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
+        var before = shell.CanvasFrame;
+        Assert.Equal(AccessibleRevealResult.NotVisible, viewport.TryReveal(interior, alignToTop: true));
+        Assert.Same(before, shell.CanvasFrame);
+        Assert.DoesNotContain(shell.CanvasFrame!.Slices, slice =>
+            slice.SourceStart <= 2 && 2 < slice.SourceStart + slice.SourceLength);
+    }
+
+    /// <summary>A failed optional OS AX attachment leaves the editor alive and warns after startup Open.</summary>
+    [Fact]
+    public async Task Canvas_accessibility_attach_failure_survives_startup_open_with_persistent_warning()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("ax-attach.txt");
+        await File.WriteAllTextAsync(path, "private source marker");
+        var shell = new FakeShell(NativeLineEndingMode.Preserve)
+        {
+            CanvasEnabled = true,
+            RejectAccessibilityAttach = true
+        };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.GetText() == "private source marker");
+
+        Assert.Null(shell.CanvasAccessibilityDocument);
+        Assert.Contains("Accessibility provider unavailable", shell.CanvasStatus);
+        Assert.DoesNotContain(path, shell.CanvasStatus, StringComparison.Ordinal);
+        Assert.DoesNotContain("private source marker", shell.CanvasStatus, StringComparison.Ordinal);
+        Assert.Empty(shell.Errors);
+    }
+
+    /// <summary>A later AX provider fault is isolated from edits and remains visible across document swaps.</summary>
+    [Fact]
+    public async Task Canvas_accessibility_runtime_failure_preserves_edit_undo_and_warning_across_new_open()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("ax-recovery.txt");
+        await File.WriteAllTextAsync(path, "disk marker");
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, null);
+        controller.Run();
+        Assert.NotNull(shell.CanvasAccessibilityDocument);
+
+        var initial = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(initial.DocumentGeneration,
+            initial.BaseVersion, initial.BindingNonce, new TextChange(0, 0, "abc"), 3));
+        Assert.Equal("abc", shell.CanvasBinding!.Snapshot.GetText());
+        shell.FailCanvasAccessibility();
+        shell.Pump();
+        Assert.Contains("Accessibility provider unavailable", shell.CanvasStatus);
+        Assert.Equal("abc", shell.CanvasBinding!.Snapshot.GetText());
+
+        shell.RequestUndo();
+        Assert.Equal("", shell.CanvasBinding!.Snapshot.GetText());
+        shell.RequestRedo();
+        Assert.Equal("abc", shell.CanvasBinding!.Snapshot.GetText());
+        shell.RequestNew();
+        Assert.Equal("", shell.CanvasBinding!.Snapshot.GetText());
+        Assert.Contains("Accessibility provider unavailable", shell.CanvasStatus);
+
+        shell.OpenPath = path;
+        shell.RequestOpen();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.GetText() == "disk marker");
+        Assert.Contains("Accessibility provider unavailable", shell.CanvasStatus);
+        Assert.DoesNotContain(path, shell.CanvasStatus, StringComparison.Ordinal);
+        Assert.DoesNotContain("disk marker", shell.CanvasStatus, StringComparison.Ordinal);
+        Assert.Empty(shell.Errors);
+    }
+
     /// <summary>Builds a controller with project-local, side-effect-free configuration.</summary>
     private static NativeEditorController NewController(FakeShell shell, string userHome, string? path)
     {
@@ -966,6 +1138,8 @@ public sealed class NativeControllerTests
         public NativeLineEndingMode LineEndingMode { get; } = lineEndingMode;
         /// <inheritdoc />
         public bool CanvasEnabled { get; set; }
+        /// <inheritdoc />
+        public bool IsCanvasComposing { get; set; }
         /// <inheritdoc />
         public bool PrefersDark => true;
         /// <inheritdoc />
@@ -1014,6 +1188,8 @@ public sealed class NativeControllerTests
         public event Action<double>? CanvasViewportResized;
         /// <inheritdoc />
         public event Action<int, int>? CanvasSelectionRequested;
+        /// <inheritdoc />
+        public event Action? CanvasAccessibilityFailed;
 
         /// <summary>The current fake text viewport.</summary>
         public NativeDocumentView? Document { get; private set; }
@@ -1025,6 +1201,14 @@ public sealed class NativeControllerTests
         public CanvasFrame? CanvasFrame { get; private set; }
         /// <summary>The latest absolute semantic facts offered to the canvas.</summary>
         public NativeCanvasSemantics? CanvasSemantics { get; private set; }
+        /// <summary>The engine-backed accessibility model installed by the controller.</summary>
+        public AccessibleDocument? CanvasAccessibilityDocument { get; private set; }
+        /// <summary>The UI-thread reveal bridge installed by the controller.</summary>
+        public IAccessibleViewport? CanvasAccessibilityViewport { get; private set; }
+        /// <summary>Models an OS accessibility provider that cannot attach.</summary>
+        public bool RejectAccessibilityAttach { get; set; }
+        /// <summary>The latest canvas chrome status, including recoverable AX failure.</summary>
+        public string? CanvasStatus { get; private set; }
         /// <summary>A recoverable reason for withholding an unsafe input binding.</summary>
         public string? CanvasInputError { get; private set; }
         /// <summary>All presentations, for stale-result assertions.</summary>
@@ -1081,9 +1265,16 @@ public sealed class NativeControllerTests
             CanvasInputError = reason;
         }
         /// <inheritdoc />
-        public void SetCanvasChrome(string title, string status, bool isModified) { }
+        public void SetCanvasChrome(string title, string status, bool isModified) => CanvasStatus = status;
         /// <inheritdoc />
         public void SetCanvasSemantics(NativeCanvasSemantics semantics) => CanvasSemantics = semantics;
+        /// <inheritdoc />
+        public void SetCanvasAccessibility(AccessibleDocument document, IAccessibleViewport viewport)
+        {
+            if (RejectAccessibilityAttach) throw new InvalidOperationException("Synthetic AX attach failure.");
+            CanvasAccessibilityDocument = document;
+            CanvasAccessibilityViewport = viewport;
+        }
         /// <inheritdoc />
         public bool CommitPendingText()
         {
@@ -1141,6 +1332,8 @@ public sealed class NativeControllerTests
         public void ResizeCanvas(double height) => CanvasViewportResized?.Invoke(height);
         /// <summary>Raises one pointer-resolved source selection.</summary>
         public void SelectCanvas(int anchor, int active) => CanvasSelectionRequested?.Invoke(anchor, active);
+        /// <summary>Raises a recoverable native AX provider fault.</summary>
+        public void FailCanvasAccessibility() => CanvasAccessibilityFailed?.Invoke();
         /// <summary>Raises the native Save command.</summary>
         public void RequestSave() => SaveRequested?.Invoke();
         /// <summary>Raises the native Save As command.</summary>

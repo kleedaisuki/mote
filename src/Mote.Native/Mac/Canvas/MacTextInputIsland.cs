@@ -72,6 +72,12 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>The real visible NSTextView receiving AppKit text input.</summary>
     internal nint Editor => _editor;
 
+    /// <summary>The source-backed NSView that may own the opt-in AX element.</summary>
+    internal nint CanvasView => _view;
+
+    /// <summary>Raised after AppKit changes the canvas view bounds.</summary>
+    internal event Action? ViewGeometryChanged;
+
     /// <summary>Whether the OS currently owns provisional candidate text.</summary>
     internal bool IsComposing => _editor != 0 && ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0;
 
@@ -110,6 +116,7 @@ internal sealed unsafe class MacTextInputIsland
     internal void Dispose()
     {
         if (s_current == this) s_current = null;
+        ViewGeometryChanged = null;
         if (_font != 0) CoreTextNative.Release(_font);
         _font = 0;
         _font = 0;
@@ -555,6 +562,7 @@ internal sealed unsafe class MacTextInputIsland
         {
             _height = rect.Size.Height;
             _width = rect.Size.Width;
+            ViewGeometryChanged?.Invoke();
             if (IsComposing) _pendingResize = true;
             else _resize(_height);
             PlaceHost(preserveComposition: true);

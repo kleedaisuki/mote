@@ -39,7 +39,7 @@ public sealed class AccessibilityDocumentTests
         Assert.Throws<AccessibleRequestTooLargeException>(() =>
             provider.GetText(provider.DocumentRange, -1));
         var oversized = provider.TryGetText(provider.DocumentRange, -1);
-        Assert.Equal(WindowsTextResult.E_OUTOFMEMORY, oversized.HResult);
+        Assert.Equal(WindowsTextResult.UIA_E_INVALIDOPERATION, oversized.HResult);
         Assert.Null(oversized.Text);
         Assert.Equal(WindowsTextResult.S_OK,
             provider.TryGetText(provider.DocumentRange, 100).HResult);
@@ -73,13 +73,14 @@ public sealed class AccessibilityDocumentTests
         var model = new AccessibleDocument(Bind(snapshot, 0, 0));
         var later = new CanvasFrame(snapshot.Version, new ViewportAnchor(13, 0), 32,
             [new ViewportSlice(2, 13, 5, 0, 16, false, false)], 13, 13);
-        model.SetFrame(model.Generation, later);
+        model.Publish(Bind(snapshot, 13, 13) with { Frame = later });
 
         Assert.Equal(13, model.Selection.Start);
         Assert.Equal("third", model.GetText(model.VisibleRanges()[0]));
-        Assert.Throws<InvalidOperationException>(() =>
-            model.SetFrame(model.Generation, later with { Version = snapshot.Version + 1 }));
-        Assert.Throws<InvalidOperationException>(() => model.SetFrame(model.Generation + 1, later));
+        Assert.Throws<ArgumentException>(() => model.Publish(
+            Bind(snapshot, 13, 13) with { Frame = later with { Version = snapshot.Version + 1 } }));
+        Assert.Throws<InvalidOperationException>(() => model.Publish(
+            Bind(snapshot, 13, 13, generation: 0) with { Frame = later }));
     }
 
     /// <summary>UIA gets a degenerate range when nothing is painted.</summary>
@@ -118,7 +119,7 @@ public sealed class AccessibilityDocumentTests
         var clipped = frame with { Slices =
             [new ViewportSlice(0, 0, 1, 0, 16, false, true),
                 new ViewportSlice(1, 4, 2, 16, 16, false, false)] };
-        model.SetFrame(model.Generation, clipped);
+        model.Publish(Bind(snapshot, 0, 0) with { Frame = clipped });
         Assert.Equal(2, model.VisibleRanges().Count);
     }
 
@@ -168,6 +169,37 @@ public sealed class AccessibilityDocumentTests
         Assert.Equal(25_000_000, mac.VisibleCharacterRange.Start);
         Assert.Equal(0, mac.VisibleCharacterRange.Length);
         Assert.Equal("", mac.StringForRange(mac.VisibleCharacterRange));
+        Assert.Equal("a", model.GetText(model.MakeRange(snapshot.Length - 1, snapshot.Length)));
+    }
+
+    /// <summary>AX source publication does not require any input-island binding.</summary>
+    [Fact]
+    public void Publishing_new_document_requires_only_engine_snapshot_and_canvas_frame()
+    {
+        using var first = new Document("first");
+        using var second = new Document("second-offscreen");
+        var model = new AccessibleDocument(Bind(first.Snapshot, 0, 0, generation: 5));
+        var old = model.DocumentRange;
+
+        model.Publish(Bind(second.Snapshot, 0, 0, generation: 6));
+
+        Assert.Equal(second.Snapshot.Length, model.DocumentRange.End);
+        Assert.Equal("offscreen", model.GetText(model.MakeRange(7, 16)));
+        Assert.Throws<InvalidOperationException>(() => model.GetText(old));
+    }
+
+    /// <summary>A one- or two-unit gap is visible only if it is actually a delimiter.</summary>
+    [Fact]
+    public void Adjacent_line_merge_does_not_claim_hidden_prefix_text()
+    {
+        using var document = new Document("abc\nnext");
+        var snapshot = document.Snapshot;
+        var frame = new CanvasFrame(snapshot.Version, new ViewportAnchor(0, 0), 0,
+            [new ViewportSlice(0, 0, 2, 0, 16, false, false),
+                new ViewportSlice(1, 4, 4, 16, 16, false, false)], 0, 0);
+        var model = new AccessibleDocument(new AccessibleCanvasState(1, snapshot, frame));
+
+        Assert.Equal(2, model.VisibleRanges().Count); // Hidden "c\n" is not a delimiter.
     }
 
     /// <summary>Old range handles cannot describe a newly bound source document.</summary>
@@ -178,7 +210,7 @@ public sealed class AccessibilityDocumentTests
         using var second = new Document("two");
         var model = new AccessibleDocument(Bind(first.Snapshot, 0, 0, generation: 1));
         var stale = model.DocumentRange;
-        model.Rebind(Bind(second.Snapshot, 0, 0, generation: 2));
+        model.Publish(Bind(second.Snapshot, 0, 0, generation: 2));
         var viewport = new ViewportStub();
         var provider = new WindowsTextProviderCore(model, viewport);
 
@@ -186,25 +218,97 @@ public sealed class AccessibilityDocumentTests
         Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
             provider.TryGetText(stale, -1).HResult);
         Assert.Throws<InvalidOperationException>(() => provider.ScrollIntoView(stale, false));
-        Assert.True(provider.ScrollIntoView(model.MakeRange(2, 3), true));
+        Assert.Equal(AccessibleRevealResult.Revealed,
+            provider.ScrollIntoView(model.MakeRange(2, 3), true));
         Assert.Equal(2, viewport.LastRange?.Start);
         Assert.True(viewport.AlignToTop);
     }
 
     /// <summary>Retained OS range handles cannot read a closed editor's snapshot.</summary>
     [Fact]
-    public void Invalidate_denies_retained_range_text_and_scroll()
+    public void Detach_denies_retained_range_text_and_scroll_without_closing_shared_document()
     {
         using var document = new Document("secret");
         var model = new AccessibleDocument(Bind(document.Snapshot, 0, 0));
         var provider = new WindowsTextProviderCore(model, new ViewportStub());
         var retained = provider.DocumentRange;
-        provider.Invalidate();
+        provider.Detach();
 
         Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
             provider.TryGetText(retained, -1).HResult);
         Assert.Throws<InvalidOperationException>(() => provider.ScrollIntoView(retained, false));
-        Assert.Throws<InvalidOperationException>(() => _ = model.DocumentRange);
+        Assert.Equal("secret", model.GetText(model.DocumentRange));
+        var nativePattern = new UiaEditorObject(provider);
+        Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+            nativePattern.GetSelection(out var selected));
+        Assert.Equal(0, selected);
+        Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+            nativePattern.GetVisibleRanges(out var visible));
+        Assert.Equal(0, visible);
+        Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+            nativePattern.GetDocumentRange(out var documentRange));
+        Assert.Equal(0, documentRange);
+        Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+            new UiaRangeObject(provider, retained).Clone(out var clone));
+        Assert.Equal(0, clone);
+    }
+
+    /// <summary>Detaching a faulty provider does not stop later edit/New publications.</summary>
+    [Fact]
+    public void Provider_detach_preserves_shared_document_for_edit_and_new()
+    {
+        using var first = new Document("before");
+        using var second = new Document("new-document");
+        var model = new AccessibleDocument(Bind(first.Snapshot, 0, 0));
+        var staleProvider = new WindowsTextProviderCore(model, new ViewportStub());
+        var oldRange = staleProvider.DocumentRange;
+        staleProvider.Detach();
+
+        var edited = first.Apply(new TextChange(first.Snapshot.Length, 0, "-edited"));
+        model.Publish(Bind(edited, 0, 0));
+        Assert.Equal("before-edited", model.GetText(model.DocumentRange));
+        model.Publish(Bind(second.Snapshot, 0, 0, generation: 2));
+        Assert.Equal("new-document", model.GetText(model.DocumentRange));
+        Assert.Equal(WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+            staleProvider.TryGetText(oldRange, -1).HResult);
+        var newProvider = new WindowsTextProviderCore(model, new ViewportStub());
+        Assert.Equal("new-document", newProvider.GetText(newProvider.DocumentRange, -1));
+    }
+
+    /// <summary>Mac AX selector fault detachment cannot poison controller publication.</summary>
+    [Fact]
+    public void Mac_provider_detach_preserves_shared_document_for_new()
+    {
+        using var first = new Document("old");
+        using var second = new Document("next");
+        var model = new AccessibleDocument(Bind(first.Snapshot, 0, 0));
+        var staleProvider = new MacAccessibilityTextCore(model, new ViewportStub());
+        var oldRange = staleProvider.RangeForLine(0);
+        staleProvider.Detach();
+
+        model.Publish(Bind(second.Snapshot, 0, 0, generation: 2));
+        Assert.Equal("next", model.GetText(model.DocumentRange));
+        Assert.Throws<InvalidOperationException>(() => staleProvider.StringForRange(oldRange));
+        var newProvider = new MacAccessibilityTextCore(model, new ViewportStub());
+        Assert.Equal("next", newProvider.StringForRange(newProvider.RangeForLine(0)));
+    }
+
+    /// <summary>IME/thread/stale failures never report successful UIA ScrollIntoView.</summary>
+    [Theory]
+    [InlineData(1, WindowsTextResult.UIA_E_INVALIDOPERATION)] // CompositionBlocked
+    [InlineData(3, WindowsTextResult.UIA_E_INVALIDOPERATION)] // NotVisible
+    [InlineData(4, WindowsTextResult.UIA_E_INVALIDOPERATION)] // WrongThread
+    [InlineData(2, WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE)] // StaleRange
+    public void Reveal_failure_maps_to_explicit_uia_failure(
+        int outcome, int expectedHResult)
+    {
+        using var document = new Document("offscreen");
+        var model = new AccessibleDocument(Bind(document.Snapshot, 0, 0));
+        var range = model.MakeRange(3, 6);
+        var core = new WindowsTextProviderCore(model, new ViewportStub((AccessibleRevealResult)outcome));
+        var nativeRange = new UiaRangeObject(core, range);
+
+        Assert.Equal(expectedHResult, nativeRange.ScrollIntoView(0));
     }
 
     /// <summary>Closed COM ranges cannot keep a large engine snapshot alive.</summary>
@@ -238,26 +342,28 @@ public sealed class AccessibilityDocumentTests
         return (provider, range, weak);
     }
 
-    private static NativeCanvasBinding Bind(TextSnapshot snapshot, int anchor, int active,
+    private static AccessibleCanvasState Bind(TextSnapshot snapshot, int anchor, int active,
         long generation = 1)
     {
         var frame = new CanvasFrame(snapshot.Version, new ViewportAnchor(0, 0), 0,
             [new ViewportSlice(0, 0, Math.Min(snapshot.Length, 3), 0, 16, false, false)],
             anchor, active);
-        return new NativeCanvasBinding(generation, snapshot.Version, 1, snapshot, frame,
-            0, "", anchor, active, "Test", "", false);
+        return new AccessibleCanvasState(generation, snapshot, frame);
     }
 
     private sealed class ViewportStub : IAccessibleViewport
     {
+        private readonly AccessibleRevealResult _result;
+        internal ViewportStub(AccessibleRevealResult result = AccessibleRevealResult.Revealed) =>
+            _result = result;
         internal AccessibleRange? LastRange { get; private set; }
         internal bool AlignToTop { get; private set; }
 
-        public bool TryScrollIntoView(AccessibleRange range, bool alignToTop)
+        public AccessibleRevealResult TryReveal(AccessibleRange range, bool alignToTop)
         {
             LastRange = range;
             AlignToTop = alignToTop;
-            return true;
+            return _result;
         }
     }
 }

@@ -35,6 +35,13 @@ internal static class Program
             if (result == 0) Console.WriteLine("mote-native-mac-canvas-delete-ready");
             return result;
         }
+        if (args.Length == 2 && args[0] == "--check-native-mac-canvas-ax")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            var result = Mac.Canvas.MacCanvasAccessibilityProbe.Run(args[1]);
+            if (result == 0) Console.WriteLine("mote-native-mac-canvas-ax-ready");
+            return result;
+        }
         if (args.Length == 3 && args[0] == "--check-native-mac-workflow")
         {
             if (!OperatingSystem.IsMacOS())
@@ -54,6 +61,7 @@ internal static class Program
             Console.WriteLine("Canvas diagnostics: --check-native-windows-canvas | --check-native-mac-canvas");
             Console.WriteLine("Experimental AppKit clipboard diagnostic: --check-native-mac-canvas-clipboard <input> <output>");
             Console.WriteLine("Experimental AppKit global-delete diagnostic: --check-native-mac-canvas-delete <input>");
+            Console.WriteLine("Experimental AppKit AX tree diagnostic: --check-native-mac-canvas-ax <input>");
             Console.WriteLine("On-screen read-only canvas: --check-native-canvas-window <100MiB-many-line-file> <50MiB-one-line-file> <output-dir> <theme-id>");
             return 0;
         }

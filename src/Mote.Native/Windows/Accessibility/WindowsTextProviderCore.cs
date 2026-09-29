@@ -13,6 +13,8 @@ internal readonly record struct WindowsTextResult(int HResult, string? Text)
     internal const int E_OUTOFMEMORY = unchecked((int)0x8007000E);
     /// <summary>A range belongs to a stale source document/version.</summary>
     internal const int UIA_E_ELEMENTNOTAVAILABLE = unchecked((int)0x80040201);
+    /// <summary>A reveal cannot complete safely in the current composition/thread state.</summary>
+    internal const int UIA_E_INVALIDOPERATION = unchecked((int)0x80131509);
 }
 
 /// <summary>
@@ -30,6 +32,7 @@ internal sealed class WindowsTextProviderCore
 {
     private readonly AccessibleDocument _document;
     private readonly IAccessibleViewport _viewport;
+    private int _detached;
 
     /// <summary>Creates a UIA-facing range adapter over the canonical source.</summary>
     internal WindowsTextProviderCore(AccessibleDocument document, IAccessibleViewport viewport)
@@ -38,20 +41,52 @@ internal sealed class WindowsTextProviderCore
         _viewport = viewport ?? throw new ArgumentNullException(nameof(viewport));
     }
 
-    /// <summary>Invalidates all outstanding ranges after the editor HWND closes.</summary>
-    internal void Invalidate() => _document.Invalidate();
+    /// <summary>
+    /// Invalidates this OS provider's old ranges without closing the controller's
+    /// shared document. A recoverable UIA fault must not disable future editing.
+    /// </summary>
+    internal void Detach() => Volatile.Write(ref _detached, 1);
+
+    /// <summary>Whether this OS provider can still serve its own COM clients.</summary>
+    internal bool IsAttached => Volatile.Read(ref _detached) == 0;
+
+    private void EnsureAttached()
+    {
+        if (!IsAttached) throw new InvalidOperationException("UIA provider is detached.");
+    }
+
+    /// <summary>Rejects a stale range before native range operations.</summary>
+    internal void ValidateRange(AccessibleRange range)
+    {
+        EnsureAttached();
+        _document.ValidateRange(range);
+    }
 
     /// <summary>Equivalent of ITextProvider.DocumentRange.</summary>
-    internal AccessibleRange DocumentRange => _document.DocumentRange;
+    internal AccessibleRange DocumentRange
+    {
+        get { EnsureAttached(); return _document.DocumentRange; }
+    }
 
     /// <summary>Equivalent of ITextProvider.GetSelection, including a degenerate caret range.</summary>
-    internal AccessibleRange Selection => _document.Selection;
+    internal AccessibleRange Selection
+    {
+        get { EnsureAttached(); return _document.Selection; }
+    }
 
     /// <summary>Equivalent of ITextProvider.GetVisibleRanges over painted source slices.</summary>
-    internal IReadOnlyList<AccessibleRange> GetVisibleRanges() => _document.VisibleRanges();
+    internal IReadOnlyList<AccessibleRange> GetVisibleRanges()
+    {
+        EnsureAttached();
+        return _document.VisibleRanges();
+    }
 
     /// <summary>Equivalent of ITextRangeProvider.GetText with UIA's -1 convention.</summary>
-    internal string GetText(AccessibleRange range, int maxLength) => _document.GetText(range, maxLength);
+    internal string GetText(AccessibleRange range, int maxLength)
+    {
+        EnsureAttached();
+        return _document.GetText(range, maxLength);
+    }
 
     /// <summary>
     /// Maps known range failures to HRESULT without ever returning S_OK for a
@@ -63,7 +98,11 @@ internal sealed class WindowsTextProviderCore
         try { return new WindowsTextResult(WindowsTextResult.S_OK, GetText(range, maxLength)); }
         catch (AccessibleRequestTooLargeException)
         {
-            return new WindowsTextResult(WindowsTextResult.E_OUTOFMEMORY, null);
+            // A fixed provider budget is not physical OOM. In a published-AOT
+            // external UIA probe, E_OUTOFMEMORY poisoned the cached TextPattern,
+            // while UIA_E_INVALIDOPERATION kept it usable for smaller requests.
+            // Neither status may be returned with a silently truncated success.
+            return new WindowsTextResult(WindowsTextResult.UIA_E_INVALIDOPERATION, null);
         }
         catch (OutOfMemoryException)
         {
@@ -80,15 +119,24 @@ internal sealed class WindowsTextProviderCore
     }
 
     /// <summary>Finds the logical source line containing an endpoint.</summary>
-    internal int LineFromOffset(int offset) => _document.LineFromOffset(offset);
+    internal int LineFromOffset(int offset)
+    {
+        EnsureAttached();
+        return _document.LineFromOffset(offset);
+    }
 
     /// <summary>Returns one logical source line for UIA line-unit navigation.</summary>
-    internal AccessibleRange RangeForLine(int line) => _document.LineRange(line);
+    internal AccessibleRange RangeForLine(int line)
+    {
+        EnsureAttached();
+        return _document.LineRange(line);
+    }
 
     /// <summary>Equivalent of ITextRangeProvider.ScrollIntoView; no input-island rebind occurs here.</summary>
-    internal bool ScrollIntoView(AccessibleRange range, bool alignToTop)
+    internal AccessibleRevealResult ScrollIntoView(AccessibleRange range, bool alignToTop)
     {
+        EnsureAttached();
         _document.ValidateRange(range);
-        return _viewport.TryScrollIntoView(range, alignToTop);
+        return _viewport.TryReveal(range, alignToTop);
     }
 }

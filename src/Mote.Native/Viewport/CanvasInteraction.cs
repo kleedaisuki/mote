@@ -35,6 +35,7 @@ internal sealed class CanvasInteraction
     private readonly NativeNavigationModel _selection;
     private readonly ContinuousViewport _viewport;
     private double _viewportHeight;
+    private int? _focusSourceOffset;
     private bool _dragging;
 
     /// <summary>Creates a source-backed canvas with no per-document line objects.</summary>
@@ -69,18 +70,36 @@ internal sealed class CanvasInteraction
         _viewportHeight = viewportHeight;
     }
 
-    /// <summary>Moves through adjacent logical rows without changing source version or selection.</summary>
-    internal void ScrollBy(double pixels) => _viewport.ScrollBy(pixels);
+    /// <summary>
+    /// Moves through adjacent logical rows without changing source version or
+    /// selection. Ordinary user scrolling releases any remote long-line focus;
+    /// an accessibility bottom alignment preserves it for the next frame.
+    /// </summary>
+    internal void ScrollBy(double pixels, bool preserveSourceFocus = false)
+    {
+        _viewport.ScrollBy(pixels);
+        if (!preserveSourceFocus) _focusSourceOffset = null;
+    }
 
-    /// <summary>Reveals a source boundary, including one far beyond the former native page.</summary>
-    internal void Reveal(int sourceOffset) => _viewport.ScrollToSource(sourceOffset);
+    /// <summary>
+    /// Reveals a source boundary and retains it as the bounded shaping focus,
+    /// even if a subsequent vertical alignment places an earlier row at top.
+    /// </summary>
+    internal void Reveal(int sourceOffset)
+    {
+        _viewport.ScrollToSource(sourceOffset);
+        _focusSourceOffset = sourceOffset;
+    }
 
     /// <summary>
     /// Rebinds the viewport after a canonical engine edit. The controller owns
     /// transforming a shared selection exactly once via Document.Changed.
     /// </summary>
-    internal void ApplyEdit(TextSnapshot after, TextChange change) =>
+    internal void ApplyEdit(TextSnapshot after, TextChange change)
+    {
         _viewport.ApplyEdit(after, change);
+        _focusSourceOffset = null;
+    }
 
     /// <summary>Starts an OS pointer selection at a platform-resolved source cluster edge.</summary>
     internal void BeginSelection(int sourceOffset)
@@ -105,7 +124,7 @@ internal sealed class CanvasInteraction
     internal CanvasFrame Frame() => new(Snapshot.Version, _viewport.TopAnchor,
         _viewport.ScrollY,
         _viewport.GetVisibleSlices(_viewportHeight, MaxVisibleSlices,
-            focusSourceOffset: _viewport.TopAnchor.SourceOffset),
+            focusSourceOffset: _focusSourceOffset ?? _viewport.TopAnchor.SourceOffset),
         _selection.Anchor, _selection.Active);
 
     /// <summary>Streams the selected original source without a second text model.</summary>

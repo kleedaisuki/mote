@@ -11,11 +11,22 @@ internal readonly record struct AccessibleRange(long Generation, long Version, i
 }
 
 /// <summary>
+/// One atomic accessibility publication, independent of the caret-local input
+/// host. Selection is carried by the source-versioned canvas frame.
+/// </summary>
+internal sealed record AccessibleCanvasState(
+    long Generation, TextSnapshot Snapshot, CanvasFrame Frame)
+{
+    /// <summary>The immutable engine source version exposed by this state.</summary>
+    internal long Version => Snapshot.Version;
+}
+
+/// <summary>
 /// Engine-backed state for one logical accessible editor. Native input islands never
 /// supply text here; this model reads only bounded intervals from the snapshot.
 /// </summary>
 /// <remarks>
-/// Replace the binding atomically on the UI thread after a committed edit. A range
+/// Publish the state atomically on the UI thread after a committed edit. A range
 /// from an older generation or version is rejected rather than describing a new file
 /// with stale source coordinates. Platform providers must marshal requests to the UI
 /// thread and must not report an oversized request as a successful truncated result.
@@ -26,28 +37,28 @@ internal sealed class AccessibleDocument
     internal const int MaxTextRequest = 65_536;
 
     private readonly object _gate = new();
-    private NativeCanvasBinding? _binding;
+    private AccessibleCanvasState? _state;
     private int _closed;
 
-    /// <summary>Creates an accessible source view from a single canvas binding.</summary>
-    internal AccessibleDocument(NativeCanvasBinding binding)
+    /// <summary>Creates an accessible source view from one immutable canvas state.</summary>
+    internal AccessibleDocument(AccessibleCanvasState state)
     {
-        _binding = Validate(binding);
+        _state = Validate(state);
     }
 
     /// <summary>The bound document generation, used to reject stale clients.</summary>
-    internal long Generation => ReadBinding().DocumentGeneration;
+    internal long Generation => ReadState().Generation;
 
     /// <summary>The immutable source version currently presented to clients.</summary>
-    internal long Version => ReadBinding().Snapshot.Version;
+    internal long Version => ReadState().Version;
 
     /// <summary>The full document interval, including all offscreen text.</summary>
     internal AccessibleRange DocumentRange
     {
         get
         {
-            var binding = ReadBinding();
-            return Range(binding, 0, binding.Snapshot.Length);
+            var state = ReadState();
+            return Range(state, 0, state.Snapshot.Length);
         }
     }
 
@@ -56,9 +67,9 @@ internal sealed class AccessibleDocument
     {
         get
         {
-            var binding = ReadBinding();
-            return Range(binding, Math.Min(binding.Anchor, binding.Active),
-                Math.Max(binding.Anchor, binding.Active));
+            var state = ReadState();
+            return Range(state, Math.Min(state.Frame.SelectionAnchor, state.Frame.SelectionActive),
+                Math.Max(state.Frame.SelectionAnchor, state.Frame.SelectionActive));
         }
     }
 
@@ -67,13 +78,13 @@ internal sealed class AccessibleDocument
     {
         get
         {
-            var binding = ReadBinding();
-            return binding.Active < binding.Anchor;
+            var state = ReadState();
+            return state.Frame.SelectionActive < state.Frame.SelectionAnchor;
         }
     }
 
     /// <summary>Whether the current frame contains any painted source slices.</summary>
-    internal bool HasVisibleSlices => ReadBinding().Frame.Slices.Count != 0;
+    internal bool HasVisibleSlices => ReadState().Frame.Slices.Count != 0;
 
     /// <summary>
     /// Permanently invalidates ranges when the native editor closes. A retained
@@ -85,43 +96,31 @@ internal sealed class AccessibleDocument
         {
             Volatile.Write(ref _closed, 1);
             // Retained COM/AX range objects keep the model, not a closed 100 MiB rope.
-            Volatile.Write(ref _binding, null);
+            Volatile.Write(ref _state, null);
         }
     }
 
     /// <summary>
-    /// Publishes the next immutable snapshot/selection/frame as one state transition.
-    /// The frame must belong to the same version as the snapshot.
+    /// Publishes source, selection, and viewport as one transition. The native
+    /// input island may be absent or unable to bind; AX source truth is unaffected.
     /// </summary>
-    internal void Rebind(NativeCanvasBinding binding)
+    internal void Publish(AccessibleCanvasState state)
     {
-        binding = Validate(binding);
+        state = Validate(state);
         lock (_gate)
         {
             EnsureOpen();
-            Volatile.Write(ref _binding, binding);
-        }
-    }
-
-    /// <summary>Updates visible geometry without rebinding input text or source bytes.</summary>
-    internal void SetFrame(long generation, CanvasFrame frame)
-    {
-        ArgumentNullException.ThrowIfNull(frame);
-        lock (_gate)
-        {
-            EnsureOpen();
-            var binding = _binding ?? throw new InvalidOperationException("Accessibility editor is closed.");
-            if (generation != binding.DocumentGeneration || frame.Version != binding.Snapshot.Version)
-                throw new InvalidOperationException("Accessibility frame belongs to a stale document generation or version.");
-            ValidateFrame(frame, binding.Snapshot.Length);
-            Volatile.Write(ref _binding, binding with { Frame = frame,
-                Anchor = frame.SelectionAnchor, Active = frame.SelectionActive });
+            var current = _state ?? throw new InvalidOperationException("Accessibility editor is closed.");
+            if (state.Generation < current.Generation ||
+                state.Generation == current.Generation && state.Version < current.Version)
+                throw new InvalidOperationException("Accessibility state would regress document identity or version.");
+            Volatile.Write(ref _state, state);
         }
     }
 
     /// <summary>Creates a checked source interval in the current document.</summary>
     internal AccessibleRange MakeRange(int start, int end) =>
-        Range(ReadBinding(), start, end);
+        Range(ReadState(), start, end);
 
     /// <summary>
     /// Reads an offscreen or onscreen source interval without a full-document mirror.
@@ -131,20 +130,20 @@ internal sealed class AccessibleDocument
     /// <exception cref="AccessibleRequestTooLargeException">The requested output exceeds the per-call budget.</exception>
     internal string GetText(AccessibleRange range, int maxLength = -1)
     {
-        var binding = ReadBinding();
-        ValidateRange(binding, range);
+        var state = ReadState();
+        ValidateRange(state, range);
         if (maxLength < -1) throw new ArgumentOutOfRangeException(nameof(maxLength));
         var length = maxLength == -1 ? range.Length : Math.Min(range.Length, maxLength);
         if (length > 0 && length < range.Length)
         {
             var boundary = range.Start + length;
-            var seam = binding.Snapshot.GetText(boundary - 1, 2);
+            var seam = state.Snapshot.GetText(boundary - 1, 2);
             if (char.IsHighSurrogate(seam[0]) && char.IsLowSurrogate(seam[1]) ||
                 seam[0] == '\r' && seam[1] == '\n') length--;
         }
         if (length > MaxTextRequest)
             throw new AccessibleRequestTooLargeException(length, MaxTextRequest);
-        return binding.Snapshot.GetText(range.Start, length);
+        return state.Snapshot.GetText(range.Start, length);
     }
 
     /// <summary>
@@ -154,23 +153,23 @@ internal sealed class AccessibleDocument
     /// </summary>
     internal IReadOnlyList<AccessibleRange> VisibleRanges()
     {
-        var binding = ReadBinding();
-        var slices = binding.Frame.Slices;
+        var state = ReadState();
+        var slices = state.Frame.Slices;
         if (slices.Count == 0)
         {
-            var offset = Math.Clamp(binding.Frame.TopAnchor.SourceOffset, 0, binding.Snapshot.Length);
-            return [Range(binding, offset, offset)];
+            var offset = Math.Clamp(state.Frame.TopAnchor.SourceOffset, 0, state.Snapshot.Length);
+            return [Range(state, offset, offset)];
         }
         var ranges = new List<AccessibleRange>(slices.Count);
         ViewportSlice? previous = null;
         foreach (var slice in slices)
         {
-            var next = Range(binding, slice.SourceStart, checked(slice.SourceStart + slice.SourceLength));
+            var next = Range(state, slice.SourceStart, checked(slice.SourceStart + slice.SourceLength));
             var contiguous = previous is { } before && ranges.Count > 0 &&
                 (next.Start == ranges[^1].End ||
                  !before.HasHiddenSuffix && !slice.HasHiddenPrefix &&
                  slice.Line == before.Line + 1 &&
-                 next.Start - ranges[^1].End is 1 or 2);
+                 IsVisibleDelimiter(state.Snapshot, ranges[^1].End, next.Start));
             if (contiguous)
                 ranges[^1] = ranges[^1] with { End = next.End };
             else ranges.Add(next);
@@ -182,49 +181,49 @@ internal sealed class AccessibleDocument
     /// <summary>Gets a whole logical line, including its original delimiter if present.</summary>
     internal AccessibleRange LineRange(int line)
     {
-        var binding = ReadBinding();
-        var snapshot = binding.Snapshot;
+        var state = ReadState();
+        var snapshot = state.Snapshot;
         var start = snapshot.GetLineStartOffset(line);
         var end = line + 1 < snapshot.LineCount
             ? snapshot.GetLineStartOffset(line + 1) : snapshot.Length;
-        return Range(binding, start, end);
+        return Range(state, start, end);
     }
 
     /// <summary>Gets the logical line containing a source boundary.</summary>
     internal int LineFromOffset(int offset) =>
-        ReadBinding().Snapshot.GetLineIndexFromOffset(offset);
+        ReadState().Snapshot.GetLineIndexFromOffset(offset);
 
     /// <summary>Gets the whole-line envelope of painted slices in one atomic source view.</summary>
     internal AccessibleRange VisibleLogicalLineRange()
     {
-        var binding = ReadBinding();
-        var slices = binding.Frame.Slices;
+        var state = ReadState();
+        var slices = state.Frame.Slices;
         if (slices.Count == 0)
         {
-            var offset = Math.Clamp(binding.Frame.TopAnchor.SourceOffset, 0, binding.Snapshot.Length);
-            return Range(binding, offset, offset);
+            var offset = Math.Clamp(state.Frame.TopAnchor.SourceOffset, 0, state.Snapshot.Length);
+            return Range(state, offset, offset);
         }
-        var snapshot = binding.Snapshot;
+        var snapshot = state.Snapshot;
         var first = snapshot.GetLineIndexFromOffset(slices[0].SourceStart);
         var tail = slices[^1];
         var last = snapshot.GetLineIndexFromOffset(Math.Max(tail.SourceStart,
             tail.SourceStart + tail.SourceLength - 1));
         var end = last + 1 < snapshot.LineCount
             ? snapshot.GetLineStartOffset(last + 1) : snapshot.Length;
-        return Range(binding, snapshot.GetLineStartOffset(first), end);
+        return Range(state, snapshot.GetLineStartOffset(first), end);
     }
 
     /// <summary>Checks that a client range still belongs to the currently bound source.</summary>
     internal void ValidateRange(AccessibleRange range) =>
-        ValidateRange(ReadBinding(), range);
+        ValidateRange(ReadState(), range);
 
-    private NativeCanvasBinding ReadBinding()
+    private AccessibleCanvasState ReadState()
     {
         EnsureOpen();
-        var binding = Volatile.Read(ref _binding)
+        var state = Volatile.Read(ref _state)
             ?? throw new InvalidOperationException("Accessibility editor is closed.");
         EnsureOpen();
-        return binding;
+        return state;
     }
 
     private void EnsureOpen()
@@ -233,51 +232,63 @@ internal sealed class AccessibleDocument
             throw new InvalidOperationException("Accessibility editor is closed.");
     }
 
-    private static void ValidateRange(NativeCanvasBinding binding, AccessibleRange range)
+    private static void ValidateRange(AccessibleCanvasState state, AccessibleRange range)
     {
-        if (range.Generation != binding.DocumentGeneration || range.Version != binding.Snapshot.Version)
+        if (range.Generation != state.Generation || range.Version != state.Version)
             throw new InvalidOperationException("Accessibility range belongs to a stale document version.");
-        if (range.Start < 0 || range.End < range.Start || range.End > binding.Snapshot.Length)
+        if (range.Start < 0 || range.End < range.Start || range.End > state.Snapshot.Length)
             throw new ArgumentOutOfRangeException(nameof(range));
     }
 
-    private static AccessibleRange Range(NativeCanvasBinding binding, int start, int end)
+    private static AccessibleRange Range(AccessibleCanvasState state, int start, int end)
     {
-        if (start < 0 || end < start || end > binding.Snapshot.Length)
+        if (start < 0 || end < start || end > state.Snapshot.Length)
             throw new ArgumentOutOfRangeException(nameof(end));
-        return new AccessibleRange(binding.DocumentGeneration, binding.Snapshot.Version, start, end);
+        return new AccessibleRange(state.Generation, state.Version, start, end);
     }
 
-    private static NativeCanvasBinding Validate(NativeCanvasBinding binding)
+    private static AccessibleCanvasState Validate(AccessibleCanvasState state)
     {
-        ArgumentNullException.ThrowIfNull(binding);
-        ArgumentNullException.ThrowIfNull(binding.Snapshot);
-        ArgumentNullException.ThrowIfNull(binding.Frame);
-        if (binding.BaseVersion != binding.Snapshot.Version ||
-            binding.Frame.Version != binding.Snapshot.Version)
-            throw new ArgumentException("Source, input binding, and frame versions must match.", nameof(binding));
-        if ((uint)binding.Anchor > (uint)binding.Snapshot.Length ||
-            (uint)binding.Active > (uint)binding.Snapshot.Length)
-            throw new ArgumentException("Selection exceeds source length.", nameof(binding));
-        ValidateFrame(binding.Frame, binding.Snapshot.Length);
-        if (binding.Frame.SelectionAnchor != binding.Anchor ||
-            binding.Frame.SelectionActive != binding.Active)
-            throw new ArgumentException("Frame and binding selections differ.", nameof(binding));
-        return binding;
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(state.Snapshot);
+        ArgumentNullException.ThrowIfNull(state.Frame);
+        if (state.Generation < 0 || state.Frame.Version != state.Version)
+            throw new ArgumentException("Generation and frame must match the source state.", nameof(state));
+        ValidateFrame(state.Frame, state.Snapshot);
+        return state with { Frame = state.Frame with
+            { Slices = Array.AsReadOnly(state.Frame.Slices.ToArray()) } };
     }
 
-    private static void ValidateFrame(CanvasFrame frame, int sourceLength)
+    private static void ValidateFrame(CanvasFrame frame, TextSnapshot snapshot)
     {
+        var sourceLength = snapshot.Length;
+        if ((uint)frame.TopAnchor.SourceOffset > (uint)sourceLength)
+            throw new ArgumentException("Viewport anchor exceeds source length.", nameof(frame));
         if ((uint)frame.SelectionAnchor > (uint)sourceLength ||
             (uint)frame.SelectionActive > (uint)sourceLength)
             throw new ArgumentException("Frame selection exceeds source length.", nameof(frame));
         ArgumentNullException.ThrowIfNull(frame.Slices);
+        var priorLine = -1;
+        var priorEnd = -1;
         foreach (var slice in frame.Slices)
         {
             if (slice.SourceStart < 0 || slice.SourceLength < 0 ||
                 slice.SourceStart > sourceLength - slice.SourceLength)
                 throw new ArgumentException("Visible slice exceeds source length.", nameof(frame));
+            if (slice.Line < priorLine || slice.SourceStart < priorEnd ||
+                slice.Line != snapshot.GetLineIndexFromOffset(slice.SourceStart))
+                throw new ArgumentException("Visible slices must follow source line order.", nameof(frame));
+            priorLine = slice.Line;
+            priorEnd = slice.SourceStart + slice.SourceLength;
         }
+    }
+
+    private static bool IsVisibleDelimiter(TextSnapshot snapshot, int start, int end)
+    {
+        var length = end - start;
+        if (length is not (1 or 2)) return false;
+        var text = snapshot.GetText(start, length);
+        return text is "\r" or "\n" or "\r\n";
     }
 }
 
