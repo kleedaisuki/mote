@@ -90,7 +90,12 @@ before and after the runs. These tests used a local Windows desktop session;
 they do not establish macOS behavior.
 
 The audit used distinct absolute `MOTE_HOME` directories below the repository's
-`.temp/config-runtime-audit/`. A small JSON file from that same directory was
+`.temp/config-runtime-audit/`. Every runtime case described below explicitly
+sets `MOTE_HOME` to a disposable repository-local path. Thus “default/off
+created no home” means **the overridden** home was not created eagerly; it is
+not a direct filesystem test of the real user's `~/.mote`. The loader's unit
+tests establish that the ordinary default resolves to the user profile's
+`~/.mote`. A small JSON file from that same directory was
 opened by the executable (not copied into the publish directory). For the
 document-open cases, the window was launched hidden, allowed to run for 1.25 s,
 then closed with Windows `WM_CLOSE`; every case exited with code 0. This ordinary
@@ -121,7 +126,40 @@ that a future cache or recovery writer already honors those overrides. A
 future writer needs a focused end-to-end destination test before claiming that
 contract. The audit found no concrete current path-placement defect.
 
-## macOS Native AOT runtime-path workflow (awaiting hosted execution)
+### Repeatable Windows AOT gate (2026-09-29)
+
+`tests/NativeWindowsConfigWorkflow.ps1` automates the same five cases for
+published `win-x64` and `win-arm64` binaries. It opens a real JSON document in
+a hidden native window, waits for a trace-producing document open, then posts
+`WM_CLOSE` only to windows owned by the exact child PID. This permits normal
+trace shutdown without using force-kill or creating a runtime sidecar. Each
+case has a distinct absolute `MOTE_HOME` beneath `.temp/windows-config-runtime/`;
+the report defaults to
+`.cache/ci-inventory/<runtime-identifier>/windows-config-runtime.json`.
+
+```powershell
+./tests/NativeWindowsConfigWorkflow.ps1 `
+  -ExecutablePath src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe `
+  -RuntimeIdentifier win-x64
+```
+
+A local `win-x64` run passed all five cases against the existing published
+`.cache/ax_shell_aot/mote.exe` (6,085,632 bytes, modified 2026-09-29 20:22:27
+Asia/Singapore, SHA-256
+`D514ABFA75B962D8E3A734A89E4061F3273C8E885A2BB96423CF65334581F60C`).
+The relevant config loader, telemetry sink, and native composition source files
+predated this artifact; this is artifact-specific evidence, not a claim that
+every subsequent source change was republished. The report is retained at
+`.cache/ci-inventory/win-x64/windows-config-runtime-local.json`. Default/off
+created no overridden home, disabled config kept only `config.toml`, environment opt-in
+wrote one 655-byte JSONL in `traces/`, config opt-in wrote one 655-byte JSONL
+in `trace-custom/`, and duplicate-key config fell back to a 653-byte JSONL in
+`traces/`. Every case exited 0, the publish directory remained one EXE, all
+traced cases contained `document.open_to_editable`, and no private fixture
+content or path appeared in JSONL. `win-arm64` remains pending a native hosted
+run; the local x64 result must not be extrapolated to Arm64.
+
+## macOS Native AOT runtime-path workflow (hosted x64/Arm64 verified)
 
 `tests/NativeMacConfigWorkflow.ps1` is a reproducible check for a **published
 lone Mach-O**, rather than a source-level test or a `.app` bundle. It accepts
@@ -139,7 +177,7 @@ on a matching hosted runner after `dotnet publish`:
 Each case receives a fresh `MOTE_HOME` under `.temp/mac-config-runtime/<guid>/`.
 The workflow checks that the published directory contains only `mote`, that
 the executable hash remains unchanged, and that default/off startup creates
-no home. It then opens an actual JSON file for four configurations: disabled
+no **overridden** home. It then opens an actual JSON file for four configurations: disabled
 tracing, `MOTE_TRACE=1` with conventional `traces/`, config-enabled tracing
 with relocated `trace-custom/`, and invalid duplicate-key TOML with environment
 opt-in falling back to `traces/`. It verifies exact home file/directory
@@ -154,6 +192,27 @@ through macOS System Events and waits for exit 0; it bounds every wait and
 retains failed fixtures for diagnosis. This uses the hosted runner's
 Accessibility/automation permissions. A TCC denial is reported as a failure
 of this *workflow capability*, not misreported as a configuration pass. The
-script passed PowerShell static parsing and a synthetic path/JSONL assertion
-probe on Windows; **neither macOS architecture has run it yet**. Only the
-per-RID hosted report can establish runtime-path behavior on macOS.
+first hosted attempt ([run 36563945129](https://github.com/kleedaisuki/mote/actions/runs/36563945129))
+reached `default-off` on both architectures but stopped on a PowerShell
+StrictMode empty-array bug in the *test harness*. After the harness fix,
+[run 36564969673](https://github.com/kleedaisuki/mote/actions/runs/36564969673)
+and [run 36566797297](https://github.com/kleedaisuki/mote/actions/runs/36566797297),
+followed by [run 36567450134](https://github.com/kleedaisuki/mote/actions/runs/36567450134),
+each produced per-RID reports marked `passed` for **all five cases on both
+`osx-x64` and `osx-arm64`**. The downloaded reports are preserved beneath
+`.cache/ci-run-36564969673/`, `.cache/ci-run-36566797297/`, and
+`.cache/ci-run-36567450134/` in this workspace. In run 36566797297, both published directories contained only
+`mote`, and every case exited 0: default/off created no overridden home,
+disabled config left only `config.toml`, environment opt-in wrote under
+`traces/`, config opt-in wrote under `trace-custom/`, and malformed duplicate-key
+config fell back to `traces/`. Each traced case had five parseable JSONL
+records including `document.open_to_editable`; the workflow's path/content
+privacy assertions passed. The third run again passed all five cases; its
+Arm64 environment-opt-in case produced seven records rather than five, so
+record count is not a fixed contract. The run 36566797297 artifacts identify SHA-256
+`81FE41576ACE322051DE28CAF5A64B42378C912B8FBCE50C9DA02DBA6450EF21`
+for x64 and
+`B69803AA33D59F90830CF8F707E042250E65214DCD6323F79B2914979CC7FEC7`
+for Arm64. These findings verify runtime configuration and trace placement
+for those published binaries; cache/data writer routing remains untested
+because no current runtime writer uses those directories.
