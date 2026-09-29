@@ -196,7 +196,7 @@ internal static class MacCanvasClipboardProbe
                         _shell.ProbeInvokeMenu("moteSaveAs:");
                         _stage = 12;
                         break;
-                    case 12 when File.Exists(_output):
+                    case 12 when File.Exists(_output) && !_shell.ProbeCanvasIsModified:
                         _shell.ProbeInvokeMenu("moteSelectAll:");
                         _stage = 13;
                         break;

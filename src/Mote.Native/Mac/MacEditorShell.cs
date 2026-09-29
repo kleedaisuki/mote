@@ -47,6 +47,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private bool _closeApproved;
     private string _statusText = string.Empty;
     private string _canvasTitle = "mote";
+    private bool _canvasIsModified;
     private string _visibleText = string.Empty;
     private string _findQuery = string.Empty;
     private int _selectionAnchor;
@@ -316,6 +317,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public void SetCanvasChrome(string title, string status, bool isModified)
     {
         _canvasTitle = title;
+        _canvasIsModified = isModified;
         _statusText = status;
         if (_window == 0) return;
         ObjC.Send(_window, ObjC.Sel("setTitle:"), ObjC.String(title));
@@ -586,6 +588,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <summary>Current canvas input binding version for published-binary probes.</summary>
     internal long ProbeCanvasVersion => _pendingCanvasBinding?.BaseVersion ?? -1;
+
+    /// <summary>Controller's last projected dirty state in opt-in canvas mode.</summary>
+    internal bool ProbeCanvasIsModified => _canvasIsModified;
 
     /// <summary>Immutable engine snapshot currently bound to the canvas probe.</summary>
     internal Mote.Engine.TextSnapshot? ProbeCanvasSnapshot => _pendingCanvasBinding?.Snapshot;
