@@ -174,8 +174,40 @@ sets `MOTE_NATIVE_MAC_STAGE_TRACE=1`; the native shell's static, text-free
 `mote-mac-stage:` codes are preserved from stderr and copied into JSON. This
 can separate `keyDown`, prechange, `textDidChange`, diff/controller, fail-closed
 disable, and modal error stages without logging a key, document text, or path.
-The read-only observer extension and stage codes have **not yet been hosted**;
-do not classify the 50 MiB failure as an OOM/modal or a parsing regression.
+The [bounded diagnostic run `36597329870`](https://github.com/kleedaisuki/mote/actions/runs/36597329870)
+compiled the new Swift observer and made that distinction on macOS arm64. The
+1 MiB control and 100 MiB many-line cases again passed external X → exact
+Save → fresh reopen. Both traced `K0/K1 → T0/T1 → D0 → F0/F1/F2/F3 → D1/D2 →
+K2`: AppKit admitted the character, `textDidChange` ran, and the controller
+edit returned. The 50 MiB one-line case still **did not Save**. Its source AX
+proxy remained present and focused at the **unchanged** 52,428,800 UTF-16
+units (`labeledSourceCandidates=1`, `labeledSourceLength=52428800`), while the
+target-owned focused window changed from `AXStandardWindow` to **`AXDialog`**
+with empty title and `AXWindows=2`. The final native event sequence was
+`K0/K1 → T0/T2 → K2 → E0/E1`: the character reached AppKit's text-change
+admission hook, was **vetoed before `textDidChange` or controller edit**, and
+the error dialog entered its modal loop. There was no `D0`, `F2/F3`, or
+`E2`/modal return. This is neither a 25-second parse nor a demonstrated
+main-thread hang; the 73 read-only AX observations and live process were
+seeing a modal window after an intentional input rejection.
+
+The code-level mechanism is narrow. `MacEditorShell.MaxCanvasInputLength`
+passes `CanvasInputWindowSelector.MaxLength = 16,384` into the controller's
+binding selection. For a 50 MiB single ASCII line at caret zero, that selector
+can fill the native island with **exactly 16,384** units. After the routing
+challenge restored the source selection to `0/0`, inserting one `X` would make
+the host `16,384 − 0 + 1 = 16,385` units. `MacTextInputIsland.BeforeTextChange`
+rejects any result above its own `MaxInputLength = 16,384` and calls the error
+callback; the observed `T2` and `E1` sequence matches this path. The external
+observer did not directly read hidden-island length, so the exact `16,384`
+host occupancy is a **deterministic source-model inference**, not a separate
+AX measurement. A discriminating fix test is a 16,383-versus-16,384-unit
+single-line boundary edit, followed by the existing 50 MiB Save/reopen oracle.
+The likely design correction is to reserve edit/composition slack in the
+selected native window, not raise the hard 16 KiB host bound or silently
+discard user input. This has **not** been implemented by the benchmark; the
+long-line external edit remains a release gap until the Native owner fixes and
+revalidates it.
 
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS
