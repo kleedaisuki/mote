@@ -76,14 +76,18 @@ compositor presentation or measured frame latency. Selection painting is
 configured with CoreText's `kCTForegroundColorFromContextAttributeName =
 kCFBooleanTrue`: without it, CoreText's attributed-string default painted
 black glyphs despite the themed CGContext fill (observed in hosted arm64
-run 36557417180). The correction requires new target-host screenshot review.
+run 36557417180). The fix passed three-theme PNG contrast and visual review
+on both Mac Native AOT RIDs in
+[run 36558583763](https://github.com/kleedaisuki/mote/actions/runs/36558583763),
+and became a blocking read-only canvas gate in
+[run 36559682956](https://github.com/kleedaisuki/mote/actions/runs/36559682956).
 Selection geometry is
 single-rectangle-per-row and not yet correct for discontiguous bidirectional
 selections; grapheme snapping only sees a bounded slice, whose hidden prefix
 could begin inside a cluster. Horizontal trackpad scrolling and text input are
-not implemented. The custom view is read-only, and `NSTextView` remains the
-shipped editor. The new on-screen probe still needs macOS arm64/x64 Native AOT
-execution and visual inspection before calling this path verified.
+not implemented **in this read-only probe**. Its passing pixel/scroll fixture
+is not a timing, input, or IME result. The default shipped editor remains
+`NSTextView`; the separate opt-in interactive canvas below has its own gates.
 
 ## Primary API references
 
@@ -95,85 +99,73 @@ execution and visual inspection before calling this path verified.
 - [NSEvent scrollingDeltaY](https://developer.apple.com/documentation/appkit/nsevent/scrollingdeltay)
 - [kCTForegroundColorFromContextAttributeName](https://developer.apple.com/documentation/coretext/kctforegroundcolorfromcontextattributename)
 
-## Opt-in interactive input island (unverified)
+## Opt-in interactive canvas and input ribbon
 
-The experimental `--canvas-experimental` shell embeds a continuous, source-backed
-AppKit `NSView` in the existing editor window. A real, visible `NSTextView` inside
-an `NSScrollView` occupies only the active logical row and receives a single
-controller-supplied source window of at most 16 Ki UTF-16 units. It is not a
-hidden whole-document mirror. Off-host rows are read from immutable snapshots
-as bounded `ViewportSlice` values and shaped by CoreText. Wheel and pointer
-callbacks report source coordinates to the controller; semantic tokens are
-clipped to visible off-host rows and redrawn in theme policy colors. Bounded
-diagnostics receive severity-colored underlines or zero-width markers on
-those rows. The normal editor
-still uses its previous `NSTextView` path unless explicitly opted in.
+`mote --canvas-experimental [path]` is an explicit, reversible path; the default
+editor remains the established `NSTextView` shell. The experimental source body
+is one AppKit `NSView` that paints **every** visible logical row from bounded
+`CanvasFrame.RowWindows` with CoreText/CoreGraphics. A separate, always-visible
+36-DIP bottom ribbon contains a focused, plain-text `NSTextView` whose source
+window is at most 16 Ki UTF-16 units. It owns AppKit input, IME candidate
+position, and local undo-independent text composition, not a whole-file copy or
+a second rendered source row. The source body height is the physical canvas
+height minus the ribbon, floored at zero; a zero-height body publishes no
+visible source rows. The minimum window size keeps an ordinary usable body,
+while programmatic tiny resize is still handled without hiding first
+responder. Source panning never moves or rebinds the ribbon during marked text.
 
-Each final native text change is converted by `NativeTextProjection` to one
-absolute source `TextChange` tagged with document generation, snapshot version,
-and binding nonce. The synchronous controller event must either publish a new
-binding before returning or reject the operation; a reentrant binding is
-applied only after the current AppKit delegate callback unwinds. Marked text
-stays in AppKit: candidate text is not submitted, input rebinds are rejected,
-theme changes are deferred, and save/open/close synchronously unmark and settle
-the final text or veto the command. Global selection outside the host replaces
-the controller's full source interval rather than only the local text range.
-The `shouldChangeTextInRange:replacementString:` delegate captures the exact
-native pre-edit range. For selected text, the inserted payload is reconstructed
-from the unchanged prefix/suffix of the before/after host strings; using the
-minimal-difference inserted text would corrupt repeated-text cases such as
-`abc`, select `ab`, type `a` (correct result: `ac`). A failed exact mapping or
-controller acknowledgement restores the canonical host; an unexpected AppKit
-callback failure disables/hides input rather than leaving a divergent editor.
-Backspace/Forward Delete on a global selection dispatches one absolute source
-deletion before AppKit's page-local command runs. This covers selections ending
-on an empty LF/CRLF row, where the native host has no characters and would
-emit no `textDidChange`; a dedicated AppKit probe tests both selection
-directions and both line-ending spellings.
-The native host has no directional selection API, so a reverse global selection
-is projected only as an ordered local range. Delayed AppKit notifications from
-this programmatic range must not overwrite the controller's `(anchor, active)`;
-only a one-shot `keyDown:`/`mouseDown:`/`mouseDragged:` user gesture authorizes
-native caret feedback. Probe telemetry records both the global and native
-ranges plus the echo/user-event counts. After two failed re-projections of a
-native echo, the third mismatch visibly disables/hides input rather than
-allowing a divergent selected range; the LF/CRLF hosted probe injects this
-fail-closed case after testing both deletion directions. Accessibility-origin selection outside
-these gestures is a separate acceptance gate, not silently claimed supported.
-The host is plain-text-only. Its custom AppKit `paste:` and
-`pasteAsPlainText:` methods preflight the OS pasteboard's plain-text UTF-16
-length before insertion. Small pastes use native input; a larger plain-text
-paste becomes one exact absolute controller edit without ever entering the
-bounded host. Rich formatting is ignored. An impossible resulting Int32 source
-length or rich-only
-clipboard is rejected visibly without partial insertion.
-These paths still need target-host mixed-format/large-payload testing.
-The same pre-change delegate rejects any non-paste input that would exceed the
-bound, with a visible explanation; real IME preedit behavior near the bound
-still requires interactive testing. The published-binary in-process clipboard
-probe exercises mixed rich/plain 40 Ki direct paste and 50 MiB plain direct
-paste with full source verification, Undo and Redo on both, bounded host
-retention, no-edit Select All→Save/Close, exact selected repeated-text
-replacement, and small accepted Save As/reopen. Immutable rope-root history
-retains an undoable 50 MiB transaction without copying another 50 MiB inverse
-string; per-stage elapsed and working-set metrics are written under repository
-`.cache/ci-inventory/<rid>/` by this diagnostic, not by ordinary editing.
-During a window resize under marked text, only the existing host frame moves
-to keep AppKit's candidate rectangle attached; viewport reflow is delivered
-after composition settles. Real CJK candidate positioning remains a gate.
-When composition returns the original host string under a nonempty global
-selection, the current shell conservatively treats it as cancellation rather
-than deleting off-host text: it cannot distinguish an identical final IME
-candidate from cancel using text equality alone. A real CJK commit/cancel test
-and explicit final `insertText:replacementRange:` evidence are required before
-claiming semantic parity for this case; `unmarkText` alone is not proof.
+The controller supplies generation-, snapshot-version-, and nonce-tagged input
+bindings. The island converts a final native edit into one absolute source
+`TextChange` and emits it synchronously; the controller must validate and
+publish a new binding before the next input. The `NSTextView` pre-change
+delegate captures the exact replacement range, since a minimal text diff does
+not preserve selected repeated-text payloads (`abc`, select `ab`, type `a`
+must yield `ac`). Global deletion also bypasses a native no-op when the active
+end is an empty LF/CRLF row. Delayed selection notifications can only override
+a global source selection when armed by a real native user gesture; repeated
+unreconcilable echoes disable the host rather than allowing silent divergence.
+Large plain-text paste is committed directly to the engine without growing the
+bounded host; rich formatting is ignored. Native marked text remains
+AppKit-owned, with binding/theme/ribbon movement deferred until composition
+settles or save/open/new/close is vetoed. A same-text IME commit versus cancel
+under an off-host global selection is still an explicit real-CJK acceptance
+gate.
 
-This path is **not yet product-ready**. In particular, this code has not passed
-target-host interactive open/edit/undo/save/reopen, real Chinese/Japanese/Korean
-IME candidate/cancel tests, or VoiceOver review. The native input host exposes
-only its bounded row through AppKit accessibility; document-wide accessibility
-semantics require a separate design. The opaque caret-row `NSTextView` currently
-uses the base theme foreground, so its local row lacks per-token colors and
-inline diagnostic underlines; preview/status still expose diagnostics. Do not
-infer any of these behaviors from the read-only
-canvas PNG probe.
+The source body uses one left-edge transform for CoreText painting, selected
+foreground/background, semantic colors, diagnostic marks, caret geometry, and
+pointer hit-testing. Horizontal wheel deltas request a versioned source-bound
+anchor; no 50 MiB line is shaped. Geometry returns unknown instead of claiming
+visibility at ambiguous grapheme/bidirectional or hidden-suffix boundaries.
+The ribbon caret uses its own TextKit/NSClipView geometry and is deliberately
+**not** compared to the CoreText source-row X coordinate. AX exposes one
+source-backed text area with a parent-space frame equal to the body rectangle,
+excluding the input ribbon; the focused `NSTextView` remains usable for OS
+input. This is API-level accessibility, not VoiceOver acceptance.
+
+### Current target-host verdict
+
+- [Run 36591084601](https://github.com/kleedaisuki/mote/actions/runs/36591084601)
+  restored macOS arm64 opt-in startup after an ABI fault: `NSFont
+  fontWithName:size:` requires an Objective-C object pointer followed by a
+  `CGFloat`. The generic two-double `objc_msgSend` signature put the NSString
+  pointer in a floating-point register on arm64 and caused a native crash.
+  `ObjC.SendObjectDouble(nint,nint,nint,double)` now expresses the exact ABI;
+  the blank GUI and small clipboard LLDB probes no longer receive a signal.
+  Both macOS RIDs passed the strict mixed 40 Ki / 50 MiB clipboard, LF/CRLF
+  selection-delete, and in-process AX workflows in this run. Those probes do
+  not emulate a physical trackpad, actual CJK IME, or a screen reader.
+- The horizontal AppKit diagnostic generated distinct before/after PNGs for a
+  source offset at 3000 in a 16 Ki row and an offset at 40 MiB in a 50 MiB row,
+  with bounded 16 Ki source slices, source hit-test, and global copy. It is
+  **not yet passing end-to-end in run 36591084601**: after New and native
+  insertion of `abc`, the source caret at offset 0 lay at local X = -11.480
+  DIP although the ribbon was visible, aligned, and first responder. The
+  then-current viewport right-transformed an empty line's horizontal left
+  edge from 0 to 3 on insertion. A left-affine horizontal-edge correction is
+  now implemented, with pure-model regression tests; its published AOT
+  x64/arm64 AppKit result remains pending. The screenshot/caret assertion is
+  unchanged.
+- External native keyboard/save routing, real CJK candidate/commit/cancel and
+  resize behavior, VoiceOver navigation, bidirectional selection geometry,
+  and practical latency remain release gates. Do not infer product parity from
+  in-process AppKit selectors or PNG capture alone.
