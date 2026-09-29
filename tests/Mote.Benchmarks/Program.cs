@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mote.Engine;
 using Mote.Formats;
 
@@ -10,7 +11,7 @@ namespace Mote.Benchmarks;
 /// <summary>Measures representative open/edit/analyze operations without a CI timing gate.</summary>
 internal static class Program
 {
-    /// <summary>Runs one reproducible synthetic Markdown workload and writes JSONL results.</summary>
+    /// <summary>Runs one process-isolated synthetic workload and writes a versioned JSONL result.</summary>
     private static async Task<int> Main(string[] args)
     {
         if (args.Length is < 1 or > 2 || !int.TryParse(args[0], out var sizeMiB) || sizeMiB is < 1 or > 512 ||
@@ -34,11 +35,30 @@ internal static class Program
             stopwatch.Stop();
             var openMs = stopwatch.Elapsed.TotalMilliseconds;
 
+            using var process = Process.GetCurrentProcess();
+            process.Refresh();
+            var originalLength = document.Snapshot.Length;
+            var workingSetAfterOpen = process.WorkingSet64;
             var snapshot = document.Snapshot;
             stopwatch.Restart();
             document.Apply(new TextChange(snapshot.Length - 1, 0, "edited "));
             stopwatch.Stop();
-            var editMs = stopwatch.Elapsed.TotalMilliseconds;
+            var editEndMs = stopwatch.Elapsed.TotalMilliseconds;
+
+            snapshot = document.Snapshot;
+            stopwatch.Restart();
+            document.Apply(new TextChange(Math.Min(64, snapshot.Length), 0, "edited "));
+            stopwatch.Stop();
+            var editStartMs = stopwatch.Elapsed.TotalMilliseconds;
+
+            snapshot = document.Snapshot;
+            stopwatch.Restart();
+            document.Apply(new TextChange(snapshot.Length / 2, 0, "edited "));
+            stopwatch.Stop();
+            var editMiddleMs = stopwatch.Elapsed.TotalMilliseconds;
+            process.Refresh();
+            var workingSetAfterEdits = process.WorkingSet64;
+            var privateBytesAfterEdits = process.PrivateMemorySize64;
 
             double? analyzeMs = null;
             int? topLevelNodes = null;
@@ -52,13 +72,15 @@ internal static class Program
                 topLevelNodes = analysis.Root.Children.Count;
                 diagnosticCount = analysis.Diagnostics.Count;
             }
-            using var process = Process.GetCurrentProcess();
+            process.Refresh();
             var result = new BenchmarkResult(
                 DateTimeOffset.UtcNow, mode, sizeMiB, document.Snapshot.Length, RuntimeInformation.OSDescription,
                 RuntimeInformation.ProcessArchitecture.ToString(), Environment.Version.ToString(),
-                Environment.ProcessorCount, openMs, editMs, analyzeMs, process.PeakWorkingSet64,
-                topLevelNodes, diagnosticCount);
-            var json = JsonSerializer.Serialize(result);
+                Environment.ProcessorCount, openMs, editEndMs, analyzeMs, process.PeakWorkingSet64,
+                topLevelNodes, diagnosticCount, 2, originalLength, editStartMs, editMiddleMs,
+                editEndMs, workingSetAfterOpen, workingSetAfterEdits,
+                privateBytesAfterEdits);
+            var json = JsonSerializer.Serialize(result, BenchmarkJsonContext.Default.BenchmarkResult);
             await File.AppendAllTextAsync(Path.Combine(resultDirectory, "results.jsonl"), json + "\n");
             Console.WriteLine(json);
             return 0;
@@ -94,11 +116,17 @@ internal static class Program
             await stream.WriteAsync(batch.AsMemory(0, (int)Math.Min(batch.Length, targetBytes - stream.Length)));
         await stream.FlushAsync();
     }
-
-    /// <summary>One JSONL row containing workload, environment, timings, and process memory.</summary>
-    private sealed record BenchmarkResult(
-        DateTimeOffset TimestampUtc, string Mode, int RequestedMiB, int TextLengthUtf16, string Os,
-        string Architecture, string DotNetVersion, int LogicalProcessors,
-        double OpenMs, double EditMs, double? AnalyzeMs, long PeakWorkingSetBytes,
-        int? TopLevelNodes, int? DiagnosticCount);
 }
+
+/// <summary>Versioned process-level open/edit result; original fields remain for prior readers.</summary>
+internal sealed record BenchmarkResult(
+    DateTimeOffset TimestampUtc, string Mode, int RequestedMiB, int TextLengthUtf16, string Os,
+    string Architecture, string DotNetVersion, int LogicalProcessors,
+    double OpenMs, double EditMs, double? AnalyzeMs, long PeakWorkingSetBytes,
+    int? TopLevelNodes, int? DiagnosticCount, int SchemaVersion, int OriginalLengthUtf16,
+    double EditStartMs, double EditMiddleMs, double EditEndMs,
+    long WorkingSetAfterOpenBytes, long WorkingSetAfterEditsBytes, long PrivateBytesAfterEdits);
+
+/// <summary>Static serializer metadata so the same benchmark also runs as Native AOT.</summary>
+[JsonSerializable(typeof(BenchmarkResult))]
+internal partial class BenchmarkJsonContext : JsonSerializerContext;
