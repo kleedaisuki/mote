@@ -73,13 +73,16 @@ internal static class Program
                 diagnosticCount = analysis.Diagnostics.Count;
             }
             process.Refresh();
+            var peakWorkingSet = process.PeakWorkingSet64;
+            long? observedPeak = peakWorkingSet > 0 ? peakWorkingSet : null;
+            long? observedPrivate = privateBytesAfterEdits > 0 ? privateBytesAfterEdits : null;
             var result = new BenchmarkResult(
                 DateTimeOffset.UtcNow, mode, sizeMiB, document.Snapshot.Length, RuntimeInformation.OSDescription,
                 RuntimeInformation.ProcessArchitecture.ToString(), Environment.Version.ToString(),
-                Environment.ProcessorCount, openMs, editEndMs, analyzeMs, process.PeakWorkingSet64,
-                topLevelNodes, diagnosticCount, 2, originalLength, editStartMs, editMiddleMs,
+                Environment.ProcessorCount, openMs, editEndMs, analyzeMs, observedPeak,
+                topLevelNodes, diagnosticCount, 3, originalLength, editStartMs, editMiddleMs,
                 editEndMs, workingSetAfterOpen, workingSetAfterEdits,
-                privateBytesAfterEdits);
+                observedPrivate);
             var json = JsonSerializer.Serialize(result, BenchmarkJsonContext.Default.BenchmarkResult);
             await File.AppendAllTextAsync(Path.Combine(resultDirectory, "results.jsonl"), json + "\n");
             Console.WriteLine(json);
@@ -119,13 +122,14 @@ internal static class Program
 }
 
 /// <summary>Versioned process-level open/edit result; original fields remain for prior readers.</summary>
+/// <remarks>Peak and private bytes are null when the platform runtime reports zero/unavailable.</remarks>
 internal sealed record BenchmarkResult(
     DateTimeOffset TimestampUtc, string Mode, int RequestedMiB, int TextLengthUtf16, string Os,
     string Architecture, string DotNetVersion, int LogicalProcessors,
-    double OpenMs, double EditMs, double? AnalyzeMs, long PeakWorkingSetBytes,
+    double OpenMs, double EditMs, double? AnalyzeMs, long? PeakWorkingSetBytes,
     int? TopLevelNodes, int? DiagnosticCount, int SchemaVersion, int OriginalLengthUtf16,
     double EditStartMs, double EditMiddleMs, double EditEndMs,
-    long WorkingSetAfterOpenBytes, long WorkingSetAfterEditsBytes, long PrivateBytesAfterEdits);
+    long WorkingSetAfterOpenBytes, long WorkingSetAfterEditsBytes, long? PrivateBytesAfterEdits);
 
 /// <summary>Static serializer metadata so the same benchmark also runs as Native AOT.</summary>
 [JsonSerializable(typeof(BenchmarkResult))]
