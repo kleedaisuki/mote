@@ -107,8 +107,9 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
     internal void Detach() => _core.Detach();
 
     /// <summary>
-    /// Checks the input HWND's GUI thread, not the possibly different COM
-    /// callback thread. A failed query must not claim logical focus.
+    /// Checks both global foreground ownership and the input HWND's GUI thread,
+    /// not the possibly different COM callback thread. A background editor may
+    /// retain thread-local focus, but must not claim global UIA focus.
     /// </summary>
     internal bool InputHasFocus
     {
@@ -117,10 +118,24 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
             if (_inputHwnd == 0) return false;
             var thread = GetWindowThreadProcessId(_inputHwnd, 0);
             if (thread == 0) return false;
+            var foreground = GetForegroundWindow();
+            if (foreground == 0 || GetWindowThreadProcessId(foreground, 0) != thread)
+                return false;
             var info = new UiaGuiThreadInfo { Size = (uint)Marshal.SizeOf<UiaGuiThreadInfo>() };
-            return GetGUIThreadInfo(thread, ref info) && info.Focus == _inputHwnd;
+            return GetGUIThreadInfo(thread, ref info) &&
+                FocusMatchesForeground(thread,
+                    GetWindowThreadProcessId(GetForegroundWindow(), 0), _inputHwnd, info.Focus);
         }
     }
+
+    /// <summary>
+    /// Pure focus decision for tests: local input focus is not global focus
+    /// while another GUI thread owns the foreground window.
+    /// </summary>
+    internal static bool FocusMatchesForeground(uint inputThread, uint foregroundThread,
+        nint inputHwnd, nint focusedHwnd) =>
+        inputThread != 0 && inputThread == foregroundThread &&
+        inputHwnd != 0 && focusedHwnd == inputHwnd;
 
     /// <summary>Gets the canvas rectangle for both the Pane and logical Document.</summary>
     internal UiaRect CanvasBounds
@@ -268,6 +283,8 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetGUIThreadInfo(uint threadId, ref UiaGuiThreadInfo info);
+    [LibraryImport("user32.dll")]
+    private static partial nint GetForegroundWindow();
     [LibraryImport("kernel32.dll")]
     private static partial uint GetCurrentThreadId();
 }

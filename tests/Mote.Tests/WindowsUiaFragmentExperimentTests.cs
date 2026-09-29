@@ -107,7 +107,17 @@ public sealed class WindowsUiaFragmentExperimentTests
                 new AccessibleDocument(new AccessibleCanvasState(9, source.Snapshot, frame)),
                 new ViewportStub());
             var root = new UiaFragmentRootObject(core, hwnd);
+            var ownerThread = GetWindowThreadProcessId(hwnd, 0);
+            Assert.NotEqual(0u, ownerThread);
+            Assert.NotEqual(ownerThread, GetCurrentThreadId());
+            Assert.True(UiaFragmentRootObject.FocusMatchesForeground(
+                ownerThread, ownerThread, hwnd, hwnd));
+            Assert.False(UiaFragmentRootObject.FocusMatchesForeground(
+                ownerThread, GetCurrentThreadId(), hwnd, hwnd));
+            Assert.False(UiaFragmentRootObject.FocusMatchesForeground(
+                ownerThread, ownerThread, hwnd, 0));
             Assert.Equal(WindowsTextResult.UIA_E_INVALIDOPERATION, root.SetFocus());
+            // A real message-only HWND cannot own the foreground desktop.
             Assert.False(root.InputHasFocus);
         }
         finally { release.Set(); await owner; }
@@ -155,6 +165,10 @@ public sealed class WindowsUiaFragmentExperimentTests
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DestroyWindow(nint hwnd);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hwnd, nint processId);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
     private sealed class ViewportStub : IAccessibleViewport
     {
