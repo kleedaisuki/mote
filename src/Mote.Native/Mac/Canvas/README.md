@@ -175,14 +175,22 @@ input. This is API-level accessibility, not VoiceOver acceptance.
   Mac RIDs after separating the 8 Ki requested input binding from the 16 Ki
   native hard cap. At the start of the 50 MiB single-line document, an actual
   `NSTextView insertText:replacementRange:` call inserted one character into
-  the canonical source; mote's Undo command restored the original length and remote
-  marker before the 40 MiB pan, hit-test, selection/copy, four PNG, tiny-body,
+  the canonical source; mote's Undo command restored the original length and
+  remote marker before the 40 MiB pan, hit-test, selection/copy, four PNG, tiny-body,
   and source-file SHA checks all passed. The adapter now rejects any incoming
   normal binding larger than 8 Ki, so a future controller change cannot
   silently refill the native host to its pre-change limit. This closes the
-  prior **in-process** ordinary-insert veto, not external keyboard routing or
-  real CJK marked-text behavior.
-- External long-line keyboard/save routing, real CJK candidate/commit/cancel
-  and resize behavior, VoiceOver navigation, bidirectional selection geometry,
-  and practical latency remain release gates. Do not infer product parity from
-  in-process AppKit selectors or PNG capture alone.
+  prior **in-process** ordinary-insert veto, not by itself external keyboard
+  routing or real CJK marked-text behavior.
+- The separate, non-gating **external** System Events + AX workflow in the
+  same run passed once on `osx-arm64` for a 50 MiB single line: after verified
+  same-process focus and selection, one keyboard `X` changed the source AX
+  count from 52,428,800 to 52,428,801, showed the dirty marker, then native
+  Save and a fresh process reopen checked exact bytes. Its privacy-safe trace
+  includes pre-change allow (`T1`) and synchronous controller commit
+  (`F2`/`F3`), rather than the old `T2` veto/AX dialog. This does **not**
+  establish external long-line behavior on `osx-x64` or other input methods.
+- Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
+  bidirectional selection geometry, and practical latency remain release
+  gates. Do not infer product parity from an in-process AppKit selector or PNG
+  capture alone.
