@@ -7,6 +7,25 @@ namespace Mote.Native.Windows.Accessibility;
 [StructLayout(LayoutKind.Sequential)]
 internal readonly record struct UiaRect(double Left, double Top, double Width, double Height);
 
+/// <summary>Windows SDK UIA property identifiers used by this diagnostic fragment.</summary>
+internal static class UiaFragmentPropertyId
+{
+    /// <summary>The element's semantic control type.</summary>
+    internal const int ControlType = 30003;
+    /// <summary>The element's accessible name.</summary>
+    internal const int Name = 30005;
+    /// <summary>Whether this element currently owns keyboard focus.</summary>
+    internal const int HasKeyboardFocus = 30008;
+    /// <summary>Whether this element can receive keyboard focus.</summary>
+    internal const int IsKeyboardFocusable = 30009;
+    /// <summary>The stable automation identity of the logical document.</summary>
+    internal const int AutomationId = 30011;
+    /// <summary>Whether this element belongs to UIA ControlView.</summary>
+    internal const int IsControlElement = 30016;
+    /// <summary>Whether this element belongs to UIA ContentView.</summary>
+    internal const int IsContentElement = 30017;
+}
+
 /// <summary>The IRawElementProviderFragment IUnknown vtable, independent of Simple.</summary>
 [GeneratedComInterface]
 [Guid("f7063da8-8359-439c-9297-bbc5299a7d87")]
@@ -163,18 +182,21 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
     {
         value = default;
         if (!_core.IsAttached) return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE;
-        if (propertyId == 30003) { value.Type = 3; value.Integer = 50033; }
-        else if (propertyId == 30005)
+        if (propertyId == UiaFragmentPropertyId.ControlType)
+        { value.Type = 3; value.Integer = 50033; }
+        else if (propertyId == UiaFragmentPropertyId.Name)
         {
             value.Type = 8;
             value.Pointer = Marshal.StringToBSTR("Mote canvas");
         }
-        else if (propertyId is 30016 or 30009)
+        else if (propertyId is UiaFragmentPropertyId.HasKeyboardFocus or
+            UiaFragmentPropertyId.IsKeyboardFocusable or
+            UiaFragmentPropertyId.IsControlElement or UiaFragmentPropertyId.IsContentElement)
         {
             value.Type = 11;
-            value.Integer = propertyId == 30016 ? -1 : 0;
+            // The canvas Pane itself never accepts input focus or content.
+            value.Integer = propertyId == UiaFragmentPropertyId.IsControlElement ? -1 : 0;
         }
-        else if (propertyId == 30017) value.Type = 11;
         return 0;
     }
 
@@ -326,21 +348,26 @@ internal sealed partial class UiaFragmentDocumentObject : IRawElementProviderSim
     {
         value = default;
         if (!_core.IsAttached) return WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE;
-        if (propertyId == 30003) { value.Type = 3; value.Integer = 50030; }
-        else if (propertyId == 30005)
+        if (propertyId == UiaFragmentPropertyId.ControlType)
+        { value.Type = 3; value.Integer = 50030; }
+        else if (propertyId == UiaFragmentPropertyId.Name)
         {
             value.Type = 8;
             value.Pointer = Marshal.StringToBSTR("Mote editor");
         }
-        else if (propertyId == 30011)
+        else if (propertyId == UiaFragmentPropertyId.AutomationId)
         {
             value.Type = 8;
             value.Pointer = Marshal.StringToBSTR("mote.source.document");
         }
-        else if (propertyId is 30016 or 30017 or 30009)
+        else if (propertyId is UiaFragmentPropertyId.HasKeyboardFocus or
+            UiaFragmentPropertyId.IsKeyboardFocusable or
+            UiaFragmentPropertyId.IsControlElement or UiaFragmentPropertyId.IsContentElement)
         {
             value.Type = 11;
-            value.Integer = propertyId == 30009 ? (_root.InputHasFocus ? -1 : 0) : -1;
+            // Focus state and focus capability are different UIA properties.
+            value.Integer = propertyId == UiaFragmentPropertyId.HasKeyboardFocus
+                ? (_root.InputHasFocus ? -1 : 0) : -1;
         }
         return 0;
     }

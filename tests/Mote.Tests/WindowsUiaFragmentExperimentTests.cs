@@ -119,8 +119,26 @@ public sealed class WindowsUiaFragmentExperimentTests
             Assert.Equal(WindowsTextResult.UIA_E_INVALIDOPERATION, root.SetFocus());
             // A real message-only HWND cannot own the foreground desktop.
             Assert.False(root.InputHasFocus);
+            AssertFocusProperties(root, isKeyboardFocusable: false);
+            AssertFocusProperties(root.Document, isKeyboardFocusable: true);
         }
         finally { release.Set(); await owner; }
+    }
+
+    private static void AssertFocusProperties(object provider, bool isKeyboardFocusable)
+    {
+        var simple = UiaComInterface.Pointer(provider, typeof(IRawElementProviderSimpleAbi).GUID);
+        try
+        {
+            var property = Marshal.GetDelegateForFunctionPointer<PropertyDelegate>(Slot(simple, 5));
+            Assert.Equal(0, property(simple, 30008, out var focused));
+            Assert.Equal((ushort)11, focused.Type); // UIA_HasKeyboardFocusPropertyId, VT_BOOL.
+            Assert.Equal(0, focused.Integer);
+            Assert.Equal(0, property(simple, 30009, out var focusable));
+            Assert.Equal((ushort)11, focusable.Type); // UIA_IsKeyboardFocusablePropertyId.
+            Assert.Equal(isKeyboardFocusable ? -1 : 0, focusable.Integer);
+        }
+        finally { Marshal.Release(simple); }
     }
 
     private static void AssertSourceTextAndIdentity(nint childSimple, WindowsTextProviderCore core)
