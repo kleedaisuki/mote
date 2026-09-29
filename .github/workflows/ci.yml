@@ -196,6 +196,28 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Native GUI smoke exited with code $($process.ExitCode): $(Get-Content '.temp/ci-smoke/ui-stderr.txt' -Raw)" }
           if ($output.Trim() -ne 'mote-native-gui-ready') { throw "Unexpected native GUI smoke output: $output" }
           Write-Host "Native GUI initialized and closed cleanly: $executable"
+      # This opt-in read-only canvas is not the default editor. Retain the report
+      # and real view PNGs even on failure; promote only after target-OS review.
+      - name: Diagnose on-screen read-only canvas (non-gating)
+        shell: pwsh
+        timeout-minutes: 12
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          & ./tests/NativeCanvasWindowWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name" `
+            -RuntimeIdentifier $rid
+      - name: Upload on-screen canvas diagnostic and PNGs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canvas-window-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/canvas-window.json
+            .cache/canvas-window/${{ matrix.rid }}/**
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify real Win32 open-edit-save-reopen workflow
         if: startsWith(matrix.rid, 'win-')
         shell: pwsh

@@ -43,26 +43,36 @@ New-Item -ItemType Directory -Force $scratch, $captureRoot, (Split-Path $reportP
 $many = Join-Path $scratch 'many-unicode.txt'
 $long = Join-Path $scratch 'long-latin.txt'
 $exe = [IO.Path]::GetFullPath($ExecutablePath)
+$sourceRowLength = ("canvas 0000 你好 אבג 👩‍💻 Z`r`n").Length
 
-# Write byte-exact corpora with constant memory. Repeated CJK/RTL/ZWJ rows put
-# real fallback and bidirectional text around the old 64 Ki source seam.
+# Write byte-exact corpora with constant memory. Fixed-width ordinals ensure
+# screenshots at different scroll positions differ, while CJK/RTL/ZWJ rows put
+# fallback and bidirectional text around the old 64 Ki source seam.
 function Write-ManyLines {
     param([string] $Path)
     $target = 100L * 1024 * 1024
-    $row = "canvas 你好 אבג 👩‍💻 Z`r`n"
     $encoding = [Text.UTF8Encoding]::new($false, $true)
-    $rowBytes = $encoding.GetBytes($row)
-    $block = [byte[]]::new($rowBytes.Length * 1024)
-    for ($i = 0; $i -lt 1024; $i++) {
-        [Array]::Copy($rowBytes, 0, $block, $i * $rowBytes.Length, $rowBytes.Length)
+    $rows = @()
+    for ($i = 0; $i -lt 2048; $i++) {
+        $rows += ,$encoding.GetBytes(('canvas {0:D4} 你好 אבג 👩‍💻 Z' -f $i) + "`r`n")
+    }
+    $rowLength = $rows[0].Length
+    if (@($rows | Where-Object Length -ne $rowLength).Count -ne 0) {
+        throw 'Fixed-width canvas row assumption failed.'
+    }
+    $block = [byte[]]::new($rowLength * $rows.Count)
+    for ($i = 0; $i -lt $rows.Count; $i++) {
+        [Array]::Copy($rows[$i], 0, $block, $i * $rowLength, $rowLength)
     }
     $stream = [IO.File]::Create($Path)
     try {
         while ($stream.Position + $block.Length -le $target) {
             $stream.Write($block, 0, $block.Length)
         }
-        while ($stream.Position + $rowBytes.Length -le $target) {
-            $stream.Write($rowBytes, 0, $rowBytes.Length)
+        $row = 0
+        while ($stream.Position + $rowLength -le $target) {
+            $stream.Write($rows[$row], 0, $rowLength)
+            $row++
         }
         $remain = [int]($target - $stream.Position)
         if ($remain -gt 0) {
@@ -141,6 +151,11 @@ try {
             $slice -lt 1 -or $slice -gt 16384 -or $hits -lt 2 -or $count -lt 2) {
             throw "Canvas geometry contract failed: $outputText"
         }
+        $beforeOrdinal = [int][Math]::Floor($before / $sourceRowLength) % 2048
+        $afterOrdinal = [int][Math]::Floor($after / $sourceRowLength) % 2048
+        if ($beforeOrdinal -eq $afterOrdinal) {
+            throw "Canvas fixture did not distinguish the scroll endpoints: $outputText"
+        }
         $pngs = @(Get-ChildItem -LiteralPath $output -Filter '*.png' -File)
         if ($pngs.Count -ne $count) { throw "Canvas screenshot count disagrees with marker: $outputText" }
         foreach ($png in $pngs) {
@@ -155,9 +170,24 @@ try {
             }
             finally { $stream.Dispose() }
         }
+        $beforeName = if ($IsWindows) { 'many-before.png' } else { "mac-canvas-many-before-$theme.png" }
+        $afterName = if ($IsWindows) { 'many-after-wheel.png' } else { "mac-canvas-many-after-$theme.png" }
+        $beforePng = Join-Path $output $beforeName
+        $afterPng = Join-Path $output $afterName
+        if (-not (Test-Path -LiteralPath $beforePng -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $afterPng -PathType Leaf)) {
+            throw 'Canvas before/after scroll screenshots are missing.'
+        }
+        $beforeHash = (Get-FileHash -LiteralPath $beforePng -Algorithm SHA256).Hash
+        $afterHash = (Get-FileHash -LiteralPath $afterPng -Algorithm SHA256).Hash
+        if ($beforeHash -ceq $afterHash) {
+            throw 'Canvas source anchor moved, but before/after PNGs are identical.'
+        }
         $result.themes += [ordered]@{
             id = $theme
             marker = $outputText
+            expected_top_row_before = ('canvas {0:D4}' -f $beforeOrdinal)
+            expected_top_row_after = ('canvas {0:D4}' -f $afterOrdinal)
             screenshot_count = $pngs.Count
             screenshot_sha256 = @($pngs | Sort-Object Name | ForEach-Object {
                 [ordered]@{ name = $_.Name; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
