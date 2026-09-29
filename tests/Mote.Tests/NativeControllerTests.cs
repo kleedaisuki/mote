@@ -668,6 +668,52 @@ public sealed class NativeControllerTests
             a.DiagnosticsSummary != "No diagnostics.");
     }
 
+    /// <summary>Idle YAML Full analysis promotes exact off-page diagnostics without blocking its visible page.</summary>
+    [Fact]
+    public async Task Controller_idle_yaml_full_pass_promotes_exact_offscreen_diagnostic()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("idle.yaml");
+        var source = "0xB: a\n" + string.Concat(Enumerable.Repeat("# padding\n", 220_000)) + "11: b\n";
+        await File.WriteAllTextAsync(path, source);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve);
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.Document?.TotalLength == source.Length);
+        await shell.PumpUntilAsync(() => shell.Analysis?.Status.Contains("YAML · Provisional · v0") == true);
+        Assert.True(shell.Document!.Text.Length < source.Length);
+        await shell.PumpUntilAsync(() => shell.Analysis?.Status.Contains("YAML · Complete · v0") == true);
+        Assert.Contains("1 document diagnostics", shell.Analysis!.DiagnosticsSummary,
+            StringComparison.Ordinal);
+        Assert.Contains("none in displayed viewport", shell.Analysis.DiagnosticsSummary,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>An uncertifiable idle TOML Full pass keeps the visible presentation intact.</summary>
+    [Fact]
+    public async Task Controller_idle_toml_provisional_full_pass_preserves_visible_facts()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("idle.toml");
+        var value = new string('x', 100);
+        var source = "title = 'start'\n" + string.Concat(Enumerable.Range(0, 40_000)
+            .Select(index => $"k{index:D5} = '{value}'\n")) +
+            "[[items]]\nname = 'x'\n[[items.child]]\ny = 1\n";
+        await File.WriteAllTextAsync(path, source);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve);
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.Document?.TotalLength == source.Length);
+        await shell.PumpUntilAsync(() => shell.Analysis?.Status.Contains("TOML · Provisional · v0") == true);
+        var visible = shell.Analysis!;
+        await shell.PumpUntilAsync(() => shell.Analysis?.Status.Contains("Full pass Provisional") == true);
+        Assert.Contains("global diagnostics unknown", shell.Analysis!.Status,
+            StringComparison.Ordinal);
+        Assert.Equal(visible.DiagnosticsSummary, shell.Analysis.DiagnosticsSummary);
+        Assert.Equal(visible.PreviewText, shell.Analysis.PreviewText);
+        Assert.Equal(visible.Tokens, shell.Analysis.Tokens);
+    }
+
     /// <summary>Builds a controller with project-local, side-effect-free configuration.</summary>
     private static NativeEditorController NewController(FakeShell shell, string userHome, string? path)
     {
