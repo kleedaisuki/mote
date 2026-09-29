@@ -43,6 +43,13 @@ internal static class MacOnScreenCanvasNative
     internal readonly record struct Affine(double A, double B, double C,
         double D, double Tx, double Ty);
 
+    /// <summary>Objective-C super dispatch starts lookup at NSTextView.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal readonly record struct Super(nint Receiver, nint Superclass);
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSendSuper")]
+    internal static extern void SendSuper(ref Super receiver, nint selector, nint eventObject);
+
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern ObjC.Point SendPoint(nint receiver, nint selector);
 

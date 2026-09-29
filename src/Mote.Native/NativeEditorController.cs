@@ -17,10 +17,6 @@ internal sealed class NativeEditorController : IDisposable
     internal const int PageSize = 64 * 1024;
     internal const int PageSlack = 8 * 1024;
     private const int FullAnalysisLimit = 2 * 1024 * 1024;
-    // Document currently budgets undo by inserted+removed UTF-16 bytes. Until
-    // persistent-root history makes large edits reversible, never accept an
-    // island edit whose newest history entry would be discarded immediately.
-    private const long CanvasUndoBudgetBytes = 32L * 1024 * 1024;
     private readonly INativeEditorShell _shell;
     private readonly INativeCanvasShell? _canvasShell;
     private readonly MoteConfiguration _configuration;
@@ -565,15 +561,6 @@ internal sealed class NativeEditorController : IDisposable
               (long)change.Start + change.DeleteLength > _canvasInputEnd)))
         {
             _shell.ShowError("The native input could not be mapped to the document safely.");
-            _canvasBoundVersion = -1;
-            ShowDocument();
-            return;
-        }
-        if (2L * (change.InsertText.Length + (long)change.DeleteLength) >
-            CanvasUndoBudgetBytes)
-        {
-            _shell.ShowError("This edit exceeds the current 32 MiB undo-history budget " +
-                "and was not applied. No document text was changed.");
             _canvasBoundVersion = -1;
             ShowDocument();
             return;

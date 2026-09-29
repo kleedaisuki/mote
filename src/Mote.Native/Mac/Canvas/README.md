@@ -130,23 +130,34 @@ deletion before AppKit's page-local command runs. This covers selections ending
 on an empty LF/CRLF row, where the native host has no characters and would
 emit no `textDidChange`; a dedicated AppKit probe tests both selection
 directions and both line-ending spellings.
+The native host has no directional selection API, so a reverse global selection
+is projected only as an ordered local range. Delayed AppKit notifications from
+this programmatic range must not overwrite the controller's `(anchor, active)`;
+only a one-shot `keyDown:`/`mouseDown:`/`mouseDragged:` user gesture authorizes
+native caret feedback. Probe telemetry records both the global and native
+ranges plus the echo/user-event counts. After two failed re-projections of a
+native echo, the third mismatch visibly disables/hides input rather than
+allowing a divergent selected range; the LF/CRLF hosted probe injects this
+fail-closed case after testing both deletion directions. Accessibility-origin selection outside
+these gestures is a separate acceptance gate, not silently claimed supported.
 The host is plain-text-only. Its custom AppKit `paste:` and
 `pasteAsPlainText:` methods preflight the OS pasteboard's plain-text UTF-16
 length before insertion. Small pastes use native input; a larger plain-text
 paste becomes one exact absolute controller edit without ever entering the
 bounded host. Rich formatting is ignored. An impossible resulting Int32 source
-length, an edit above the controller's 32 MiB undo-history budget, or rich-only
+length or rich-only
 clipboard is rejected visibly without partial insertion.
 These paths still need target-host mixed-format/large-payload testing.
 The same pre-change delegate rejects any non-paste input that would exceed the
 bound, with a visible explanation; real IME preedit behavior near the bound
 still requires interactive testing. The published-binary in-process clipboard
-probe exercises mixed rich/plain 40 Ki direct paste with byte-exact source
-verification and Undo, 50 MiB explicit rejection with unchanged engine/native
-host/disk and retained Redo history, bounded host retention, no-edit Select
-All→Save/Close, exact selected repeated-text replacement, and small accepted
-Save As/reopen. A future persistent-root history policy may permit 50 MiB
-paste with Undo, but silently accepting a non-undoable edit is not allowed.
+probe exercises mixed rich/plain 40 Ki direct paste and 50 MiB plain direct
+paste with full source verification, Undo and Redo on both, bounded host
+retention, no-edit Select All→Save/Close, exact selected repeated-text
+replacement, and small accepted Save As/reopen. Immutable rope-root history
+retains an undoable 50 MiB transaction without copying another 50 MiB inverse
+string; per-stage elapsed and working-set metrics are written under repository
+`.cache/ci-inventory/<rid>/` by this diagnostic, not by ordinary editing.
 During a window resize under marked text, only the existing host frame moves
 to keep AppKit's candidate rectangle attached; viewport reflow is delivered
 after composition settles. Real CJK candidate positioning remains a gate.

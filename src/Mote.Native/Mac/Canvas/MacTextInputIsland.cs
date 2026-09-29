@@ -51,6 +51,12 @@ internal sealed unsafe class MacTextInputIsland
     private bool _pendingResize;
     private int _dragAnchor;
     private bool _reportedFailure;
+    private bool _userSelectionPending;
+    private int _selectionRepairCount;
+    private int _selectionNotifications;
+    private int _selectionEchoes;
+    private int _selectionUserEvents;
+    private string _lastSelectionOutcome = "none";
 
     /// <summary>Creates callbacks that keep document mutations in the controller.</summary>
     internal MacTextInputIsland(Action<CanvasCommittedEdit> edit, Action<double> scroll,
@@ -68,6 +74,37 @@ internal sealed unsafe class MacTextInputIsland
 
     /// <summary>Whether the OS currently owns provisional candidate text.</summary>
     internal bool IsComposing => _editor != 0 && ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0;
+
+    /// <summary>Probe-only native selected range and event-origin summary.</summary>
+    internal string ProbeSelectionTrace
+    {
+        get
+        {
+            var range = _editor == 0 ? new ObjC.Range(0, 0) :
+                ObjC.SendRange(_editor, ObjC.Sel("selectedRange"));
+            return $"native={range.Location},{range.Length}; notifications={_selectionNotifications}; " +
+                $"echoes={_selectionEchoes}; user={_selectionUserEvents}; " +
+                $"pending={_userSelectionPending}; last={_lastSelectionOutcome}";
+        }
+    }
+
+    /// <summary>Whether a native callback fault has disabled the bounded host.</summary>
+    internal bool ProbeInputDisabled => _reportedFailure && _binding is null;
+
+    /// <summary>Injects one unarmed AppKit selection echo for a hosted fail-closed probe.</summary>
+    internal void ProbeProgrammaticSelectionEcho(int start, int length)
+    {
+        if (_editor == 0 || _reportedFailure) return;
+        ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"),
+            new ObjC.Range((nuint)start, (nuint)length));
+        OnSelectionChanged();
+    }
+
+    /// <summary>Marks a real native keyboard or pointer event as the source of selection.</summary>
+    internal void ArmUserSelectionGesture() => _userSelectionPending = true;
+
+    /// <summary>Invalidates a pending local gesture before a global menu command projects state.</summary>
+    internal void CancelUserSelectionGesture() => _userSelectionPending = false;
 
     /// <summary>Releases only the font owned by this island and unhooks native callbacks.</summary>
     internal void Dispose()
@@ -151,6 +188,8 @@ internal sealed unsafe class MacTextInputIsland
             return;
         }
         _binding = binding;
+        CancelUserSelectionGesture();
+        _selectionRepairCount = 0;
         _snapshot = binding.Snapshot;
         _frame = binding.Frame;
         _projection = new NativeTextProjection(binding.InputSourceText, NativeLineEndingMode.Preserve);
@@ -183,6 +222,7 @@ internal sealed unsafe class MacTextInputIsland
                 nameof(frame));
         if (IsComposing) throw new InvalidOperationException("Cannot remove input during marked text.");
         _binding = null;
+        CancelUserSelectionGesture();
         _deferredBinding = null;
         _projection = null;
         _nativeChangeObserved = false;
@@ -197,6 +237,8 @@ internal sealed unsafe class MacTextInputIsland
     internal void SetFrame(CanvasFrame frame)
     {
         if (IsComposing) return;
+        CancelUserSelectionGesture();
+        _selectionRepairCount = 0;
         _frame = frame;
         PlaceHost();
         Invalidate();
@@ -241,6 +283,7 @@ internal sealed unsafe class MacTextInputIsland
     internal void OnTextChanged()
     {
         if (_setting || _binding is null) return;
+        CancelUserSelectionGesture();
         _nativeChangeObserved = true;
         if (IsComposing)
         {
@@ -278,24 +321,41 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>Converts a bounded host caret/selection to global source coordinates.</summary>
     internal void OnSelectionChanged()
     {
-        if (_setting || IsComposing || _binding is null || _projection is null) return;
+        _selectionNotifications++;
+        if (_setting || IsComposing || _binding is null || _projection is null)
+        {
+            _lastSelectionOutcome = "setting-or-composing";
+            return;
+        }
         var range = ObjC.SendRange(_editor, ObjC.Sel("selectedRange"));
         if (range.Location > (nuint)_projection.Display.Length ||
             range.Length > (nuint)_projection.Display.Length - range.Location) return;
-        if (_frame is { } frame)
+        if (_frame is not null)
         {
-            var first = Math.Min(frame.SelectionAnchor, frame.SelectionActive);
-            var last = Math.Max(frame.SelectionAnchor, frame.SelectionActive);
-            var expectedStart = Math.Clamp(first - _binding.InputSourceStart, 0,
-                _projection.Display.Length);
-            var expectedEnd = Math.Clamp(last - _binding.InputSourceStart, 0,
-                _projection.Display.Length);
-            if (expectedStart == expectedEnd)
-                expectedStart = expectedEnd = Math.Clamp(frame.SelectionActive -
-                    _binding.InputSourceStart, 0, _projection.Display.Length);
-            if (range.Location == (nuint)expectedStart &&
-                range.Length == (nuint)(expectedEnd - expectedStart)) return;
+            var expected = ProjectedHostSelection();
+            if (range == expected)
+            {
+                CancelUserSelectionGesture();
+                _lastSelectionOutcome = "matches-global";
+                return;
+            }
+            if (!_userSelectionPending)
+            {
+                _selectionEchoes++;
+                _lastSelectionOutcome = "programmatic-echo";
+                if (_selectionRepairCount++ < 2)
+                {
+                    _setting = true;
+                    try { ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), expected); }
+                    finally { _setting = false; }
+                }
+                else DisableAfterFailure("Native selection did not reconcile with the source selection.");
+                return;
+            }
         }
+        CancelUserSelectionGesture();
+        _selectionUserEvents++;
+        _lastSelectionOutcome = "user-accepted";
         var anchor = _binding.InputSourceStart + _projection.ToSourceBoundary((int)range.Location);
         var active = _binding.InputSourceStart +
             _projection.ToSourceBoundary((int)(range.Location + range.Length), true);
@@ -454,27 +514,34 @@ internal sealed unsafe class MacTextInputIsland
             // Keep the actual NSTextView/candidate rect attached on resize;
             // marked text and selection remain entirely owned by AppKit.
             if (IsComposing) return;
-            var first = Math.Min(_frame.SelectionAnchor, _frame.SelectionActive);
-            var last = Math.Max(_frame.SelectionAnchor, _frame.SelectionActive);
-            var localStart = Math.Clamp(first - _binding.InputSourceStart, 0,
-                _binding.InputSourceText.Length);
-            var localEnd = Math.Clamp(last - _binding.InputSourceStart, 0,
-                _binding.InputSourceText.Length);
-            if (localStart == localEnd)
-                localStart = localEnd = Math.Clamp(_frame.SelectionActive -
-                    _binding.InputSourceStart, 0, _binding.InputSourceText.Length);
+            var projected = ProjectedHostSelection();
             _setting = true;
             try
             {
-                ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"),
-                    new ObjC.Range((nuint)localStart, (nuint)(localEnd - localStart)));
+                ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), projected);
                 ObjC.Send(_editor, ObjC.Sel("scrollRangeToVisible:"),
-                    new ObjC.Range((nuint)localEnd, 0));
+                    new ObjC.Range(projected.Location + projected.Length, 0));
             }
             finally { _setting = false; }
             return;
         }
         ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 1);
+    }
+
+    private ObjC.Range ProjectedHostSelection()
+    {
+        var frame = _frame!;
+        var binding = _binding!;
+        var first = Math.Min(frame.SelectionAnchor, frame.SelectionActive);
+        var last = Math.Max(frame.SelectionAnchor, frame.SelectionActive);
+        var start = Math.Clamp(first - binding.InputSourceStart, 0,
+            binding.InputSourceText.Length);
+        var end = Math.Clamp(last - binding.InputSourceStart, 0,
+            binding.InputSourceText.Length);
+        if (start == end)
+            start = end = Math.Clamp(frame.SelectionActive - binding.InputSourceStart,
+                0, binding.InputSourceText.Length);
+        return new ObjC.Range((nuint)start, (nuint)(end - start));
     }
 
     private void Draw()
@@ -850,8 +917,26 @@ internal sealed unsafe class MacTextInputIsland
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Paste, "v@:@");
         Add(cls, "pasteAsPlainText:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Paste, "v@:@");
+        Add(cls, "keyDown:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&InputKeyDown, "v@:@");
+        Add(cls, "mouseDown:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&InputMouseDown, "v@:@");
+        Add(cls, "mouseDragged:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&InputMouseDragged, "v@:@");
         ObjC.RegisterClassPair(cls);
         return InputClass;
+    }
+
+    private static void ForwardInputEvent(nint self, nint selector, nint eventObject)
+    {
+        var current = s_current;
+        if (current is null) return;
+        current.InvokeSafely(() =>
+        {
+            current.ArmUserSelectionGesture();
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTextView"));
+            MacOnScreenCanvasNative.SendSuper(ref superclass, selector, eventObject);
+        });
     }
 
     private static void Add(nint cls, string selector, nint implementation, string encoding)
@@ -891,4 +976,16 @@ internal sealed unsafe class MacTextInputIsland
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Paste(nint self, nint selector, nint sender)
     { var current = s_current; current?.InvokeSafely(current.PastePlain); }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void InputKeyDown(nint self, nint selector, nint eventObject)
+    { ForwardInputEvent(self, selector, eventObject); }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void InputMouseDown(nint self, nint selector, nint eventObject)
+    { ForwardInputEvent(self, selector, eventObject); }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void InputMouseDragged(nint self, nint selector, nint eventObject)
+    { ForwardInputEvent(self, selector, eventObject); }
 }

@@ -115,12 +115,12 @@ The experimental Windows and macOS adapters are designed to route exact
 plain-text clipboard payloads larger than the input host directly to the
 controller as one global transaction; rich clipboard formatting is never
 imported into source text. Windows has local real-HWND evidence; macOS still
-requires hosted AppKit workflow evidence. The opt-in controller currently
-rejects an edit whose inserted-plus-removed UTF-16 bytes exceed the engine's
-32 MiB undo-history budget **before** mutation, with a visible error and a
-safe native-host rebind; it never silently accepts an immediately non-undoable
-50 MiB paste/delete. This cap is temporary until reversible persistent-root
-history is validated. Target-OS CJK IME composition,
+requires hosted AppKit workflow evidence. The engine now retains the newest
+oversized edit through shared persistent rope roots, rather than dropping its
+Undo entry when its nominal cost exceeds the ordinary 32 MiB history budget.
+The experimental canvas no longer imposes a duplicate 32 MiB hard cap;
+50 MiB paste/delete still need target-host latency, peak-memory, and Undo
+evidence before product parity can be claimed. Target-OS CJK IME composition,
 screen-reader access to off-host text, rich Unicode hit-test/candidate geometry,
 semantic colors on the native host row, background analysis latency, and
 end-to-end 100 MiB editing remain independent acceptance gates. Keep the

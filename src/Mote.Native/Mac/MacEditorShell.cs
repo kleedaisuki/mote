@@ -595,6 +595,17 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <summary>Current input binding nonce for diagnostic probe telemetry.</summary>
     internal long ProbeCanvasNonce => _pendingCanvasBinding?.BindingNonce ?? -1;
 
+    /// <summary>Native selectedRange and event-origin counters for hosted debugging.</summary>
+    internal string ProbeCanvasNativeSelectionTrace =>
+        _canvas?.ProbeSelectionTrace ?? "canvas-unavailable";
+
+    /// <summary>Whether repeated native selection echoes visibly disabled editing.</summary>
+    internal bool ProbeCanvasInputDisabled => _canvas?.ProbeInputDisabled ?? false;
+
+    /// <summary>Injects an unarmed native selection echo only for fail-closed testing.</summary>
+    internal void ProbeCanvasSelectionEcho(int start, int length) =>
+        _canvas?.ProbeProgrammaticSelectionEcho(start, length);
+
     /// <summary>Controller's last projected dirty state in opt-in canvas mode.</summary>
     internal bool ProbeCanvasIsModified => _canvasIsModified;
 
@@ -620,6 +631,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         if (!_experimentalCanvas || _canvas is null || start < 0 || length < 0)
             throw new InvalidOperationException("Canvas probe selection is unavailable.");
+        // The in-process probe has no physical NSEvent; explicitly arm the same
+        // one-shot user-origin path that the NSTextView subclass arms on key/mouse.
+        _canvas.ArmUserSelectionGesture();
         ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"),
             new ObjC.Range((nuint)start, (nuint)length));
     }
@@ -1114,6 +1128,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         {
             try
             {
+                shell._canvas?.CancelUserSelectionGesture();
                 if (!shell.CommitPendingText()) return 1;
                 if (shell._canvas?.TryDeleteGlobalSelection() == true) return 1;
             }
@@ -1125,16 +1140,19 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         }
         if (command == ObjC.Sel("selectAll:"))
         {
+            shell._canvas?.CancelUserSelectionGesture();
             shell.NotifyAfterComposition(shell.SelectAllRequested);
             return 1;
         }
         if (command == ObjC.Sel("copy:"))
         {
+            shell._canvas?.CancelUserSelectionGesture();
             shell.NotifyAfterComposition(shell.CopyRequested);
             return 1;
         }
         if (command == ObjC.Sel("cut:"))
         {
+            shell._canvas?.CancelUserSelectionGesture();
             shell.NotifyAfterComposition(shell.CutRequested);
             return 1;
         }

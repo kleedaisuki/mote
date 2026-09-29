@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Diagnostics;
 using Mote.Configuration;
 using Mote.Engine;
 using Mote.Themes;
@@ -7,7 +9,7 @@ using Mote.Themes;
 namespace Mote.Native.Mac.Canvas;
 
 /// <summary>
-/// Published-binary AppKit clipboard gate for bounded input and undo-safe paste.
+/// Published-binary AppKit clipboard gate for bounded input and root-history paste.
 /// This exercises a real NSTextView and controller, not external keyboard or IME.
 /// </summary>
 [SupportedOSPlatform("macos")]
@@ -17,8 +19,8 @@ internal static class MacCanvasClipboardProbe
     private const string RichPayload = "{\\rtf1\\ansi\\b RTF must not be imported\\b0}";
 
     /// <summary>
-    /// Accepts 40 Ki mixed-format paste, rejects a 50 MiB transaction before
-    /// losing Undo, then checks selected replacement and Save As/reopen.
+    /// Accepts and undoes 40 Ki and 50 MiB source edits without expanding the
+    /// host, then checks selected replacement and Save As/reopen.
     /// </summary>
     internal static int Run(string input, string output)
     {
@@ -51,6 +53,7 @@ internal static class MacCanvasClipboardProbe
             var workflow = new Workflow(shell, inputPath, outputPath, original, inputHash);
             shell.Shown += workflow.Start;
             controller.Run();
+            workflow.WriteMetrics();
             if (!workflow.Succeeded || !SameInput(inputPath, inputHash) || !File.Exists(outputPath))
                 return 1;
             using var reopened = Document.OpenAsync(outputPath).GetAwaiter().GetResult();
@@ -77,10 +80,14 @@ internal static class MacCanvasClipboardProbe
         private long _baseVersion = -1;
         private long _largeVersion = -1;
         private long _undoVersion = -1;
-        private long _redoVersion = -1;
+        private long _hugeVersion = -1;
+        private long _hugeUndoVersion = -1;
+        private long _hugeRedoVersion = -1;
         private long _selectedVersion = -1;
         private int _stage;
         private bool _done;
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private readonly List<string> _milestones = [];
 
         internal Workflow(MacEditorShell shell, string input, string output,
             string original, byte[] hash)
@@ -93,6 +100,17 @@ internal static class MacCanvasClipboardProbe
         }
 
         internal bool Succeeded { get; private set; }
+
+        internal void WriteMetrics()
+        {
+            var rid = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
+                ? "osx-arm64" : "osx-x64";
+            var directory = Path.Combine(Environment.CurrentDirectory, ".cache",
+                "ci-inventory", rid);
+            Directory.CreateDirectory(directory);
+            File.WriteAllLines(Path.Combine(directory, "mac-canvas-clipboard-metrics.txt"),
+                _milestones);
+        }
 
         internal void Start() => Schedule();
 
@@ -111,6 +129,7 @@ internal static class MacCanvasClipboardProbe
             if (DateTime.UtcNow >= _deadline) { Finish(false); return; }
             try
             {
+                var priorStage = _stage;
                 switch (_stage)
                 {
                     case 0 when _shell.ProbeTitle.Contains(Path.GetFileName(_input),
@@ -150,57 +169,69 @@ internal static class MacCanvasClipboardProbe
                         _shell.ProbeCanvasPaste(new string('Y', LargeClipboardLength), null);
                         _stage = 5;
                         break;
-                    case 5 when _shell.ProbeCanvasError is { } refusal:
-                        if (!refusal.Contains("undo-history budget", StringComparison.Ordinal) ||
-                            _shell.ProbeCanvasSnapshot?.GetText() != _original ||
-                            _shell.ProbeCanvasVersion != _undoVersion ||
-                            _shell.ProbeNativeText != _original || !SameInput(_input, _hash))
+                    case 5 when _shell.ProbeCanvasSnapshot is { } huge &&
+                        huge.Version > _undoVersion:
+                        if (!MatchesHuge(huge) ||
+                            _shell.ProbeNativeText.Length > 16 * 1024 ||
+                            _shell.ProbeCanvasError is not null || !SameInput(_input, _hash))
                         { Finish(false); return; }
-                        _shell.ProbeInvokeMenu("moteRedo:");
+                        _hugeVersion = huge.Version;
+                        _shell.ProbeInvokeMenu("moteUndo:");
                         _stage = 6;
                         break;
-                    case 6 when _shell.ProbeCanvasSnapshot is { } redone &&
-                        redone.Version > _undoVersion &&
-                        redone.GetText() == new string('X', 40 * 1024) + _original:
-                        _redoVersion = redone.Version;
-                        _shell.ProbeInvokeMenu("moteUndo:");
+                    case 6 when _shell.ProbeCanvasSnapshot is { } undoneHuge &&
+                        undoneHuge.Version > _hugeVersion &&
+                        undoneHuge.GetText() == _original:
+                        _hugeUndoVersion = undoneHuge.Version;
+                        _shell.ProbeInvokeMenu("moteRedo:");
                         _stage = 7;
                         break;
-                    case 7 when _shell.ProbeCanvasSnapshot is { } again &&
-                        again.Version > _redoVersion && again.GetText() == _original:
-                        _baseVersion = again.Version;
-                        _shell.ProbeCanvasSelect(0, 2);
+                    case 7 when _shell.ProbeCanvasSnapshot is { } redoneHuge &&
+                        redoneHuge.Version > _hugeUndoVersion:
+                        if (!MatchesHuge(redoneHuge) ||
+                            _shell.ProbeNativeText.Length > 16 * 1024 ||
+                            !SameInput(_input, _hash))
+                        { Finish(false); return; }
+                        _hugeRedoVersion = redoneHuge.Version;
+                        _shell.ProbeInvokeMenu("moteUndo:");
                         _stage = 8;
                         break;
-                    case 8 when _shell.ProbeCanvasSelection == (0, 2):
+                    case 8 when _shell.ProbeCanvasSnapshot is { } finalUndo &&
+                        finalUndo.Version > _hugeRedoVersion &&
+                        finalUndo.GetText() == _original:
+                        _baseVersion = finalUndo.Version;
+                        _shell.ProbeCanvasSelect(0, 2);
+                        _stage = 9;
+                        break;
+                    case 9 when _shell.ProbeCanvasSelection == (0, 2):
                         // Minimal diff of "abc" -> "ac" deletes b and inserts
                         // nothing; the exact selected payload is still "a".
                         _shell.ProbeCanvasPaste("a", RichPayload);
-                        _stage = 9;
+                        _stage = 10;
                         break;
-                    case 9 when _shell.ProbeNativeText == "ac" &&
+                    case 10 when _shell.ProbeNativeText == "ac" &&
                         _shell.ProbeCanvasVersion > _baseVersion &&
                         _shell.ProbeCanvasError is null && SameInput(_input, _hash):
                         _selectedVersion = _shell.ProbeCanvasVersion;
                         _shell.ProbeCanvasSelect(0, 0);
-                        _stage = 10;
-                        break;
-                    case 10 when _shell.ProbeCanvasSelection == (0, 0):
-                        _shell.ProbeCanvasPaste("Z", RichPayload);
                         _stage = 11;
                         break;
-                    case 11 when _shell.ProbeNativeText == "Zac" &&
+                    case 11 when _shell.ProbeCanvasSelection == (0, 0):
+                        _shell.ProbeCanvasPaste("Z", RichPayload);
+                        _stage = 12;
+                        break;
+                    case 12 when _shell.ProbeNativeText == "Zac" &&
                         _shell.ProbeCanvasVersion > _selectedVersion &&
                         _shell.ProbeCanvasError is null && SameInput(_input, _hash):
                         _shell.ProbePickSave(_output);
                         _shell.ProbeInvokeMenu("moteSaveAs:");
-                        _stage = 12;
-                        break;
-                    case 12 when File.Exists(_output) && !_shell.ProbeCanvasIsModified:
-                        _shell.ProbeInvokeMenu("moteSelectAll:");
                         _stage = 13;
                         break;
-                    case 13 when _shell.ProbeCanvasSelection == (0, 3):
+                    case 13 when File.Exists(_output) && !_shell.ProbeCanvasIsModified:
+                        _shell.ProbeInvokeMenu("moteSelectAll:");
+                        _stage = 14;
+                        break;
+                    case 14 when _shell.ProbeCanvasSelection == (0, 3):
                         if (!_shell.CommitPendingText() ||
                             _shell.ProbeCanvasSnapshot?.GetText() != "Zac")
                         { Finish(false); return; }
@@ -208,6 +239,7 @@ internal static class MacCanvasClipboardProbe
                         Finish(true);
                         return;
                 }
+                if (_stage != priorStage) Record($"stage-{priorStage}-to-{_stage}");
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
@@ -218,12 +250,38 @@ internal static class MacCanvasClipboardProbe
             Schedule();
         }
 
+        private bool MatchesHuge(TextSnapshot snapshot)
+        {
+            if (snapshot.Length != LargeClipboardLength + _original.Length) return false;
+            var offset = 0;
+            foreach (var chunk in snapshot.GetChunks())
+            {
+                foreach (var character in chunk.Span)
+                {
+                    var expected = offset < LargeClipboardLength ? 'Y' :
+                        _original[offset - LargeClipboardLength];
+                    if (character != expected) return false;
+                    offset++;
+                }
+            }
+            return offset == snapshot.Length;
+        }
+
         private void Finish(bool success)
         {
             _done = true;
             Succeeded = success;
+            Record(success ? "completed" : "failed");
             if (!success) Console.Error.WriteLine($"Mac canvas clipboard stage {_stage} failed.");
             _shell.Close();
+        }
+
+        private void Record(string name)
+        {
+            using var process = Process.GetCurrentProcess();
+            _milestones.Add($"{name} elapsed_ms={_clock.ElapsedMilliseconds} " +
+                $"working_set_bytes={process.WorkingSet64} " +
+                $"peak_working_set_bytes={process.PeakWorkingSet64}");
         }
     }
 }

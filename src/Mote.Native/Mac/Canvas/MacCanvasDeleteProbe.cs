@@ -62,6 +62,7 @@ internal static class MacCanvasDeleteProbe
         private readonly DateTime _deadline = DateTime.UtcNow.AddSeconds(60);
         private long _baseVersion;
         private long _firstDeleteVersion;
+        private long _secondDeleteVersion;
         private (int Anchor, int Active) _reverseImmediately;
         private int _stage;
         private bool _done;
@@ -101,6 +102,7 @@ internal static class MacCanvasDeleteProbe
                         StringComparison.Ordinal) &&
                         _shell.ProbeCanvasSnapshot?.GetText() == _original:
                         _baseVersion = _shell.ProbeCanvasVersion;
+                        _shell.ProbeCaptureCanvasErrors();
                         _shell.ProbeCanvasSelectGlobal(0, _emptyStart);
                         _stage = 1;
                         break;
@@ -127,7 +129,27 @@ internal static class MacCanvasDeleteProbe
                         break;
                     case 5 when _shell.ProbeCanvasSnapshot?.GetText() == _expected &&
                         _shell.ProbeCanvasVersion > _firstDeleteVersion:
-                        _shell.ProbeApproveDiscardOnce();
+                        _secondDeleteVersion = _shell.ProbeCanvasVersion;
+                        _shell.ProbeInvokeMenu("moteUndo:");
+                        _stage = 6;
+                        break;
+                    case 6 when _shell.ProbeCanvasSnapshot?.GetText() == _original &&
+                        _shell.ProbeCanvasVersion > _secondDeleteVersion:
+                        _shell.ProbeCanvasSelectGlobal(_emptyStart, 0);
+                        _stage = 7;
+                        break;
+                    case 7 when _shell.ProbeCanvasSelection == (_emptyStart, 0) &&
+                        _shell.ProbeNativeText == "a":
+                        _shell.ProbeCanvasSelectionEcho(0, 0);
+                        _shell.ProbeCanvasSelectionEcho(0, 0);
+                        _shell.ProbeCanvasSelectionEcho(0, 0);
+                        _stage = 8;
+                        break;
+                    case 8 when _shell.ProbeCanvasInputDisabled &&
+                        _shell.ProbeCanvasSelection == (_emptyStart, 0) &&
+                        _shell.ProbeCanvasSnapshot?.GetText() == _original &&
+                        _shell.ProbeCanvasError?.Contains("did not reconcile",
+                            StringComparison.Ordinal) == true:
                         Succeeded = true;
                         Finish(true);
                         return;
@@ -157,7 +179,8 @@ internal static class MacCanvasDeleteProbe
                     $"input-start={_shell.ProbeCanvasInputStart}; " +
                     $"nonce={_shell.ProbeCanvasNonce}; " +
                     $"native-length={_shell.ProbeNativeText.Length}; " +
-                    $"marked={_shell.ProbeHasMarkedText}.");
+                    $"marked={_shell.ProbeHasMarkedText}; " +
+                    _shell.ProbeCanvasNativeSelectionTrace + ".");
             }
             _shell.Close();
         }
