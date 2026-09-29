@@ -83,7 +83,7 @@ public sealed class HorizontalViewportTests
         Assert.Equal(1, emptyCanvas.HorizontalAnchor.SourceBoundary);
     }
 
-    /// <summary>Edits transform source anchors right-affinely and preserve residual only across other rows.</summary>
+    /// <summary>Edits before the horizontal edge shift it; insertion at the edge remains left-biased.</summary>
     [Fact]
     public void Edits_before_at_and_after_anchor_transform_without_preserving_stale_pixel_width()
     {
@@ -97,7 +97,8 @@ public sealed class HorizontalViewportTests
         Assert.Null(canvas.HorizontalAnchor.MeasuredXFromStart);
 
         Apply(new TextChange(6, 0, "Y"));
-        Assert.Equal(7, canvas.HorizontalAnchor.SourceBoundary);
+        Assert.Equal(6, canvas.HorizontalAnchor.SourceBoundary);
+        Assert.Equal(0, canvas.HorizontalAnchor.IntraClusterPixels);
         canvas.SetHorizontalAnchor(7, HorizontalCaretAffinity.Trailing, 3.5, 24);
         Apply(new TextChange(document.Snapshot.GetLineStartOffset(1), 0, "Z"));
         Assert.Equal(7, canvas.HorizontalAnchor.SourceBoundary);
@@ -193,5 +194,78 @@ public sealed class HorizontalViewportTests
         Assert.Empty(initiallyHidden.Frame().RowWindows);
         initiallyHidden.Resize(20);
         Assert.NotEmpty(initiallyHidden.Frame().Slices);
+    }
+
+    /// <summary>An empty New buffer keeps the horizontal viewport at its source start after typing.</summary>
+    [Fact]
+    public void Inserting_at_empty_left_edge_keeps_source_zero_visible_and_vertical_anchor_right_affine()
+    {
+        using var document = new Document();
+        var canvas = new CanvasInteraction(document.Snapshot, 20, 40);
+        Assert.Equal(0, canvas.HorizontalAnchor.SourceBoundary);
+        Assert.Equal(0, canvas.TopAnchor.SourceOffset);
+
+        var after = document.Apply(new TextChange(0, 0, "abc"));
+        canvas.ApplyEdit(after, new TextChangeRange(0, 0, 3));
+
+        Assert.Equal(0, canvas.HorizontalAnchor.SourceBoundary);
+        Assert.Equal(0, canvas.HorizontalAnchor.ReferenceLineStart);
+        Assert.Equal(3, canvas.TopAnchor.SourceOffset);
+        Assert.Null(canvas.HorizontalAnchor.MeasuredXFromStart);
+        Assert.Equal(0, Assert.Single(canvas.Frame().RowWindows).LeftEdgeSourceBoundary);
+        Assert.Equal("abc", after.GetText());
+    }
+
+    /// <summary>The horizontal edge tracks surviving content but never jumps over new text at itself.</summary>
+    [Fact]
+    public void Before_and_overlapping_edits_transform_horizontal_edge_independently_of_vertical_anchor()
+    {
+        using var document = new Document("abcdefghijkl");
+        var canvas = new CanvasInteraction(document.Snapshot, 20, 40, maxSliceLength: 8);
+        canvas.SetHorizontalAnchor(6, HorizontalCaretAffinity.Trailing, 2.5, 32);
+        canvas.ApplyEdit(document.Snapshot, new TextChangeRange(6, 0, 0));
+        Assert.Equal(6, canvas.HorizontalAnchor.SourceBoundary);
+        Assert.Equal(document.Snapshot.Version, canvas.Frame().Version);
+
+        Apply(new TextChange(4, 2, "")); // deletion ends exactly at old edge
+        Assert.Equal(4, canvas.HorizontalAnchor.SourceBoundary);
+        Assert.Equal(0, canvas.HorizontalAnchor.IntraClusterPixels);
+        Assert.Null(canvas.HorizontalAnchor.MeasuredXFromStart);
+
+        Apply(new TextChange(2, 4, "Z")); // replacement spans the current edge
+        Assert.Equal(2, canvas.HorizontalAnchor.SourceBoundary);
+        Assert.Equal(0, canvas.HorizontalAnchor.ReferenceLineStart);
+        Assert.Equal(0, canvas.HorizontalAnchor.IntraClusterPixels);
+        Assert.Null(canvas.HorizontalAnchor.MeasuredXFromStart);
+
+        void Apply(TextChange change)
+        {
+            var after = document.Apply(change);
+            canvas.ApplyEdit(after,
+                new TextChangeRange(change.Start, change.DeleteLength, change.InsertText.Length));
+            Assert.Equal(after.Version, canvas.Frame().Version);
+        }
+    }
+
+    /// <summary>Typing at a 40 Mi-unit pan edge cannot shift the bounded visible window right.</summary>
+    [Fact]
+    public void Far_line_insert_at_horizontal_edge_remains_bounded_and_left_biased()
+    {
+        const int target = 40 * 1024 * 1024;
+        using var document = new Document(new string('a', 50 * 1024 * 1024));
+        var canvas = new CanvasInteraction(document.Snapshot, 20, 40, maxSliceLength: 4096);
+        canvas.SetHorizontalAnchor(target, HorizontalCaretAffinity.Leading, 1.25, 250);
+
+        var after = document.Apply(new TextChange(target, 0, "Z"));
+        canvas.ApplyEdit(after, new TextChangeRange(target, 0, 1));
+        var frame = canvas.Frame();
+
+        Assert.Equal(target, frame.Horizontal.SourceBoundary);
+        Assert.Equal(0, frame.Horizontal.IntraClusterPixels);
+        Assert.Null(frame.Horizontal.MeasuredXFromStart);
+        Assert.Contains(frame.RowWindows, row => row.LeftEdgeSourceBoundary == target &&
+            row.Slice.SourceStart <= target && target < row.Slice.SourceStart + row.Slice.SourceLength);
+        Assert.All(frame.Slices, slice => Assert.InRange(slice.SourceLength, 0, 4096));
+        Assert.Equal("Z", after.GetText(target, 1));
     }
 }

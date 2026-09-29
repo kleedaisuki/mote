@@ -163,9 +163,12 @@ internal sealed class ContinuousViewport
     }
 
     /// <summary>
-    /// Rebinds after a committed source edit, transforming the anchor with right
-    /// affinity. Measurements are invalidated because line identities may have moved.
-    /// Only replacement extents are needed; the viewport never reads inserted text.
+    /// Rebinds after a committed source edit. The vertical anchor follows inserted
+    /// text with right affinity, but the horizontal viewport's left edge stays
+    /// before text inserted exactly at that edge. An edit strictly before the edge
+    /// shifts it; a replacement covering it clamps it to the replacement start.
+    /// Measurements are invalidated because line identities may have moved. Only
+    /// replacement extents are needed; the viewport never reads inserted text.
     /// </summary>
     internal void ApplyEdit(TextSnapshot after, TextChangeRange change)
     {
@@ -179,7 +182,7 @@ internal sealed class ContinuousViewport
 
         var newOffset = TransformRight(_anchor.SourceOffset, change);
         var horizontalOffset = _horizontal.SourceBoundary;
-        var newHorizontalBoundary = TransformRight(horizontalOffset, change);
+        var newHorizontalBoundary = TransformHorizontalLeft(horizontalOffset, change);
         var oldReferenceLine = _snapshot.GetLineIndexFromOffset(horizontalOffset);
         var changedLine = _snapshot.GetLineIndexFromOffset(change.Start);
         var oldLineCount = _snapshot.LineCount;
@@ -352,6 +355,13 @@ internal sealed class ContinuousViewport
         return offset < change.Start ? offset :
             offset <= end ? change.Start + change.InsertLength :
             offset + change.InsertLength - change.DeleteLength;
+    }
+
+    private static int TransformHorizontalLeft(int offset, TextChangeRange change)
+    {
+        if (offset <= change.Start) return offset;
+        if (offset < change.Start + change.DeleteLength) return change.Start;
+        return offset + change.InsertLength - change.DeleteLength;
     }
 
     private static void ValidateHeight(double height, string name)

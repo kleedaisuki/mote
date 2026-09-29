@@ -6,7 +6,7 @@
 
 - The immutable `TextSnapshot` remains the only text source. Persistent coordinates are global UTF-16 offsets. `ViewportAnchor` retains an interior source offset and a fractional intra-row pixel offset. `HorizontalAnchor` is one source boundary, caret affinity, and local pixel residual; there is no independently mutable global horizontal pixel scalar.
 - No-wrap gives each logical line one implicit row. Only deviations from the base row height have nodes in `SparseHeightIndex`. A theme color repaint need not call `Reflow`; a font, DPI, tab, or wrap change does, invalidating all measurements while keeping the source anchor.
-- An edit transforms the anchor with right affinity and clears measured heights. This conservative invalidation prevents stale line identities or geometry. A later layout implementation may retain unaffected measurements using versioned dependency checks.
+- An edit transforms the vertical anchor and global selection with right affinity. The horizontal viewport's **left edge** stays before text inserted or replaced exactly at that edge; edits strictly before it shift the edge to preserve surviving content, and replacements spanning it clamp to the replacement start. Measured widths, local pixel residuals, and row heights are invalidated conservatively when their source context changes. This prevents a three-character insertion at document start from scrolling its first character offscreen.
 - A source reveal also retains a bounded shaping-focus offset independently of
   the *vertical* top anchor. Bottom-aligning an offscreen point may put earlier
   rows at the top; a 100 Ki-character target line must still request its slice
