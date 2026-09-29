@@ -154,18 +154,21 @@ input. This is API-level accessibility, not VoiceOver acceptance.
   Both macOS RIDs passed the strict mixed 40 Ki / 50 MiB clipboard, LF/CRLF
   selection-delete, and in-process AX workflows in this run. Those probes do
   not emulate a physical trackpad, actual CJK IME, or a screen reader.
-- The horizontal AppKit diagnostic generated distinct before/after PNGs for a
-  source offset at 3000 in a 16 Ki row and an offset at 40 MiB in a 50 MiB row,
-  with bounded 16 Ki source slices, source hit-test, and global copy. It is
-  **not yet passing end-to-end in run 36591084601**: after New and native
-  insertion of `abc`, the source caret at offset 0 lay at local X = -11.480
-  DIP although the ribbon was visible, aligned, and first responder. The
-  then-current viewport right-transformed an empty line's horizontal left
-  edge from 0 to 3 on insertion. A left-affine horizontal-edge correction is
-  now implemented, with pure-model regression tests; its published AOT
-  x64/arm64 AppKit result remains pending. The screenshot/caret assertion is
-  unchanged.
-- External native keyboard/save routing, real CJK candidate/commit/cancel and
-  resize behavior, VoiceOver navigation, bidirectional selection geometry,
+- [Run 36594818528](https://github.com/kleedaisuki/mote/actions/runs/36594818528)
+  passed the **in-process AppKit** horizontal workflow on both published Mac
+  AOT RIDs. Distinct before/after PNGs show source offset 3000 in a 16 Ki row
+  and offset 40 MiB in a 50 MiB row; bounded slices, source hit-test, global
+  selection/copy, and unchanged fixture SHA-256 all passed. New plus native
+  insertion of `abc` leaves its source caret at local X = 12 DIP and visible;
+  the earlier left-edge regression in run 36591084601 put it at -11.480 DIP.
+  At the configured minimum window content size, the measured canvas was
+  268×90 DIP, with a 54-DIP source body and 120-DIP ribbon clip: source caret,
+  host alignment, visibility, and focus passed. A separately forced zero-body
+  canvas exposed zero rows and no source caret, then recovered source and
+  focused input after restoring normal geometry. These are OS-backed view and
+  selector checks, but the pan/click calls are diagnostic invocations, not an
+  external physical trackpad or keyboard trace.
+- External long-line keyboard/save routing, real CJK candidate/commit/cancel
+  and resize behavior, VoiceOver navigation, bidirectional selection geometry,
   and practical latency remain release gates. Do not infer product parity from
   in-process AppKit selectors or PNG capture alone.
