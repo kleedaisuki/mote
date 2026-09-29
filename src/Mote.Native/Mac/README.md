@@ -69,6 +69,15 @@ or application bundle is needed for this adapter.
   global defaults key. Theme selection is made by the controller at startup.
 - `NSApplicationLoad` is called before Objective-C class lookup. A prior AOT
   probe found `objc_getClass("NSTextView") == nil` without loading AppKit.
+- Window close and the app-menu Quit action use `NSApplication.stop:` from the
+  close event rather than `terminate:`. Apple documents that `stop:` returns
+  from `run`; `terminate:` exits the process before managed post-run checks or
+  telemetry shutdown. A benign `NSEventTypeApplicationDefined` event is posted
+  after `stop:` so a timer-driven close also wakes a blocked event loop.
+  Dock/system Quit is redirected through the same checked window-close path
+  and returns `NSTerminateCancel` to prevent AppKit's direct process exit.
+  The hosted workflow initially exposed the original gap: exit code 0 with
+  empty stdout because post-run assertions never executed.
 
 ## Validation status
 
@@ -106,6 +115,9 @@ interactive runner/manual test.
 
 - [NSApplicationLoad](https://developer.apple.com/documentation/appkit/nsapplicationload)
 - [NSApplication lifecycle](https://developer.apple.com/documentation/appkit/nsapplication)
+- [NSApplication.stop:](https://developer.apple.com/documentation/appkit/nsapplication/stop%28_%3A%29)
+- [NSEvent custom event creation](https://developer.apple.com/documentation/appkit/nsevent/otherevent%28with%3Alocation%3Amodifierflags%3Atimestamp%3Awindownumber%3Acontext%3Asubtype%3Adata1%3Adata2%3A%29)
+- [NSApplication.postEvent:atStart:](https://developer.apple.com/documentation/appkit/nsapplication/postevent%28_%3Aatstart%3A%29)
 - [NSTextView and native text editing](https://developer.apple.com/documentation/appkit/nstextview)
 - [NSTextViewDelegate](https://developer.apple.com/documentation/appkit/nstextviewdelegate)
 - [NSTextView selection notification](https://developer.apple.com/documentation/appkit/nstextview/didchangeselectionnotification)
