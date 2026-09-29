@@ -41,16 +41,68 @@ the adapter adds `ViewportSlice.TopY` for viewport-relative Y.
   -p:PublishAot=true -p:SelfContained=true -o .cache/win_canvas_aot` and run
   `.cache/win_canvas_aot/Mote.Tests.exe`: same five cases, exit code 0.
 
-The temporary probe's `.cache` output is not the product's single-binary
-deliverable. The hosted gate verifies **read-only hit-test feasibility**, not
-an on-screen painted canvas or frame latency. Before using this adapter for
-editing, measure creation and reuse of layouts on real visible rows; verify
-text range selection, wrapping, DPI changes, font fallback, bidi caret
-affinity, remote horizontal geometry, IME, and screen-reader range semantics
-on both Windows architectures.
+The temporary geometry probe's `.cache` output is not the product's
+single-binary deliverable. These checks verify hit-test feasibility, not an
+editable canvas or frame latency. The separate on-screen workflow below adds
+real HWND paint evidence. Before using either adapter for editing, measure
+layout reuse and real visible-row scrolling; verify wrapping, DPI changes,
+font fallback, bidi caret affinity, remote horizontal geometry, IME, and
+screen-reader range semantics.
+
+## On-screen read-only canvas checkpoint
+
+`WindowsOnScreenCanvasProbe.Run(manyLinePath, longLinePath, outputDirectory,
+theme)` opens a real top-level Win32 window and pumps its OS message loop.
+`WM_PAINT` renders `CanvasInteraction.Frame()` with bounded DirectWrite layouts
+on a Direct2D DC target, then blits the same 32-bpp DIB to the window. Each
+paint reads only visible source slices of at most 4096 UTF-16 code units;
+there is no second full-document text mirror. Native wheel and vertical
+scrollbar messages move the continuous source anchor. Pointer capture and drag
+select in global source coordinates, including across the former 64 KiB page
+seam. Theme foreground, background, selection foreground and selection
+background are applied. A selected CRLF or intermediate blank line fills the
+visible row remainder. PNGs encode the exact DIB passed to `BitBlt`.
+
+The probe additionally checks a remote 50 MiB long-line slice, six live
+position/point hit-test round trips (including CJK, RTL and emoji), an
+intermediate blank selected row, and a CRLF-only selected row. It never edits
+source text. Its output directory is restricted to repository `.cache` or
+`.temp` under the current working directory.
+
+Windows x64 Native AOT evidence (2026-09-29):
+
+```powershell
+dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r win-x64 `
+  --self-contained true -p:PublishAot=true -o .cache/win_canvas_onscreen_aot
+& tests/NativeCanvasWindowWorkflow.ps1 `
+  -ExecutablePath (Resolve-Path '.cache/win_canvas_onscreen_aot/mote.exe').Path `
+  -RuntimeIdentifier win-x64
+```
+
+The workflow generated a 104,857,600-byte mixed-script CRLF file and a
+52,428,800-byte single-line file under `.temp/canvas-window/win-x64/`.
+All three themes passed with `before=0`, `after=65550`,
+`selection=29+65680`, `long-slice=4096`, `hits=6`, and seven PNGs per theme.
+The report and PNG hashes are in `.cache/ci-inventory/win-x64/canvas-window.json`;
+inspect screenshots in `.cache/canvas-window/win-x64/<theme>/` for `mote-dark`,
+`mote-light`, and `mote-high-contrast-dark`. The workflow's repeated Unicode
+rows produce identical before/after pixels despite the measured source change;
+a numbered-line supplementary fixture in `.temp/win_onscreen_large/` produced
+visibly different before/after screenshots in `.cache/win_onscreen_dark/`.
+
+The tested AOT publish directory held exactly one `mote.exe` (5,886,464 bytes),
+SHA-256 `0D01E7E87CCD113B69249AB1098AADE8CAD5549A5AF348DCC54BA2DFF3530D38`.
+Host: Windows NT 10.0.26200.0, 96 DPI. Cascadia Code was the requested and
+installed font family; the actual fallback faces for CJK/emoji were not
+introspected. Dark/light/high-contrast selection, empty-row and Unicode
+screenshots were visually checked. This establishes a read-only OS paint
+callback and DIB capture, **not** physical screen presentation latency,
+editable IME, UIA, or on-screen Windows Arm64 behavior.
 
 ## Primary references
 
 - [DirectWrite factory and sharing](https://learn.microsoft.com/en-us/windows/win32/api/dwrite/nn-dwrite-idwritefactory)
 - [CreateTextLayout](https://learn.microsoft.com/en-us/windows/win32/api/dwrite/nf-dwrite-idwritefactory-createtextlayout)
 - [IDWriteTextLayout hit-testing](https://learn.microsoft.com/en-us/windows/win32/api/dwrite/nn-dwrite-idwritetextlayout)
+- [Direct2D `DrawTextLayout`](https://learn.microsoft.com/en-us/windows/win32/direct2d/how-to--draw-text)
+- [DirectWrite rendering to GDI surfaces](https://learn.microsoft.com/en-us/windows/win32/directwrite/render-to-a-gdi-surface)

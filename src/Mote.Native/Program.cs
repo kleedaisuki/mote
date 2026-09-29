@@ -19,6 +19,8 @@ internal static class Program
             return CheckWindowsCanvas();
         if (args.Length == 1 && args[0] == "--check-native-mac-canvas")
             return CheckMacCanvas();
+        if (args.Length == 5 && args[0] == "--check-native-canvas-window")
+            return CheckCanvasWindow(args[1], args[2], args[3], args[4]);
         if (args.Length == 3 && args[0] == "--check-native-mac-workflow")
         {
             if (!OperatingSystem.IsMacOS())
@@ -35,6 +37,7 @@ internal static class Program
             Console.WriteLine("Usage: mote [path] [--smoke-gui|--check-runtime]");
             Console.WriteLine("macOS diagnostic: mote --check-native-mac-workflow <input> <output>");
             Console.WriteLine("Canvas diagnostics: --check-native-windows-canvas | --check-native-mac-canvas");
+            Console.WriteLine("On-screen read-only canvas: --check-native-canvas-window <100MiB-many-line-file> <50MiB-one-line-file> <output-dir> <theme-id>");
             return 0;
         }
         var smoke = args.Length == 1 && args[0] == "--smoke-gui";
@@ -117,6 +120,37 @@ internal static class Program
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Console.Error.WriteLine($"macOS canvas diagnostic unavailable ({ex.GetType().Name}).");
+            return 4;
+        }
+    }
+
+    /// <summary>
+    /// Drives an opt-in visible native canvas without replacing the working
+    /// editor or accepting text input. Captures stay in the caller's repo cache.
+    /// </summary>
+    private static int CheckCanvasWindow(string many, string longLine, string output,
+        string themeId)
+    {
+        var theme = ThemePolicies.All.FirstOrDefault(policy =>
+            string.Equals(policy.Id, themeId, StringComparison.OrdinalIgnoreCase));
+        if (theme is null || !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
+            return 3;
+        try
+        {
+            var result = OperatingSystem.IsWindows()
+                ? Windows.Canvas.WindowsOnScreenCanvasProbe.Run(many, longLine, output, theme)
+                : Mac.Canvas.MacOnScreenCanvasProbe.Run(many, longLine, output, theme);
+            var platform = OperatingSystem.IsWindows() ? "windows" : "macos";
+            Console.WriteLine($"mote-native-canvas-window-ready platform={platform} " +
+                $"theme={result.ThemeId} before={result.ManyLineBefore} " +
+                $"after={result.ManyLineAfter} selection={result.SelectionStart}+" +
+                $"{result.SelectionLength} long-slice={result.LongLineMaxSliceLength} " +
+                $"hits={result.HitTestRoundTrips} screenshots={result.ScreenshotPaths.Count}");
+            return 0;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"On-screen canvas diagnostic unavailable ({ex.GetType().Name}).");
             return 4;
         }
     }

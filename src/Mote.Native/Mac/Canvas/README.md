@@ -43,9 +43,48 @@ not displayed frames, frame latency, visual correctness, or editability. These
 results establish target-host CoreText/CoreGraphics ABI and bounded geometry
 feasibility only. The current `NSTextView` remains the product editor.
 
+## Read-only on-screen NSView experiment
+
+`MacOnScreenCanvasProbe.Run(manyLinePath, longLinePath, outputDirectory, theme)`
+now creates a real top-level AppKit `NSWindow` with an Objective-C-backed
+`NSView`. `drawRect:`, `scrollWheel:`, and mouse down/drag/up handlers share
+`CanvasInteraction` over the immutable engine snapshot. Each paint reads only
+the currently visible `ViewportSlice` strings (at most 16 Ki UTF-16 units per
+slice), shapes them with CoreText, and paints with CoreGraphics using the
+selected theme policy. Selected text is redrawn through a clipped graphics
+state in the policy's explicit `SelectionForeground`, rather than leaving
+ordinary syntax foreground on the selection surface. No `NSTextView` copy of the 100 MiB or 50 MiB source
+exists. The synthetic probe invokes the same wheel/pointer methods that OS
+events call, verifies a global selection crossing the former 64 Ki boundary,
+seeks to a remote bounded slice in a single long line, and requires at least
+three visible-window `drawRect:` callbacks. It captures distinct numbered-row
+rasters before and after the wheel gesture so visual QA can compare line
+ordinals, not merely scroll-model counters; a separate raster shows the
+cross-seam selection. A small third fixture exercises
+pointer hit-testing on intermediate empty LF and CRLF rows, selecting through
+both to capture the trailing newline markers. It writes five AppKit view-raster
+PNGs under the specified repository `.cache/` or `.temp/` directory.
+For each theme, `mac-canvas-{theme-id}-metadata.txt` records the exact shell
+command, macOS version, backing-display scale, resolved CoreText PostScript
+font name, published executable SHA-256, visible paint count, and absolute PNG
+paths. This metadata is a CI artifact, never a file shipped with the binary.
+
+The PNGs come from `NSView.cacheDisplayInRect:toBitmapImageRep:` after the
+window has displayed, avoiding Screen Recording permissions. They verify the
+view's drawing path and are inspectable artifacts, **not** proof of physical
+compositor presentation or measured frame latency. Selection painting is
+single-rectangle-per-row and not yet correct for discontiguous bidirectional
+selections; grapheme snapping only sees a bounded slice, whose hidden prefix
+could begin inside a cluster. Horizontal trackpad scrolling and text input are
+not implemented. The custom view is read-only, and `NSTextView` remains the
+shipped editor. The new on-screen probe still needs macOS arm64/x64 Native AOT
+execution and visual inspection before calling this path verified.
+
 ## Primary API references
 
 - [CTLineGetOffsetForStringIndex](https://developer.apple.com/documentation/coretext/ctlinegetoffsetforstringindex%28_%3A_%3A_%3A%29)
 - [CTLineGetStringIndexForPosition](https://developer.apple.com/documentation/coretext/ctlinegetstringindexforposition%28_%3A_%3A%29)
 - [CTLineDraw](https://developer.apple.com/documentation/coretext/ctlinedraw%28_%3A_%3A%29)
 - [CGBitmapContextCreate](https://developer.apple.com/documentation/coregraphics/cgbitmapcontextcreate)
+- [NSView cacheDisplayInRect:toBitmapImageRep:](https://developer.apple.com/documentation/appkit/nsview/cachedisplay%28in%3Ato%3A%29)
+- [NSEvent scrollingDeltaY](https://developer.apple.com/documentation/appkit/nsevent/scrollingdeltay)
