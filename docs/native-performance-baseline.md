@@ -88,6 +88,35 @@ For **first editable**, require both a projected document and an active native f
 
 **Target experiment:** keep a fixed SHA-256 Native AOT executable per platform and fixed runner image, use telemetry **off** for the primary path, alternate control and GUI cases, and collect at least 30 warm processes on each of at least three independent hosted VM instances. Record OS/image, CPU count, executable hash, timer overhead, phase deltas, median/MAD and raw samples; reserve one first invocation per VM as a separate, *not cache-cold*, category. Run with and without the parent's 2 ms memory-poll loop to bound observer overhead. Repeat any apparent phase difference on a stable local Mac under Instruments before changing production architecture. Then, with a real Markdown file and separately with a 100 MiB/long-line file, measure open-to-first-editable and edit-to-first-draw; local external pixels can bound draw-to-visible. Only a repeatable, phase-localized bottleneck should motivate an optimization, and no CI timing gate is warranted yet.
 
+### Reproducible 100 MiB Markdown completeness benchmark
+
+The standalone `benchmarks/Mote.MarkdownBenchmarks` project isolates the new large-Markdown semantic-session contract from the earlier engine/JSON harness. It publishes as Native AOT on Windows x64 and macOS arm64. Each invocation writes **exactly 104,857,600 ASCII bytes** to a repository-local `.temp/benchmarks/` file using a 64 KiB buffer, then excludes file generation from `Document.OpenAsync` and analysis timings. It appends one source-generated-JSON row to `.cache/benchmarks/markdown-large.jsonl`; the temporary source file is removed. The four modes are deliberately *different semantic cases*, not interchangeable timing samples:
+
+| Mode | Deterministic source | Required analysis contract |
+| --- | --- | --- |
+| `markdown-flat` | 12,800 blank-separated, 8,190-character `alpha...` paragraphs (8,192 bytes per block) | Uncached `Full` is `Complete`, covers the entire 100 MiB, and reports exact zero diagnostics; one character replaced at UTF-16 offset 64 stays `Complete` after one `VersionedEdit`. |
+| `markdown-dense` | Repeated `alpha\n\n` paragraphs, far beyond the flat block-count admission budget | `Full` and near-start edited `Full` are `Provisional`, with unknown total diagnostic count; fast rejection is **not** complete parsing. |
+| `markdown-complex` | Repeated heading/inline link, list item and fenced JSON | Same honest `Provisional` outcome; independent flat-block certification is unsafe for this syntax. |
+| `markdown-cancel` | Same sparse flat source as `markdown-flat` | A 5 ms *requested* timer cancellation interrupts the uncached scan; a second `Full` on the same session recovers `Complete`. Record the timer's **actual** request time and the request-to-observed-cancellation interval separately. |
+
+All session calls are synchronous on one measured thread. `GC.GetAllocatedBytesForCurrentThread` is **cumulative transient analyzer allocation**, not retained heap; allocation excludes source generation and file open, but includes the session call and projection. A forced GC occurs after open and before the measured analysis. Process working-set samples are taken after open, analysis, edit and cancellation recovery; a positive `PeakWorkingSet64` is a **whole-process lifetime** peak including the engine document, not an analyzer-only RSS increment. As with the preceding engine benchmark, a zero OS peak counter is serialized as `null` (unavailable), and positive macOS point-in-time `WorkingSet64` must **not** be labeled a peak. The edit's engine `ApplyMs` and session `EditAnalyzeMs` are distinct; neither includes native UI projection or paint. For cancellation, the timer may fire later than its requested 5 ms under scheduling/GC load, so response latency must be assessed from the recorded actual request timestamp, not `InitialAnalyzeMs − 5`.
+
+A **single local Windows x64 Native AOT sanity run** (Windows 10.0.26200, .NET 10.0.11, 20 logical processors, warm cache) passed all four contracts: flat cold certification 559 ms / 638,971,432 allocated bytes / 229.4 MiB process peak; flat edit analysis 0.024 ms / 67,928 bytes; dense and complex Full returned `Provisional` in 1.18 and 0.98 ms. The cancellation timer actually fired at 13.63 ms, the exception followed 0.034 ms later, and the same session recertified in 555 ms. These are **one-shot functionality and order-of-magnitude checks**, not a p50, p95, or cross-platform performance claim. In particular, the ~609 MiB transient allocation of a complete flat certification is a real GC/energy cost despite modest retained RSS; its practical significance requires hosted repetition and, eventually, user-file distributions.
+
+`Benchmarks` now has a focused `workflow_dispatch` choice `suite=markdown`. It runs three process-isolated repetitions of all four modes **on the same VM and same published binary per RID**, rotating mode order, and uploads the 12 raw JSONL rows per platform without a timing gate. `suite=engine` and `suite=startup` retain their previous manual workloads; default `suite=all` and the weekly schedule run all suites. On a push, a small path-classification job selects only the suites whose source areas changed: `benchmarks/Mote.MarkdownBenchmarks/**` selects Markdown, `tests/Mote.Benchmarks/**` selects existing engine/JSON, and `tests/Measure-NativeStartup.ps1` selects startup. A workflow-only change conservatively selects all; a workflow change accompanying only Markdown source selects Markdown alone. This prevents a Markdown-only push from repeating the already measured 100 MiB JSON guard. The useful hosted comparison is **within one RID/VM** across modes and across same-RID repeated runs; it is not a macOS-vs-Windows speed contest. Three repetitions make nearest-rank p95 equal the sample maximum, so preserve raw points and do not invent a tail SLA.
+
+Reproduction after Native AOT publish, with all artifacts confined to this checkout:
+
+```powershell
+dotnet publish benchmarks/Mote.MarkdownBenchmarks/Mote.MarkdownBenchmarks.csproj `
+  -c Release -r win-x64 --self-contained true -p:PublishAot=true `
+  -o .temp/benchmarks/markdown-win-x64
+.temp/benchmarks/markdown-win-x64/Mote.MarkdownBenchmarks.exe markdown-flat
+.temp/benchmarks/markdown-win-x64/Mote.MarkdownBenchmarks.exe markdown-dense
+.temp/benchmarks/markdown-win-x64/Mote.MarkdownBenchmarks.exe markdown-complex
+.temp/benchmarks/markdown-win-x64/Mote.MarkdownBenchmarks.exe markdown-cancel
+```
+
 ### Local Windows Native AOT sanity snapshot
 
 Environment: Windows 10.0.26200 x64, Intel Core i9-12900H, 32 GiB RAM, .NET SDK 10.0.400. The engine harness was published as `win-x64` Native AOT. Each row below is **one** process, run on a shared development host with warm filesystem caches and concurrent development activity; it is a functionality/performance-order sanity check, not a distribution or uncertainty estimate.
