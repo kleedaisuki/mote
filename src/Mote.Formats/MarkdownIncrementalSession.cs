@@ -7,9 +7,9 @@ namespace Mote.Formats;
 /// <summary>
 /// A per-document Markdown analyzer with conservative, source-spanned block reuse.
 /// Small documents use Markdig's complete AST. Large files can be certified
-/// complete only when every bounded block belongs to an independent flat
-/// heading/paragraph grammar; otherwise the visible result is Provisional.
-/// Lists, fences, references and malformed intermediates never inherit stale
+/// complete only when every bounded block belongs to an independent
+/// heading/paragraph/closed-fence grammar; otherwise the visible result is Provisional.
+/// Lists, references and malformed intermediates never inherit stale
 /// semantics from an unrelated block.
 /// </summary>
 internal sealed class MarkdownIncrementalSession : IFormatSession
@@ -65,7 +65,11 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         else if (!CanExactParse(snapshot, cancellationToken))
         {
             var skipCertification = TryMapUncertifiedLine(snapshot, changesSinceCommittedState, out var badLine);
-            if (!skipCertification &&
+            // A cold Visible request must never scan a giant document merely
+            // to discover whether Full semantics are possible. Idle Full can
+            // certify later; existing complete caches and safe local edits
+            // have already returned above without this fallback.
+            if (request.Scope == AnalysisScope.Full && !skipCertification &&
                 TryCertifyFlat(snapshot, cancellationToken, out var certifiedFlat, out badLine))
             {
                 var projection = ProjectFlat(snapshot, certifiedFlat, request, cancellationToken);
@@ -116,9 +120,9 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
 
     /// <summary>
     /// Certifies a deliberately small, dependency-free CommonMark subset from
-    /// bounded physical-line reads. Exact blank separators make each heading or
-    /// paragraph an independent Markdig block; no references or inline markup
-    /// are admitted. One failure rejects the whole certification.
+    /// bounded physical-line reads. Exact blank separators make each heading,
+    /// paragraph or closed fence an independent Markdig block. Active syntax
+    /// outside fences is not admitted. One failure rejects the whole document.
     /// </summary>
     private static bool TryCertifyFlat(TextSnapshot snapshot, CancellationToken ct,
         out List<FlatRun> runs, out TextSpan? badLine)
@@ -128,6 +132,8 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         if (snapshot.LineCount > MaxFlatBlocks * 3 + 1) return false;
         var blocks = new List<FlatBlock>();
         var separated = true;
+        var fenceStart = -1;
+        string? fenceMarker = null;
         for (var line = 0; line < snapshot.LineCount; line++)
         {
             ct.ThrowIfCancellationRequested();
@@ -147,6 +153,34 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
                 else if (raw.EndsWith('\n')) bodyLength--;
                 else { badLine = new TextSpan(start, rawLength); return false; }
             }
+            if (fenceStart >= 0)
+            {
+                if (end - fenceStart > MaxExactLineLength + 2)
+                {
+                    badLine = new TextSpan(fenceStart, end - fenceStart);
+                    return false;
+                }
+                if (raw.AsSpan(0, bodyLength).SequenceEqual(fenceMarker))
+                {
+                    var length = start + bodyLength - fenceStart;
+                    if (length > MaxExactLineLength)
+                    {
+                        badLine = new TextSpan(fenceStart, end - fenceStart);
+                        return false;
+                    }
+                    var source = snapshot.GetText(fenceStart, length);
+                    if (!IsVerifiedFenceBlock(source))
+                    {
+                        badLine = new TextSpan(fenceStart, end - fenceStart);
+                        return false;
+                    }
+                    blocks.Add(new FlatBlock(fenceStart, length, CertifiedKind.FencedCode, 0));
+                    fenceStart = -1;
+                    fenceMarker = null;
+                    separated = false;
+                }
+                continue;
+            }
             if (bodyLength == 0) { separated = true; continue; }
             if (!separated)
             {
@@ -160,13 +194,26 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
             // A count-budget failure is not an intrinsic defect of this line:
             // deleting earlier blocks may make the same line admissible.
             if (blocks.Count == MaxFlatBlocks) return false;
+            if (TryFenceOpener(raw.AsSpan(0, bodyLength), out var marker))
+            {
+                fenceStart = start;
+                fenceMarker = marker;
+                separated = false;
+                continue;
+            }
             if (!IsVerifiedFlatBlock(raw[..bodyLength], out var level))
             {
                 badLine = new TextSpan(start, rawLength);
                 return false;
             }
-            blocks.Add(new FlatBlock(start, bodyLength, level));
+            blocks.Add(new FlatBlock(start, bodyLength,
+                level == 0 ? CertifiedKind.Paragraph : CertifiedKind.Heading, level));
             separated = false;
+        }
+        if (fenceStart >= 0)
+        {
+            badLine = new TextSpan(fenceStart, snapshot.Length - fenceStart);
+            return false;
         }
         ct.ThrowIfCancellationRequested();
         if (blocks.Count > 0)
@@ -243,6 +290,52 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
                 parsed[0] is HeadingBlock heading && heading.Level == level);
     }
 
+    /// <summary>Accepts only a column-zero opener with a small ASCII info word.</summary>
+    private static bool TryFenceOpener(ReadOnlySpan<char> line, out string marker)
+    {
+        marker = string.Empty;
+        if (line.IsEmpty || line[0] is not ('`' or '~')) return false;
+        var count = 0;
+        while (count < line.Length && line[count] == line[0]) count++;
+        if (count is < 3 or > 16) return false;
+        foreach (var c in line[count..])
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_')) return false;
+        marker = new string(line[..count]);
+        return true;
+    }
+
+    /// <summary>
+    /// Verifies a closed, bounded fence with the same parser used by legacy
+    /// analysis. Its content is opaque: reference-like text inside cannot
+    /// define or consume links in another block.
+    /// </summary>
+    private static bool IsVerifiedFenceBlock(string source)
+    {
+        var firstEnd = source.IndexOf('\n');
+        if (firstEnd < 0) return false;
+        var openerEnd = firstEnd > 0 && source[firstEnd - 1] == '\r' ? firstEnd - 1 : firstEnd;
+        if (!TryFenceOpener(source.AsSpan(0, openerEnd), out var marker)) return false;
+        var lastStart = source.LastIndexOf('\n') + 1;
+        if (lastStart <= firstEnd || !source.AsSpan(lastStart).SequenceEqual(marker)) return false;
+        for (var i = 0; i < source.Length; i++)
+            if (source[i] == '\r' && (i + 1 == source.Length || source[i + 1] != '\n')) return false;
+        var parsed = Markdown.Parse(source, MarkdownPolicy.Pipeline);
+        return parsed.Count == 1 && parsed[0] is FencedCodeBlock &&
+            parsed[0].Span.Start == 0 && parsed[0].Span.End + 1 == source.Length;
+    }
+
+    private static bool IsVerifiedCertifiedBlock(string source, out CertifiedKind kind, out int level)
+    {
+        if (IsVerifiedFlatBlock(source, out level))
+        {
+            kind = level == 0 ? CertifiedKind.Paragraph : CertifiedKind.Heading;
+            return true;
+        }
+        level = 0;
+        kind = CertifiedKind.FencedCode;
+        return IsVerifiedFenceBlock(source);
+    }
+
     private bool TryFlatIncremental(TextSnapshot snapshot, VersionedEdit edit, CancellationToken ct,
         out List<FlatRun> next)
     {
@@ -262,9 +355,9 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         var newLength = (long)block.Length - change.DeleteLength + change.InsertText.Length;
         if (newLength is < 1 or > MaxExactLineLength) return false;
         var source = snapshot.GetText(start, (int)newLength);
-        if (!IsVerifiedFlatBlock(source, out var level)) return false;
+        if (!IsVerifiedCertifiedBlock(source, out var kind, out var level)) return false;
         var delta = change.InsertText.Length - change.DeleteLength;
-        var updated = new FlatBlock(0, (int)newLength, level);
+        var updated = new FlatBlock(0, (int)newLength, kind, level);
         for (var i = 0; i < _flatRuns.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -349,7 +442,13 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
                 var localTokens = new List<SemanticToken>();
                 var localDiagnostics = new List<Diagnostic>();
                 var node = MarkdownPolicy.Project(parsed[0], source, localTokens, localDiagnostics, ct);
-                if (node.Kind != (block.HeadingLevel == 0 ? "paragraph" : "heading") ||
+                var expectedKind = block.Kind switch
+                {
+                    CertifiedKind.Paragraph => "paragraph",
+                    CertifiedKind.Heading => "heading",
+                    _ => "fenced-code"
+                };
+                if (node.Kind != expectedKind ||
                     node.Span != new TextSpan(0, block.Length) || localDiagnostics.Count != 0)
                     throw new InvalidOperationException("Certified Markdown block violated its grammar invariant.");
                 children.Add(ShiftNode(node, start));
@@ -636,8 +735,11 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
     /// <summary>A slice of immutable blocks sharing one lazy UTF-16 displacement.</summary>
     private sealed record Run(Block[] Blocks, int First, int Count, int Shift);
 
-    /// <summary>A certified independent block; no full paragraph text is retained.</summary>
-    private readonly record struct FlatBlock(int Start, int Length, int HeadingLevel);
+    /// <summary>The block forms admitted by the whole-document certifier.</summary>
+    private enum CertifiedKind { Paragraph, Heading, FencedCode }
+
+    /// <summary>A certified independent block; no full source text is retained.</summary>
+    private readonly record struct FlatBlock(int Start, int Length, CertifiedKind Kind, int HeadingLevel);
 
     /// <summary>Compact certified block offsets sharing one lazy edit displacement.</summary>
     private sealed record FlatRun(FlatBlock[] Blocks, int First, int Count, int Shift);
