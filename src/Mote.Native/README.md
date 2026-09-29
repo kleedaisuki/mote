@@ -47,15 +47,34 @@ AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
   continuous scroll and off-page screen-reader text exposure are not yet
   implemented. A 64 KiB page within a single 50 MiB line still
   needs measured shaping and caret behavior.
-- Format analysis is version-checked and canceled when superseded. Policies
-  offering `IIncrementalDocumentPolicy` get one serialized per-document session
-  with a bounded versioned edit chain; Plain, CSV and Markdown currently offer
-  this capability. CSV and plain text can report complete large-file facts;
-  large Markdown may report a provisional viewport until a complete cache is
-  available. The legacy fallback performs complete analysis only through
-  2 Mi UTF-16 units and explicitly labels larger projections as partial or
-  unavailable. An empty partial diagnostic list never means the whole file
-  is valid. A future policy can adopt sessions without changing the shell.
+- Format analysis is version-checked and canceled when superseded. All six
+  shipped format policies offer `IIncrementalDocumentPolicy`: each open document
+  owns one serialized session and a bounded versioned edit chain. Immediate
+  analysis requests the visible source range above 2 Mi UTF-16 units; its
+  `Provisional`, `CoveredRegion`, or `Complete` result is shown honestly. A
+  separate idle lane may request `Full` for incomplete JSON, YAML, TOML, and
+  Markdown. It waits 1/3/15 seconds for files <=4 Mi, <=32 Mi, or larger,
+  respectively, and at most one completed pass is attempted per stable version.
+  A new edit or page reanalysis cancels the pass; a retry after cancellation
+  pays the full delay again. Markdown beyond 16 Mi UTF-16 units is excluded
+  because its current full parse can materialize too much text. Even a `Full`
+  request can remain provisional: the status says so, visible diagnostics stay
+  intact, and no global count is invented. Only certified `Complete` results
+  promote the global count. The idle pass is deferred with an explicit status
+  when the [GC's last physical-memory observation](https://learn.microsoft.com/en-us/dotnet/api/system.gcmemoryinfo.memoryloadbytes)
+  suggests insufficient work
+  headroom; this advisory guard cannot guarantee that another process will not
+  exhaust memory later. Large JSON visible requests scan globally for accurate
+  semantics, so the controller uses a 200/500 ms debounce above 8/32 Mi UTF-16
+  units to coalesce typing, with immediate cancellation of stale work. Analysis
+  cannot block the native input thread, but OS/format-specific peak memory and
+  background CPU cost remain release gates.
+- A separate `Viewport/` model now represents continuous source-backed scrolling
+  and bounded visible slices without a per-line object graph. It is **not**
+  wired to the shipped native text control. Read-only DirectWrite and CoreText
+  geometry probes can be invoked with `--check-native-windows-canvas` and
+  `--check-native-mac-canvas`; they do not establish a painted interactive
+  canvas, IME parity, or accessibility.
 - Native preview is a bounded, source-mapped semantic rendering: Markdown
   headings, paragraphs, lists, quotes and code; CSV rows and columns; and
   structured JSON/TOML/YAML trees. It is not yet a full CommonMark or

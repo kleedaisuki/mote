@@ -15,6 +15,10 @@ internal static class Program
             Console.WriteLine("mote-native-ready");
             return 0;
         }
+        if (args.Length == 1 && args[0] == "--check-native-windows-canvas")
+            return CheckWindowsCanvas();
+        if (args.Length == 1 && args[0] == "--check-native-mac-canvas")
+            return CheckMacCanvas();
         if (args.Length == 3 && args[0] == "--check-native-mac-workflow")
         {
             if (!OperatingSystem.IsMacOS())
@@ -30,6 +34,7 @@ internal static class Program
         {
             Console.WriteLine("Usage: mote [path] [--smoke-gui|--check-runtime]");
             Console.WriteLine("macOS diagnostic: mote --check-native-mac-workflow <input> <output>");
+            Console.WriteLine("Canvas diagnostics: --check-native-windows-canvas | --check-native-mac-canvas");
             return 0;
         }
         var smoke = args.Length == 1 && args[0] == "--smoke-gui";
@@ -78,5 +83,41 @@ internal static class Program
         app.Run();
         MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
         return 0;
+    }
+
+    /// <summary>Runs the optional Windows geometry diagnostic without affecting normal editing.</summary>
+    private static int CheckWindowsCanvas()
+    {
+        if (!OperatingSystem.IsWindows()) return 3;
+        try
+        {
+            var result = Windows.Canvas.WindowsCanvasProbe.Run();
+            Console.WriteLine($"mote-native-windows-canvas-ready cases={result.Cases} " +
+                $"ascii={result.ExactAsciiHits} clusters={result.ClusterRoundTrips}");
+            return 0;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"Windows canvas diagnostic unavailable ({ex.GetType().Name}).");
+            return 4;
+        }
+    }
+
+    /// <summary>Runs the optional macOS geometry/bitmap diagnostic without taking input ownership.</summary>
+    private static int CheckMacCanvas()
+    {
+        if (!OperatingSystem.IsMacOS()) return 3;
+        try
+        {
+            var result = Mac.Canvas.MacCanvasProbe.Run();
+            Console.WriteLine($"mote-native-mac-canvas-ready cases={result.Cases.Count} " +
+                $"painted={result.Cases.Sum(static item => item.PaintedBytes)}");
+            return 0;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"macOS canvas diagnostic unavailable ({ex.GetType().Name}).");
+            return 4;
+        }
     }
 }

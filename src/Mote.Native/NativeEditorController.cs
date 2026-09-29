@@ -30,6 +30,8 @@ internal sealed class NativeEditorController : IDisposable
     private bool _nativeProjectsGlobalSelection;
     private IDocumentPolicy _policy = DocumentPolicies.ForKind(DocumentKind.PlainText);
     private NativeFormatSessionDriver? _sessionDriver;
+    private NativeIdleFullAnalysis? _idleFullAnalysis;
+    private NativeAnalysisView? _visibleSessionAnalysis;
     private NativeTextProjection? _projection;
     private CancellationTokenSource? _analysisCancellation;
     private long _analysisSerial;
@@ -51,6 +53,7 @@ internal sealed class NativeEditorController : IDisposable
         _theme = theme;
         _startupPath = startupPath;
         _sessionDriver = CreateSessionDriver(_policy);
+        _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
         _document.Changed += DocumentChanged;
         shell.TextChanged += Edited;
         shell.SelectionChanged += SelectionChanged;
@@ -83,6 +86,8 @@ internal sealed class NativeEditorController : IDisposable
         _disposed = true;
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
+        _idleFullAnalysis?.Dispose();
+        _visibleSessionAnalysis = null;
         _document.Changed -= DocumentChanged;
         _sessionDriver?.Dispose();
         _findCancellation?.Cancel();
@@ -185,6 +190,8 @@ internal sealed class NativeEditorController : IDisposable
     {
         ++_openSerial;
         CancelAnalysis();
+        _idleFullAnalysis?.Dispose();
+        _visibleSessionAnalysis = null;
         _document.Changed -= DocumentChanged;
         _sessionDriver?.Dispose();
         _document.Dispose();
@@ -202,6 +209,7 @@ internal sealed class NativeEditorController : IDisposable
             ? DocumentPolicies.ForPath(path)
             : DocumentPolicies.ForKind(DocumentKind.PlainText);
         _sessionDriver = CreateSessionDriver(_policy);
+        _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
         _pageStart = 0;
         _pageLength = 0;
         _requestedCaretSource = 0;
@@ -739,6 +747,8 @@ internal sealed class NativeEditorController : IDisposable
     private void ScheduleAnalysis(TelemetryMark editMark = default)
     {
         CancelAnalysis();
+        _idleFullAnalysis?.Cancel();
+        _visibleSessionAnalysis = null;
         var cancellation = new CancellationTokenSource();
         _analysisCancellation = cancellation;
         var serial = ++_analysisSerial;
@@ -820,7 +830,16 @@ internal sealed class NativeEditorController : IDisposable
         {
             try
             {
-                await Task.Delay(80, cancellation.Token).ConfigureAwait(false);
+                // JSON Visible checks the whole source to certify global semantics.
+                // A longer debounce on huge files coalesces typing rather than
+                // repeatedly starting a multi-second scan after each keystroke.
+                var delay = policy.Kind == DocumentKind.Json ? snapshot.Length switch
+                {
+                    > 32 * 1024 * 1024 => 500,
+                    > 8 * 1024 * 1024 => 200,
+                    _ => 80
+                } : 80;
+                await Task.Delay(delay, cancellation.Token).ConfigureAwait(false);
                 using var parse = MoteTelemetry.Start(TelemetryOperation.AnalysisParse,
                     Dimensions(snapshot));
                 var result = await driver.AnalyzeAsync(snapshot, request,
@@ -840,16 +859,29 @@ internal sealed class NativeEditorController : IDisposable
                         TelemetryOperation.AnalysisToPresentation, Dimensions(snapshot));
                     var tokens = ProjectTokens(result.Tokens, pageStart, pageLength,
                         _projection!);
-                    var diagnostics = SessionDiagnosticSummary(result);
+                    var diagnostics = SessionDiagnosticSummary(result, pageStart, pageLength);
                     var preview = NativePreviewBuilder.Build(result, policy.Kind, snapshot,
                         pageStart, pageLength);
-                    _shell.SetAnalysis(new NativeAnalysisView(tokens, diagnostics,
+                    _visibleSessionAnalysis = new NativeAnalysisView(tokens, diagnostics,
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
-                        preview.Spans));
+                        preview.Spans);
+                    _shell.SetAnalysis(_visibleSessionAnalysis);
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
                         dimensions: Dimensions(snapshot));
                     MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation,
                         editMark, Dimensions(snapshot));
+                    var idle = _idleFullAnalysis?.Offer(snapshot, result, request.VisibleRange);
+                    if (idle is IdleFullOffer.MemoryLimited or IdleFullOffer.PolicyLimited)
+                    {
+                        var reason = idle == IdleFullOffer.MemoryLimited
+                            ? "memory pressure"
+                            : "format work limit";
+                        _shell.SetAnalysis(_visibleSessionAnalysis with
+                        {
+                            Status = $"{policy.DisplayName} · Full pass deferred: {reason}; " +
+                                $"global diagnostics unknown · v{result.Version}"
+                        });
+                    }
                 });
             }
             catch (OperationCanceledException) { }
@@ -867,19 +899,29 @@ internal sealed class NativeEditorController : IDisposable
         });
     }
 
-    private static string SessionDiagnosticSummary(DocumentAnalysis result)
+    /// <summary>
+    /// Separates a certified document-wide count from diagnostics actually visible
+    /// on the current source page. Full projections may include off-page errors.
+    /// </summary>
+    private static string SessionDiagnosticSummary(DocumentAnalysis result,
+        int pageStart, int pageLength)
     {
+        var pageEnd = pageStart + pageLength;
+        var shown = result.Diagnostics.Where(d => d.Span.Length == 0
+            ? d.Span.Start >= pageStart &&
+                (d.Span.Start < pageEnd ||
+                 pageEnd == result.Root.Span.End && d.Span.Start == pageEnd)
+            : d.Span.Start < pageEnd && d.Span.End > pageStart).ToArray();
         if (result.Completeness != AnalysisCompleteness.Complete)
             return $"{result.Completeness} in {result.Coverage.Start:N0}–" +
                 $"{result.Coverage.End:N0}; global diagnostics unknown. " +
-                (result.Diagnostics.Count == 0 ? "No diagnostics in current projection." :
-                    DiagnosticSummary(result.Diagnostics));
+                (shown.Length == 0 ? "No diagnostics in displayed viewport." :
+                    DiagnosticSummary(shown));
         var count = result.TotalDiagnosticCount ?? result.Diagnostics.Count;
         if (count == 0) return "No diagnostics.";
-        if (result.Diagnostics.Count == 0)
+        if (shown.Length == 0)
             return $"{count:N0} document diagnostics; none in displayed viewport.";
-        var shown = DiagnosticSummary(result.Diagnostics);
-        return $"{count:N0} document diagnostics; shown: {shown}";
+        return $"{count:N0} document diagnostics; shown: {DiagnosticSummary(shown)}";
     }
 
     private void DocumentChanged(object? sender, DocumentChangedEventArgs change)
@@ -892,14 +934,89 @@ internal sealed class NativeEditorController : IDisposable
         policy is IIncrementalDocumentPolicy incremental
             ? new NativeFormatSessionDriver(incremental) : null;
 
+    /// <summary>
+    /// Binds the optional idle lane to one document/policy identity. Worker results
+    /// cross the UI thread only after rechecking that identity and source version.
+    /// </summary>
+    private NativeIdleFullAnalysis? CreateIdleFullAnalysis(NativeFormatSessionDriver? driver,
+        Document document, IDocumentPolicy policy)
+    {
+        if (driver is null) return null;
+        return new NativeIdleFullAnalysis(driver, policy.Kind,
+            (snapshot, result, visibleRange) => Post(() =>
+                PublishIdleFullAnalysis(driver, document, policy, snapshot, result,
+                    visibleRange)),
+            (snapshot, error) => Post(() =>
+            {
+                if (!_disposed && ReferenceEquals(driver, _sessionDriver) &&
+                    ReferenceEquals(document, _document) &&
+                    snapshot.Version == _document.Snapshot.Version)
+                {
+                    MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded,
+                        dimensions: Dimensions(snapshot), status: TelemetryStatus.Failure);
+                    if (_visibleSessionAnalysis is { } visible)
+                        _shell.SetAnalysis(visible with
+                        {
+                            Status = $"{policy.DisplayName} · Full pass failed; " +
+                                $"visible diagnostics retained · v{snapshot.Version}"
+                        });
+                }
+            }));
+    }
+
+    /// <summary>
+    /// Promotes only a certified whole-document result. A policy may correctly
+    /// answer a Full request with Provisional coverage, which must not erase the
+    /// more relevant visible-page analysis or claim a global problem count.
+    /// </summary>
+    private void PublishIdleFullAnalysis(NativeFormatSessionDriver driver, Document document,
+        IDocumentPolicy policy, TextSnapshot snapshot, DocumentAnalysis result,
+        Mote.Formats.TextSpan visibleRange)
+    {
+        if (_disposed || !ReferenceEquals(driver, _sessionDriver) ||
+            !ReferenceEquals(document, _document) || !ReferenceEquals(policy, _policy) ||
+            snapshot.Version != _document.Snapshot.Version || result.Version != snapshot.Version ||
+            visibleRange.Start != _pageStart || visibleRange.Length != _pageLength)
+        {
+            MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded);
+            return;
+        }
+        if (result.Completeness != AnalysisCompleteness.Complete)
+        {
+            // The Full request did run, but the policy could not certify the
+            // entire file. Keep visible facts and make the finite result clear.
+            if (_visibleSessionAnalysis is { } visible)
+                _shell.SetAnalysis(visible with
+                {
+                    Status = $"{policy.DisplayName} · Full pass {result.Completeness}; " +
+                        $"global diagnostics unknown · v{result.Version}"
+                });
+            return;
+        }
+
+        using var present = MoteTelemetry.Start(TelemetryOperation.AnalysisToPresentation,
+            Dimensions(snapshot));
+        var tokens = ProjectTokens(result.Tokens, _pageStart, _pageLength, _projection!);
+        var preview = NativePreviewBuilder.Build(result, policy.Kind, snapshot,
+            _pageStart, _pageLength);
+        _shell.SetAnalysis(new NativeAnalysisView(tokens,
+            SessionDiagnosticSummary(result, _pageStart, _pageLength),
+            preview.Text, $"{policy.DisplayName} · Complete · v{result.Version}", preview.Spans));
+        MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
+            dimensions: Dimensions(snapshot));
+    }
+
     private void SelectPolicy(IDocumentPolicy policy)
     {
         if (ReferenceEquals(policy, _policy)) return;
         ++_formatSerial;
         CancelAnalysis();
+        _idleFullAnalysis?.Dispose();
+        _visibleSessionAnalysis = null;
         _sessionDriver?.Dispose();
         _policy = policy;
         _sessionDriver = CreateSessionDriver(policy);
+        _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
     }
 
     private static IReadOnlyList<SemanticToken> ProjectTokens(IReadOnlyList<SemanticToken> tokens,

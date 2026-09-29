@@ -38,6 +38,9 @@ internal sealed class NativeFormatSessionDriver : IDisposable
         _session = policy.CreateSession();
     }
 
+    /// <summary>The compile-time policy kind bound to this document-lifetime session.</summary>
+    internal DocumentKind Kind => _policy.Kind;
+
     /// <summary>
     /// Records a committed mutation in delivery order. History is bounded; exceeding
     /// the bound only forfeits incremental reuse, never correctness.
