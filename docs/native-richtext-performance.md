@@ -51,6 +51,21 @@ With **mandatory** selection/scroll restoration included in the timed RTF pass (
 
 The one-pass RTF path's 20 synthetic post-style `WM_CHAR` calls at a restored caret had within-run p95 medians of approximately **17.3 ms** (one long line), **2.8 ms** (ASCII lines), and **14.9 ms** (mixed Unicode lines). The one-long-line case remains expensive for typing even after eliminating the styling loop. These samples are too few to infer a product p95; retain separate user-input-to-present tracing.
 
+### Live-theme and Undo HWND follow-up (2026-09-30)
+
+The current default Windows shell was exercised in a disposable, real `RICHEDIT50W` HWND by `.temp/WindowsThemeUndoProbe/` on Windows 11 10.0.26200 x64, .NET SDK 10.0.400, source checkout `2670ba2` plus the uncommitted live-theme Windows patch. Build and run, without rebuilding project references:
+
+```powershell
+dotnet build .temp/WindowsThemeUndoProbe/Probe.csproj -c Release -p:BuildProjectReferences=false -v:q
+dotnet .temp/WindowsThemeUndoProbe/bin/Release/net10.0-windows/Mote.Tests.dll
+```
+
+Raw output is in `.cache/native-richtext-performance/theme-undo-20260930.txt`. The probe uses an in-memory `Mote.Engine.Document`, routes native committed edits and both native shell Undo commands through that engine, publishes version-matched semantic tokens, then invokes `SetTheme(light)` and `SetTheme(dark)` so the one-pass RTF path is actually eligible. It uses `TranslateAcceleratorW` with a temporary, restored Ctrl keyboard state for the Ctrl+Z route, and sends the Edit-menu command ID for the menu route. This is an actual HWND and engine transaction test, not a physical-keyboard or full `NativeEditorController`/disk-save test.
+
+Two edits followed by the two distinct engine Undo routes restored the **exact original source** in both the engine snapshot and RichEdit's CRLF-projected text. Before/after each pair of live palette switches, `EM_EXGETSEL` remained `[800,805]`, `EM_GETFIRSTVISIBLELINE` remained `53`, and all **3,838 UTF-16 bytes** of the displayed page matched. The 120-line fixture reported `EM_GETLINECOUNT=120` and allowed `EM_GETFIRSTVISIBLELINE=119` after an explicit large scroll, so line 53 was not a scroll clamp. The selection was placed **before** sampling the scroll baseline: an earlier draft incorrectly sampled first line `76` and then moved the selection offscreen, which itself changed first line to `14`; that was a probe error, not a theme regression.
+
+`EM_CANUNDO` nevertheless returned `1` after semantic RTF publication. A deliberately direct `EM_UNDO` on a disposable third edit returned `1` and changed `EM_CANUNDO` to `0`, but did **not** change either engine or native text and did not change the sampled token color (`0xDFDAD8`). Thus `EM_CANUNDO` alone cannot establish that the user can undo a text edit outside the engine. Synthetic keyboard-position `WM_CONTEXTMENU` and right-button messages produced neither a popup-menu window nor `GUI_INMENUMODE` in this probe; the shell's Edit menu and Ctrl+Z are wired to engine events. A physical mouse, assistive technology, and other native-command ingress were not exercised, so do not generalize this to every conceivable context-menu route. If a native Undo action ever becomes user-reachable, route it to engine Undo rather than relying on native stack state; do not replace the measured one-pass RTF styling with per-token formatting on the basis of `EM_CANUNDO` alone.
+
 ## Integration choice and failure boundaries
 
 | Approach | Measured result | Judgment |
