@@ -87,7 +87,9 @@ function Invoke-NativeSmoke {
         telemetry = $TraceMode
         ordinal = $Index
         process_start_to_smoke_exit_ms = $watch.Elapsed.TotalMilliseconds
-        observed_peak_working_set_bytes = if ($memorySamples -gt 0) { $peak } else { $null }
+        # macOS can report zero throughout a short smoke run; zero is unavailable,
+        # not evidence that the GUI process consumed no resident memory.
+        observed_peak_working_set_bytes = if ($peak -gt 0) { $peak } else { $null }
         memory_sample_count = $memorySamples
         cumulative_trace_bytes = $traceBytes
     }
