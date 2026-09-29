@@ -205,3 +205,7 @@ finally {
     if ($success) { Remove-Item -LiteralPath $scratch -Recurse -Force }
     else { Write-Warning "External macOS workflow did not verify; retained synthetic fixture under $scratch." }
 }
+
+if (-not $success) {
+    throw "External macOS open-edit-save-reopen workflow failed at ${stage}: $($result.error)"
+}

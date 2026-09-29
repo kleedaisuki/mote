@@ -122,6 +122,39 @@ jobs:
           if ($inventory.non_executable_payload_count -ne 0) {
             throw "Native AOT publish is not one executable: $($inventory.non_executable_payload_count) additional payload files, including $($inventory.bundled_native_library_count) bundled native libraries. See uploaded inventory."
           }
+      - name: Verify OS-native offscreen text-canvas probe
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $publish = "src/Mote.Native/bin/Release/net10.0/$rid/publish"
+          $exe = if ($IsWindows) { Join-Path $publish 'mote.exe' } else { Join-Path $publish 'mote' }
+          $flag = if ($IsWindows) { '--check-native-windows-canvas' } else { '--check-native-mac-canvas' }
+          New-Item -ItemType Directory -Force -Path '.temp/ci-smoke' | Out-Null
+          $start = @{
+            FilePath = $exe
+            ArgumentList = $flag
+            PassThru = $true
+            Wait = $true
+            RedirectStandardOutput = '.temp/ci-smoke/canvas-stdout.txt'
+            RedirectStandardError = '.temp/ci-smoke/canvas-stderr.txt'
+          }
+          if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+          $process = Start-Process @start
+          $output = (Get-Content '.temp/ci-smoke/canvas-stdout.txt' -Raw).Trim()
+          if ($process.ExitCode -ne 0) {
+            throw "Native canvas probe exited $($process.ExitCode): $(Get-Content '.temp/ci-smoke/canvas-stderr.txt' -Raw)"
+          }
+          if ($IsWindows) {
+            if ($output -cne 'mote-native-windows-canvas-ready cases=5 ascii=2 clusters=5') {
+              throw "Unexpected Windows canvas marker: $output"
+            }
+          } elseif ($output -cmatch '^mote-native-mac-canvas-ready cases=4 painted=([0-9]+)$') {
+            if ([long]$Matches[1] -le 0) { throw "Mac canvas painted no pixels: $output" }
+          } else {
+            throw "Unexpected macOS canvas marker: $output"
+          }
+          Write-Host "Native offscreen text-canvas probe passed: $output"
       - name: Smoke-test native executable without a display server
         shell: pwsh
         run: |
@@ -201,9 +234,8 @@ jobs:
           name: mac-accessibility-${{ matrix.rid }}
           path: .cache/ci-inventory/${{ matrix.rid }}/mac-accessibility.json
           if-no-files-found: error
-      - name: Probe external macOS keyboard edit-save-reopen workflow
+      - name: Verify external macOS keyboard edit-save-reopen workflow
         if: always() && startsWith(matrix.rid, 'osx-')
-        continue-on-error: true
         shell: pwsh
         timeout-minutes: 3
         run: |
@@ -227,5 +259,6 @@ jobs:
           name: failed-gui-workflow-${{ matrix.rid }}
           path: |
             .temp/mac-native-*.txt
+            .temp/ci-smoke/canvas-*.txt
             .temp/gui-workflow/**
           if-no-files-found: ignore
