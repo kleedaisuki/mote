@@ -71,6 +71,15 @@ internal static class ObjC
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, nint arg1, nint arg2, double arg3);
 
+    /// <summary>
+    /// Sends a method whose first argument is an Objective-C object and whose
+    /// second argument is a CGFloat. The distinct name prevents a pointer
+    /// from silently selecting the two-double ABI on arm64.
+    /// </summary>
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint SendObjectDouble(nint receiver, nint selector,
+        nint objectArgument, double scalarArgument);
+
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, Rect rect);
 

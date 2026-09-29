@@ -449,7 +449,7 @@ internal sealed unsafe class MacTextInputIsland
         _trueValue = MacOnScreenCanvasNative.BooleanTrue;
         if (_font == 0 || _fontAttribute == 0 || _contextColorAttribute == 0 || _trueValue == 0)
             throw new InvalidOperationException("CoreText could not resolve the canvas font.");
-        var font = ObjC.Send(ObjC.Class("NSFont"), ObjC.Sel("fontWithName:size:"),
+        var font = ObjC.SendObjectDouble(ObjC.Class("NSFont"), ObjC.Sel("fontWithName:size:"),
             ObjC.String(family), theme.Typography.EditorFontSize);
         if (font == 0)
             font = ObjC.Send(ObjC.Class("NSFont"),
