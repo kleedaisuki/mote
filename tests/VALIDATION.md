@@ -85,3 +85,22 @@ An independently inspected Windows x64 full-reference `Mote.Native` AOT publish 
 After Formats and Native code freeze, one serialized run executed `dotnet restore mote.sln --nologo`, `dotnet build mote.sln --configuration Release --no-restore --nologo`, and `dotnet test mote.sln --configuration Release --no-build --nologo`. Build succeeded with **0 warnings and 0 errors**, compiling both `Mote.Native` and the legacy `Mote.Desktop`; tests passed **149/149** general, **9/9** configuration, and **13/13** theme cases (**171/171** total, none skipped). This supersedes earlier Windows test counts for the frozen tree.
 
 The matching native publish command was `dotnet publish src/Mote.Native/Mote.Native.csproj --configuration Release --runtime win-x64 --self-contained true --output .cache/final-native-win-x64 -p:PublishAot=true -p:ContinuousIntegrationBuild=true -p:DebugType=none -p:GenerateDocumentationFile=false -p:StripSymbols=false --nologo`; it succeeded with no warnings in output. The publish directory contained **exactly one file**, `mote.exe` (`5,208,064` bytes). On the same Windows x64 host, `Start-Process -Wait -WindowStyle Hidden` with redirected stdout/stderr under `.temp/final-native-smoke` verified `--check-runtime` (exit 0, `mote-native-ready`) and `--smoke-gui` (exit 0, `mote-native-gui-ready`). No macOS or Windows ARM64 result is inferred from this local checkpoint. GUI smoke only proves a native window could initialize and close; it does not establish first paint, keyboard/IME/accessibility behavior, or document association.
+
+### Hosted cross-platform CI checkpoint, 2026-09-29
+
+[Integrated GitHub Actions run 36542765032](https://github.com/kleedaisuki/mote/actions/runs/36542765032) finished **green in all six jobs**: solution build/tests on Windows and macOS, plus native single-binary AOT publish/smoke/inventory gates on four native-architecture runners. The native jobs ran `--check-runtime` and `--smoke-gui`; macOS jobs additionally ran the standalone executable through Launch Services (`open -W -a`) and checked Mach-O linked-library paths against system locations. The downloaded JSON inventories, retained under ignored `.cache/ci-run-36542765032/`, contain:
+
+| RID | Hosted runner | Publish payload | Bytes | Extra files | Bundled native libraries |
+| --- | --- | --- | ---: | ---: | ---: |
+| `win-x64` | `windows-latest` | `mote.exe` | 5,208,064 | 0 | 0 |
+| `win-arm64` | `windows-11-arm` | `mote.exe` | 5,309,440 | 0 | 0 |
+| `osx-x64` | `macos-15-intel` | `mote` | 12,137,440 | 0 | 0 |
+| `osx-arm64` | `macos-latest` | `mote` | 11,871,032 | 0 | 0 |
+
+This verifies **one disk file per published native executable** on those four CI targets. It is not evidence of a signed/notarized macOS release, Finder document association, CJK input method (IME), assistive technology, first physical paint, or an interactive open–edit–save workflow on macOS and ARM64. The cross-platform managed tests and headless native GUI smoke cannot replace those product-level checks. The separate legacy Avalonia prototype remains noncompliant even though it builds and its own Windows smoke once passed.
+
+### Next native workflow contract (not yet verified)
+
+The pure `NativeNavigationModel` already has local tests for cross-rope-chunk find/wrap, global selection projection, line lookup, and streaming copy. These do **not** show that Win32/RichEdit or AppKit/NSTextView commands actually wire to the model. Once the shell/controller exposes commands, fake-shell integration should verify: a selection spanning two bounded pages is copied with original CR/LF spelling; Find Next can select a match across a rope chunk and move the viewport/caret to the global offset; Go To Line lands on a line outside the current page; edits after a global selection update the anchor/active coordinates correctly. Platform-level automation should test those same command paths where deterministic control hooks exist, rather than treating model-only tests as user-workflow proof.
+
+Plain/CSV/Markdown `IFormatSession` direct tests already cover versioned edits, cancellation retry, absolute spans, exact CSV global diagnostic counts under bounded projection, and provisional large-Markdown coverage. Native integration must separately prove that the controller retains one session per document, feeds a contiguous edit chain, discards stale analysis after rapid edits/opens, and labels partial results honestly. A session type existing in `Mote.Formats` is not proof that product UI uses it.
