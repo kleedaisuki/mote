@@ -201,6 +201,25 @@ jobs:
           name: mac-accessibility-${{ matrix.rid }}
           path: .cache/ci-inventory/${{ matrix.rid }}/mac-accessibility.json
           if-no-files-found: error
+      - name: Probe external macOS keyboard edit-save-reopen workflow
+        if: always() && startsWith(matrix.rid, 'osx-')
+        continue-on-error: true
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacExternalWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/mac-external-workflow.json"
+      - name: Upload external macOS workflow report
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-external-workflow-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-external-workflow.json
+            .temp/mac-external-workflow/**
+          if-no-files-found: warn
       - name: Upload failed GUI workflow fixtures
         if: failure()
         uses: actions/upload-artifact@v4
