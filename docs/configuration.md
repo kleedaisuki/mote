@@ -120,3 +120,40 @@ currently write either kind of file, so their absence shows lazy creation, not
 that a future cache or recovery writer already honors those overrides. A
 future writer needs a focused end-to-end destination test before claiming that
 contract. The audit found no concrete current path-placement defect.
+
+## macOS Native AOT runtime-path workflow (awaiting hosted execution)
+
+`tests/NativeMacConfigWorkflow.ps1` is a reproducible check for a **published
+lone Mach-O**, rather than a source-level test or a `.app` bundle. It accepts
+`-ExecutablePath` and `-RuntimeIdentifier` (`osx-x64` or `osx-arm64`), and writes
+a JSON report by default to
+`.cache/ci-inventory/<runtime-identifier>/mac-config-runtime.json`. For example,
+on a matching hosted runner after `dotnet publish`:
+
+```powershell
+./tests/NativeMacConfigWorkflow.ps1 `
+  -ExecutablePath src/Mote.Native/bin/Release/net10.0/osx-arm64/publish/mote `
+  -RuntimeIdentifier osx-arm64
+```
+
+Each case receives a fresh `MOTE_HOME` under `.temp/mac-config-runtime/<guid>/`.
+The workflow checks that the published directory contains only `mote`, that
+the executable hash remains unchanged, and that default/off startup creates
+no home. It then opens an actual JSON file for four configurations: disabled
+tracing, `MOTE_TRACE=1` with conventional `traces/`, config-enabled tracing
+with relocated `trace-custom/`, and invalid duplicate-key TOML with environment
+opt-in falling back to `traces/`. It verifies exact home file/directory
+placement, nonempty parseable JSONL with `document.open_to_editable`, and no
+fixture path, home path, or source-content sentinel in the JSONL. Cache/data
+overrides are included in the config-enabled case, but the script checks only
+their **lazy non-creation**, because no current runtime writer uses those paths.
+
+The non-smoke cases require a normal app shutdown to flush trace records. The
+script waits for the exact child PID's document window, then sends Command-W
+through macOS System Events and waits for exit 0; it bounds every wait and
+retains failed fixtures for diagnosis. This uses the hosted runner's
+Accessibility/automation permissions. A TCC denial is reported as a failure
+of this *workflow capability*, not misreported as a configuration pass. The
+script passed PowerShell static parsing and a synthetic path/JSONL assertion
+probe on Windows; **neither macOS architecture has run it yet**. Only the
+per-RID hosted report can establish runtime-path behavior on macOS.
