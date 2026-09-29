@@ -246,6 +246,29 @@ internal sealed class CsvIncrementalSession : IFormatSession
         while (true)
         {
             if (cursor.Position >= maxPosition) throw new ScanBudgetExceededException();
+            if ((cursor.Position & 4095) == 0) ct.ThrowIfCancellationRequested();
+            if (cursor.Peek() == ',')
+            {
+                // Offscreen empty fields have no payload or diagnostics. Preserve
+                // the boundary cell itself, including the zero-width viewport edge.
+                var skipUntil = maxPosition;
+                if (capture && cells!.Count < maxCells)
+                {
+                    if (captureRange is { } range)
+                    {
+                        if (cursor.Position < range.Start)
+                            skipUntil = Math.Min(skipUntil, range.Start);
+                        else if (cursor.Position <= range.End)
+                            skipUntil = cursor.Position;
+                    }
+                    else skipUntil = cursor.Position;
+                }
+                if (skipUntil > cursor.Position)
+                {
+                    width += cursor.SkipCommas(skipUntil, ct);
+                    continue;
+                }
+            }
             var fieldStart = cursor.Position;
             var quoted = cursor.Peek() == '"';
             var contentEnd = fieldStart;
@@ -582,5 +605,28 @@ internal sealed class CsvIncrementalSession : IFormatSession
         internal char Read() { var c = Peek(); Position++; return c; }
         internal void Advance() { Position++; }
         internal string Slice(int start, int length) => _snapshot.GetText(start, length);
+
+        /// <summary>Consumes consecutive delimiters without crossing a visible-scan limit.</summary>
+        internal int SkipCommas(int maxPosition, CancellationToken ct)
+        {
+            var count = 0;
+            while (Position < Length && Position < maxPosition)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (Position < _windowStart || Position >= _windowStart + _window.Length)
+                {
+                    _windowStart = Position;
+                    _window = _snapshot.GetText(Position, Math.Min(WindowSize, Length - Position));
+                }
+                var offset = Position - _windowStart;
+                var available = Math.Min(4096, Math.Min(_window.Length - offset, maxPosition - Position));
+                var next = _window.AsSpan(offset, available).IndexOfAnyExcept(',');
+                var consumed = next < 0 ? available : next;
+                Position += consumed;
+                count += consumed;
+                if (next >= 0) break;
+            }
+            return count;
+        }
     }
 }
