@@ -124,27 +124,34 @@ internal sealed class ContinuousViewport
     /// <summary>
     /// Rebinds after a committed source edit, transforming the anchor with right
     /// affinity. Measurements are invalidated because line identities may have moved.
+    /// Only replacement extents are needed; the viewport never reads inserted text.
     /// </summary>
-    internal void ApplyEdit(TextSnapshot after, TextChange change)
+    internal void ApplyEdit(TextSnapshot after, TextChangeRange change)
     {
         ArgumentNullException.ThrowIfNull(after);
-        if (change.InsertText is null) throw new ArgumentException("Insert text must not be null.", nameof(change));
-        if (change.Start < 0 || change.DeleteLength < 0 ||
+        if (change.Start < 0 || change.DeleteLength < 0 || change.InsertLength < 0 ||
             change.Start > _snapshot.Length - change.DeleteLength)
             throw new ArgumentOutOfRangeException(nameof(change));
-        var expectedLength = (long)_snapshot.Length - change.DeleteLength + change.InsertText.Length;
+        var expectedLength = (long)_snapshot.Length - change.DeleteLength + change.InsertLength;
         if (after.Length != expectedLength)
             throw new ArgumentException("Snapshot length does not match the committed change.", nameof(after));
 
         var oldOffset = _anchor.SourceOffset;
         var end = change.Start + change.DeleteLength;
         var newOffset = oldOffset < change.Start ? oldOffset :
-            oldOffset <= end ? change.Start + change.InsertText.Length :
-            oldOffset + change.InsertText.Length - change.DeleteLength;
+            oldOffset <= end ? change.Start + change.InsertLength :
+            oldOffset + change.InsertLength - change.DeleteLength;
         var intraRowY = _anchor.IntraRowY;
         _snapshot = after;
         _heights.Clear();
         ScrollToSource(Math.Clamp(newOffset, 0, after.Length), intraRowY);
+    }
+
+    /// <summary>Compatibility adapter for callers that still hold an inserted-text change.</summary>
+    internal void ApplyEdit(TextSnapshot after, TextChange change)
+    {
+        if (change.InsertText is null) throw new ArgumentException("Insert text must not be null.", nameof(change));
+        ApplyEdit(after, new TextChangeRange(change.Start, change.DeleteLength, change.InsertText.Length));
     }
 
     /// <summary>Returns the document Y coordinate at the top of the containing row.</summary>

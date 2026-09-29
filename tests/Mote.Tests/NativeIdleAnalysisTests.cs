@@ -40,7 +40,7 @@ public sealed class NativeIdleAnalysisTests
         using var document = new Document("{\"x\":1}");
         var policy = new ProbePolicy(DocumentKind.Json, AnalysisCompleteness.Complete);
         using var driver = new NativeFormatSessionDriver(policy);
-        document.Changed += (_, change) => driver.Record(change);
+        document.ChangedRange += (_, change) => driver.Record(change);
         var delay = new ControlledDelay();
         var versions = new List<long>();
         using var idle = new NativeIdleFullAnalysis(driver, policy.Kind,

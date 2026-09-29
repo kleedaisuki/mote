@@ -866,7 +866,11 @@ public sealed class NativeControllerTests
         Assert.Empty(shell.Errors);
         Assert.Equal(original, await File.ReadAllTextAsync(path));
 
+        var beforeUndoAllocation = GC.GetAllocatedBytesForCurrentThread();
         shell.RequestUndo();
+        var undoAllocation = GC.GetAllocatedBytesForCurrentThread() - beforeUndoAllocation;
+        if (!largeDelete)
+            Assert.InRange(undoAllocation, 0, 64L * 1024 * 1024);
         var afterLargeUndo = shell.CanvasBinding!;
         Assert.Equal(afterLarge.BaseVersion + 1, afterLargeUndo.BaseVersion);
         AssertSnapshotMatches(afterLargeUndo.Snapshot, afterSmallText);
@@ -881,7 +885,11 @@ public sealed class NativeControllerTests
         Assert.Equal(afterSmallUndo.BaseVersion + 1, afterSmallRedo.BaseVersion);
         AssertSnapshotMatches(afterSmallRedo.Snapshot, afterSmallText);
 
+        var beforeRedoAllocation = GC.GetAllocatedBytesForCurrentThread();
         shell.RequestRedo();
+        var redoAllocation = GC.GetAllocatedBytesForCurrentThread() - beforeRedoAllocation;
+        if (!largeDelete)
+            Assert.InRange(redoAllocation, 0, 64L * 1024 * 1024);
         var afterLargeRedo = shell.CanvasBinding!;
         Assert.Equal(afterSmallRedo.BaseVersion + 1, afterLargeRedo.BaseVersion);
         AssertLargeState(afterLargeRedo.Snapshot, largeDelete, original.Length);
@@ -1036,6 +1044,49 @@ public sealed class NativeControllerTests
         Assert.Same(before, shell.CanvasFrame);
         Assert.DoesNotContain(shell.CanvasFrame!.Slices, slice =>
             slice.SourceStart <= 2 && 2 < slice.SourceStart + slice.SourceLength);
+    }
+
+    /// <summary>Undo/Redo must reveal a caret hidden inside the source gap of a long-line frame.</summary>
+    [Fact]
+    public void Canvas_undo_redo_reveals_caret_inside_hidden_long_line_gap()
+    {
+        using var temp = new RepoTemp();
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = true };
+        using var controller = NewController(shell, temp.Path, null);
+        controller.Run();
+        shell.ResizeCanvas(200);
+        var source = string.Concat(Enumerable.Repeat("short\n", 100)) +
+            new string('x', 100_000) + "\nAFTER\n";
+        var first = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(first.DocumentGeneration,
+            first.BaseVersion, first.BindingNonce, new TextChange(0, 0, source), source.Length));
+
+        const int target = 50_600;
+        shell.SelectCanvas(target, target);
+        var nearTarget = shell.CanvasBinding!;
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(nearTarget.DocumentGeneration,
+            nearTarget.BaseVersion, nearTarget.BindingNonce, new TextChange(target, 0, "Z"), target + 1));
+        Assert.Equal("Z", shell.CanvasBinding!.Snapshot.GetText(target, 1));
+
+        var accessible = Assert.IsType<AccessibleDocument>(shell.CanvasAccessibilityDocument);
+        var viewport = Assert.IsAssignableFrom<IAccessibleViewport>(shell.CanvasAccessibilityViewport);
+        var beginning = accessible.MakeRange(600, 601);
+        Assert.Equal(AccessibleRevealResult.Revealed, viewport.TryReveal(beginning, alignToTop: true));
+        Assert.DoesNotContain(shell.CanvasFrame!.Slices, slice => Contains(slice, target + 1));
+        Assert.Contains(shell.CanvasFrame.Slices, slice => slice.SourceStart > target + 1);
+
+        shell.RequestUndo();
+        Assert.Equal(source, shell.CanvasBinding!.Snapshot.GetText());
+        Assert.Contains(shell.CanvasFrame!.Slices, slice => Contains(slice, target));
+        Assert.All(shell.CanvasFrame.Slices, slice => Assert.InRange(slice.SourceLength, 0, 16 * 1024));
+
+        shell.RequestRedo();
+        Assert.Equal("Z", shell.CanvasBinding!.Snapshot.GetText(target, 1));
+        Assert.Contains(shell.CanvasFrame!.Slices, slice => Contains(slice, target + 1));
+        Assert.Empty(shell.Errors);
+
+        static bool Contains(ViewportSlice slice, int offset) =>
+            slice.SourceStart <= offset && offset < slice.SourceStart + slice.SourceLength;
     }
 
     /// <summary>A failed optional OS AX attachment leaves the editor alive and warns after startup Open.</summary>

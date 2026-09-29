@@ -93,12 +93,20 @@ internal sealed class CanvasInteraction
 
     /// <summary>
     /// Rebinds the viewport after a canonical engine edit. The controller owns
-    /// transforming a shared selection exactly once via Document.Changed.
+    /// transforming a shared selection exactly once via the document notification.
+    /// The canvas consumes only replacement extents, never a copied insert string.
     /// </summary>
-    internal void ApplyEdit(TextSnapshot after, TextChange change)
+    internal void ApplyEdit(TextSnapshot after, TextChangeRange change)
     {
         _viewport.ApplyEdit(after, change);
         _focusSourceOffset = null;
+    }
+
+    /// <summary>Compatibility adapter for callers that still hold an inserted-text change.</summary>
+    internal void ApplyEdit(TextSnapshot after, TextChange change)
+    {
+        if (change.InsertText is null) throw new ArgumentException("Insert text must not be null.", nameof(change));
+        ApplyEdit(after, new TextChangeRange(change.Start, change.DeleteLength, change.InsertText.Length));
     }
 
     /// <summary>Starts an OS pointer selection at a platform-resolved source cluster edge.</summary>

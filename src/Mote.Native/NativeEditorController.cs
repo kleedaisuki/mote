@@ -77,7 +77,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         }
         _sessionDriver = CreateSessionDriver(_policy);
         _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
-        _document.Changed += DocumentChanged;
+        _document.ChangedRange += DocumentChanged;
         shell.TextChanged += Edited;
         shell.SelectionChanged += SelectionChanged;
         shell.NewRequested += New;
@@ -119,7 +119,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _analysisCancellation?.Dispose();
         _idleFullAnalysis?.Dispose();
         _visibleSessionAnalysis = null;
-        _document.Changed -= DocumentChanged;
+        _document.ChangedRange -= DocumentChanged;
         _sessionDriver?.Dispose();
         _findCancellation?.Cancel();
         _findCancellation?.Dispose();
@@ -235,11 +235,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         CancelAnalysis();
         _idleFullAnalysis?.Dispose();
         _visibleSessionAnalysis = null;
-        _document.Changed -= DocumentChanged;
+        _document.ChangedRange -= DocumentChanged;
         _sessionDriver?.Dispose();
         _document.Dispose();
         _document = replacement;
-        _document.Changed += DocumentChanged;
+        _document.ChangedRange += DocumentChanged;
         _navigation = new NativeNavigationModel();
         ++_canvasGeneration;
         _canvasBoundGeneration = -1;
@@ -887,11 +887,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         {
             var frame = canvas.Frame();
             var activeSource = _navigation.Active;
-            var first = frame.Slices.Count == 0 ? frame.TopAnchor.SourceOffset :
-                frame.Slices[0].SourceStart;
-            var last = frame.Slices.Count == 0 ? first :
-                frame.Slices[^1].SourceStart + frame.Slices[^1].SourceLength;
-            if (activeSource < first || activeSource > last) canvas.Reveal(activeSource);
+            // Visible rows may contain unpainted gaps inside an exceptionally
+            // long line. The first/last slice envelope is not a caret oracle.
+            if (!ContainsPaintedBoundary(frame, activeSource)) canvas.Reveal(activeSource);
             ShowDocument();
             ScheduleAnalysis();
             return;
@@ -1239,7 +1237,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         return $"{count:N0} document diagnostics; shown: {DiagnosticSummary(shown)}";
     }
 
-    private void DocumentChanged(object? sender, DocumentChangedEventArgs change)
+    private void DocumentChanged(object? sender, DocumentChangedRangeEventArgs change)
     {
         _sessionDriver?.Record(change);
         _navigation.ApplyChange(change.Change, change.After);

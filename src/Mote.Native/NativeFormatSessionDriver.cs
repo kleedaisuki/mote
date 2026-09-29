@@ -10,7 +10,7 @@ namespace Mote.Native;
 /// </summary>
 /// <remarks>
 /// The driver belongs to exactly one document lifetime. Call <see cref="Record"/>
-/// for every <see cref="Document.Changed"/> event before requesting analysis of
+/// for every <see cref="Document.ChangedRange"/> event before requesting analysis of
 /// that version. Results are not published here: the caller must reject results
 /// whose document identity or version is no longer current.
 /// </remarks>
@@ -42,10 +42,11 @@ internal sealed class NativeFormatSessionDriver : IDisposable
     internal DocumentKind Kind => _policy.Kind;
 
     /// <summary>
-    /// Records a committed mutation in delivery order. History is bounded; exceeding
-    /// the bound only forfeits incremental reuse, never correctness.
+    /// Records a committed range mutation in delivery order. An insertion larger
+    /// than the entire log budget is never materialized. Once older edits exhaust
+    /// the budget, their log is discarded but the current bounded edit is kept.
     /// </summary>
-    public void Record(DocumentChangedEventArgs change)
+    public void Record(DocumentChangedRangeEventArgs change)
     {
         ArgumentNullException.ThrowIfNull(change);
         lock (_gate)
@@ -53,21 +54,33 @@ internal sealed class NativeFormatSessionDriver : IDisposable
             if (_disposed) return;
             var before = change.Before.Version;
             var after = change.After.Version;
-            if (after <= before || change.Change.InsertText is null)
+            var extent = change.Change;
+            if (after <= before || extent.Start < 0 || extent.DeleteLength < 0 ||
+                extent.InsertLength < 0 || extent.Start > change.Before.Length ||
+                extent.DeleteLength > change.Before.Length - extent.Start ||
+                extent.Start > change.After.Length ||
+                extent.InsertLength > change.After.Length - extent.Start ||
+                (long)change.Before.Length - extent.DeleteLength + extent.InsertLength != change.After.Length)
             {
                 ClearEdits();
                 return;
             }
             if (_committedVersion is long committed && after <= committed) return;
             if (_edits.Count > 0 && _edits[^1].AfterVersion != before) ClearEdits();
-            if (_edits.Count == MaxPendingEdits ||
-                change.Change.InsertText.Length > MaxPendingInsertUnits - _pendingInsertUnits)
+            if (extent.InsertLength > MaxPendingInsertUnits)
+            {
+                // Do not materialize a large inserted range merely to feed an
+                // incremental cache. The next analysis parses its snapshot anew.
                 ClearEdits();
-            // A single oversized insertion cannot fit the budget; a subsequent
-            // request will rebuild from its immutable snapshot instead.
-            if (change.Change.InsertText.Length > MaxPendingInsertUnits) return;
-            _edits.Add(new VersionedEdit(before, after, change.Change));
-            _pendingInsertUnits += change.Change.InsertText.Length;
+                return;
+            }
+            if (_edits.Count == MaxPendingEdits ||
+                extent.InsertLength > MaxPendingInsertUnits - _pendingInsertUnits)
+                ClearEdits();
+            var inserted = change.After.GetText(extent.Start, extent.InsertLength);
+            _edits.Add(new VersionedEdit(before, after,
+                new TextChange(extent.Start, extent.DeleteLength, inserted)));
+            _pendingInsertUnits += extent.InsertLength;
         }
     }
 

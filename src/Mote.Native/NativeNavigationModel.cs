@@ -54,6 +54,16 @@ internal sealed class NativeNavigationModel
     /// </summary>
     public void ApplyChange(TextChange change, TextSnapshot after)
     {
+        ArgumentNullException.ThrowIfNull(change.InsertText);
+        ApplyChange(new TextChangeRange(change.Start, change.DeleteLength, change.InsertText.Length), after);
+    }
+
+    /// <summary>
+    /// Transforms both endpoints through a committed replacement extent without reading
+    /// inserted text. Endpoints at or inside the old range are right-affine to its new end.
+    /// </summary>
+    public void ApplyChange(TextChangeRange change, TextSnapshot after)
+    {
         ArgumentNullException.ThrowIfNull(after);
         Anchor = Transform(Anchor, change);
         Active = Transform(Active, change);
@@ -139,12 +149,12 @@ internal sealed class NativeNavigationModel
         }
     }
 
-    private static int Transform(int offset, TextChange change)
+    private static int Transform(int offset, TextChangeRange change)
     {
         if (offset < change.Start) return offset;
         var oldEnd = checked(change.Start + change.DeleteLength);
-        if (offset <= oldEnd) return checked(change.Start + change.InsertText.Length);
-        return checked(offset + change.InsertText.Length - change.DeleteLength);
+        if (offset <= oldEnd) return checked(change.Start + change.InsertLength);
+        return checked(offset + change.InsertLength - change.DeleteLength);
     }
 
     private static int[] PrefixTable(string needle)
