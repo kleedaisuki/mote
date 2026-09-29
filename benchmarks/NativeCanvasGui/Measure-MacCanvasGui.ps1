@@ -211,6 +211,9 @@ function Invoke-Case {
         ax_window_ms = $null
         ax_frontmost_ms = $null
         ax_focused_role = $null
+        focus_diagnostic_error = ''
+        foreground_process_observation = ''
+        foreground_process_error = ''
         open_to_ax_focus_ms = $null
         edit_to_dirty_automation_ms = $null
         edit_to_save_automation_ms = $null
@@ -265,9 +268,6 @@ tell application "System Events"
     return "not-frontmost"
 end tell
 "@
-        [void](Wait-AxStage $child $result "$Name-ax-frontmost" $frontScript 'frontmost' 10000)
-        $result.ax_frontmost_ms = $watch.Elapsed.TotalMilliseconds
-        $result.readiness_step = 'focused-role'
         $focusScript = @"
 tell application "System Events"
     set targetProcess to first process whose unix id is $($child.Id)
@@ -276,6 +276,33 @@ tell application "System Events"
     return "role=" & roleName
 end tell
 "@
+        try {
+            [void](Wait-AxStage $child $result "$Name-ax-frontmost" $frontScript 'frontmost' 10000)
+        }
+        catch {
+            $foregroundError = $_.Exception.Message
+            # Diagnostic only: inspect AX role once even if focus activation is
+            # unavailable. Never dispatch an edit or Save without foreground.
+            try {
+                $result.ax_focused_role = Invoke-AppleScript $focusScript `
+                    "$Name-ax-focus-readonly" 4000
+            }
+            catch { $result.focus_diagnostic_error = $_.Exception.Message }
+            $frontWhoScript = @"
+tell application "System Events"
+    set foregroundProcess to first process whose frontmost is true
+    return "pid=" & (unix id of foregroundProcess) & ";name=" & (name of foregroundProcess)
+end tell
+"@
+            try {
+                $result.foreground_process_observation = Invoke-AppleScript `
+                    $frontWhoScript "$Name-foreground-process-readonly" 4000
+            }
+            catch { $result.foreground_process_error = $_.Exception.Message }
+            throw $foregroundError
+        }
+        $result.ax_frontmost_ms = $watch.Elapsed.TotalMilliseconds
+        $result.readiness_step = 'focused-role'
         $role = Wait-AxStage $child $result "$Name-ax-focus" $focusScript 'role=*TextArea*' 16000
         $result.ax_focused_role = $role
         $result.readiness_step = 'complete'

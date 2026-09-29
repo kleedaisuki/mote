@@ -88,6 +88,19 @@ match flag/count/length, not arbitrary window text, and no script reads
 `AXValue`. This is still a **non-gating diagnostic** until hosted evidence
 shows AX/TCC and the custom canvas hierarchy work end to end.
 
+The [second hosted attempt (`36578393670`)](https://github.com/kleedaisuki/mote/actions/runs/36578393670)
+localized the first **1 MiB control** failure: the exact-PID AX process was
+visible after 883.5 ms, its expected window title matched after 1,462.9 ms,
+but `set frontmost` was followed by `frontmost=false` on all 27 observations
+within the 10-second foreground budget. No focused role, key, or Save was
+reached; this is not evidence of a 100 MiB load regression. The strict default
+editor keyboard probe sets frontmost but does not assert that property, so this
+alone does not establish whether the canvas is activation-broken or the hosted
+property is misleading. On a foreground failure, the next diagnostic now
+**only reads** the target's AX focused role and the System Events foreground
+process PID/name once, retaining the original failure and sending no keyboard
+input. A target role is not by itself proof that keystrokes would route safely.
+
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS
 `PeakWorkingSet64` has been unavailable in prior Native AOT runs; a positive
