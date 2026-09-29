@@ -98,7 +98,7 @@ internal static class Program
             return 3;
         }
 
-        var config = MoteConfigLoader.Load();
+        var config = ValidateThemeId(MoteConfigLoader.Load(), out var themeWarning);
         var traceRequested = config.TraceEnabled || Environment.GetEnvironmentVariable("MOTE_TRACE") == "1";
         if (traceRequested)
         {
@@ -122,6 +122,20 @@ internal static class Program
         var theme = ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark);
         using var app = new NativeEditorController(shell, config, theme,
             smoke ? null : remaining.FirstOrDefault());
+        if (!smoke && themeWarning is not null)
+        {
+            // The status bar counts warnings but cannot display their details.
+            // A typo is rare and actionable, so show its text once after the
+            // native window exists instead of silently changing appearance.
+            var warningShown = false;
+            var warningText = themeWarning.Message;
+            shell.Shown += () =>
+            {
+                if (warningShown) return;
+                warningShown = true;
+                shell.Post(() => shell.ShowError(warningText));
+            };
+        }
         if (smoke)
         {
             shell.Shown += () =>
@@ -133,6 +147,26 @@ internal static class Program
         app.Run();
         MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
         return 0;
+    }
+
+    /// <summary>
+    /// Adds a nonfatal diagnostic for a syntactically valid but unregistered theme ID.
+    /// The ID remains intact for display, while the policy resolver safely follows
+    /// the operating system's light/dark preference. Known IDs allocate nothing.
+    /// </summary>
+    internal static MoteConfiguration ValidateThemeId(
+        MoteConfiguration configuration, out ConfigDiagnostic? warning)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        warning = null;
+        if (ThemePolicies.IsKnownId(configuration.ThemeId)) return configuration;
+
+        warning = new ConfigDiagnostic("CONFIG_THEME",
+            $"Unknown theme '{configuration.ThemeId}'. Using the system light/dark appearance. " +
+            $"Edit {configuration.ConfigPath} and choose 'mote-dark', 'mote-light', " +
+            "'mote-high-contrast-dark', or 'system'.");
+        var diagnostics = new List<ConfigDiagnostic>(configuration.Diagnostics) { warning };
+        return configuration with { Diagnostics = diagnostics.AsReadOnly() };
     }
 
     /// <summary>Runs the optional Windows geometry diagnostic without affecting normal editing.</summary>

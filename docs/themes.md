@@ -1,8 +1,9 @@
 # Theme policy and accessibility decision
 
-Status: implemented static policy module. Both native shells resolve the policy
-at startup, but live `system` appearance updates and full native chrome/selection
-application are not yet demonstrated. The Avalonia prototype is not the
+Status: implemented static policy module and nonfatal unknown-ID warning. Both
+native shells resolve the policy at startup, but live `system` appearance
+updates and full native chrome/selection application are not yet demonstrated.
+The Avalonia prototype is not the
 strict-single-binary product shell.
 
 ## Why a theme policy
@@ -36,22 +37,27 @@ the earlier teal-heavy appearance.
 | `mote-dark` | Exact immutable policy | Built-in default: familiar restrained dark editor. |
 | `mote-light` | Exact immutable policy | Light editor with explicit contrast checks. |
 | `mote-high-contrast-dark` | Exact immutable policy | Stronger text and boundary contrast. |
-| unknown/empty | Same as `system` | Nonfatal config error; config loader should warn. |
+| syntactically valid unknown ID | Same as `system` | Native composition adds `CONFIG_THEME` and shows one actionable warning after the window opens. |
+| empty or invalid ID | Built-in `mote-dark` | Config loader retains its default and reports `CONFIG_VALUE`. |
 
 The config layer owns `~/.mote` path conventions and any user-editable file.
 `Mote.Themes` has no filesystem paths or side effects. Custom color overrides
 would need a typed, validated *data* layer applied to a base policy; they must
 not become runtime plugin DLLs or silently bypass the contrast contract.
-The composition root can use `ThemePolicies.IsKnownId` to surface a
-configuration typo while still continuing with the safe fallback. **Current
-gap:** `MoteConfigLoader` accepts syntactically valid but unknown IDs, and
-`Mote.Native.Program` calls `Resolve` without `IsKnownId`. For example,
-`appearance.theme = 'mote-drak'` silently selects the OS dark/light fallback
-and adds no `ConfigDiagnostic`. The desired behavior is a visible, nonfatal
-`CONFIG_THEME` warning (or equivalent stable code), retaining safe fallback.
-This belongs at the composition boundary unless the configuration module
-explicitly takes a theme-registry dependency; duplicating the ID list in two
-modules would create configuration drift.
+`MoteConfigLoader` validates the syntax of a theme ID without depending on a
+theme registry. `Mote.Native.Program.ValidateThemeId` then uses
+`ThemePolicies.IsKnownId` at the composition boundary. For example,
+`appearance.theme = 'mote-drak'` appends a nonfatal `CONFIG_THEME` diagnostic,
+preserves any other config warnings, and leaves `Resolve`'s safe OS light/dark
+fallback intact. The native status bar counts the diagnostic; because that
+count alone cannot reveal its text, the composition root also posts the
+actionable message once after the real GUI window is shown. The automatic
+`--smoke-gui` path skips the modal so diagnostics cannot hang startup probes.
+The warning names `config.toml` and the four supported IDs. This avoids
+duplicating the registry in the configuration module. Focused Release tests
+cover all known IDs (including `system` and case-insensitivity), a valid typo,
+diagnostic preservation, and fallback (**7/7 passed**). The modal's native
+visual presentation has not yet been independently exercised on both OSes.
 
 ## Contrast contract and important limits
 
@@ -93,8 +99,9 @@ contract test, not a native rendering or live-theme-switch test.
 ## Native runtime integration audit and acceptance (2026-09-29)
 
 This is source inspection of the current `Mote.Native` tree, not a target-host
-run of operating-system appearance transitions. `Program` loads the user
-configuration, samples `shell.PrefersDark`, calls `ThemePolicies.Resolve`, and
+run of operating-system appearance transitions. `Program` loads and validates
+the user configuration, samples `shell.PrefersDark`, calls
+`ThemePolicies.Resolve`, and
 passes one immutable policy to `NativeEditorController`. The controller keeps
 `_theme` readonly and calls `_shell.SetTheme(_theme)` when shown. Neither shell
 currently publishes an appearance-change event back to the controller. Thus
@@ -121,4 +128,4 @@ Make an unchanged effective policy a no-op. A real Windows and macOS acceptance
 run should switch OS appearance twice during an open file, repeat once during
 IME preedit, capture before/after screenshots and exact text/selection/version
 checks, and verify explicit IDs ignore the OS transition. The unknown-ID
-warning is an independent startup acceptance case.
+warning's real native dialog remains an independent startup acceptance case.
