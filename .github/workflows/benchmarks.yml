@@ -5,6 +5,13 @@ permissions:
   contents: read
 
 on:
+  # A changed benchmark contract can validate itself on a feature branch; manual
+  # dispatch and schedules require this workflow to exist on the default branch.
+  push:
+    paths:
+      - '.github/workflows/benchmarks.yml'
+      - 'tests/Mote.Benchmarks/**'
+      - 'tests/Measure-NativeStartup.ps1'
   workflow_dispatch:
   schedule:
     - cron: '15 2 * * 1'
