@@ -389,6 +389,17 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (_window != 0) ObjC.Send(_window, ObjC.Sel("performClose:"), 0);
     }
 
+    private void StopAndWake()
+    {
+        ObjC.Send(_application, ObjC.Sel("stop:"), 0);
+        // stop: invoked from a timer/selector callback may leave run waiting
+        // for its next NSEvent. A benign application-defined event wakes it.
+        var wake = ObjC.SendOtherEvent(ObjC.Class("NSEvent"),
+            ObjC.Sel("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"),
+            15, new ObjC.Point(0, 0), 0, 0, 0, 0, 0, 0, 0);
+        if (wake != 0) ObjC.Send(_application, ObjC.Sel("postEvent:atStart:"), wake, (byte)1);
+    }
+
     private static string? PanelPath(nint panel)
     {
         var url = ObjC.Send(panel, ObjC.Sel("URL"));
@@ -518,7 +529,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         var main = ObjC.New("NSMenu");
         AddMenu(main, "mote", [
             ("About mote", "orderFrontStandardAboutPanel:", ""),
-            ("Quit mote", "terminate:", "q")], false);
+            ("Quit mote", "moteQuit:", "q")], true);
         AddMenu(main, "File", [
             ("New", "moteNew:", "n"), ("Open…", "moteOpen:", "o"),
             ("Save", "moteSave:", "s"), ("Save As…", "moteSaveAs:", "S"),
@@ -746,6 +757,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         Add(cls, "moteSelectAll:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SelectAll, "v@:@");
         Add(cls, "moteCopy:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Copy, "v@:@");
         Add(cls, "moteCut:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Cut, "v@:@");
+        Add(cls, "moteQuit:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Quit, "v@:@");
         ObjC.RegisterClassPair(cls);
         return className;
     }
@@ -883,6 +895,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     {
         var shell = s_current;
         if (shell is null) return 1;
+        if (shell._closeApproved) return 1;
         try
         {
             if (!shell.CommitMarkedTextBeforeCommand())
@@ -902,14 +915,16 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     private static void WindowWillClose(nint self, nint selector, nint sender)
     {
         var shell = s_current;
-        if (shell is not null) ObjC.Send(shell._application, ObjC.Sel("terminate:"), 0);
+        // terminate: exits inside AppKit and skips managed post-run verification.
+        if (shell is not null) shell.StopAndWake();
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static nint ApplicationShouldTerminate(nint self, nint selector, nint sender)
     {
         var shell = s_current;
-        if (shell is null || shell._closeApproved) return 1;
+        if (shell is null) return 1;
+        if (shell._closeApproved) { shell.StopAndWake(); return 0; }
         try
         {
             if (!shell.CommitMarkedTextBeforeCommand())
@@ -919,7 +934,13 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
             }
             var args = new NativeClosingEventArgs();
             shell.ClosingRequested?.Invoke(shell, args);
-            return args.Cancel ? 0 : 1;
+            if (args.Cancel) return 0;
+            shell._closeApproved = true;
+            ObjC.Send(shell._window, ObjC.Sel("close"));
+            if (ObjC.Send(shell._window, ObjC.Sel("isVisible")) != 0)
+                shell._closeApproved = false;
+            // Cancels AppKit's direct exit; WindowWillClose has stopped the run loop.
+            return 0;
         }
         catch (Exception error) { shell.ShowError(error.Message); return 0; }
     }
@@ -977,4 +998,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Cut(nint self, nint selector, nint sender)
     { var shell = s_current; shell?.NotifyAfterComposition(shell.CutRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Quit(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.Close(); }
 }

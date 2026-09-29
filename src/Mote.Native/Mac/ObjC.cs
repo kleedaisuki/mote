@@ -60,6 +60,9 @@ internal static class ObjC
     internal static extern nint Send(nint receiver, nint selector, nint arg1, nint arg2);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint Send(nint receiver, nint selector, nint arg1, byte arg2);
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, nint arg1, nint arg2, nint arg3);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
@@ -105,6 +108,11 @@ internal static class ObjC
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, nint arg1, nint arg2, nint arg3,
         nint arg4, nint arg5, nint arg6);
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint SendOtherEvent(nint receiver, nint selector, nuint type,
+        Point location, nuint modifierFlags, double timestamp, nint windowNumber,
+        nint context, short subtype, nint data1, nint data2);
 
     [DllImport(AppKit, EntryPoint = "NSApplicationLoad")]
     [return: MarshalAs(UnmanagedType.I1)]
