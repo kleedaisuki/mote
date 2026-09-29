@@ -96,7 +96,7 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
             var memory = GC.GetGCMemoryInfo();
             if (!HasMemoryBudget(_kind, snapshot.Length,
                 memory.TotalAvailableMemoryBytes, memory.HighMemoryLoadThresholdBytes,
-                memory.MemoryLoadBytes)) return IdleFullOffer.MemoryLimited;
+                memory.MemoryLoadBytes, snapshot.LineCount)) return IdleFullOffer.MemoryLimited;
             var pending = new Pending(snapshot);
             _pending = pending;
             _ = RunAsync(pending, visibleRange);
@@ -126,12 +126,14 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
 
     /// <summary>
     /// Offers Full only to policies with a cancellable, resource-admitted path.
-    /// Markdown's large-file policy now certifies a restricted flat subset and
+    /// CSV's cold Visible pass indexes only a bounded prefix. Its cancellable
+    /// Full pass is needed to discover off-page ragged rows and exact counts.
+    /// Markdown's large-file policy certifies only a restricted flat subset and
     /// returns Provisional for structures it cannot prove within its budget.
     /// </summary>
     private bool CanRun() => _kind switch
     {
-        DocumentKind.Json or DocumentKind.Yaml or DocumentKind.Toml or
+        DocumentKind.Json or DocumentKind.Yaml or DocumentKind.Toml or DocumentKind.Csv or
             DocumentKind.Markdown => true,
         _ => false
     };
@@ -143,7 +145,8 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
     /// it is not an OOM guarantee because other processes may allocate later.
     /// </summary>
     internal static bool HasMemoryBudget(DocumentKind kind, int length,
-        long totalAvailable, long highLoadThreshold, long memoryLoad)
+        long totalAvailable, long highLoadThreshold, long memoryLoad,
+        int physicalLineCount = 0)
     {
         const long fixedReserve = 128L * 1024 * 1024;
         var factor = kind switch
@@ -152,7 +155,15 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
             DocumentKind.Markdown => 8L,
             _ => 4L
         };
-        var estimatedWork = fixedReserve + factor * length;
+        // CSV retains one 24-byte Row per logical record. Logical records
+        // cannot outnumber physical lines, even when quoted cells span lines.
+        // The 32-byte envelope includes block-array/list overhead and avoids
+        // admitting a newline-dense 100 MiB file on a memory-poor host while
+        // keeping ordinary wide-row files eligible for global diagnostics.
+        var rowEnvelope = kind == DocumentKind.Csv
+            ? checked(32L * Math.Max(0, physicalLineCount)) : 0;
+        var estimatedWork = checked(fixedReserve +
+            Math.Max(checked(factor * length), rowEnvelope));
         if (totalAvailable > 0 && estimatedWork > totalAvailable / 2) return false;
         if (highLoadThreshold > 0 && memoryLoad > 0)
         {
