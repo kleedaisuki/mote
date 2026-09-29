@@ -143,14 +143,16 @@ public sealed class Document : IDisposable
             ValidateBoundary(_snapshot, change.Start + change.DeleteLength);
             ValidateWellFormed(change.InsertText);
             if (change.DeleteLength == 0 && change.InsertText.Length == 0) return _snapshot;
-            var removed = _snapshot.GetText(change.Start, change.DeleteLength);
             var beforeState = _stateId;
             var afterState = checked(++_nextStateId);
-            args = Commit(change);
+            var beforeRoot = _snapshot.Root;
+            var afterRoot = RopeNode.Replace(beforeRoot, change.Start, change.DeleteLength, change.InsertText);
+            args = Commit(change, afterRoot);
             _stateId = afterState;
             foreach (var undone in _redo) _historyCost -= undone.Cost;
             _redo.Clear();
-            var entry = new HistoryEntry(change, removed, beforeState, afterState);
+            var entry = new HistoryEntry(beforeRoot, afterRoot, change.Start,
+                change.DeleteLength, change.InsertText.Length, beforeState, afterState);
             _undo.Add(entry);
             _historyCost += entry.Cost;
             TrimHistory();
@@ -167,9 +169,12 @@ public sealed class Document : IDisposable
         {
             ThrowIfDisposed();
             if (_undo.Count == 0) return false;
-            var entry = Pop(_undo);
-            var inverse = new TextChange(entry.Change.Start, entry.Change.InsertText.Length, entry.Removed);
-            args = Commit(inverse);
+            var entry = _undo[^1];
+            var restored = new TextSnapshot(entry.BeforeRoot, checked(_nextVersion + 1));
+            var inverse = new TextChange(entry.Start, entry.InsertLength,
+                restored.GetText(entry.Start, entry.DeleteLength));
+            Pop(_undo);
+            args = Commit(inverse, entry.BeforeRoot);
             _stateId = entry.BeforeStateId;
             _redo.Add(entry);
         }
@@ -185,8 +190,12 @@ public sealed class Document : IDisposable
         {
             ThrowIfDisposed();
             if (_redo.Count == 0) return false;
-            var entry = Pop(_redo);
-            args = Commit(entry.Change);
+            var entry = _redo[^1];
+            var restored = new TextSnapshot(entry.AfterRoot, checked(_nextVersion + 1));
+            var change = new TextChange(entry.Start, entry.DeleteLength,
+                restored.GetText(entry.Start, entry.InsertLength));
+            Pop(_redo);
+            args = Commit(change, entry.AfterRoot);
             _stateId = entry.AfterStateId;
             _undo.Add(entry);
         }
@@ -376,11 +385,10 @@ public sealed class Document : IDisposable
         }
     }
 
-    private DocumentChangedEventArgs Commit(TextChange change)
+    private DocumentChangedEventArgs Commit(TextChange change, RopeNode? root)
     {
         var before = _snapshot;
-        _snapshot = new TextSnapshot(RopeNode.Replace(before.Root, change.Start, change.DeleteLength, change.InsertText),
-            checked(++_nextVersion));
+        _snapshot = new TextSnapshot(root, checked(++_nextVersion));
         _cache.Clear();
         var args = new DocumentChangedEventArgs(before, _snapshot, change);
         _pendingChanges.Enqueue(args);
@@ -424,11 +432,30 @@ public sealed class Document : IDisposable
 
     private void TrimHistory()
     {
-        while (_undo.Count > DefaultHistoryCount || _historyCost > DefaultHistoryBudget)
+        // One oversized action is kept as an undo barrier; ordinary history stays bounded.
+        HistoryEntry? protectedEntry = null;
+        for (var i = _undo.Count - 1; i >= 0; i--)
+            if (_undo[i].Cost > DefaultHistoryBudget)
+            {
+                protectedEntry = _undo[i];
+                break;
+            }
+        var ordinaryCost = _historyCost - (protectedEntry?.Cost ?? 0);
+        while (_undo.Count > DefaultHistoryCount || ordinaryCost > DefaultHistoryBudget)
         {
             if (_undo.Count == 0) break;
-            _historyCost -= _undo[0].Cost;
+            var oldest = _undo[0];
+            _historyCost -= oldest.Cost;
             _undo.RemoveAt(0);
+            if (ReferenceEquals(oldest, protectedEntry))
+            {
+                protectedEntry = null;
+                ordinaryCost = _historyCost;
+            }
+            else
+            {
+                ordinaryCost -= oldest.Cost;
+            }
         }
     }
 
@@ -517,8 +544,13 @@ public sealed class Document : IDisposable
             throw new ArgumentException("The edit bisects a UTF-16 surrogate pair.", nameof(offset));
     }
 
-    private sealed record HistoryEntry(TextChange Change, string Removed, long BeforeStateId, long AfterStateId)
+    /// <summary>
+    /// History retains roots, not contiguous text copies. The newest giant edit can be
+    /// undone without retaining its clipboard string or materializing a deleted region.
+    /// </summary>
+    private sealed record HistoryEntry(RopeNode? BeforeRoot, RopeNode? AfterRoot,
+        int Start, int DeleteLength, int InsertLength, long BeforeStateId, long AfterStateId)
     {
-        internal long Cost => (long)(Change.InsertText.Length + Removed.Length) * sizeof(char);
+        internal long Cost => checked(((long)InsertLength + DeleteLength) * sizeof(char));
     }
 }
