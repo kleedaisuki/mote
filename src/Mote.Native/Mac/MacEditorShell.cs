@@ -589,6 +589,12 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <summary>Current canvas input binding version for published-binary probes.</summary>
     internal long ProbeCanvasVersion => _pendingCanvasBinding?.BaseVersion ?? -1;
 
+    /// <summary>Current bounded host source start for diagnostic probe telemetry.</summary>
+    internal int ProbeCanvasInputStart => _pendingCanvasBinding?.InputSourceStart ?? -1;
+
+    /// <summary>Current input binding nonce for diagnostic probe telemetry.</summary>
+    internal long ProbeCanvasNonce => _pendingCanvasBinding?.BindingNonce ?? -1;
+
     /// <summary>Controller's last projected dirty state in opt-in canvas mode.</summary>
     internal bool ProbeCanvasIsModified => _canvasIsModified;
 

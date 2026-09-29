@@ -62,6 +62,7 @@ internal static class MacCanvasDeleteProbe
         private readonly DateTime _deadline = DateTime.UtcNow.AddSeconds(60);
         private long _baseVersion;
         private long _firstDeleteVersion;
+        private (int Anchor, int Active) _reverseImmediately;
         private int _stage;
         private bool _done;
 
@@ -117,6 +118,7 @@ internal static class MacCanvasDeleteProbe
                     case 3 when _shell.ProbeCanvasSnapshot?.GetText() == _original &&
                         _shell.ProbeCanvasVersion > _firstDeleteVersion:
                         _shell.ProbeCanvasSelectGlobal(_emptyStart, 0);
+                        _reverseImmediately = _shell.ProbeCanvasSelection;
                         _stage = 4;
                         break;
                     case 4 when _shell.ProbeCanvasSelection == (_emptyStart, 0):
@@ -144,7 +146,19 @@ internal static class MacCanvasDeleteProbe
         {
             _done = true;
             Succeeded = success;
-            if (!success) Console.Error.WriteLine($"Mac canvas delete stage {_stage} failed.");
+            if (!success)
+            {
+                var selection = _shell.ProbeCanvasSelection;
+                Console.Error.WriteLine($"Mac canvas delete stage {_stage} failed: " +
+                    $"selection={selection.Anchor},{selection.Active}; " +
+                    $"reverse-immediate={_reverseImmediately.Anchor},{_reverseImmediately.Active}; " +
+                    $"version={_shell.ProbeCanvasVersion}; " +
+                    $"snapshot-version={_shell.ProbeCanvasSnapshot?.Version ?? -1}; " +
+                    $"input-start={_shell.ProbeCanvasInputStart}; " +
+                    $"nonce={_shell.ProbeCanvasNonce}; " +
+                    $"native-length={_shell.ProbeNativeText.Length}; " +
+                    $"marked={_shell.ProbeHasMarkedText}.");
+            }
             _shell.Close();
         }
     }
