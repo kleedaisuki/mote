@@ -183,12 +183,23 @@ try {
         if ($beforeHash -ceq $afterHash) {
             throw 'Canvas source anchor moved, but before/after PNGs are identical.'
         }
+        $selectedName = if ($IsWindows) { 'many-selection.png' } else { "mac-canvas-many-selected-$theme.png" }
+        $selectedPng = Join-Path $output $selectedName
+        if (-not (Test-Path -LiteralPath $selectedPng -PathType Leaf)) {
+            throw 'Canvas selection screenshot is missing.'
+        }
+        $python = if ($IsWindows) { 'python' } else { 'python3' }
+        $contrastText = & $python -B (Join-Path $PSScriptRoot 'InspectCanvasPng.py') `
+            $beforePng $selectedPng $theme 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Canvas theme contrast failed: $contrastText" }
+        $contrast = $contrastText | ConvertFrom-Json
         $result.themes += [ordered]@{
             id = $theme
             marker = $outputText
             expected_top_row_before = ('canvas {0:D4}' -f $beforeOrdinal)
             expected_top_row_after = ('canvas {0:D4}' -f $afterOrdinal)
             screenshot_count = $pngs.Count
+            contrast = $contrast
             screenshot_sha256 = @($pngs | Sort-Object Name | ForEach-Object {
                 [ordered]@{ name = $_.Name; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
             })
