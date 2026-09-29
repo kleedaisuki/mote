@@ -1,5 +1,5 @@
 # Diagnose a published macOS editor using external System Events keyboard commands.
-# This probe remains non-gating until its OS interaction is demonstrated on hosted runners.
+# The hosted workflow treats any non-success report as a strict failure.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
     [Parameter(Mandatory)][string] $ReportPath
@@ -47,6 +47,27 @@ function Invoke-AppleScript {
     param([string] $ScriptText, [string] $Name)
     $script = Join-Path $scratch "$Name.applescript"
     [IO.File]::WriteAllText($script, $ScriptText, $utf8)
+    # PowerShell syntax validation cannot see AppleScript grammar. Compile every
+    # generated command before execution so a broken script cannot send a key.
+    $compileStart = [Diagnostics.ProcessStartInfo]::new('/usr/bin/osacompile')
+    [void]$compileStart.ArgumentList.Add('-o')
+    [void]$compileStart.ArgumentList.Add((Join-Path $scratch "$Name.scpt"))
+    [void]$compileStart.ArgumentList.Add($script)
+    $compileStart.UseShellExecute = $false
+    $compileStart.RedirectStandardOutput = $true
+    $compileStart.RedirectStandardError = $true
+    $compiler = [Diagnostics.Process]::Start($compileStart)
+    try {
+        if (-not $compiler.WaitForExit(15000)) {
+            $compiler.Kill()
+            $compiler.WaitForExit()
+            throw "AppleScript $Name compilation timed out."
+        }
+        $compileError = $compiler.StandardError.ReadToEnd().Trim()
+        [IO.File]::WriteAllText((Join-Path $scratch "$Name.compile.stderr.txt"), $compileError, $utf8)
+        if ($compiler.ExitCode -ne 0) { throw "AppleScript $Name compilation failed: $compileError" }
+    }
+    finally { $compiler.Dispose() }
     $start = [Diagnostics.ProcessStartInfo]::new('/usr/bin/osascript')
     [void]$start.ArgumentList.Add($script)
     $start.UseShellExecute = $false
@@ -84,7 +105,8 @@ tell application "System Events"
             set frontmost of targetProcess to true
             if exists window 1 of targetProcess then
                 if name of window 1 of targetProcess contains "note.txt" then
-                    set focusRole to role of focused UI element of targetProcess
+                    set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
+                    set focusRole to value of attribute "AXRole" of focusedElement
                     if focusRole contains "TextArea" then
                         log "ready:window-and-AXTextArea"
                         return "AXTextArea"
@@ -132,7 +154,8 @@ try {
 tell application "System Events"
     set targetProcess to first process whose unix id is $($process.Id)
     set frontmost of targetProcess to true
-    if role of focused UI element of targetProcess does not contain "TextArea" then error "editor lost native focus"
+    set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
+    if (value of attribute "AXRole" of focusedElement) does not contain "TextArea" then error "editor lost native focus"
     keystroke "X"
     log "typed:sent-X"
     delay 0.2
@@ -197,7 +220,8 @@ end tell
 tell application "System Events"
     set targetProcess to first process whose unix id is $($process.Id)
     set frontmost of targetProcess to true
-    if role of focused UI element of targetProcess does not contain "TextArea" then error "reopened editor lost native focus"
+    set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
+    if (value of attribute "AXRole" of focusedElement) does not contain "TextArea" then error "reopened editor lost native focus"
     keystroke "a" using command down
     keystroke "c" using command down
 end tell
@@ -244,7 +268,9 @@ catch {
             $axState = @"
 tell application "System Events"
     set targetProcess to first process whose unix id is $($process.Id)
-    return "window=" & name of window 1 of targetProcess & " ; focused-role=" & role of focused UI element of targetProcess & " ; tree=" & (entire contents of window 1 of targetProcess as text)
+    set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
+    set focusRole to value of attribute "AXRole" of focusedElement
+    return "window=" & name of window 1 of targetProcess & " ; focused-role=" & focusRole & " ; tree=" & (entire contents of window 1 of targetProcess as text)
 end tell
 "@
             $observed = Invoke-AppleScript $axState 'failure-ax-state'
