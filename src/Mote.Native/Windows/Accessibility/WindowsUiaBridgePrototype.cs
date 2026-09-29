@@ -114,18 +114,26 @@ internal partial interface ITextRangeProviderAbi
 internal sealed partial class WindowsUiaBridgePrototype
 {
     private readonly UiaEditorObject _provider;
+    private readonly UiaFragmentRootObject? _fragmentRoot;
 
     /// <summary>Creates one provider object for one engine-backed editor.</summary>
-    internal WindowsUiaBridgePrototype(AccessibleDocument document, IAccessibleViewport viewport)
+    internal WindowsUiaBridgePrototype(AccessibleDocument document, IAccessibleViewport viewport,
+        nint inputHwnd = 0, bool fragmentExperiment = false)
     {
-        _provider = new UiaEditorObject(new WindowsTextProviderCore(document, viewport));
+        if (fragmentExperiment && inputHwnd == 0)
+            throw new ArgumentException("The fragment experiment requires the input HWND.", nameof(inputHwnd));
+        var core = new WindowsTextProviderCore(document, viewport);
+        _provider = new UiaEditorObject(core);
+        if (fragmentExperiment) _fragmentRoot = new UiaFragmentRootObject(core, inputHwnd);
     }
 
     /// <summary>Returns a WM_GETOBJECT result using a source-generated COM callable wrapper.</summary>
     internal nint HandleGetObject(nint hwnd, nuint wParam, nint lParam)
     {
         _provider.BindWindow(hwnd);
-        var pointer = UiaComInterface.Pointer(_provider, typeof(IRawElementProviderSimpleAbi).GUID);
+        _fragmentRoot?.BindWindow(hwnd);
+        var visibleProvider = (object?)_fragmentRoot ?? _provider;
+        var pointer = UiaComInterface.Pointer(visibleProvider, typeof(IRawElementProviderSimpleAbi).GUID);
         try { return UiaReturnRawElementProvider(hwnd, wParam, lParam, pointer); }
         finally { Marshal.Release(pointer); }
     }
@@ -144,8 +152,10 @@ internal sealed partial class WindowsUiaBridgePrototype
     internal void DetachRegistration(nint hwnd)
     {
         _provider.Detach();
+        _fragmentRoot?.Detach();
         UiaReturnRawElementProvider(hwnd, 0, 0, 0);
         _provider.BindWindow(0);
+        _fragmentRoot?.BindWindow(0);
     }
 
     [LibraryImport("Uiautomationcore.dll")]

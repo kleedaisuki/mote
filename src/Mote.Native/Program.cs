@@ -57,6 +57,7 @@ internal static class Program
         {
             Console.WriteLine("Usage: mote [path] [--smoke-gui|--check-runtime]");
             Console.WriteLine("Experimental canvas: mote --canvas-experimental [path]");
+            Console.WriteLine("Windows UIA fragment diagnostic: mote --canvas-experimental --uia-fragment-experimental [path]");
             Console.WriteLine("macOS diagnostic: mote --check-native-mac-workflow <input> <output>");
             Console.WriteLine("Canvas diagnostics: --check-native-windows-canvas | --check-native-mac-canvas");
             Console.WriteLine("Experimental AppKit clipboard diagnostic: --check-native-mac-canvas-clipboard <input> <output>");
@@ -67,8 +68,18 @@ internal static class Program
         }
         var canvasMode = args.Length > 0 && args[0] == "--canvas-experimental";
         var remaining = canvasMode ? args[1..] : args;
+        var fragmentMode = remaining.Length > 0 && remaining[0] == "--uia-fragment-experimental";
+        if (fragmentMode)
+        {
+            if (!canvasMode || !OperatingSystem.IsWindows())
+            {
+                Console.Error.WriteLine("The UIA fragment diagnostic requires Windows canvas mode.");
+                return 2;
+            }
+            remaining = remaining[1..];
+        }
         var smoke = remaining.Length == 1 && remaining[0] == "--smoke-gui";
-        if (!smoke && remaining.Length > 1)
+        if (remaining.Contains("--uia-fragment-experimental") || !smoke && remaining.Length > 1)
         {
             Console.Error.WriteLine("mote opens one file per process; provide at most one path.");
             return 2;
@@ -98,7 +109,7 @@ internal static class Program
         }
 
         INativeEditorShell shell = OperatingSystem.IsWindows()
-            ? new Windows.WindowsEditorShell(canvasMode)
+            ? new Windows.WindowsEditorShell(canvasMode, fragmentMode)
             : new Mac.MacEditorShell(canvasMode);
         var theme = ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark);
         using var app = new NativeEditorController(shell, config, theme,

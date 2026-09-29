@@ -40,6 +40,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private static WindowsRichEditIsland? _creating;
     private static WindowsRichEditIsland? _active;
     private readonly nint _parent;
+    private readonly bool _fragmentExperiment;
     private WindowsDirectWriteCanvas _geometry;
     private WindowsCanvasPainter _painter;
     private IThemePolicy _theme;
@@ -79,11 +80,13 @@ internal sealed class WindowsRichEditIsland : IDisposable
         bool ConfirmedReplacement = false);
 
     /// <summary>Creates a child canvas inside the existing native editor window.</summary>
-    internal WindowsRichEditIsland(nint parent, IThemePolicy theme)
+    internal WindowsRichEditIsland(nint parent, IThemePolicy theme,
+        bool fragmentExperiment = false)
     {
         if (parent == 0) throw new ArgumentOutOfRangeException(nameof(parent));
         ArgumentNullException.ThrowIfNull(theme);
         _parent = parent;
+        _fragmentExperiment = fragmentExperiment;
         _theme = theme;
         _geometry = NewGeometry(theme);
         _painter = new WindowsCanvasPainter(theme);
@@ -172,7 +175,10 @@ internal sealed class WindowsRichEditIsland : IDisposable
         ArgumentNullException.ThrowIfNull(viewport);
         if (_window == 0) throw new InvalidOperationException("Canvas HWND is not ready.");
         if (_uiaBridge is not null) throw new InvalidOperationException("UIA is already attached.");
-        _uiaBridge = new WindowsUiaBridgePrototype(document, viewport);
+        _uiaBridge = _fragmentExperiment
+            ? new WindowsUiaBridgePrototype(document, viewport, _input,
+                fragmentExperiment: true)
+            : new WindowsUiaBridgePrototype(document, viewport);
         _uiaResponder = responderOverride ?? _uiaBridge.HandleGetObject;
     }
 

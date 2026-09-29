@@ -74,14 +74,21 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private string _lastFind = "";
     private string? _styleText;
     private readonly bool _experimentalCanvas;
+    private readonly bool _uiaFragmentExperimental;
     private WindowsRichEditIsland? _canvasIsland;
     private NativeCanvasBinding? _pendingCanvasBinding;
     private CanvasFrame? _pendingCanvasFrame;
     private NativeCanvasSemantics? _pendingCanvasSemantics;
 
     /// <summary>Creates the established editor or explicitly opts into the continuous canvas.</summary>
-    internal WindowsEditorShell(bool experimentalCanvas = false) =>
+    internal WindowsEditorShell(bool experimentalCanvas = false, bool uiaFragmentExperimental = false)
+    {
+        if (uiaFragmentExperimental && !experimentalCanvas)
+            throw new ArgumentException("UIA fragment diagnostics require the canvas shell.",
+                nameof(uiaFragmentExperimental));
         _experimentalCanvas = experimentalCanvas;
+        _uiaFragmentExperimental = uiaFragmentExperimental;
+    }
 
     /// <inheritdoc />
     public bool CanvasEnabled => _experimentalCanvas;
@@ -592,7 +599,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_experimentalCanvas)
         {
             Win32.ShowWindow(_editor, 0);
-            _canvasIsland = new WindowsRichEditIsland(_window, _theme);
+            _canvasIsland = new WindowsRichEditIsland(_window, _theme,
+                _uiaFragmentExperimental);
             _canvasIsland.EditCommitted += edit => CanvasEditCommitted?.Invoke(edit);
             _canvasIsland.ScrollRequested += delta => CanvasScrollRequested?.Invoke(delta);
             _canvasIsland.ViewportResized += height => CanvasViewportResized?.Invoke(height);
