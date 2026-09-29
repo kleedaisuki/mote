@@ -1,0 +1,52 @@
+name: Native UI single-binary probe
+
+on:
+  push:
+    branches: [codex/native-ui-probe]
+  workflow_dispatch:
+
+jobs:
+  appkit:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            rid: osx-arm64
+          - runner: macos-15-intel
+            rid: osx-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Native AOT publish, inventory and AppKit smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=".temp/probe-publish/${{ matrix.rid }}"
+          dotnet publish .temp/single-binary-appkit/SingleBinaryAppKit.csproj \
+            -c Release -r "${{ matrix.rid }}" --self-contained true \
+            -p:PublishAot=true -o "$out"
+          echo '=== file inventory ==='
+          find "$out" -maxdepth 2 -type f -print | sort
+          echo '=== Mach-O ==='
+          file "$out/SingleBinaryAppKit"
+          otool -L "$out/SingleBinaryAppKit"
+          echo '=== AppKit/IME protocol check ==='
+          "$out/SingleBinaryAppKit"
+          echo '=== native window smoke ==='
+          python3 - "$out/SingleBinaryAppKit" <<'PY'
+          import subprocess
+          import sys
+
+          result = subprocess.run([sys.argv[1], '--window'], capture_output=True,
+                                  text=True, timeout=20)
+          print(result.stdout)
+          print(result.stderr, file=sys.stderr)
+          print(f'exit={result.returncode}')
+          if result.returncode != 0:
+              raise SystemExit(result.returncode)
+          PY
