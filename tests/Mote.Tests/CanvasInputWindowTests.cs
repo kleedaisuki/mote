@@ -55,6 +55,11 @@ public sealed class CanvasInputWindowTests
         Assert.InRange(smaller.SourceText.Length, 1, 2048);
         Assert.InRange(caret, smaller.SourceStart, smaller.SourceEnd);
         Assert.Equal(new string('x', smaller.SourceText.Length), smaller.SourceText);
+
+        var macBinding = CanvasInputWindowSelector.Select(document.Snapshot, caret, 8192);
+        Assert.Equal(8192, macBinding.SourceText.Length);
+        Assert.InRange(caret, macBinding.SourceStart, macBinding.SourceEnd);
+        Assert.Equal(new string('x', macBinding.SourceText.Length), macBinding.SourceText);
     }
 
     /// <summary>Neither edge of the native window may bisect an astral Unicode scalar.</summary>
@@ -183,5 +188,59 @@ public sealed class CanvasInputWindowTests
             CanvasInputWindowSelector.Select(giant.Snapshot, 0, 2048));
         Assert.InRange(CanvasInputWindowSelector.Select(giant.Snapshot, 0).SourceText.Length,
             1, CanvasInputWindowSelector.MaxLength);
+    }
+
+    /// <summary>A Mac-sized source binding leaves space below the separate 16 Ki native edit limit.</summary>
+    [Theory]
+    [InlineData(8192)]
+    [InlineData(16383)]
+    [InlineData(16384)]
+    public void Mac_binding_limit_does_not_fill_native_edit_capacity(int sourceLength)
+    {
+        const int bindingLimit = 8192;
+        const int nativeEditLimit = 16384;
+        using var document = new Document(new string('x', sourceLength));
+        var window = CanvasInputWindowSelector.Select(document.Snapshot, sourceLength / 2, bindingLimit);
+
+        Assert.InRange(window.SourceText.Length, 1, bindingLimit);
+        Assert.Equal(document.Snapshot.GetText(window.SourceStart, window.SourceText.Length), window.SourceText);
+        Assert.InRange(sourceLength / 2, window.SourceStart, window.SourceEnd);
+        Assert.True(window.SourceText.Length + 1 <= nativeEditLimit);
+    }
+
+    /// <summary>The 8 Ki Mac request never splits Unicode clusters to manufacture edit slack.</summary>
+    [Theory]
+    [InlineData("a\u0301", 2)]
+    [InlineData("👩‍💻", 5)]
+    [InlineData("🇨🇳", 4)]
+    public void Mac_binding_limit_preserves_grapheme_edges(string grapheme, int units)
+    {
+        const int bindingLimit = 8192;
+        var startAt = bindingLimit / 2 - units / 2;
+        using var startDocument = new Document(new string('x', startAt) + grapheme + new string('y', 20_000));
+        var startWindow = CanvasInputWindowSelector.Select(startDocument.Snapshot, bindingLimit, bindingLimit);
+        Assert.InRange(startWindow.SourceText.Length, 1, bindingLimit);
+        Assert.Equal(startAt, startWindow.SourceStart);
+        Assert.StartsWith(grapheme, startWindow.SourceText);
+
+        var endAt = bindingLimit - units / 2;
+        using var endDocument = new Document(new string('x', endAt) + grapheme + "tail");
+        var endWindow = CanvasInputWindowSelector.Select(endDocument.Snapshot, 0, bindingLimit);
+        Assert.Equal(endAt, endWindow.SourceEnd);
+        Assert.DoesNotContain(grapheme, endWindow.SourceText, StringComparison.Ordinal);
+    }
+
+    /// <summary>An 8 Ki grapheme dependency fails closed instead of binding partial native text.</summary>
+    [Fact]
+    public void Mac_binding_limit_rejects_oversized_cluster_without_document_change()
+    {
+        var source = "a" + new string('\u0301', 8192);
+        using var document = new Document(source);
+        var before = document.Snapshot;
+
+        Assert.Throws<CanvasInputWindowBoundaryException>(() =>
+            CanvasInputWindowSelector.Select(before, 0, 8192));
+        Assert.Same(before, document.Snapshot);
+        Assert.Equal(source, document.Snapshot.GetText());
     }
 }

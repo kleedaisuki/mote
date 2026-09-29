@@ -20,6 +20,12 @@ internal sealed unsafe class MacTextInputIsland
     private const string InputClass = "MoteInteractiveCanvasInputView";
     private const string HostScrollClass = "MoteInteractiveCanvasHostScrollView";
     private const int MaxInputLength = 16 * 1024;
+    /// <summary>
+    /// Controller-requested source window. The remaining native capacity lets
+    /// NSTextView accept ordinary insertion or IME commits before the next
+    /// synchronous source rebind; the 16 Ki pre-change limit remains a hard cap.
+    /// </summary>
+    internal const int MaxBindingLength = MaxInputLength / 2;
     private const double LeftInset = 12;
     private const double RibbonHeight = 36;
     private const double RibbonLabelWidth = 140;
@@ -323,6 +329,8 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>
     /// Replaces the host's one-line source window. Reentrant controller bindings
     /// are applied immediately after textDidChange returns, before another OS input.
+    /// A binding uses at most 8 Ki; the remaining native capacity is reserved
+    /// for AppKit's transient edit before the controller publishes a new binding.
     /// </summary>
     internal void Bind(NativeCanvasBinding binding)
     {
@@ -332,13 +340,13 @@ internal sealed unsafe class MacTextInputIsland
             throw new InvalidOperationException("The canvas input host failed; reopen the editor.");
         if (binding.BaseVersion != binding.Snapshot.Version ||
             binding.Frame.Version != binding.Snapshot.Version ||
-            binding.InputSourceText.Length > MaxInputLength ||
+            binding.InputSourceText.Length > MaxBindingLength ||
             binding.InputSourceStart < 0 ||
             binding.InputSourceStart > binding.Snapshot.Length - binding.InputSourceText.Length ||
             binding.InputSourceText.IndexOfAny(['\r', '\n']) >= 0 ||
             !string.Equals(binding.Snapshot.GetText(binding.InputSourceStart,
                 binding.InputSourceText.Length), binding.InputSourceText, StringComparison.Ordinal))
-            throw new ArgumentException("Input binding must be an exact bounded single-line source slice.",
+            throw new ArgumentException("Input binding must be an exact single-line source slice with native edit reserve.",
                 nameof(binding));
         if (IsComposing) throw new InvalidOperationException("Cannot rebind during marked text.");
         if (_inChange)

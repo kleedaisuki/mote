@@ -747,6 +747,42 @@ public sealed class NativeControllerTests
         Assert.DoesNotContain("discrete", shell.CanvasBinding.Status, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>A platform's 8 Ki binding request leaves one-character edits below its 16 Ki native hard limit.</summary>
+    [Theory]
+    [InlineData(8192)]
+    [InlineData(16383)]
+    [InlineData(16384)]
+    public async Task Canvas_controller_honors_smaller_native_input_binding_limit(int sourceLength)
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("bounded-input.txt");
+        var source = new string('x', sourceLength);
+        await File.WriteAllTextAsync(path, source);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve)
+        {
+            CanvasEnabled = true,
+            MaxCanvasInputLength = 8192
+        };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.CanvasBinding?.Snapshot.Length == sourceLength);
+
+        var before = shell.CanvasBinding!;
+        Assert.InRange(before.InputSourceText.Length, 1, 8192);
+        Assert.True(before.InputSourceText.Length + 1 <= 16384);
+        shell.CommitCanvasEdit(new CanvasCommittedEdit(before.DocumentGeneration,
+            before.BaseVersion, before.BindingNonce, new TextChange(0, 0, "X"), 1));
+
+        var after = shell.CanvasBinding!;
+        Assert.Equal(sourceLength + 1, after.Snapshot.Length);
+        Assert.Equal("X", after.Snapshot.GetText(0, 1));
+        Assert.InRange(after.InputSourceText.Length, 1, 8192);
+        Assert.Equal(source, await File.ReadAllTextAsync(path));
+        Assert.Empty(shell.Errors);
+        shell.RequestUndo();
+        Assert.Equal(source, shell.CanvasBinding!.Snapshot.GetText());
+    }
+
     /// <summary>Replacing repeated text uses the exact OS source transaction, not a guessed diff.</summary>
     [Fact]
     public async Task Canvas_selected_repeated_text_is_replaced_exactly_once()

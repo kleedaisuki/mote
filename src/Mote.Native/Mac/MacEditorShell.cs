@@ -75,7 +75,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public bool CanvasEnabled => _experimentalCanvas;
 
     /// <inheritdoc />
-    public int MaxCanvasInputLength => CanvasInputWindowSelector.MaxLength;
+    public int MaxCanvasInputLength => MacTextInputIsland.MaxBindingLength;
 
     /// <inheritdoc />
     public bool IsCanvasComposing => _experimentalCanvas && _canvas?.IsComposing == true;
@@ -676,6 +676,14 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         var caret = new ObjC.Range((nuint)ProbeNativeText.Length, 0);
         ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), caret);
+        ObjC.Send(_editor, ObjC.Sel("insertText:replacementRange:"),
+            ObjC.String(value), new ObjC.Range(nuint.MaxValue, 0));
+    }
+
+    /// <summary>Exercises an ordinary native insertion at a long-line source start.</summary>
+    internal void ProbeInsertAtStart(string value)
+    {
+        ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), new ObjC.Range(0, 0));
         ObjC.Send(_editor, ObjC.Sel("insertText:replacementRange:"),
             ObjC.String(value), new ObjC.Range(nuint.MaxValue, 0));
     }

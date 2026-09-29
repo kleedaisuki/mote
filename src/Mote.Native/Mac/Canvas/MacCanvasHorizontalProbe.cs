@@ -115,6 +115,7 @@ internal static class MacCanvasHorizontalProbe
         private double _normalWindowWidth;
         private int _shortHit;
         private int _remoteHit;
+        private int _longSourceLength;
 
         internal Workflow(MacEditorShell shell, string shortPath, string longPath,
             string output, string themeId)
@@ -249,6 +250,31 @@ internal static class MacCanvasHorizontalProbe
                         longSource.Length >= 50 * 1024 * 1024:
                         if (longSource.GetText(RemoteOffset, RemoteMarker.Length) != RemoteMarker)
                             throw new InvalidOperationException("Remote source marker changed.");
+                        _check = "S2-long-host-reserve";
+                        _longSourceLength = longSource.Length;
+                        if (_shell.ProbeNativeText.Length is < 1 or >
+                            MacTextInputIsland.MaxBindingLength)
+                            throw new InvalidOperationException("Long-line host lacks insertion reserve.");
+                        _shell.ProbeInsertAtStart("X");
+                        _stage = 21;
+                        break;
+                    case 21 when _shell.ProbeCanvasSnapshot is { } insertedLong &&
+                        insertedLong.Length == _longSourceLength + 1:
+                        _check = "S21-native-insert-source";
+                        if (insertedLong.GetText(0, 1) != "X" ||
+                            _shell.ProbeNativeText.Length > MacTextInputIsland.MaxBindingLength)
+                            throw new InvalidOperationException("Long-line native insertion was not canonical.");
+                        _metrics.Add("long-line-native-insert=source-plus-one");
+                        _shell.ProbeInvokeMenu("moteUndo:");
+                        _stage = 22;
+                        break;
+                    case 22 when _shell.ProbeCanvasSnapshot is { } undoneLong &&
+                        undoneLong.Length == _longSourceLength:
+                        _check = "S22-native-insert-undo";
+                        if (undoneLong.GetText(RemoteOffset, RemoteMarker.Length) != RemoteMarker ||
+                            _shell.ProbeTitle.Contains('•'))
+                            throw new InvalidOperationException("Long-line native insertion did not undo cleanly.");
+                        _metrics.Add("long-line-native-undo=source-restored");
                         _shell.ProbeCanvasHorizontalAnchor(RemoteOffset);
                         _stage = 3;
                         break;
