@@ -170,7 +170,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 _application = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication"));
                 ObjC.Send(_application, ObjC.Sel("setActivationPolicy:"), 0);
                 ObjC.Send(_application, ObjC.Sel("setDelegate:"), _delegate);
+                if (_experimentalCanvas) MacTextInputIsland.TraceStage("S0-before-window");
                 CreateWindow();
+                if (_experimentalCanvas) MacTextInputIsland.TraceStage("S1-window-ready");
                 CreateMenu();
                 if (_theme is not null) ApplyTheme(_theme);
                 if (_pendingDocument is not null) SetDocument(_pendingDocument);
@@ -184,6 +186,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 if (_pendingSelection is { } selection) SetSelection(selection.Anchor, selection.Active);
                 ObjC.Send(_window, ObjC.Sel("makeKeyAndOrderFront:"), 0);
                 ObjC.Send(_application, ObjC.Sel("activateIgnoringOtherApps:"), 1);
+                if (_experimentalCanvas) MacTextInputIsland.TraceStage("S2-before-loop");
                 if (_experimentalCanvas) Post(() => _canvas?.PublishBodyHeight());
                 Post(() => Shown?.Invoke());
                 ObjC.Send(_application, ObjC.Sel("run"));

@@ -104,6 +104,7 @@ internal static class MacCanvasHorizontalProbe
         private readonly List<string> _metrics = [];
         private readonly Dictionary<string, string> _imageHashes = [];
         private int _stage;
+        private string _check = "startup";
         private bool _done;
         private double _beforeX;
         private double _normalCanvasHeight;
@@ -175,10 +176,13 @@ internal static class MacCanvasHorizontalProbe
                         break;
                     case 1 when _shell.ProbeCanvasFrame is { } panned &&
                         panned.Horizontal.SourceBoundary > 0:
+                        _check = "S1-bounded";
                         CheckBounded(panned);
+                        _check = "S1-source-caret";
                         var after = _shell.GetCanvasCaretGeometry(panned, ShortOffset);
                         if (after is not { IsVisible: true })
                             throw new InvalidOperationException("Short caret was not visibly reanchored.");
+                        _check = "S1-ribbon-caret-focus";
                         var host = _shell.ProbeCanvasHostGeometry(0);
                         if (host is not { Aligned: true, Hidden: false } ||
                             !_shell.ProbeCanvasInputFocused ||
@@ -187,28 +191,38 @@ internal static class MacCanvasHorizontalProbe
                             throw new InvalidOperationException("Visible input ribbon lost its caret or focus.");
                         // Raster comparison must isolate panning from the later
                         // selection/copy test; selection alone cannot prove scroll.
+                        _check = "S1-before-after-raster";
                         Capture("short-after.png");
                         RequireDifferent("short-before.png", "short-after.png");
+                        _check = "S1-source-hit";
                         _shortHit = _shell.ProbeCanvasHitSource(after.Value.X + 1,
                             after.Value.Y + after.Value.Height * 0.5);
                         if (_shortHit != ShortOffset)
                             throw new InvalidOperationException("Short pointer source mapping failed.");
+                        _check = "S1-global-selection";
                         _shell.ProbeCanvasSelectGlobal(_shortHit, _shortHit + ShortMarker.Length);
                         if (_shell.ProbeCanvasSelection !=
                             (ShortOffset, ShortOffset + ShortMarker.Length))
                             throw new InvalidOperationException("Short global selection failed.");
-                        _shell.ProbeInvokeMenu("moteCopy:");
-                        var board = ObjC.Send(ObjC.Class("NSPasteboard"),
-                            ObjC.Sel("generalPasteboard"));
-                        var copied = ObjC.Send(board, ObjC.Sel("stringForType:"),
-                            ObjC.String("public.utf8-plain-text"));
-                        if (ObjC.ManagedString(copied) != ShortMarker)
-                            throw new InvalidOperationException("Short global copy failed.");
+                        _check = "S1-global-copy";
                         _metrics.Add($"short-before-x={_beforeX.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"short-after-x={after.Value.X.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"host-native-x={host.Value.NativeX.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"host-clip-x={host.Value.ClipX.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"host-ribbon-caret-x={(host.Value.NativeX - host.Value.ClipX).ToString("F3", CultureInfo.InvariantCulture)}");
+                        var board = ObjC.Send(ObjC.Class("NSPasteboard"),
+                            ObjC.Sel("generalPasteboard"));
+                        ObjC.Send(board, ObjC.Sel("clearContents"));
+                        _shell.ProbeInvokeMenu("moteCopy:");
+                        _stage = 11;
+                        break;
+                    case 11:
+                        _check = "S11-await-async-copy";
+                        var copyBoard = ObjC.Send(ObjC.Class("NSPasteboard"),
+                            ObjC.Sel("generalPasteboard"));
+                        var copied = ObjC.Send(copyBoard, ObjC.Sel("stringForType:"),
+                            ObjC.String("public.utf8-plain-text"));
+                        if (ObjC.ManagedString(copied) != ShortMarker) break;
                         _shell.ProbePickOpen(_longPath);
                         _shell.ProbeInvokeMenu("moteOpen:");
                         _stage = 2;
@@ -336,7 +350,8 @@ internal static class MacCanvasHorizontalProbe
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
-                Console.Error.WriteLine($"Mac horizontal stage {_stage}: {error.GetType().Name}.");
+                Console.Error.WriteLine($"Mac horizontal stage {_stage} check {_check}: " +
+                    $"{error.GetType().Name}.");
                 Finish(false);
                 return;
             }

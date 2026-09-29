@@ -25,6 +25,14 @@ internal sealed unsafe class MacTextInputIsland
     private const double RibbonLabelWidth = 140;
     private const string ObjcRuntime = "/usr/lib/libobjc.A.dylib";
     private static MacTextInputIsland? s_current;
+    private static readonly bool s_traceStages =
+        Environment.GetEnvironmentVariable("MOTE_NATIVE_MAC_STAGE_TRACE") == "1";
+
+    /// <summary>Privacy-safe target-host ABI breadcrumbs, disabled in normal editing.</summary>
+    internal static void TraceStage(string code)
+    {
+        if (s_traceStages) Console.Error.WriteLine($"mote-mac-stage:{code}");
+    }
 
     private readonly Action<CanvasCommittedEdit> _edit;
     private readonly Action<double> _scroll;
@@ -248,6 +256,7 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>Creates the canvas and bounded input host as one left-pane view.</summary>
     internal nint CreateView(ObjC.Rect frame)
     {
+        TraceStage("C0-create-view");
         if (s_current is not null) throw new InvalidOperationException("Only one interactive canvas may exist.");
         s_current = this;
         _width = frame.Size.Width;
@@ -307,6 +316,7 @@ internal sealed unsafe class MacTextInputIsland
             ObjC.Sel("systemFontOfSize:"), 11d));
         ObjC.Send(_ribbonLabel, ObjC.Sel("setStringValue:"), ObjC.String("Input @ 0"));
         ObjC.Send(_view, ObjC.Sel("addSubview:"), _ribbonLabel);
+        TraceStage("C1-view-ready");
         return _view;
     }
 
@@ -316,6 +326,7 @@ internal sealed unsafe class MacTextInputIsland
     /// </summary>
     internal void Bind(NativeCanvasBinding binding)
     {
+        TraceStage("B0-bind-enter");
         ArgumentNullException.ThrowIfNull(binding);
         if (_reportedFailure)
             throw new InvalidOperationException("The canvas input host failed; reopen the editor.");
@@ -352,10 +363,12 @@ internal sealed unsafe class MacTextInputIsland
             _compositionDirty = false;
             _nativeChangeObserved = false;
             _replacementRangeBeforeEdit = null;
+            TraceStage("B1-before-place-host");
             PlaceHost();
         }
         finally { _setting = false; }
         Invalidate();
+        TraceStage("B2-bind-ready");
     }
 
     /// <summary>
@@ -680,6 +693,7 @@ internal sealed unsafe class MacTextInputIsland
     /// </summary>
     private void PlaceHost()
     {
+        TraceStage("P0-place-host");
         if (_editor == 0 || _binding is null || _frame is null || IsComposing ||
             _frame.Version != _binding.Snapshot.Version) return;
         ObjC.Send(_hostScroll, ObjC.Sel("setFrame:"), new ObjC.Rect(
@@ -693,15 +707,19 @@ internal sealed unsafe class MacTextInputIsland
         try
         {
             ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), projected);
+            TraceStage("P1-before-size-to-fit");
             ObjC.Send(_editor, ObjC.Sel("sizeToFit"));
+            TraceStage("P2-before-scroll-range");
             ObjC.Send(_editor, ObjC.Sel("scrollRangeToVisible:"),
                 new ObjC.Range(projected.Location + projected.Length, 0));
+            TraceStage("P3-before-native-caret");
             var local = checked((int)(projected.Location + projected.Length));
             var clip = ObjC.Send(_hostScroll, ObjC.Sel("contentView"));
             var clipX = MacOnScreenCanvasNative.GetRect(clip,
                 ObjC.Sel("bounds")).Origin.X;
             _hostAligned = TryNativeCaretX(local, out var x) &&
                 x - clipX >= 0 && x - clipX <= _width - RibbonLabelWidth - 8;
+            TraceStage("P4-host-ready");
         }
         finally { _setting = false; }
     }
@@ -734,10 +752,12 @@ internal sealed unsafe class MacTextInputIsland
         if (character < 0) return false;
         var glyph = checked((nuint)ObjC.Send(layout,
             ObjC.Sel("glyphIndexForCharacterAtIndex:"), (nint)character));
+        TraceStage("G0-before-glyph-rect");
         var rect = RuntimeInformation.ProcessArchitecture == Architecture.X64
             ? GetGlyphRectStret(layout, glyph, container)
             : SendGlyphRectDirect(layout, ObjC.Sel("boundingRectForGlyphRange:inTextContainer:"),
                 new ObjC.Range(glyph, 1), container);
+        TraceStage("G1-after-glyph-rect");
         x = origin.X + rect.Origin.X + (atEnd ? rect.Size.Width : 0);
         return double.IsFinite(x) && x >= 0;
     }
