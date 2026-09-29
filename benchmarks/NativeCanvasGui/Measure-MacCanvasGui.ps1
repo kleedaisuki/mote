@@ -235,6 +235,65 @@ function Wait-AxSelection {
     throw "routing-selection-timeout: $Name expected=$Start/$Length after 4 seconds."
 }
 
+# Observe one already-dispatched X through independent source and title signals.
+# Never retries the mutating key, and never authorizes Save from a title alone.
+function Wait-EditObserved {
+    param([Diagnostics.Process] $Child, [Collections.IDictionary] $Result,
+        [int] $ExpectedLength, [string] $FileName, [string] $Name,
+        [Diagnostics.Stopwatch] $Watch, [double] $EditAt)
+    $titleScript = @"
+tell application "System Events"
+    set targetProcess to first process whose unix id is $($Child.Id)
+    if name of window 1 of targetProcess contains " •" then return "dirty"
+    return "clean"
+end tell
+"@
+    $compiledTitle = Compile-AppleScript $titleScript "$Name-dirty-observer"
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $attempt = 0
+    $confirmed = $null
+    while ($timer.ElapsedMilliseconds -lt 25000) {
+        $Child.Refresh()
+        if ($Child.HasExited) { throw "edit-child-exited: $Name exit=$($Child.ExitCode)" }
+        $attempt++
+        if ($null -eq $confirmed) {
+            try {
+                $gate = Read-AxGate $Child.Id $ExpectedLength $FileName `
+                    ('{0}-source-{1:D2}' -f $Name, $attempt)
+                $Result.post_edit_last_gate = $gate
+                if ($gate.sourceCandidates -eq 1 -and $gate.sourceLength -eq $ExpectedLength -and
+                    $gate.selectionStart -eq 1 -and $gate.selectionLength -eq 0) {
+                    Assert-AxGate $gate $Child.Id $ExpectedLength 1 0
+                    $confirmed = $gate
+                    $Result.edit_to_source_ax_ms = $Watch.Elapsed.TotalMilliseconds - $EditAt
+                }
+            }
+            catch { $Result.post_edit_last_error = $_.Exception.Message }
+        }
+        if ($Result.dirty_marker_status -ne 'observed') {
+            try {
+                $title = Invoke-CompiledAppleScript $compiledTitle `
+                    ('{0}-dirty-{1:D2}' -f $Name, $attempt) 2000
+                if ($title -ceq 'dirty') {
+                    $Result.dirty_marker_status = 'observed'
+                    $Result.edit_to_dirty_automation_ms = $Watch.Elapsed.TotalMilliseconds - $EditAt
+                }
+            }
+            catch { $Result.dirty_marker_error = $_.Exception.Message }
+        }
+        if ($null -ne $confirmed -and $Result.dirty_marker_status -eq 'observed') { break }
+        Start-Sleep -Milliseconds 150
+    }
+    $Result.post_edit_attempts = $attempt
+    if ($null -eq $confirmed) {
+        throw "edit-source-timeout: $Name source AX length/selection was not confirmed after one X; last_error=$($Result.post_edit_last_error)"
+    }
+    if ($Result.dirty_marker_status -ne 'observed') {
+        $Result.dirty_marker_status = 'missing-after-source-confirmed'
+    }
+    return $confirmed
+}
+
 function Wait-FileLength {
     param([string] $Path, [long] $Expected)
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -297,10 +356,17 @@ function Invoke-Case {
         source_ax_gate_before = $null
         source_ax_gate_after_shift = $null
         source_ax_gate_after_left = $null
+        source_ax_gate_before_save = $null
         routing_probe_status = 'not-run'
         open_to_ax_focus_ms = $null
+        edit_to_source_ax_ms = $null
         edit_to_dirty_automation_ms = $null
         edit_to_save_automation_ms = $null
+        dirty_marker_status = 'not-observed'
+        dirty_marker_error = ''
+        post_edit_attempts = 0
+        post_edit_last_error = ''
+        post_edit_last_gate = $null
         ax_visible_range_before = $null
         ax_visible_range_after = $null
         vertical_scroll_status = 'unverified'
@@ -443,20 +509,18 @@ tell application "System Events"
     set targetProcess to first process whose unix id is $($child.Id)
     set frontmost of targetProcess to true
     keystroke "X"
-    repeat with attempt from 1 to 100
-        if name of window 1 of targetProcess contains " •" then return "dirty"
-        delay 0.05
-    end repeat
-    error "native edit did not mark the document dirty"
+    return "edit-sent"
 end tell
 "@
-        if ((Invoke-AppleScript $editScript "$Name-edit" 10000) -cne 'dirty') {
-            throw 'External text-input edit was not acknowledged.'
+        if ((Invoke-AppleScript $editScript "$Name-edit" 4000) -cne 'edit-sent') {
+            throw 'edit-dispatch-error: External X was not dispatched.'
         }
-        $result.edit_to_dirty_automation_ms = $watch.Elapsed.TotalMilliseconds - $editAt
-        $afterEdit = Read-AxGate $child.Id ([int]($originalLength + 1)) `
-            $fileName "$Name-gate-after-edit"
-        Assert-AxGate $afterEdit $child.Id ([int]($originalLength + 1)) 1 0
+        [void](Wait-EditObserved $child $result ([int]($originalLength + 1)) `
+            $fileName $Name $watch $editAt)
+        $beforeSave = Read-AxGate $child.Id ([int]($originalLength + 1)) `
+            $fileName "$Name-gate-before-save"
+        $result.source_ax_gate_before_save = $beforeSave
+        Assert-AxGate $beforeSave $child.Id ([int]($originalLength + 1)) 1 0
         $result.stage = 'save'
         $saveScript = @"
 tell application "System Events"
@@ -537,7 +601,9 @@ end tell
             $originalHash)) {
             throw 'reopen-bytes-error: saved bytes changed during fresh reopen.'
         }
-        $result.status = 'external-open-edit-save-reopen-passed'
+        $result.status = if ($result.dirty_marker_status -eq 'observed') {
+            'external-open-edit-save-reopen-passed'
+        } else { 'external-open-edit-save-reopen-passed-without-dirty-title' }
         $result.stage = 'complete'
     }
     catch {

@@ -123,8 +123,35 @@ frontmost/global PID is a **false-negative for a known successful keyboard
 workflow** and cannot be the sole Canvas gate. Conversely, an AX scroll-area
 role does not prove the hidden input island is first responder. The new
 source-proxy focus + non-mutating selection challenge is designed to separate
-those cases without risking a text key to an unverified target. It has **not
-yet been hosted**; there is still no 100 MiB external edit/Save claim.
+those cases without risking a text key to an unverified target.
+
+The [first hosted source-proxy-gated run (`36594818528`)](https://github.com/kleedaisuki/mote/actions/runs/36594818528)
+compiled the Swift observer and executed all three cases on macOS arm64. The
+**1 MiB control and 100 MiB many-line** cases passed the exact source-backed
+selection challenge, one external `X`, full-byte Save, and fresh-process
+reopen with source length +1. For 100 MiB, the externally observed source
+proxy was ready after **3,007.5 ms**, X-to-dirty-title was **336.3 ms**, and
+X-to-exact-Save was **1,055.7 ms**. These are **one-run automation-inclusive
+intervals**, not first editable frame, paint, or a latency distribution. The
+source AX visible range changed `0/2176→2113/2240` after the native Next Page
+menu; that is a scroll-anchor clue, not rendered-pixel proof. Positive point
+working sets were **291.7 MiB** at focus and **309.2 MiB** after Save; the
+macOS peak counter remained unavailable. In all three cases the Swift
+`NSWorkspace` frontmost PID matched mote while `System Events` still reported
+Finder, directly confirming why the older foreground-property gate was false.
+The **50 MiB single-line** case passed Shift+Right and Left selection routing,
+but the combined edit script did not observe a dirty title within its bounded
+poll. It did **not** reach Save or reopen. The current artifact cannot tell
+whether the X was never committed, committed slowly, or only the title marker
+was missed; no long-line edit/Save performance claim follows. The follow-up
+harness sends **exactly one X** and separately polls the source-backed AX
+length/selection and dirty title for at most 25 seconds. It never retries X;
+if AX fails to confirm the exact length +1 and selection `1/0`, it stops before
+Save. If AX confirms but the title does not, it records
+`dirty_marker_status=missing-after-source-confirmed` and allows one Command-S
+only after renewing the focused-source/window gate; the full streaming byte
+oracle and fresh reopen still decide whether the edit actually persisted.
+This diagnostic has **not yet been target-run**.
 
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS
