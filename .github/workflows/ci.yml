@@ -244,6 +244,29 @@ jobs:
           path: .cache/canvas-large-undo/*.json
           if-no-files-found: warn
           retention-days: 14
+      # Real HWND horizontal navigation/selection on a 50 MiB unique-marker
+      # line; still diagnostic until hosted GUI and additional RID evidence.
+      - name: Diagnose Windows horizontal canvas workflow (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          & ./tests/NativeWindowsHorizontalWorkflow.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe'
+      - name: Upload Windows horizontal canvas diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-horizontal-win-x64
+          path: |
+            .cache/windows-horizontal/latest.json
+            .temp/windows-horizontal/**/result.json
+            .temp/windows-horizontal/**/*.png
+            .temp/windows-horizontal/**/*-stdout.txt
+            .temp/windows-horizontal/**/*-stderr.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Diagnose Windows native config and trace placement (non-gating)
         if: matrix.rid == 'win-x64'
         shell: pwsh
@@ -444,6 +467,32 @@ jobs:
         with:
           name: mac-ax-external-${{ matrix.rid }}
           path: .cache/ci-inventory/${{ matrix.rid }}/mac-ax-external.json
+          if-no-files-found: warn
+          retention-days: 14
+      # The opt-in AppKit canvas owns source-row paint; a focused native text
+      # input lives only in its reserved bottom ribbon. This first probe is
+      # synthetic in-process pan/copy, not external trackpad or CJK IME proof.
+      - name: Diagnose macOS horizontal canvas ribbon (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacHorizontalWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS horizontal canvas ribbon diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-horizontal-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/horizontal.json
+            .cache/ci-inventory/${{ matrix.rid }}/horizontal-stdout.txt
+            .cache/ci-inventory/${{ matrix.rid }}/horizontal-stderr.txt
+            .cache/horizontal-*/*.png
+            .cache/horizontal-*/metrics.txt
           if-no-files-found: warn
           retention-days: 14
       # Initial external keyboard/edit/save capability probe for the opt-in
