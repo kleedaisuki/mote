@@ -10,6 +10,8 @@ This is a **known product limitation**, not evidence that a bare Mach-O cannot r
 
 **Product decision, 2026-09-29:** the user explicitly accepted that a first launch may require an online Gatekeeper ticket lookup, and reaffirmed strict one-file delivery. Therefore release documentation must disclose the online-first limitation rather than substituting an `.app` or a sidecar to enable offline stapling. This decision does **not** waive the Developer ID, notarization, and fresh quarantined-launch verification gates below.
 
+**Current execution constraint, 2026-09-29:** the user has not enrolled in the Apple Developer Program and explicitly asked us not to pursue signing credentials now. Continue one-Mach-O Native AOT, AppKit, and hosted functional verification without repeatedly requesting credentials. No Developer ID signature, notarization, or fresh quarantined Gatekeeper launch can be claimed under this constraint; the trust gate remains unverified rather than silently waived. Revisit only if the user later changes the release requirement or supplies a publisher-controlled account through a secure channel.
+
 ## Keep six different claims separate
 
 | Stage | What it establishes | What it does **not** establish |
