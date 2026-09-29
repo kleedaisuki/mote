@@ -23,7 +23,16 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     private readonly AccessibleDocument? _accessibleDocument;
     private readonly int _uiThreadId = Environment.CurrentManagedThreadId;
     private readonly MoteConfiguration _configuration;
-    private readonly IThemePolicy _theme;
+    /// <summary>The palette last committed to both controller and native shell.</summary>
+    private IThemePolicy _theme;
+    /// <summary>The latest coalesced target while native preedit or a transition is active.</summary>
+    private IThemePolicy? _pendingTheme;
+    /// <summary>Detects appearance callbacks reentrant inside native palette application.</summary>
+    private long _appearanceSerial;
+    private bool _themeApplying;
+    /// <summary>Keeps a privacy-safe failure notice until a palette commits successfully.</summary>
+    private bool _themeUnavailable;
+    private bool _shown;
     private readonly string? _startupPath;
     private Document _document = new();
     private NativeNavigationModel _navigation = new();
@@ -97,6 +106,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         shell.CutRequested += Cut;
         shell.ClosingRequested += Closing;
         shell.Shown += Shown;
+        shell.AppearanceChanged += AppearanceChanged;
+        shell.CompositionSettled += CompositionSettled;
         if (_canvasShell is { } canvasShell)
         {
             canvasShell.CanvasEditCommitted += CanvasEdited;
@@ -116,6 +127,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     {
         if (_disposed) return;
         _disposed = true;
+        _shell.AppearanceChanged -= AppearanceChanged;
+        _shell.CompositionSettled -= CompositionSettled;
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
         _idleFullAnalysis?.Dispose();
@@ -130,7 +143,12 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     private void Shown()
     {
-        _shell.SetTheme(_theme);
+        try { _shell.SetTheme(_theme); }
+        catch (NativeThemeDeferredException) { _pendingTheme = _theme; }
+        catch (Exception) { ReportThemeFailure(); }
+        _shown = true;
+        ApplyPendingTheme();
+        if (_themeUnavailable) UpdateThemeNotice();
         ShowDocument();
         if (_canvasShell is not null)
         {
@@ -145,6 +163,129 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         }
         ScheduleAnalysis();
         if (_startupPath is not null) StartOpen(_startupPath);
+    }
+
+    /// <summary>
+    /// Re-resolves every configured ID against the current OS preference.
+    /// Explicit IDs naturally stay unchanged; system and unknown-ID fallback
+    /// follow the OS without a separate theme-selection branch.
+    /// </summary>
+    private void AppearanceChanged()
+    {
+        if (_disposed) return;
+        if (Environment.CurrentManagedThreadId != _uiThreadId)
+        {
+            try { TryPost(AppearanceChanged); }
+            catch (Exception) { /* Never unwind through an OS appearance callback. */ }
+            return;
+        }
+        try
+        {
+            ++_appearanceSerial;
+            var resolved = ThemePolicies.Resolve(_configuration.ThemeId, _shell.PrefersDark);
+            _pendingTheme = string.Equals(resolved.Id, _theme.Id,
+                StringComparison.OrdinalIgnoreCase) ? null : resolved;
+            ApplyPendingTheme();
+        }
+        catch (Exception)
+        {
+            _pendingTheme = null;
+            ReportThemeFailure();
+        }
+    }
+
+    /// <summary>Retries the coalesced appearance only after native preedit has settled.</summary>
+    private void CompositionSettled()
+    {
+        if (_disposed) return;
+        if (Environment.CurrentManagedThreadId != _uiThreadId)
+        {
+            try { TryPost(CompositionSettled); }
+            catch (Exception) { /* Never unwind through an OS composition callback. */ }
+            return;
+        }
+        try
+        {
+            ApplyPendingTheme();
+            UpdateThemeNotice();
+        }
+        catch (Exception) { ReportThemeFailure(); }
+    }
+
+    /// <summary>
+    /// Applies the palette as one UI-thread transition without editing source,
+    /// rebuilding a document projection, or interrupting marked text.
+    /// </summary>
+    private void ApplyPendingTheme()
+    {
+        if (!_shown || _themeApplying || _pendingTheme is null || _shell.IsTextComposing)
+            return;
+        var next = _pendingTheme;
+        _pendingTheme = null;
+        var appearanceSerial = _appearanceSerial;
+        _themeApplying = true;
+        try
+        {
+            _shell.SetTheme(next);
+            _theme = next;
+            _themeUnavailable = false;
+            UpdateThemeNotice();
+        }
+        catch (NativeThemeDeferredException)
+        {
+            // The native adapter promises it has not changed any paint role.
+            // Keep the last requested policy for the final IME callback.
+            _pendingTheme = next;
+        }
+        catch (Exception)
+        {
+            // A platform adapter may have applied some paint roles before an
+            // OS resource failed. Best-effort rollback leaves source untouched.
+            try { _shell.SetTheme(_theme); }
+            catch (Exception) { /* Keep the canonical model and report a recoverable UI fault. */ }
+            ReportThemeFailure();
+        }
+        finally { _themeApplying = false; }
+        if (appearanceSerial != _appearanceSerial)
+        {
+            // An appearance callback may run inside SetTheme while _theme still
+            // denotes the old policy. Resolve again against the committed theme.
+            try
+            {
+                var resolved = ThemePolicies.Resolve(_configuration.ThemeId, _shell.PrefersDark);
+                _pendingTheme = string.Equals(resolved.Id, _theme.Id,
+                    StringComparison.OrdinalIgnoreCase) ? null : resolved;
+            }
+            catch (Exception) { ReportThemeFailure(); }
+        }
+        if (_pendingTheme is not null)
+        {
+            try { TryPost(ApplyPendingTheme); }
+            catch (Exception) { /* The next OS event can retry a pending palette. */ }
+        }
+    }
+
+    /// <summary>Retains a nonmodal warning without interrupting native composition.</summary>
+    private void ReportThemeFailure()
+    {
+        _themeUnavailable = true;
+        try
+        {
+            TryPost(UpdateThemeNotice);
+        }
+        catch (Exception) { /* A failed status refresh must not escape an OS callback. */ }
+    }
+
+    /// <summary>Updates only native status chrome after preedit has ended.</summary>
+    private void UpdateThemeNotice()
+    {
+        if (_disposed || !_shown || _shell.IsTextComposing) return;
+        try
+        {
+            _shell.SetStatusNotice(_themeUnavailable
+                ? "Theme update unavailable; editing remains available." : null);
+        }
+        catch (Exception) { /* A status failure must not disable editing. */ }
     }
 
     private void New()
@@ -1008,7 +1149,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         var pageStatus = snapshot.Length <= PageSize ? "" :
             $"Page {_pageStart:N0}–{_pageStart + _pageLength:N0} / {snapshot.Length:N0}; page navigation is discrete";
         _shell.SetDocument(new NativeDocumentView(title, _projection.Display, _pageStart,
-            snapshot.Length, _document.IsModified, pageStatus + statusSuffix, focus));
+            snapshot.Length, _document.IsModified, pageStatus + statusSuffix,
+            new NativeDocumentStamp(_canvasGeneration, snapshot.Version), focus));
     }
 
     /// <summary>
@@ -1125,7 +1267,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         if (!full && policy.Kind is not (DocumentKind.PlainText or DocumentKind.Markdown or DocumentKind.Csv))
         {
             _shell.SetAnalysis(new NativeAnalysisView([], "Global diagnostics deferred for large files.",
-                "Structure preview requires complete semantic analysis.", "Large file: editable viewport; semantic analysis deferred"));
+                "Structure preview requires complete semantic analysis.",
+                "Large file: editable viewport; semantic analysis deferred",
+                new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
             return;
         }
         _ = Task.Run(async () =>
@@ -1157,7 +1301,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         full ? 0 : pageStart, full);
                     _shell.SetAnalysis(new NativeAnalysisView(visible, diagnostics, preview.Text,
                         full ? $"{policy.DisplayName} semantic analysis · v{snapshot.Version}"
-                             : $"{policy.DisplayName} sample · partial", preview.Spans));
+                             : $"{policy.DisplayName} sample · partial",
+                        new NativeDocumentStamp(_canvasGeneration, snapshot.Version), preview.Spans));
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
                         dimensions: Dimensions(snapshot));
                     MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation,
@@ -1171,7 +1316,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 {
                     if (!_disposed && serial == _analysisSerial)
                         _shell.SetAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
-                            $"{policy.DisplayName}: {ex.Message}"));
+                            $"{policy.DisplayName}: {ex.Message}",
+                            new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
                 });
             }
         });
@@ -1222,7 +1368,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         pageStart, pageLength);
                     _visibleSessionAnalysis = new NativeAnalysisView(tokens, diagnostics,
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
-                        preview.Spans);
+                        new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans);
                     _shell.SetAnalysis(_visibleSessionAnalysis);
                     _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
                         result.Completeness, result.Coverage,
@@ -1255,7 +1401,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     if (!_disposed && serial == _analysisSerial &&
                         ReferenceEquals(driver, _sessionDriver))
                         _shell.SetAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
-                            $"{policy.DisplayName}: {ex.Message}"));
+                            $"{policy.DisplayName}: {ex.Message}",
+                            new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
                 });
             }
         });
@@ -1371,7 +1518,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             _pageStart, _pageLength);
         _shell.SetAnalysis(new NativeAnalysisView(tokens,
             SessionDiagnosticSummary(result, _pageStart, _pageLength),
-            preview.Text, $"{policy.DisplayName} · Complete · v{result.Version}", preview.Spans));
+            preview.Text, $"{policy.DisplayName} · Complete · v{result.Version}",
+            new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans));
         _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
             result.Completeness, result.Coverage,
             VisibleSourceTokens(result.Tokens, _pageStart, _pageLength),
@@ -1391,6 +1539,14 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _policy = policy;
         _sessionDriver = CreateSessionDriver(policy);
         _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
+        // Save As can change the format policy without changing source version.
+        // Clear old-language facts before the new analyzer publishes, rather
+        // than trying to encode policy identity into the input binding stamp.
+        var stamp = new NativeDocumentStamp(_canvasGeneration, _document.Snapshot.Version);
+        _shell.SetAnalysis(new NativeAnalysisView([], "Format analysis pending; global diagnostics unknown.",
+            "", $"{policy.DisplayName} · analyzing", stamp));
+        _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(stamp.Version,
+            AnalysisCompleteness.Provisional, new Mote.Formats.TextSpan(0, 0), [], []));
     }
 
     private static IReadOnlyList<SemanticToken> ProjectTokens(IReadOnlyList<SemanticToken> tokens,

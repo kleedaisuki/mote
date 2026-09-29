@@ -21,7 +21,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 {
     private const nuint WindowStyle = 1 | 2 | 4 | 8;
     private const nuint ResizeWidthAndHeight = 2 | 16;
+    private const string EditorAppearanceClass = "MoteDefaultEditorAppearanceView";
+    private const string ObjcRuntime = "/usr/lib/libobjc.A.dylib";
     private static MacEditorShell? s_current;
+
+    [DllImport(ObjcRuntime, EntryPoint = "objc_msgSendSuper")]
+    private static extern void SendSuperNoArgument(ref MacOnScreenCanvasNative.Super receiver,
+        nint selector);
     private readonly bool _experimentalCanvas;
     private readonly ConcurrentQueue<Action> _posted = new();
     private nint _application;
@@ -42,15 +48,18 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private IThemePolicy? _theme;
     private NativeDocumentView? _pendingDocument;
     private NativeAnalysisView? _pendingAnalysis;
+    private Mote.Engine.TextSnapshot? _presentedCanvasSnapshot;
     private bool _deferredDocument;
     private string? _deferredAnalysisText;
     private bool _settingText;
     private bool _settingSelection;
     private bool _compositionDirty;
+    private bool _compositionObserved;
     private bool _compositionCheckScheduled;
     private bool _compositionCommitRejected;
     private bool _closeApproved;
     private string _statusText = string.Empty;
+    private string? _statusNotice;
     private string _canvasTitle = "mote";
     private bool _canvasIsModified;
     private string _visibleText = string.Empty;
@@ -65,7 +74,21 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private bool _probeDidConfirmDiscard;
     private bool _probeCaptureCanvasErrors;
     private string? _probeCanvasError;
-    private bool _deferredCanvasTheme;
+    private string? _previewText;
+    private bool? _lastAppearanceDark;
+    private bool _appearanceNotificationsReady;
+
+    /// <inheritdoc />
+    public bool IsTextComposing => _experimentalCanvas
+        ? _canvas?.HasPendingComposition == true
+        : _editor != 0 && (_compositionDirty ||
+            ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0);
+
+    /// <inheritdoc />
+    public event Action? AppearanceChanged;
+
+    /// <inheritdoc />
+    public event Action? CompositionSettled;
 
     /// <summary>Constructs the established editor or an explicit, opt-in canvas editor.</summary>
     internal MacEditorShell(bool experimentalCanvas = false) =>
@@ -104,13 +127,33 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         get
         {
-            // The app-level effective appearance includes macOS's system choice and
-            // is the same appearance AppKit uses when drawing this application.
+            // A visible view may inherit a window-specific appearance rather than
+            // NSApplication's default. Ask AppKit to classify custom/vibrant names.
             ObjC.ApplicationLoad();
-            var application = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication"));
-            var appearance = ObjC.Send(application, ObjC.Sel("effectiveAppearance"));
-            var name = ObjC.ManagedString(ObjC.Send(appearance, ObjC.Sel("name")));
-            return name.Contains("Dark", StringComparison.OrdinalIgnoreCase);
+            var pool = ObjC.New("NSAutoreleasePool");
+            try
+            {
+                var application = ObjC.Send(ObjC.Class("NSApplication"),
+                    ObjC.Sel("sharedApplication"));
+                var view = _editor != 0 ? _editor : application;
+                var appearance = ObjC.Send(view, ObjC.Sel("effectiveAppearance"));
+                var names = ObjC.New("NSMutableArray");
+                try
+                {
+                    ObjC.Send(names, ObjC.Sel("addObject:"), ObjC.String("NSAppearanceNameAqua"));
+                    ObjC.Send(names, ObjC.Sel("addObject:"), ObjC.String("NSAppearanceNameDarkAqua"));
+                    var matched = ObjC.ManagedString(ObjC.Send(appearance,
+                        ObjC.Sel("bestMatchFromAppearancesWithNames:"), names));
+                    var dark = matched == "NSAppearanceNameDarkAqua" ||
+                        matched.Length == 0 && ObjC.ManagedString(ObjC.Send(appearance,
+                            ObjC.Sel("name"))).Contains("Dark", StringComparison.OrdinalIgnoreCase);
+                    if (!_appearanceNotificationsReady && _lastAppearanceDark is null)
+                        _lastAppearanceDark = dark;
+                    return dark;
+                }
+                finally { ObjC.Send(names, ObjC.Sel("release")); }
+            }
+            finally { ObjC.Send(pool, ObjC.Sel("release")); }
         }
     }
 
@@ -197,6 +240,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 {
                     if (_experimentalCanvas) MacTextInputIsland.TraceStage("S5-before-shown");
                     Shown?.Invoke();
+                    _appearanceNotificationsReady = true;
+                    ObserveAppearanceChanged();
                     if (_experimentalCanvas) MacTextInputIsland.TraceStage("S6-shown-returned");
                 });
                 ObjC.Send(_application, ObjC.Sel("run"));
@@ -217,6 +262,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public void SetDocument(NativeDocumentView view)
     {
+        if (_pendingDocument is { } previous &&
+            (previous.Stamp != view.Stamp || previous.PageStart != view.PageStart))
+            ClearAnalysisPreview();
         _pendingDocument = view;
         _statusText = view.Status;
         if (_editor == 0) return;
@@ -261,11 +309,48 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public void SetAnalysis(NativeAnalysisView view)
     {
+        if (!AnalysisMatchesCurrentDocument(view)) return;
         _pendingAnalysis = view;
+        if (!_experimentalCanvas && IsTextComposing)
+        {
+            _deferredAnalysisText = _visibleText;
+            return;
+        }
+        ApplyAnalysis(view, updateFonts: true);
+    }
+
+    private bool AnalysisMatchesCurrentDocument(NativeAnalysisView view)
+    {
+        if (_experimentalCanvas)
+            return _pendingCanvasBinding is { } binding && view.Stamp ==
+                new NativeDocumentStamp(binding.DocumentGeneration, binding.BaseVersion);
+        return _pendingDocument is { } document && view.Stamp == document.Stamp;
+    }
+
+    /// <summary>Clears stale token colors without changing text, selection, or preview content.</summary>
+    private void RestyleBaseText()
+    {
+        if (_editor == 0 || _preview == 0 || _theme is null) return;
+        if (!_experimentalCanvas)
+        {
+            var length = checked((int)ObjC.Send(ObjC.Send(_editor,
+                ObjC.Sel("string")), ObjC.Sel("length")));
+            ObjC.Send(_editor, ObjC.Sel("setTextColor:range:"),
+                Color(_theme.Palette.EditorForeground), new ObjC.Range(0, (nuint)length));
+        }
+        var previewLength = checked((int)ObjC.Send(ObjC.Send(_preview,
+            ObjC.Sel("string")), ObjC.Sel("length")));
+        ObjC.Send(_preview, ObjC.Sel("setTextColor:range:"),
+            Color(_theme.Palette.PreviewForeground),
+            new ObjC.Range(0, (nuint)previewLength));
+    }
+
+    private void ApplyAnalysis(NativeAnalysisView view, bool updateFonts)
+    {
         if (_editor == 0) return;
         if (_experimentalCanvas)
         {
-            SetPreview(view);
+            SetPreview(view, updateFonts);
             SetStatus(string.IsNullOrEmpty(view.DiagnosticsSummary)
                 ? view.Status : $"{view.Status}  ·  {view.DiagnosticsSummary}");
             return;
@@ -294,7 +379,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             ObjC.Send(_editor, ObjC.Sel("setTextColor:range:"), color,
                 new ObjC.Range((nuint)start, (nuint)spanLength));
         }
-        SetPreview(view);
+        SetPreview(view, updateFonts);
         SetStatus(string.IsNullOrEmpty(view.DiagnosticsSummary)
             ? view.Status : $"{view.Status}  ·  {view.DiagnosticsSummary}");
     }
@@ -302,27 +387,56 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public void SetTheme(IThemePolicy theme)
     {
-        _theme = theme;
-        if (_editor == 0) return;
-        if (_experimentalCanvas && _canvas is { IsComposing: true })
+        ArgumentNullException.ThrowIfNull(theme);
+        if (IsTextComposing)
         {
-            _deferredCanvasTheme = true;
-            return;
+            _compositionObserved = true;
+            ScheduleCompositionCheck();
+            throw new NativeThemeDeferredException();
         }
-        ApplyTheme(theme);
-        _canvas?.SetTheme(theme);
-        _deferredCanvasTheme = false;
+        var updateFonts = _theme is null || _theme.Typography != theme.Typography ||
+            _theme.Spacing != theme.Spacing;
+        if (_editor == 0) { _theme = theme; return; }
+        // The island rechecks marked text before touching its host. It must
+        // veto an unexpected preedit race before editor/preview colors change.
+        try { _canvas?.SetTheme(theme); }
+        catch (NativeThemeDeferredException)
+        {
+            _compositionObserved = true;
+            ScheduleCompositionCheck();
+            throw;
+        }
+        _theme = theme;
+        ApplyTheme(theme, updateFonts);
+        // Cached source-mapped analysis is recolored, never recomputed.
+        if (_pendingAnalysis is { } analysis && AnalysisMatchesCurrentDocument(analysis))
+            ApplyAnalysis(analysis, updateFonts);
+        else
+            RestyleBaseText();
+    }
+
+    /// <inheritdoc />
+    public void SetStatusNotice(string? notice)
+    {
+        _statusNotice = string.IsNullOrWhiteSpace(notice) ? null : notice;
+        RenderStatus();
     }
 
     /// <inheritdoc />
     public void SetCanvasBinding(NativeCanvasBinding binding)
     {
         if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
+        var changedSource = !ReferenceEquals(_presentedCanvasSnapshot, binding.Snapshot);
         _pendingCanvasBinding = binding;
         _pendingCanvasUnavailable = null;
         _pendingCanvasFrame = binding.Frame;
+        _canvas?.Bind(binding);
+        if (changedSource)
+        {
+            _presentedCanvasSnapshot = binding.Snapshot;
+            ClearAnalysisPreview();
+        }
         if (_canvas is null) return;
-        _canvas.Bind(binding);
         SetCanvasChrome(binding.Title, binding.Status, binding.IsModified);
     }
 
@@ -339,10 +453,16 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         CanvasFrame frame, string reason)
     {
         if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
+        var changedSource = !ReferenceEquals(_presentedCanvasSnapshot, snapshot);
         _pendingCanvasBinding = null;
         _pendingCanvasUnavailable = (snapshot, frame, reason);
         _pendingCanvasFrame = frame;
         _canvas?.SetUnavailable(snapshot, frame, reason);
+        if (changedSource)
+        {
+            _presentedCanvasSnapshot = snapshot;
+            ClearAnalysisPreview();
+        }
         SetStatus(reason);
     }
 
@@ -500,7 +620,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         {
             var settled = _experimentalCanvas ? _canvas?.CommitPendingText() ?? true :
                 CommitMarkedTextBeforeCommand();
-            if (settled) ReplayCanvasTheme();
+            if (settled) ObserveCompositionState();
             return settled;
         }
         catch (Exception error)
@@ -510,13 +630,21 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         }
     }
 
-    private void ReplayCanvasTheme()
+    /// <summary>
+    /// Announces the end of a native marked-text episode only after its final
+    /// source reconcile. Polling also covers cancellation without textDidChange.
+    /// </summary>
+    private void ObserveCompositionState()
     {
-        if (!_deferredCanvasTheme || _theme is null || _canvas is null || _canvas.IsComposing)
+        if (IsTextComposing)
+        {
+            _compositionObserved = true;
+            ScheduleCompositionCheck();
             return;
-        ApplyTheme(_theme);
-        _canvas.SetTheme(_theme);
-        _deferredCanvasTheme = false;
+        }
+        if (!_compositionObserved) return;
+        _compositionObserved = false;
+        CompositionSettled?.Invoke();
     }
 
     private static string? PromptText(string title, string explanation, string initialValue)
@@ -666,6 +794,32 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <summary>Gets the canonical page last sent by the controller, excluding marked preedit.</summary>
     internal string ProbeProjectedText => _pendingDocument?.Text ?? string.Empty;
+
+    /// <summary>Current controller-applied policy for the isolated AppKit theme probe.</summary>
+    internal string? ProbeThemeId => _theme?.Id;
+
+    /// <summary>Last presentation admitted by the document-generation guard.</summary>
+    internal NativeAnalysisView? ProbeAnalysis => _pendingAnalysis;
+
+    /// <summary>Stamp of the currently projected source document.</summary>
+    internal NativeDocumentStamp? ProbeDocumentStamp => _pendingDocument?.Stamp;
+
+    /// <summary>Native editable view handle; only the diagnostic reads it.</summary>
+    internal nint ProbeEditorView => _editor;
+
+    /// <summary>Native read-only preview view handle; only the diagnostic reads it.</summary>
+    internal nint ProbePreviewView => _preview;
+
+    /// <summary>Overrides only this process's window appearance; never changes system preferences.</summary>
+    internal void ProbeSetWindowAppearance(bool dark)
+    {
+        if (_window == 0) throw new InvalidOperationException("Theme probe window is unavailable.");
+        var name = dark ? "NSAppearanceNameDarkAqua" : "NSAppearanceNameAqua";
+        var appearance = ObjC.Send(ObjC.Class("NSAppearance"),
+            ObjC.Sel("appearanceNamed:"), ObjC.String(name));
+        if (appearance == 0) throw new InvalidOperationException("Theme probe appearance is unavailable.");
+        ObjC.Send(_window, ObjC.Sel("setAppearance:"), appearance);
+    }
 
     /// <summary>Whether AppKit currently owns uncommitted marked text.</summary>
     internal bool ProbeHasMarkedText => _editor != 0 &&
@@ -906,6 +1060,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                     if (_probeCaptureCanvasErrors) _probeCanvasError = message;
                     else Post(() => ShowError(message));
                 });
+            _canvas.EffectiveAppearanceChanged += ObserveAppearanceChanged;
             _canvas.ViewGeometryChanged += () =>
             {
                 try { _accessibility?.UpdateBodyRect(_canvas.BodyRect); }
@@ -939,7 +1094,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(scroll, ObjC.Sel("setHasVerticalScroller:"), 1);
         ObjC.Send(scroll, ObjC.Sel("setAutohidesScrollers:"), 1);
         ObjC.Send(scroll, ObjC.Sel("setBorderType:"), 0);
-        textView = ObjC.Send(ObjC.Send(ObjC.Class("NSTextView"), ObjC.Sel("alloc")),
+        var textClass = editable ? RegisterEditorAppearanceClass() : "NSTextView";
+        textView = ObjC.Send(ObjC.Send(ObjC.Class(textClass), ObjC.Sel("alloc")),
             ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 0, rect.Size.Width, rect.Size.Height));
         // NSText's range-specific color and font APIs require rich text. The
         // controller still receives and saves only NSString's plain characters.
@@ -1012,7 +1168,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(main, ObjC.Sel("setSubmenu:forItem:"), submenu, holder);
     }
 
-    private void ApplyTheme(IThemePolicy theme)
+    private void ApplyTheme(IThemePolicy theme, bool updateFonts = true)
     {
         var palette = theme.Palette;
         var editorForeground = Color(palette.EditorForeground);
@@ -1022,25 +1178,52 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(_preview, ObjC.Sel("setBackgroundColor:"), Color(palette.PreviewBackground));
         ObjC.Send(_preview, ObjC.Sel("setTextColor:"), Color(palette.PreviewForeground));
         ObjC.Send(_status, ObjC.Sel("setTextColor:"), Color(palette.MutedForeground));
-        var editorFont = ObjC.Send(ObjC.Class("NSFont"), ObjC.Sel("monospacedSystemFontOfSize:weight:"),
-            theme.Typography.EditorFontSize, 0d);
-        ObjC.Send(_editor, ObjC.Sel("setFont:"), editorFont);
-        ObjC.Send(_preview, ObjC.Sel("setFont:"), editorFont);
+        if (updateFonts)
+        {
+            var editorFont = ObjC.Send(ObjC.Class("NSFont"),
+                ObjC.Sel("monospacedSystemFontOfSize:weight:"),
+                theme.Typography.EditorFontSize, 0d);
+            ObjC.Send(_editor, ObjC.Sel("setFont:"), editorFont);
+            ObjC.Send(_preview, ObjC.Sel("setFont:"), editorFont);
+        }
         SetStatus(_statusText);
     }
 
-    private void SetPreview(NativeAnalysisView view)
+    /// <summary>
+    /// Removes previous-document or previous-page preview content immediately;
+    /// analysis for the new presentation will repopulate it asynchronously.
+    /// </summary>
+    private void ClearAnalysisPreview()
     {
-        ObjC.Send(_preview, ObjC.Sel("setString:"), ObjC.String(view.PreviewText));
+        _pendingAnalysis = null;
+        _deferredAnalysisText = null;
+        _previewText = string.Empty;
+        if (_preview != 0)
+            ObjC.Send(_preview, ObjC.Sel("setString:"), ObjC.String(string.Empty));
+    }
+
+    private void SetPreview(NativeAnalysisView view, bool updateFonts = true)
+    {
+        var textChanged = !string.Equals(_previewText, view.PreviewText,
+            StringComparison.Ordinal);
+        if (textChanged)
+        {
+            ObjC.Send(_preview, ObjC.Sel("setString:"), ObjC.String(view.PreviewText));
+            _previewText = view.PreviewText;
+        }
+        updateFonts |= textChanged;
         var length = view.PreviewText.Length;
         if (length == 0) return;
         var palette = _theme?.Palette;
         var foreground = Color(palette?.PreviewForeground ?? new ThemeColor(225, 227, 231));
         var whole = new ObjC.Range(0, (nuint)length);
         ObjC.Send(_preview, ObjC.Sel("setTextColor:range:"), foreground, whole);
-        var baseFont = ObjC.Send(ObjC.Class("NSFont"), ObjC.Sel("systemFontOfSize:"),
-            _theme?.Typography.UiFontSize ?? 12d);
-        ObjC.Send(_preview, ObjC.Sel("setFont:range:"), baseFont, whole);
+        if (updateFonts)
+        {
+            var baseFont = ObjC.Send(ObjC.Class("NSFont"), ObjC.Sel("systemFontOfSize:"),
+                _theme?.Typography.UiFontSize ?? 12d);
+            ObjC.Send(_preview, ObjC.Sel("setFont:range:"), baseFont, whole);
+        }
 
         var colors = new Dictionary<string, nint>(StringComparer.Ordinal);
         nint headingFont = 0;
@@ -1057,6 +1240,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             }
             var range = new ObjC.Range((nuint)span.Start, (nuint)span.Length);
             ObjC.Send(_preview, ObjC.Sel("setTextColor:range:"), color, range);
+            if (!updateFonts) continue;
             nint font = 0;
             if (span.Kind == "heading")
                 font = headingFont != 0 ? headingFont :
@@ -1091,7 +1275,34 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Sel("colorWithSRGBRed:green:blue:alpha:"),
         color.Red / 255d, color.Green / 255d, color.Blue / 255d, 1d);
 
-    private void SetStatus(string value) => ObjC.Send(_status, ObjC.Sel("setStringValue:"), ObjC.String(value));
+    /// <summary>Publishes one UI-thread effective-appearance transition after startup.</summary>
+    private void ObserveAppearanceChanged()
+    {
+        if (!_appearanceNotificationsReady || _editor == 0) return;
+        var dark = PrefersDark;
+        if (_lastAppearanceDark == dark) return;
+        _lastAppearanceDark = dark;
+        if (IsTextComposing)
+        {
+            _compositionObserved = true;
+            ScheduleCompositionCheck();
+        }
+        AppearanceChanged?.Invoke();
+    }
+
+    private void SetStatus(string value)
+    {
+        _statusText = value;
+        RenderStatus();
+    }
+
+    private void RenderStatus()
+    {
+        if (_status == 0) return;
+        var text = _statusNotice is null ? _statusText :
+            $"{_statusText}  ·  {_statusNotice}";
+        ObjC.Send(_status, ObjC.Sel("setStringValue:"), ObjC.String(text));
+    }
 
     private void ReplayDeferredAnalysis()
     {
@@ -1164,6 +1375,17 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         catch (Exception error) { ShowError(error.Message); }
     }
 
+    private static string RegisterEditorAppearanceClass()
+    {
+        var cls = ObjC.AllocateClassPair(ObjC.Class("NSTextView"), EditorAppearanceClass, 0);
+        if (cls == 0) return EditorAppearanceClass;
+        Add(cls, "viewDidChangeEffectiveAppearance",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&EditorAppearanceChanged,
+            "v@:");
+        ObjC.RegisterClassPair(cls);
+        return EditorAppearanceClass;
+    }
+
     private static string RegisterDelegateClass()
     {
         const string className = "MoteNativeEditorDelegate";
@@ -1216,6 +1438,18 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             throw new InvalidOperationException($"Could not register {selector}.");
     }
 
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void EditorAppearanceChanged(nint self, nint selector)
+    {
+        try
+        {
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTextView"));
+            SendSuperNoArgument(ref superclass, selector);
+            s_current?.ObserveAppearanceChanged();
+        }
+        catch { /* An AppKit IMP must never unwind a managed exception. */ }
+    }
+
     private void Notify(Action? callback)
     {
         try { callback?.Invoke(); }
@@ -1234,7 +1468,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 MacTextInputIsland.TraceStage("D0-text-did-change-enter");
                 shell._canvas?.OnTextChanged();
                 MacTextInputIsland.TraceStage("D1-canvas-text-change-returned");
-                shell.ReplayCanvasTheme();
+                shell.ObserveCompositionState();
                 MacTextInputIsland.TraceStage("D2-text-did-change-returned");
                 return;
             }
@@ -1246,7 +1480,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             if (ObjC.Send(shell._editor, ObjC.Sel("hasMarkedText")) != 0)
             {
                 shell._compositionDirty = true;
-                shell.ScheduleCompositionCheck();
+                shell.ObserveCompositionState();
                 return;
             }
             var finishingComposition = shell._compositionDirty;
@@ -1257,6 +1491,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                     StringComparison.Ordinal);
             shell.ReplayDeferredDocument();
             shell.ReplayDeferredAnalysis();
+            shell.ObserveCompositionState();
         }
         catch (Exception error)
         {
@@ -1284,6 +1519,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             }
             shell._pendingNativeSelection = ObjC.SendRange(shell._editor, ObjC.Sel("selectedRange"));
             shell.CommitComposition();
+            shell.ObserveCompositionState();
             if (!shell._selectionDeliveryScheduled)
             {
                 shell._selectionDeliveryScheduled = true;
@@ -1334,12 +1570,19 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         if (shell is null) return;
         try
         {
-            if (shell._experimentalCanvas) return;
             shell._compositionCheckScheduled = false;
             if (ObjC.Send(shell._editor, ObjC.Sel("hasMarkedText")) != 0)
                 shell.ScheduleCompositionCheck();
+            else if (shell._experimentalCanvas)
+            {
+                shell._canvas?.CommitPendingText();
+                shell.ObserveCompositionState();
+            }
             else
+            {
                 shell.CommitComposition();
+                shell.ObserveCompositionState();
+            }
         }
         catch (Exception error) { shell.ShowError(error.Message); }
     }

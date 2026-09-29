@@ -88,6 +88,10 @@ internal sealed unsafe class MacTextInputIsland
     private static extern void SendGlyphRectStret(out ObjC.Rect result,
         nint receiver, nint selector, ObjC.Range glyphRange, nint textContainer);
 
+    [DllImport(ObjcRuntime, EntryPoint = "objc_msgSendSuper")]
+    private static extern void SendSuperNoArgument(ref MacOnScreenCanvasNative.Super receiver,
+        nint selector);
+
     /// <summary>Creates callbacks that keep document mutations in the controller.</summary>
     internal MacTextInputIsland(Action<CanvasCommittedEdit> edit, Action<double> scroll,
         Action<CanvasHorizontalAnchorRequest> horizontal, Action<double> resize,
@@ -194,8 +198,14 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>Raised after AppKit changes the canvas view bounds.</summary>
     internal event Action? ViewGeometryChanged;
 
+    /// <summary>Raised on AppKit's UI thread when the canvas inherits a new appearance.</summary>
+    internal event Action? EffectiveAppearanceChanged;
+
     /// <summary>Whether the OS currently owns provisional candidate text.</summary>
     internal bool IsComposing => _editor != 0 && ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0;
+
+    /// <summary>Whether a final native commit/cancel still needs source reconciliation.</summary>
+    internal bool HasPendingComposition => _compositionDirty || IsComposing;
 
     private double BodyHeight => Math.Max(0, _height - RibbonHeight);
 
@@ -254,6 +264,7 @@ internal sealed unsafe class MacTextInputIsland
     {
         if (s_current == this) s_current = null;
         ViewGeometryChanged = null;
+        EffectiveAppearanceChanged = null;
         if (_font != 0) CoreTextNative.Release(_font);
         _font = 0;
         _font = 0;
@@ -442,28 +453,38 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>Changes paint and host font only when no marked text exists.</summary>
     internal void SetTheme(IThemePolicy theme)
     {
+        if (_editor == 0) { _theme = theme; return; }
+        if (IsComposing) throw new NativeThemeDeferredException();
+        var updateFonts = _font == 0 || _theme is null ||
+            _theme.Typography != theme.Typography || _theme.Spacing != theme.Spacing;
         _theme = theme;
-        if (_editor == 0 || IsComposing) return;
-        if (_font != 0) CoreTextNative.Release(_font);
-        var family = theme.Typography.EditorFontFamilies.Split(',',
-            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .FirstOrDefault(static name => name.Equals("Menlo", StringComparison.OrdinalIgnoreCase))
-            ?? "Menlo";
-        var nameString = CreateString(family);
-        try { _font = CoreTextNative.FontCreate(nameString, theme.Typography.EditorFontSize, 0); }
-        finally { CoreTextNative.Release(nameString); }
-        _fontAttribute = CoreTextNative.FontAttributeName;
-        _contextColorAttribute = MacOnScreenCanvasNative.ForegroundColorFromContextAttributeName;
-        _trueValue = MacOnScreenCanvasNative.BooleanTrue;
-        if (_font == 0 || _fontAttribute == 0 || _contextColorAttribute == 0 || _trueValue == 0)
-            throw new InvalidOperationException("CoreText could not resolve the canvas font.");
-        var font = ObjC.SendObjectDouble(ObjC.Class("NSFont"), ObjC.Sel("fontWithName:size:"),
-            ObjC.String(family), theme.Typography.EditorFontSize);
-        if (font == 0)
-            font = ObjC.Send(ObjC.Class("NSFont"),
-                ObjC.Sel("monospacedSystemFontOfSize:weight:"),
-                theme.Typography.EditorFontSize, 0d);
-        ObjC.Send(_editor, ObjC.Sel("setFont:"), font);
+        if (updateFonts)
+        {
+            if (_font != 0)
+            {
+                CoreTextNative.Release(_font);
+                _font = 0;
+            }
+            var family = theme.Typography.EditorFontFamilies.Split(',',
+                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault(static name => name.Equals("Menlo", StringComparison.OrdinalIgnoreCase))
+                ?? "Menlo";
+            var nameString = CreateString(family);
+            try { _font = CoreTextNative.FontCreate(nameString, theme.Typography.EditorFontSize, 0); }
+            finally { CoreTextNative.Release(nameString); }
+            _fontAttribute = CoreTextNative.FontAttributeName;
+            _contextColorAttribute = MacOnScreenCanvasNative.ForegroundColorFromContextAttributeName;
+            _trueValue = MacOnScreenCanvasNative.BooleanTrue;
+            if (_font == 0 || _fontAttribute == 0 || _contextColorAttribute == 0 || _trueValue == 0)
+                throw new InvalidOperationException("CoreText could not resolve the canvas font.");
+            var font = ObjC.SendObjectDouble(ObjC.Class("NSFont"), ObjC.Sel("fontWithName:size:"),
+                ObjC.String(family), theme.Typography.EditorFontSize);
+            if (font == 0)
+                font = ObjC.Send(ObjC.Class("NSFont"),
+                    ObjC.Sel("monospacedSystemFontOfSize:weight:"),
+                    theme.Typography.EditorFontSize, 0d);
+            ObjC.Send(_editor, ObjC.Sel("setFont:"), font);
+        }
         ObjC.Send(_editor, ObjC.Sel("setTextColor:"), Color(theme.Palette.EditorForeground));
         ObjC.Send(_editor, ObjC.Sel("setBackgroundColor:"), Color(theme.Palette.PanelBackground));
         ObjC.Send(_editor, ObjC.Sel("setInsertionPointColor:"), Color(theme.Palette.Cursor));
@@ -472,7 +493,7 @@ internal sealed unsafe class MacTextInputIsland
         if (_ribbonLabel != 0)
             ObjC.Send(_ribbonLabel, ObjC.Sel("setTextColor:"),
                 Color(theme.Palette.MutedForeground));
-        PlaceHost();
+        if (updateFonts) PlaceHost();
         Invalidate();
     }
 
@@ -1381,6 +1402,9 @@ internal sealed unsafe class MacTextInputIsland
         Add(cls, "drawRect:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Rect, void>)&DrawRect,
             "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+        Add(cls, "viewDidChangeEffectiveAppearance",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ViewAppearanceChanged,
+            "v@:");
         Add(cls, "scrollWheel:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ScrollWheel, "v@:@");
         Add(cls, "mouseDown:",
@@ -1446,6 +1470,18 @@ internal sealed unsafe class MacTextInputIsland
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void DrawRect(nint self, nint selector, ObjC.Rect dirty)
     { var current = s_current; current?.InvokeSafely(current.Draw); }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void ViewAppearanceChanged(nint self, nint selector)
+    {
+        try
+        {
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSView"));
+            SendSuperNoArgument(ref superclass, selector);
+            s_current?.EffectiveAppearanceChanged?.Invoke();
+        }
+        catch { /* Appearance failures must not disable text input or unwind an AppKit IMP. */ }
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void ScrollWheel(nint self, nint selector, nint eventObject)

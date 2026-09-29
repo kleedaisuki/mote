@@ -72,6 +72,7 @@ internal static class Win32
     internal const uint GT_USECRLF = 1;
     internal const uint CP_UNICODE = 1200;
     internal const uint SCF_SELECTION = 1;
+    internal const uint SCF_ALL = 4;
     internal const uint CFM_BOLD = 0x00000001;
     internal const uint CFE_BOLD = 0x00000001;
     internal const uint CFM_SIZE = 0x80000000;

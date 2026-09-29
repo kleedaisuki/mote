@@ -12,6 +12,12 @@ internal enum NativeLineEndingMode
     CrLf
 }
 
+/// <summary>
+/// Identifies one immutable document version across native text and semantic
+/// presentation. A new document may reuse a version number but never a generation.
+/// </summary>
+internal readonly record struct NativeDocumentStamp(long Generation, long Version);
+
 /// <summary>One bounded, editable projection of the canonical engine document.</summary>
 internal sealed record NativeDocumentView(
     string Title,
@@ -20,6 +26,7 @@ internal sealed record NativeDocumentView(
     int TotalLength,
     bool IsModified,
     string Status,
+    NativeDocumentStamp Stamp,
     int? FocusDisplayOffset = null);
 
 /// <summary>A styled preview range mapped to its originating document source span.</summary>
@@ -36,6 +43,7 @@ internal sealed record NativeAnalysisView(
     string DiagnosticsSummary,
     string PreviewText,
     string Status,
+    NativeDocumentStamp Stamp,
     IReadOnlyList<NativePreviewSpan>? PreviewSpans = null);
 
 /// <summary>Cancelable native window close notification.</summary>
@@ -43,6 +51,16 @@ internal sealed class NativeClosingEventArgs : EventArgs
 {
     /// <summary>Set when the unsaved-document prompt rejects closing.</summary>
     public bool Cancel { get; set; }
+}
+
+/// <summary>
+/// Native preedit began after a controller palette preflight; no palette was
+/// applied, and the same policy may be retried after CompositionSettled.
+/// </summary>
+internal sealed class NativeThemeDeferredException : InvalidOperationException
+{
+    /// <summary>Creates the internal, non-user-facing composition signal.</summary>
+    internal NativeThemeDeferredException() : base("Native text composition is active.") { }
 }
 
 /// <summary>
@@ -55,6 +73,19 @@ internal interface INativeEditorShell
     NativeLineEndingMode LineEndingMode { get; }
     /// <summary>The current OS application appearance, used for the system theme preference.</summary>
     bool PrefersDark { get; }
+    /// <summary>Whether the OS owns uncommitted text composition in either editor mode.</summary>
+    bool IsTextComposing { get; }
+
+    /// <summary>
+    /// Raised on the UI thread after the effective OS appearance may have changed.
+    /// The controller re-queries PrefersDark; the event carries no cached palette.
+    /// </summary>
+    event Action? AppearanceChanged;
+    /// <summary>
+    /// Raised on the UI thread after an IME commit or cancellation has finished
+    /// its final native edit callback, never while marked/preedit text remains.
+    /// </summary>
+    event Action? CompositionSettled;
 
     /// <summary>Raised after a user edit with the complete bounded page text.</summary>
     event Action<string>? TextChanged;
@@ -101,8 +132,18 @@ internal interface INativeEditorShell
     void SetDocument(NativeDocumentView view);
     /// <summary>Updates semantic decoration without altering text or selection.</summary>
     void SetAnalysis(NativeAnalysisView view);
-    /// <summary>Applies a compile-time theme policy to platform controls.</summary>
+    /// <summary>
+    /// Applies one policy to all platform controls before returning; it must
+    /// never silently defer a subset. Throws NativeThemeDeferredException
+    /// before any mutation if native preedit starts after controller preflight.
+    /// </summary>
     void SetTheme(IThemePolicy theme);
+    /// <summary>
+    /// Sets or clears a persistent, nonmodal status notice without touching
+    /// document text, selection, native undo, input composition, or layout.
+    /// The notice remains visible when ordinary status text is refreshed.
+    /// </summary>
+    void SetStatusNotice(string? notice);
     /// <summary>
     /// Settles native IME preedit into a synchronous TextChanged callback before a command
     /// may replace the document or persist its bytes; false vetoes that command.

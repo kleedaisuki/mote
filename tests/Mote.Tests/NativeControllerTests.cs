@@ -11,7 +11,7 @@ using Mote.Themes;
 namespace Mote.Tests;
 
 /// <summary>UI-independent tests of source/native projection and editor orchestration.</summary>
-public sealed class NativeControllerTests
+public sealed partial class NativeControllerTests
 {
     /// <summary>RichEdit CRLF coordinates preserve mixed original line endings outside an edit.</summary>
     [Fact]
@@ -1327,7 +1327,13 @@ public sealed class NativeControllerTests
         /// <inheritdoc />
         public bool IsCanvasComposing { get; set; }
         /// <inheritdoc />
-        public bool PrefersDark => true;
+        public bool PrefersDark { get; set; } = true;
+        /// <inheritdoc />
+        public bool IsTextComposing { get; set; }
+        /// <inheritdoc />
+        public event Action? AppearanceChanged;
+        /// <inheritdoc />
+        public event Action? CompositionSettled;
         /// <inheritdoc />
         public event Action<string>? TextChanged;
         /// <inheritdoc />
@@ -1381,6 +1387,8 @@ public sealed class NativeControllerTests
 
         /// <summary>The current fake text viewport.</summary>
         public NativeDocumentView? Document { get; private set; }
+        /// <summary>Counts complete text-page projections; status-only theme notices must not add one.</summary>
+        public int DocumentSetCount { get; private set; }
         /// <summary>The current fake semantic presentation.</summary>
         public NativeAnalysisView? Analysis { get; private set; }
         /// <summary>The latest bounded input-island binding in opt-in canvas mode.</summary>
@@ -1407,6 +1415,18 @@ public sealed class NativeControllerTests
         public List<string> Errors { get; } = [];
         /// <summary>The applied compile-time theme.</summary>
         public IThemePolicy? Theme { get; private set; }
+        /// <summary>Nonmodal status-chrome notice, never part of document text or preview.</summary>
+        public string? StatusNotice { get; private set; }
+        /// <summary>All native status-notice updates for deferred-composition assertions.</summary>
+        public List<string?> StatusNotices { get; } = [];
+        /// <summary>Every attempted native theme application, including a failed attempt and rollback.</summary>
+        public List<string> ThemeAttempts { get; } = [];
+        /// <summary>One policy ID for which the fake OS resource allocator fails.</summary>
+        public string? RejectThemeId { get; set; }
+        /// <summary>One policy ID for which composition starts after the controller's preflight.</summary>
+        public string? DeferNextThemeId { get; set; }
+        /// <summary>One synchronous OS callback while the native palette is being applied.</summary>
+        public Action<IThemePolicy>? DuringThemeApply { get; set; }
         /// <summary>Next path returned by the Open dialog.</summary>
         public string? OpenPath { get; set; }
         /// <summary>Next path returned by the Save As dialog.</summary>
@@ -1437,7 +1457,11 @@ public sealed class NativeControllerTests
         /// <inheritdoc />
         public void Run() => Shown?.Invoke();
         /// <inheritdoc />
-        public void SetDocument(NativeDocumentView view) => Document = view;
+        public void SetDocument(NativeDocumentView view)
+        {
+            Document = view;
+            DocumentSetCount++;
+        }
         /// <inheritdoc />
         public void SetCanvasBinding(NativeCanvasBinding binding)
         {
@@ -1482,7 +1506,26 @@ public sealed class NativeControllerTests
         /// <inheritdoc />
         public void SetAnalysis(NativeAnalysisView view) { Analysis = view; Analyses.Add(view); }
         /// <inheritdoc />
-        public void SetTheme(IThemePolicy theme) => Theme = theme;
+        public void SetTheme(IThemePolicy theme)
+        {
+            ThemeAttempts.Add(theme.Id);
+            DuringThemeApply?.Invoke(theme);
+            if (string.Equals(theme.Id, DeferNextThemeId, StringComparison.Ordinal))
+            {
+                DeferNextThemeId = null;
+                IsTextComposing = true;
+                throw new NativeThemeDeferredException();
+            }
+            if (string.Equals(theme.Id, RejectThemeId, StringComparison.Ordinal))
+                throw new InvalidOperationException("Synthetic palette resource failure.");
+            Theme = theme;
+        }
+        /// <inheritdoc />
+        public void SetStatusNotice(string? notice)
+        {
+            StatusNotice = notice;
+            StatusNotices.Add(notice);
+        }
         /// <inheritdoc />
         public void SetSelection(int displayAnchor, int displayActive) =>
             DisplaySelection = new NativeProjectedSelection(displayAnchor, displayActive);
@@ -1530,6 +1573,14 @@ public sealed class NativeControllerTests
             CanvasHorizontalAnchorRequested?.Invoke(request);
         /// <summary>Raises a recoverable native AX provider fault.</summary>
         public void FailCanvasAccessibility() => CanvasAccessibilityFailed?.Invoke();
+        /// <summary>Raises one OS appearance notification after changing the queried preference.</summary>
+        public void ChangeAppearance(bool prefersDark)
+        {
+            PrefersDark = prefersDark;
+            AppearanceChanged?.Invoke();
+        }
+        /// <summary>Signals that a native IME commit or cancellation has finished its final edit callback.</summary>
+        public void SettleComposition() => CompositionSettled?.Invoke();
         /// <summary>Raises the native Save command.</summary>
         public void RequestSave() => SaveRequested?.Invoke();
         /// <summary>Raises the native Save As command.</summary>

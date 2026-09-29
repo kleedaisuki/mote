@@ -74,6 +74,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private bool _settingText;
     private bool _settingSelection;
     private bool _composition;
+    private bool _compositionObserved;
+    private bool _compositionSettledPending;
     private bool _compositionAttempted;
     private bool _commitQueued;
     private bool _selectionQueued;
@@ -137,7 +139,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
                 (nint)(Win32.ENM_CHANGE | Win32.ENM_SELCHANGE | 0x10000000 | 0x20000000));
             if (!Win32.SetWindowSubclass(_input, InputProcedure, 2, 0))
                 throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot subclass input island.");
-            SetInputAppearance(theme);
+            SetInputAppearance(theme, updateFont: true);
         }
         catch
         {
@@ -151,6 +153,9 @@ internal sealed class WindowsRichEditIsland : IDisposable
 
     /// <summary>Whether native IME preedit owns the input island.</summary>
     internal bool IsComposing => _composition;
+
+    /// <summary>Whether a final IME edit callback still owns the input transaction.</summary>
+    internal bool IsCompositionPending => _composition || _compositionSettledPending;
 
     /// <summary>Document pixels; the remaining bottom strip is a separate OS input ribbon.</summary>
     private int BodyHeight => Math.Max(0, _height - RibbonHeight);
@@ -207,6 +212,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
             _commitQueued = false;
             CommitFinalText();
         }
+        FinishCompositionNotification();
         return true;
     }
 
@@ -224,6 +230,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
     internal event Action<string>? Faulted;
     /// <summary>An AX-only failure detached the provider without disabling text input.</summary>
     internal event Action? AccessibilityFaulted;
+    /// <summary>Raised after final commit/cancel reconciliation leaves the native input island.</summary>
+    internal event Action? CompositionFinished;
 
     /// <summary>
     /// Registers the one source-backed UIA element on this canvas HWND. The bounded
@@ -339,18 +347,46 @@ internal sealed class WindowsRichEditIsland : IDisposable
     internal void SetTheme(IThemePolicy theme)
     {
         ArgumentNullException.ThrowIfNull(theme);
-        if (_composition) throw new InvalidOperationException("Theme change would displace IME composition.");
-        var geometry = NewGeometry(theme);
-        var painter = new WindowsCanvasPainter(theme);
-        _geometry.Dispose();
-        _painter.Dispose();
-        _geometry = geometry;
-        _painter = painter;
+        if (IsCompositionPending) throw new NativeThemeDeferredException();
+        var updateMetrics = _theme.Typography != theme.Typography ||
+            _theme.Spacing != theme.Spacing;
+        var geometry = updateMetrics ? NewGeometry(theme) : null;
+        WindowsCanvasPainter painter;
+        try { painter = new WindowsCanvasPainter(theme); }
+        catch
+        {
+            geometry?.Dispose();
+            throw;
+        }
+        var oldTheme = _theme;
+        var oldGeometry = _geometry;
+        var oldPainter = _painter;
         _theme = theme;
-        SetInputAppearance(theme);
-        PlaceInput();
-        PublishBodyHeight();
-        Invalidate();
+        _painter = painter;
+        if (geometry is not null) _geometry = geometry;
+        try
+        {
+            SetInputAppearance(theme, updateMetrics);
+            if (updateMetrics)
+            {
+                PlaceInput();
+                PublishBodyHeight();
+            }
+            Invalidate();
+        }
+        catch
+        {
+            _theme = oldTheme;
+            _geometry = oldGeometry;
+            _painter = oldPainter;
+            try { SetInputAppearance(oldTheme, updateMetrics); }
+            catch { /* Preserve the original failure for the controller's rollback. */ }
+            geometry?.Dispose();
+            painter.Dispose();
+            throw;
+        }
+        oldPainter.Dispose();
+        if (geometry is not null) oldGeometry.Dispose();
     }
 
     /// <summary>
@@ -500,25 +536,20 @@ internal sealed class WindowsRichEditIsland : IDisposable
                         }
                     }
                     else if (header.Window == _input && header.Code == 0x0713)
-                    {
-                        CaptureBeforeEdit();
-                        _composition = true;
-                        _compositionAttempted = true;
-                        SuspendPointerDrag();
-                    }
+                        BeginComposition();
                     else if (header.Window == _input && header.Code == 0x0714)
-                    {
-                        _composition = false;
-                        QueueCommit();
-                        FinishDeferredBodyResize();
-                    }
+                        EndComposition();
                 }
                 return 0;
             case CommitMessage:
-                if (_commitQueued && !_composition)
+                if (!_composition)
                 {
-                    _commitQueued = false;
-                    CommitFinalText();
+                    if (_commitQueued)
+                    {
+                        _commitQueued = false;
+                        CommitFinalText();
+                    }
+                    FinishCompositionNotification();
                 }
                 return 0;
             case SelectionMessage:
@@ -593,12 +624,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
     {
         if (island._faulted && message != Win32.WM_NCDESTROY) return 0;
         if (message == Win32.WM_IME_STARTCOMPOSITION)
-        {
-            island.CaptureBeforeEdit();
-            island._composition = true;
-            island._compositionAttempted = true;
-            island.SuspendPointerDrag();
-        }
+            island.BeginComposition();
         var confirmedImeResult = message == WmImeComposition &&
             ((ulong)lParam & GcsResultString) != 0 && HasImeResultString(window);
         if (message == Win32.WM_COPY || message == Win32.WM_CUT)
@@ -672,11 +698,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
             if (pending.GlobalLength > 0) island.QueueCommit();
         }
         if (message == Win32.WM_IME_ENDCOMPOSITION)
-        {
-            island._composition = false;
-            island.QueueCommit();
-            island.FinishDeferredBodyResize();
-        }
+            island.EndComposition();
         if (message == Win32.WM_NCDESTROY)
             Win32.RemoveWindowSubclass(window, InputProcedure, subclassId);
         return result;
@@ -710,6 +732,39 @@ internal sealed class WindowsRichEditIsland : IDisposable
 
     private double LineHeight => Math.Max(16,
         _theme.Typography.EditorFontSize * _theme.Typography.LineHeightMultiplier);
+
+    /// <summary>Starts one OS-owned preedit without duplicating the captured edit base.</summary>
+    private void BeginComposition()
+    {
+        if (_composition) return;
+        CaptureBeforeEdit();
+        _composition = true;
+        _compositionObserved = true;
+        _compositionAttempted = true;
+        SuspendPointerDrag();
+    }
+
+    /// <summary>Queues final reconcile before announcing a committed or cancelled IME episode.</summary>
+    private void EndComposition()
+    {
+        if (!_composition && !_compositionObserved) return;
+        _composition = false;
+        _compositionObserved = false;
+        _compositionSettledPending = true;
+        QueueCommit();
+        // A prior CommitMessage can have been consumed during preedit while
+        // _commitQueued stayed true; ensure one post-end callback still runs.
+        if (_window != 0) Win32.PostMessageW(_window, CommitMessage, 0, 0);
+        FinishDeferredBodyResize();
+    }
+
+    /// <summary>Announces one settled episode after its final source transaction.</summary>
+    private void FinishCompositionNotification()
+    {
+        if (_composition || !_compositionSettledPending) return;
+        _compositionSettledPending = false;
+        CompositionFinished?.Invoke();
+    }
 
     private void QueueCommit()
     {
@@ -1030,18 +1085,25 @@ internal sealed class WindowsRichEditIsland : IDisposable
         finally { ImmReleaseContext(input, context); }
     }
 
-    private void SetInputAppearance(IThemePolicy theme)
+    private void SetInputAppearance(IThemePolicy theme, bool updateFont)
     {
         if (_input == 0) return;
         Win32.SendMessageW(_input, Win32.EM_SETBKGNDCOLOR, 0,
             (nint)ColorRef(theme.Palette.PanelBackground));
-        var old = _inputFont;
-        var family = theme.Typography.EditorFontFamilies.Split(',', 2)[0].Trim();
-        _inputFont = Win32.CreateFontW(-(int)Math.Round(theme.Typography.EditorFontSize * 96 / 72),
-            0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, family.Length == 0 ? "Consolas" : family);
-        if (_inputFont != 0)
-            Win32.SendMessageW(_input, Win32.WM_SETFONT, (nuint)_inputFont, (nint)1);
-        if (old != 0) Win32.DeleteObject(old);
+        if (updateFont)
+        {
+            var family = theme.Typography.EditorFontFamilies.Split(',', 2)[0].Trim();
+            var font = Win32.CreateFontW(
+                -(int)Math.Round(theme.Typography.EditorFontSize * 96 / 72),
+                0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
+                family.Length == 0 ? "Consolas" : family);
+            if (font == 0)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "Input font creation failed.");
+            var old = _inputFont;
+            _inputFont = font;
+            Win32.SendMessageW(_input, Win32.WM_SETFONT, (nuint)font, (nint)1);
+            if (old != 0) Win32.DeleteObject(old);
+        }
         if (_binding is not null)
         {
             _settingText = true;

@@ -45,6 +45,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private const int CutId = 216;
     private const nuint StyleTimerId = 1;
     private const uint SelectionMessage = Win32.WM_APP + 1;
+    private const uint CompositionSettledMessage = Win32.WM_APP + 2;
+    private const uint WmSettingChange = 0x001A;
+    private const uint WmSysColorChange = 0x0015;
+    private const uint WmThemeChanged = 0x031A;
     private static readonly Win32.WindowProcedure WindowProcedure = Dispatch;
     private static readonly Win32.SubclassProcedure EditorSubclassProcedure = EditorSubclass;
     private static WindowsEditorShell? _creating;
@@ -63,9 +67,15 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private NativeTextProjection _previewProjection = new("", NativeLineEndingMode.CrLf);
     private NativeDocumentView? _document;
     private NativeAnalysisView? _analysis;
+    private bool _analysisPresentationDeferred;
+    private NativeDocumentStamp? _canvasStamp;
     private IThemePolicy _theme = ThemePolicies.Get(ThemePolicies.DefaultId);
     private bool _settingText;
     private bool _imeComposing;
+    private bool _imeSettling;
+    private bool? _lastPrefersDark;
+    private string _statusBase = "";
+    private string? _statusNotice;
     private bool _settingSelection;
     private bool _pendingSelection;
     private bool _selectionPostQueued;
@@ -100,7 +110,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public int MaxCanvasInputLength => WindowsRichEditIsland.MaxInputLength;
 
     /// <inheritdoc />
-    public bool IsCanvasComposing => _canvasIsland?.IsComposing ?? false;
+    public bool IsCanvasComposing => _canvasIsland?.IsCompositionPending ?? false;
 
     /// <inheritdoc />
     public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
@@ -140,6 +150,16 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             }
         }
     }
+
+    /// <inheritdoc />
+    public bool IsTextComposing => _imeComposing || _imeSettling ||
+        (_canvasIsland?.IsCompositionPending ?? false);
+
+    /// <inheritdoc />
+    public event Action? AppearanceChanged;
+
+    /// <inheritdoc />
+    public event Action? CompositionSettled;
 
     /// <inheritdoc />
     public event Action<string>? TextChanged;
@@ -247,8 +267,12 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     }
 
     /// <inheritdoc />
-    public bool CommitPendingText() => !_imeComposing &&
-        (_canvasIsland is null || _canvasIsland.FlushPendingText());
+    public bool CommitPendingText()
+    {
+        if (_imeComposing) return false;
+        if (_imeSettling && !FinishDefaultComposition()) return false;
+        return _canvasIsland is null || _canvasIsland.FlushPendingText();
+    }
 
     /// <inheritdoc />
     public void SetCanvasBinding(NativeCanvasBinding binding)
@@ -257,6 +281,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         ArgumentNullException.ThrowIfNull(binding);
         if (_canvasIsland?.IsComposing == true)
             throw new InvalidOperationException("An active IME composition cannot be rebound.");
+        var stamp = new NativeDocumentStamp(binding.DocumentGeneration, binding.BaseVersion);
         if (_window != 0)
         {
             Win32.SetWindowTextW(_window, binding.Title);
@@ -264,6 +289,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         }
         if (_canvasIsland is null) _pendingCanvasBinding = binding;
         else _canvasIsland.Bind(binding);
+        if (_canvasStamp != stamp) _analysis = null;
+        if (_canvasStamp != stamp) _analysisPresentationDeferred = false;
+        _canvasStamp = stamp;
     }
 
     /// <inheritdoc />
@@ -280,6 +308,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     {
         if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
         _canvasIsland?.SetInputUnavailable(snapshot, frame, reason);
+        _canvasStamp = null;
+        _analysis = null;
+        _analysisPresentationDeferred = false;
         UpdateStatus(reason);
     }
 
@@ -330,13 +361,24 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             }
             return;
         }
+        var stampChanged = _document is null || _document.Stamp != view.Stamp ||
+            _document.PageStart != view.PageStart ||
+            !string.Equals(_document.Text, view.Text, StringComparison.Ordinal);
         _document = view;
+        if (stampChanged)
+        {
+            _analysis = null;
+            _analysisPresentationDeferred = false;
+            CancelPendingStyle();
+            ClearPreview();
+        }
         if (_window == 0) return;
 
         Win32.SetWindowTextW(_window, view.Title);
         UpdateStatus(view.Status);
         if (string.Equals(_visibleText, view.Text, StringComparison.Ordinal))
         {
+            if (stampChanged) SetAllEditorColor(_theme.Palette.EditorForeground);
             if (view.FocusDisplayOffset is int focus)
                 SetSelection(Math.Clamp(focus, 0, _visibleText.Length),
                     Math.Clamp(focus, 0, _visibleText.Length));
@@ -371,7 +413,15 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public void SetAnalysis(NativeAnalysisView view)
     {
         ArgumentNullException.ThrowIfNull(view);
+        var currentStamp = _experimentalCanvas ? _canvasStamp : _document?.Stamp;
+        if (currentStamp is null || currentStamp.Value != view.Stamp) return;
         _analysis = view;
+        if (IsTextComposing)
+        {
+            _analysisPresentationDeferred = true;
+            return; // Preview/style publication must not displace an OS candidate.
+        }
+        _analysisPresentationDeferred = false;
         if (_window == 0) return;
         if (!_experimentalCanvas) ScheduleStyle();
         _settingText = true;
@@ -395,41 +445,100 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public void SetTheme(IThemePolicy theme)
     {
         ArgumentNullException.ThrowIfNull(theme);
-        if (_canvasIsland?.IsComposing == true)
-            throw new InvalidOperationException("Theme changes cannot interrupt IME composition.");
-        _theme = theme;
-        if (_window == 0) return;
+        if (IsTextComposing) throw new NativeThemeDeferredException();
+        if (_window == 0) { _theme = theme; return; }
+        var oldTheme = _theme;
+        var updateFonts = _editorFont == 0 || _uiFont == 0 ||
+            oldTheme.Typography != theme.Typography || oldTheme.Spacing != theme.Spacing;
+        nint newEditorFont = 0, newUiFont = 0;
+        if (updateFonts)
+        {
+            newEditorFont = CreateThemeFont(theme.Typography.EditorFontFamilies,
+                theme.Typography.EditorFontSize, "Consolas");
+            try
+            {
+                newUiFont = CreateThemeFont(theme.Typography.UiFontFamilies,
+                    theme.Typography.UiFontSize, "Segoe UI");
+            }
+            catch { Win32.DeleteObject(newEditorFont); throw; }
+        }
+        var canvasApplied = false;
+        try
+        {
+            if (_experimentalCanvas && _canvasIsland is not null)
+            {
+                _canvasIsland.SetTheme(theme);
+                canvasApplied = true;
+            }
+            _theme = theme;
+            ApplyThemeSurfaces(theme, updateFonts, newEditorFont, newUiFont);
+            if (!_experimentalCanvas)
+            {
+                var analysisMatchesText = !_analysisPresentationDeferred &&
+                    _analysis is not null && _document is not null &&
+                    _analysis.Stamp == _document.Stamp &&
+                    string.Equals(_styleText, _visibleText, StringComparison.Ordinal);
+                CancelPendingStyle();
+                if (analysisMatchesText)
+                {
+                    ApplySemanticColors(_analysis!);
+                    _styleText = _visibleText;
+                }
+                else SetAllEditorColor(theme.Palette.EditorForeground);
+            }
+            var activeStamp = _experimentalCanvas ? _canvasStamp : _document?.Stamp;
+            if (!_analysisPresentationDeferred && _analysis is not null &&
+                activeStamp == _analysis.Stamp)
+                ApplyPreviewColors(_analysis);
+            else SetAllControlColor(_preview, theme.Palette.PreviewForeground);
+        }
+        catch
+        {
+            _theme = oldTheme;
+            if (canvasApplied)
+            {
+                try { _canvasIsland?.SetTheme(oldTheme); }
+                catch { /* Preserve the initiating error for controller rollback. */ }
+            }
+            try { ApplyThemeSurfaces(oldTheme, updateFonts, _editorFont, _uiFont); }
+            catch { /* Keep native callbacks fail-closed on the original error. */ }
+            if (newEditorFont != 0) Win32.DeleteObject(newEditorFont);
+            if (newUiFont != 0) Win32.DeleteObject(newUiFont);
+            throw;
+        }
+        if (updateFonts)
+        {
+            var oldEditorFont = _editorFont;
+            var oldUiFont = _uiFont;
+            _editorFont = newEditorFont;
+            _uiFont = newUiFont;
+            if (oldEditorFont != 0) Win32.DeleteObject(oldEditorFont);
+            if (oldUiFont != 0) Win32.DeleteObject(oldUiFont);
+        }
+    }
+
+    /// <summary>Allocates a font before mutating either native text control.</summary>
+    private static nint CreateThemeFont(string families, double size, string fallback)
+    {
+        var font = Win32.CreateFontW(-(int)Math.Round(size * 96 / 72),
+            0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, FirstFont(families, fallback));
+        if (font == 0)
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Theme font creation failed.");
+        return font;
+    }
+
+    /// <summary>Applies palette roles without rebuilding text controls or source projections.</summary>
+    private void ApplyThemeSurfaces(IThemePolicy theme, bool updateFonts,
+        nint editorFont, nint uiFont)
+    {
         Win32.SendMessageW(_editor, Win32.EM_SETBKGNDCOLOR, 0,
             (nint)ColorRef(theme.Palette.EditorBackground));
         Win32.SendMessageW(_preview, Win32.EM_SETBKGNDCOLOR, 0,
             (nint)ColorRef(theme.Palette.PreviewBackground));
-        var oldEditorFont = _editorFont;
-        var oldUiFont = _uiFont;
-        var editorFace = FirstFont(theme.Typography.EditorFontFamilies, "Consolas");
-        var uiFace = FirstFont(theme.Typography.UiFontFamilies, "Segoe UI");
-        _editorFont = Win32.CreateFontW(-(int)Math.Round(theme.Typography.EditorFontSize * 96 / 72),
-            0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, editorFace);
-        _uiFont = Win32.CreateFontW(-(int)Math.Round(theme.Typography.UiFontSize * 96 / 72),
-            0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uiFace);
-        if (_editorFont != 0) Win32.SendMessageW(_editor, Win32.WM_SETFONT, (nuint)_editorFont, (nint)1);
-        if (_uiFont != 0)
-        {
-            Win32.SendMessageW(_preview, Win32.WM_SETFONT, (nuint)_uiFont, (nint)1);
-            Win32.SendMessageW(_status, Win32.WM_SETFONT, (nuint)_uiFont, (nint)1);
-        }
-        if (oldEditorFont != 0) Win32.DeleteObject(oldEditorFont);
-        if (oldUiFont != 0) Win32.DeleteObject(oldUiFont);
-        if (_experimentalCanvas)
-            _canvasIsland?.SetTheme(theme);
-        else if (_analysis is not null) ScheduleStyle();
-        else
-        {
-            var selected = GetSelection();
-            SetSelection(0, _visibleText.Length);
-            SetSelectionColor(theme.Palette.EditorForeground);
-            SetSelection(selected.Min, selected.Max);
-        }
-        if (_analysis is not null) ApplyPreviewColors(_analysis);
+        if (!updateFonts) return;
+        Win32.SendMessageW(_editor, Win32.WM_SETFONT, (nuint)editorFont, (nint)1);
+        Win32.SendMessageW(_preview, Win32.WM_SETFONT, (nuint)uiFont, (nint)1);
+        Win32.SendMessageW(_status, Win32.WM_SETFONT, (nuint)uiFont, (nint)1);
     }
 
     /// <inheritdoc />
@@ -514,6 +623,13 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         Win32.MB_OK | Win32.MB_ICONERROR);
 
     /// <inheritdoc />
+    public void SetStatusNotice(string? notice)
+    {
+        _statusNotice = string.IsNullOrWhiteSpace(notice) ? null : notice;
+        RenderStatus();
+    }
+
+    /// <inheritdoc />
     public void Post(Action action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -529,21 +645,76 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         return shell.WindowMessage(window, message, wParam, lParam);
     }
 
+    /// <summary>Re-queries OS application appearance rather than trusting message payloads.</summary>
+    private void ObserveAppearanceChange()
+    {
+        var dark = PrefersDark;
+        if (_lastPrefersDark is null || _lastPrefersDark == dark)
+        {
+            _lastPrefersDark = dark;
+            return;
+        }
+        _lastPrefersDark = dark;
+        try { AppearanceChanged?.Invoke(); }
+        catch (Exception ex) { ReportCallbackFailure("Appearance", ex); }
+    }
+
+    /// <summary>Notifies the controller only after native preedit and final text reconcile.</summary>
+    private void NotifyCompositionSettled()
+    {
+        if (IsTextComposing) return;
+        try { PublishDeferredAnalysis(); }
+        catch (Exception ex) { ReportCallbackFailure("Analysis", ex); }
+        try { CompositionSettled?.Invoke(); }
+        catch (Exception ex) { ReportCallbackFailure("Composition", ex); }
+    }
+
+    /// <summary>Publishes a still-current analysis only after native marked text is gone.</summary>
+    private void PublishDeferredAnalysis()
+    {
+        if (!_analysisPresentationDeferred || _analysis is not { } view) return;
+        var activeStamp = _experimentalCanvas ? _canvasStamp : _document?.Stamp;
+        if (activeStamp != view.Stamp)
+        {
+            _analysisPresentationDeferred = false;
+            return;
+        }
+        _analysisPresentationDeferred = false;
+        try { SetAnalysis(view); }
+        catch
+        {
+            _analysisPresentationDeferred = true;
+            throw;
+        }
+    }
+
+    private void ReportCallbackFailure(string kind, Exception error)
+    {
+        _ = error; // Never display exception text: it may contain a user path.
+        if (_statusNotice is not null) return; // Preserve the controller's actionable notice.
+        try { SetStatusNotice($"{kind} update unavailable; editing remains available."); }
+        catch { /* Optional UI notification must not unwind through user32. */ }
+    }
+
     private nint WindowMessage(nint window, uint message, nuint wParam, nint lParam)
     {
         switch (message)
         {
             case Win32.WM_CREATE:
                 _window = window;
+                _lastPrefersDark = PrefersDark;
                 CreateControls();
                 return 0;
+            case WmSettingChange or WmSysColorChange or WmThemeChanged:
+                ObserveAppearanceChange();
+                return Win32.DefWindowProcW(window, message, wParam, lParam);
             case Win32.WM_SIZE:
                 ResizeControls();
                 return 0;
             case Win32.WM_COMMAND:
                 if ((int)(wParam & 0xFFFF) == EditorId && (int)((wParam >> 16) & 0xFFFF) == Win32.EN_CHANGE)
                 {
-                    if (!_settingText) OnTextChanged();
+                    if (!_settingText && !_imeComposing) OnTextChanged();
                     return 0;
                 }
                 HandleCommand((int)(wParam & 0xFFFF));
@@ -567,7 +738,11 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 return 0;
             case SelectionMessage:
                 _selectionPostQueued = false;
-                FlushSelection();
+                if (!IsTextComposing) FlushSelection();
+                return 0;
+            case CompositionSettledMessage:
+                if (_imeComposing) return 0;
+                FinishDefaultComposition();
                 return 0;
             case Win32.WM_TIMER when wParam == StyleTimerId:
                 Win32.KillTimer(_window, StyleTimerId);
@@ -575,7 +750,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 {
                     Win32.SetTimer(_window, StyleTimerId, 300, 0);
                 }
-                else if (_analysis is not null && string.Equals(_styleText, _visibleText,
+                else if (_analysis is not null && _document is not null &&
+                    _analysis.Stamp == _document.Stamp &&
+                    string.Equals(_styleText, _visibleText,
                     StringComparison.Ordinal))
                 {
                     ApplySemanticColors(_analysis);
@@ -632,6 +809,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 ShowError(message);
             };
             _canvasIsland.AccessibilityFaulted += () => CanvasAccessibilityFailed?.Invoke();
+            _canvasIsland.CompositionFinished += NotifyCompositionSettled;
             if (_pendingCanvasBinding is not null) _canvasIsland.Bind(_pendingCanvasBinding);
             if (_pendingCanvasFrame is not null) _canvasIsland.SetFrame(_pendingCanvasFrame);
             if (_pendingCanvasSemantics is not null) _canvasIsland.SetSemantics(_pendingCanvasSemantics);
@@ -744,9 +922,38 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         var text = ReadEditorText();
         if (string.Equals(text, _visibleText, StringComparison.Ordinal)) return;
         CancelPendingStyle();
+        var previousText = _visibleText;
+        var previousOffsets = _editorOffsets;
         _visibleText = text;
         _editorOffsets = new RichEditOffsetMap(text);
-        TextChanged?.Invoke(text);
+        try { TextChanged?.Invoke(text); }
+        catch
+        {
+            _visibleText = previousText;
+            _editorOffsets = previousOffsets;
+            throw;
+        }
+    }
+
+    /// <summary>Synchronously settles a post-IME command before Save/Open can proceed.</summary>
+    private bool FinishDefaultComposition()
+    {
+        if (!_imeSettling) return true;
+        try
+        {
+            OnTextChanged();
+            // Selection is still held until the final text callback succeeds.
+            // FlushSelection itself must not be blocked by IsTextComposing.
+            FlushSelection();
+            _imeSettling = false;
+            NotifyCompositionSettled();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ReportCallbackFailure("Text composition", ex);
+            return false;
+        }
     }
 
     private static nint EditorSubclass(nint window, uint message, nuint wParam,
@@ -770,12 +977,19 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             Win32.WM_CLEAR or Win32.WM_IME_STARTCOMPOSITION ||
             message == Win32.WM_KEYDOWN && (wParam == 0x08 || wParam == 0x2E))
             shell.FlushSelection();
-        if (message == Win32.WM_IME_STARTCOMPOSITION) shell._imeComposing = true;
+        if (message == Win32.WM_IME_STARTCOMPOSITION)
+        {
+            shell._imeComposing = true;
+            shell._imeSettling = false;
+        }
         var result = Win32.DefSubclassProc(window, message, wParam, lParam);
         if (message == Win32.WM_IME_ENDCOMPOSITION)
         {
             shell._imeComposing = false;
+            shell._imeSettling = true;
             if (shell._analysis is not null) shell.ScheduleStyle();
+            if (shell._window != 0)
+                Win32.PostMessageW(shell._window, CompositionSettledMessage, 0, 0);
         }
         if (message == Win32.WM_NCDESTROY)
             Win32.RemoveWindowSubclass(window, EditorSubclassProcedure, subclassId);
@@ -909,6 +1123,21 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         }
     }
 
+    /// <summary>Removes the previous page's preview without touching editor text or focus.</summary>
+    private void ClearPreview()
+    {
+        _previewProjection = new NativeTextProjection("", NativeLineEndingMode.CrLf);
+        _previewOffsets = new RichEditOffsetMap("");
+        if (_preview == 0) return;
+        _settingText = true;
+        try
+        {
+            var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
+            Win32.SendMessageW(_preview, Win32.EM_SETTEXTEX, ref text, "");
+        }
+        finally { _settingText = false; }
+    }
+
     private Win32.CharacterRange GetSelection() => GetSelection(_editor);
 
     private Win32.CharacterRange GetSelection(nint control)
@@ -955,6 +1184,23 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private void SetSelectionColor(ThemeColor color) =>
         SetCharacterFormat(_editor, color, false, false, false);
 
+    /// <summary>Recolors an unanalysed page without moving the native selection or scroll.</summary>
+    private void SetAllEditorColor(ThemeColor color)
+        => SetAllControlColor(_editor, color);
+
+    /// <summary>Uses SCF_ALL so stale previews and plain pages never move a caret.</summary>
+    private static void SetAllControlColor(nint control, ThemeColor color)
+    {
+        var format = new Win32.CharacterFormat
+        {
+            Size = (uint)Marshal.SizeOf<Win32.CharacterFormat>(),
+            Mask = Win32.CFM_COLOR,
+            TextColor = ColorRef(color),
+            FaceName = ""
+        };
+        Win32.SendMessageW(control, Win32.EM_SETCHARFORMAT, Win32.SCF_ALL, ref format);
+    }
+
     private void SetCharacterFormat(nint control, ThemeColor color, bool bold,
         bool large, bool monospace)
     {
@@ -976,7 +1222,18 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     private void UpdateStatus(string text)
     {
-        if (_status != 0) Win32.SetWindowTextW(_status, text);
+        _statusBase = text;
+        RenderStatus();
+    }
+
+    /// <summary>Updates only the native status control, never text or editor selection.</summary>
+    private void RenderStatus()
+    {
+        if (_status == 0) return;
+        var value = _statusNotice is null ? _statusBase :
+            string.IsNullOrEmpty(_statusBase) ? _statusNotice :
+            _statusBase + "  ·  " + _statusNotice;
+        Win32.SetWindowTextW(_status, value);
     }
 
     private string? PickFile(bool save, string? currentPath)
