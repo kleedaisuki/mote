@@ -23,6 +23,8 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     private const string ClassName = "MoteSourceAccessibilityElement";
     private static MacAccessibilityElementPrototype? s_current;
     private static bool s_registered;
+    private static readonly bool s_traceStages =
+        Environment.GetEnvironmentVariable("MOTE_NATIVE_MAC_STAGE_TRACE") == "1";
     private readonly MacAccessibilityTextCore _core;
     private nint _element;
     private nint _canvasView;
@@ -59,13 +61,17 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
     internal nint Attach(nint canvasView, nint inputEditor,
         ObjC.Rect? initialBodyRect = null)
     {
+        TraceStage("A00-attach-enter");
         if (canvasView == 0 || inputEditor == 0)
             throw new ArgumentException("Canvas and input views must exist before AX attachment.");
         if (s_current is not null) throw new InvalidOperationException("Only one AX prototype may be attached.");
         // Validate before recording an owned input view: failed attachment must
         // not let Dispose change its pre-existing accessibility flag.
+        TraceStage("A01-before-body-validate");
         if (initialBodyRect is { } initial) ValidateBodyRect(canvasView, initial);
+        TraceStage("A02-after-body-validate");
         RegisterClass();
+        TraceStage("A03-after-class-register");
         s_current = this;
         try
         {
@@ -76,28 +82,56 @@ internal sealed unsafe class MacAccessibilityElementPrototype : IDisposable
                 _bodyRect = body;
                 _hasBodyRect = true;
             }
+            TraceStage("A04-before-children-read");
             _previousChildren = ObjC.Send(canvasView, ObjC.Sel("accessibilityChildren"));
+            TraceStage("A05-after-children-read");
             if (_previousChildren != 0)
                 ObjC.Send(_previousChildren, ObjC.Sel("retain"));
+            TraceStage("A06-after-children-retain");
+            TraceStage("A07-before-input-flag-read");
             _inputWasAccessible = ObjC.Send(inputEditor, ObjC.Sel("isAccessibilityElement")) != 0;
-            _element = ObjC.Send(ObjC.Send(ObjC.Class(ClassName), ObjC.Sel("alloc")), ObjC.Sel("init"));
+            TraceStage("A08-after-input-flag-read");
+            TraceStage("A09-before-element-alloc");
+            var allocated = ObjC.Send(ObjC.Class(ClassName), ObjC.Sel("alloc"));
+            TraceStage("A10-after-element-alloc");
+            _element = ObjC.Send(allocated, ObjC.Sel("init"));
+            TraceStage("A11-after-element-init");
             if (_element == 0) throw new InvalidOperationException("AppKit could not allocate the AX element.");
+            TraceStage("A12-before-set-parent");
             ObjC.Send(_element, ObjC.Sel("setAccessibilityParent:"), canvasView);
+            TraceStage("A13-after-set-parent");
+            TraceStage("A14-before-set-frame");
             UpdateFrameFromView();
+            TraceStage("A15-after-set-frame");
+            TraceStage("A16-before-children-array");
             var children = _previousChildren != 0
                 ? ObjC.Send(ObjC.Class("NSMutableArray"), ObjC.Sel("arrayWithArray:"), _previousChildren)
                 : ObjC.Send(ObjC.Class("NSMutableArray"), ObjC.Sel("array"));
+            TraceStage("A17-after-children-array");
+            TraceStage("A18-before-array-edit");
             ObjC.Send(children, ObjC.Sel("removeObjectIdenticalTo:"), inputEditor);
             ObjC.Send(children, ObjC.Sel("addObject:"), _element);
+            TraceStage("A19-after-array-edit");
+            TraceStage("A20-before-set-children");
             ObjC.Send(canvasView, ObjC.Sel("setAccessibilityChildren:"), children);
+            TraceStage("A21-after-set-children");
+            TraceStage("A22-before-hide-input");
             ObjC.Send(inputEditor, ObjC.Sel("setAccessibilityElement:"), 0);
+            TraceStage("A23-after-hide-input");
             return _element;
         }
         catch
         {
+            TraceStage("A24-managed-exception");
             Dispose();
             throw;
         }
+    }
+
+    /// <summary>Privacy-safe AX attachment breadcrumbs for opt-in crash diagnosis.</summary>
+    private static void TraceStage(string code)
+    {
+        if (s_traceStages) Console.Error.WriteLine($"mote-mac-stage:{code}");
     }
 
     /// <summary>

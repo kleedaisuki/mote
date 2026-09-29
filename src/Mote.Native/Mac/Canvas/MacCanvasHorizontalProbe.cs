@@ -45,6 +45,7 @@ internal static class MacCanvasHorizontalProbe
             workflow = new Workflow(shell, shortFile, longFile, output, theme.Id);
             shell.Shown += workflow.Start;
             controller.Run();
+            Console.Error.WriteLine("mote-mac-horizontal-stage:run-returned");
             workflow.WriteMetrics();
             return workflow.Succeeded && Hash(shortFile).AsSpan().SequenceEqual(shortHash) &&
                 Hash(longFile).AsSpan().SequenceEqual(longHash) ? 0 : 1;
@@ -104,6 +105,7 @@ internal static class MacCanvasHorizontalProbe
         private readonly List<string> _metrics = [];
         private readonly Dictionary<string, string> _imageHashes = [];
         private int _stage;
+        private int _lastReportedStage = -1;
         private string _check = "startup";
         private bool _done;
         private double _beforeX;
@@ -141,7 +143,19 @@ internal static class MacCanvasHorizontalProbe
         private void Tick()
         {
             if (_done) return;
-            if (DateTime.UtcNow >= _deadline) { Finish(false); return; }
+            if (_lastReportedStage != _stage)
+            {
+                _lastReportedStage = _stage;
+                _check = $"S{_stage}-waiting";
+                Heartbeat("enter");
+                Console.Error.WriteLine($"mote-mac-horizontal-stage:enter-{_stage}");
+            }
+            if (DateTime.UtcNow >= _deadline)
+            {
+                Heartbeat("deadline");
+                Finish(false);
+                return;
+            }
             try
             {
                 switch (_stage)
@@ -273,7 +287,11 @@ internal static class MacCanvasHorizontalProbe
                         _metrics.Add($"remote-hit={_remoteHit}");
                         Capture("remote-after.png");
                         RequireDifferent("remote-before.png", "remote-after.png");
+                        Heartbeat("before-new");
+                        Console.Error.WriteLine("mote-mac-horizontal-stage:before-new");
                         _shell.ProbeInvokeMenu("moteNew:");
+                        Heartbeat("after-new");
+                        Console.Error.WriteLine("mote-mac-horizontal-stage:after-new");
                         _stage = 5;
                         break;
                     case 5 when _shell.ProbeCanvasSnapshot is { Length: 0 } empty &&
@@ -350,6 +368,7 @@ internal static class MacCanvasHorizontalProbe
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                Heartbeat($"exception-{error.GetType().Name}");
                 Console.Error.WriteLine($"Mac horizontal stage {_stage} check {_check}: " +
                     $"{error.GetType().Name}.");
                 Finish(false);
@@ -416,7 +435,32 @@ internal static class MacCanvasHorizontalProbe
             _done = true;
             Succeeded = success;
             if (!success) Console.Error.WriteLine($"Mac horizontal stage {_stage} failed.");
+            Heartbeat(success ? "success-before-close" : "failure-before-close");
+            Console.Error.WriteLine($"mote-mac-horizontal-stage:before-close-{_stage}");
+            // The probe deliberately edits only its new, unsaved scratch
+            // document. Its own close must not wait forever in a user modal.
+            _shell.ProbeApproveDiscardOnce();
             _shell.Close();
+            Heartbeat("after-close");
+            Console.Error.WriteLine($"mote-mac-horizontal-stage:after-close-{_stage}");
+        }
+
+        private void Heartbeat(string phase)
+        {
+            // A child killed by the outer diagnostic timeout cannot write
+            // metrics.txt; persist only privacy-safe state before each risky
+            // native action so the target-host stall remains identifiable.
+            try
+            {
+                var path = Path.Combine(_output, "last-stage.txt");
+                var temporary = path + ".tmp";
+                File.WriteAllText(temporary, $"stage={_stage}\ncheck={_check}\nphase={phase}\n");
+                File.Move(temporary, path, overwrite: true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"mote-mac-horizontal-heartbeat:{error.GetType().Name}");
+            }
         }
 
         internal void WriteMetrics()

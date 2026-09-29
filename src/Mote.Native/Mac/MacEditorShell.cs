@@ -187,8 +187,18 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 ObjC.Send(_window, ObjC.Sel("makeKeyAndOrderFront:"), 0);
                 ObjC.Send(_application, ObjC.Sel("activateIgnoringOtherApps:"), 1);
                 if (_experimentalCanvas) MacTextInputIsland.TraceStage("S2-before-loop");
-                if (_experimentalCanvas) Post(() => _canvas?.PublishBodyHeight());
-                Post(() => Shown?.Invoke());
+                if (_experimentalCanvas) Post(() =>
+                {
+                    MacTextInputIsland.TraceStage("S3-before-body-publish");
+                    _canvas?.PublishBodyHeight();
+                    MacTextInputIsland.TraceStage("S4-body-published");
+                });
+                Post(() =>
+                {
+                    if (_experimentalCanvas) MacTextInputIsland.TraceStage("S5-before-shown");
+                    Shown?.Invoke();
+                    if (_experimentalCanvas) MacTextInputIsland.TraceStage("S6-shown-returned");
+                });
                 ObjC.Send(_application, ObjC.Sel("run"));
             }
             finally
@@ -352,16 +362,20 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public void SetCanvasAccessibility(AccessibleDocument document,
         IAccessibleViewport viewport)
     {
+        if (_experimentalCanvas) MacTextInputIsland.TraceStage("A0-shell-ax-enter");
         if (!_experimentalCanvas || _canvas is null ||
             _canvas.CanvasView == 0 || _canvas.Editor == 0)
             throw new InvalidOperationException("The opt-in canvas views are not ready for AX.");
         if (_accessibility is not null)
             throw new InvalidOperationException("The canvas AX element is already attached.");
         var provider = new MacAccessibilityElementPrototype(document, viewport);
+        MacTextInputIsland.TraceStage("A1-shell-ax-provider-ready");
         provider.Faulted += QueueAccessibilityFault;
         try
         {
+            MacTextInputIsland.TraceStage("A2-shell-ax-before-attach");
             provider.Attach(_canvas.CanvasView, _canvas.Editor, _canvas.BodyRect);
+            MacTextInputIsland.TraceStage("A3-shell-ax-attached");
             _accessibility = provider;
         }
         catch
