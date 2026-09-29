@@ -135,17 +135,17 @@ internal static class Program
             var rawDocuments = DocumentsInView(element, TreeWalker.RawViewWalker);
             var controlDocuments = DocumentsInView(element, TreeWalker.ControlViewWalker);
             var contentDocuments = DocumentsInView(element, TreeWalker.ContentViewWalker);
-            var focus = CaptureFocus(element, sourceElement, hostElement, process.Id);
+            var focus = CaptureFocus(canvas, input, process, fragmentExperiment);
             report.Focus = focus;
-            if (fragmentExperiment && focus.Status == "focus-inconclusive-external-foreground")
+            if (fragmentExperiment && focus.Status.StartsWith("focus-inconclusive-", StringComparison.Ordinal))
                 report.Inconclusive.Add(focus.Status);
             if (fragmentExperiment && focus.Status == "focus-inconsistent-mote-foreground")
                 report.ReleaseBlockers.Add($"Mote was stably foreground, but source UIA focus and global FocusedElement disagreed: {focus.Focused}");
             report.Tree = new TreeObservation(
                 Describe(element), Describe(sourceElement), Describe(hostElement), Describe(rawChild), Describe(controlChild),
                 Describe(contentChild), focus.Focused,
-                focus.CanvasHasKeyboardFocus, focus.SourceHasKeyboardFocus,
-                focus.HostHasKeyboardFocus, rawDocuments, controlDocuments, contentDocuments);
+                focus.Canvas.Current, focus.Source.Current,
+                focus.Host.Current, rawDocuments, controlDocuments, contentDocuments);
             if (rawDocuments.Count != 1 || controlDocuments.Count != 1 || contentDocuments.Count != 1)
             {
                 report.ReleaseBlockers.Add($"Expected one source-backed Document in each canvas subtree: Raw={rawDocuments.Count}, Control={controlDocuments.Count}, Content={contentDocuments.Count}; focused={report.Tree.Focused}. Single-editor accessibility is not established.");
@@ -316,30 +316,64 @@ internal static class Program
     /// changing foreground makes focus inconclusive, not a passing assertion
     /// or an attributed provider defect.
     /// </summary>
-    private static FocusObservation CaptureFocus(AutomationElement canvas,
-        AutomationElement source, AutomationElement host, int processId)
+    private static FocusObservation CaptureFocus(nint canvasHwnd, nint inputHwnd,
+        Process process, bool fragmentExperiment)
     {
+        var preflight = GetForegroundWindow();
+        Thread.Sleep(30);
         var before = GetForegroundWindow();
-        GetWindowThreadProcessId(before, out var beforePid);
+        var beforeThread = GetWindowThreadProcessId(before, out var beforePid);
+        // Avoid reusing the tree traversal's RCWs. This specifically tests how
+        // UIAutomationClient merges the new fragment provider and HWND host.
+        var canvas = AutomationElement.FromHandle(canvasHwnd);
+        var source = WaitForSourceElement(canvasHwnd, process, fragmentExperiment);
+        var host = AutomationElement.FromHandle(inputHwnd);
         var focused = AutomationElement.FocusedElement;
-        var sourceHasFocus = source.Current.HasKeyboardFocus;
-        var hostHasFocus = host.Current.HasKeyboardFocus;
-        var canvasHasFocus = canvas.Current.HasKeyboardFocus;
+        var sourceFocus = ReadFocusProperties(source);
+        var hostFocus = ReadFocusProperties(host);
+        var canvasFocus = ReadFocusProperties(canvas);
         var after = GetForegroundWindow();
-        GetWindowThreadProcessId(after, out var afterPid);
-        var stableMoteForeground = before != 0 && before == after &&
-            beforePid == processId && afterPid == processId;
+        var afterThread = GetWindowThreadProcessId(after, out var afterPid);
+        var stableMoteForeground = preflight != 0 && preflight == before && before == after &&
+            beforeThread != 0 && beforeThread == afterThread &&
+            beforePid == process.Id && afterPid == process.Id;
         var focusedIsSource = focused is not null &&
             focused.GetRuntimeId().SequenceEqual(source.GetRuntimeId());
+        var focusedIsHost = focused is not null &&
+            focused.GetRuntimeId().SequenceEqual(host.GetRuntimeId());
+        var expectedFocus = fragmentExperiment
+            ? focusedIsSource && sourceFocus.AllTrue && hostFocus.AllTrue
+            : focusedIsHost && hostFocus.AllTrue;
         var status = !stableMoteForeground
             ? "focus-inconclusive-external-foreground"
-            : focusedIsSource && sourceHasFocus && hostHasFocus
+            : expectedFocus
                 ? "focus-consistent-mote-foreground"
                 : "focus-inconsistent-mote-foreground";
-        return new FocusObservation(status, before.ToInt64(), after.ToInt64(),
-            beforePid, afterPid, processId, Describe(focused), focusedIsSource,
-            canvasHasFocus, sourceHasFocus, hostHasFocus);
+        return new FocusObservation(status, preflight.ToInt64(), before.ToInt64(),
+            after.ToInt64(), beforeThread, afterThread, beforePid, afterPid, process.Id,
+            Describe(focused), focusedIsSource,
+            focusedIsHost, canvasFocus, sourceFocus, hostFocus);
     }
+
+    /// <summary>Reads UIA property 30008 via current, explicit and newly cached client paths.</summary>
+    private static FocusPropertyObservation ReadFocusProperties(AutomationElement element)
+    {
+        var current = element.Current.HasKeyboardFocus;
+        var direct = BoolProperty(element.GetCurrentPropertyValue(
+            AutomationElement.HasKeyboardFocusProperty));
+        var request = new CacheRequest { TreeScope = TreeScope.Element };
+        request.Add(AutomationElement.HasKeyboardFocusProperty);
+        request.Add(AutomationElement.AutomationIdProperty);
+        var updated = element.GetUpdatedCache(request);
+        var cached = updated.Cached.HasKeyboardFocus;
+        var cachedDirect = BoolProperty(updated.GetCachedPropertyValue(
+            AutomationElement.HasKeyboardFocusProperty));
+        return new FocusPropertyObservation(AutomationElement.HasKeyboardFocusProperty.Id,
+            current, direct, cached, cachedDirect, updated.Cached.AutomationId);
+    }
+
+    /// <summary>Preserves a missing or non-boolean UIA value rather than coercing it to false.</summary>
+    private static bool? BoolProperty(object value) => value is bool boolean ? boolean : null;
 
     /// <summary>Polls a real HWND without accidentally accepting another editor process.</summary>
     private static nint WaitFor(Func<nint> find, Process process)
@@ -448,7 +482,17 @@ internal sealed record TreeObservation(string Canvas, string SourceDocument, str
     IReadOnlyList<string> ContentDocuments);
 
 /// <summary>Near-simultaneous foreground and UIA-focus sample with an explicit inconclusive state.</summary>
-internal sealed record FocusObservation(string Status, long ForegroundBeforeHwnd,
-    long ForegroundAfterHwnd, int ForegroundBeforePid, int ForegroundAfterPid,
-    int MoteProcessId, string Focused, bool FocusedIsSource,
-    bool CanvasHasKeyboardFocus, bool SourceHasKeyboardFocus, bool HostHasKeyboardFocus);
+internal sealed record FocusObservation(string Status, long ForegroundPreflightHwnd,
+    long ForegroundBeforeHwnd, long ForegroundAfterHwnd, uint ForegroundBeforeThreadId,
+    uint ForegroundAfterThreadId, int ForegroundBeforePid, int ForegroundAfterPid,
+    int MoteProcessId, string Focused, bool FocusedIsSource, bool FocusedIsHost,
+    FocusPropertyObservation Canvas, FocusPropertyObservation Source,
+    FocusPropertyObservation Host);
+
+/// <summary>Four independent client views of UIA HasKeyboardFocus (property 30008).</summary>
+internal sealed record FocusPropertyObservation(int PropertyId, bool Current, bool? ExplicitCurrent,
+    bool Cached, bool? ExplicitCached, string CachedAutomationId)
+{
+    /// <summary>True only when all client retrieval paths agree that this element has focus.</summary>
+    public bool AllTrue => Current && ExplicitCurrent == true && Cached && ExplicitCached == true;
+}

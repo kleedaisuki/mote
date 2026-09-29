@@ -44,12 +44,26 @@ Narrator/NVDA or IME acceptance result.
 Focus is sampled with `GetForegroundWindow`/owner PID **before and after**
 the UIA `FocusedElement` and `HasKeyboardFocus` reads. Only when the same mote
 foreground HWND is stable across that interval does the fragment report
-`focus-consistent-mote-foreground` or a focus release blocker. A foreign or
+`focus-consistent-mote-foreground` or a focus release blocker. Baseline expects
+the physical RichEdit host as UIA focus; fragment mode expects the mapped
+source Document. A foreign or
 changing foreground reports `focus-inconclusive-external-foreground` in the
 JSON `Focus.Status` and `Inconclusive`, causing a nonzero diagnostic exit but
 **not** attributing a product defect. This distinction is necessary on hosted
 ARM64, where the runner's privacy-settings window can take global focus while
 the editor's local provider still reports focus for its last input HWND.
+The probe also reacquires **fresh** canvas/source/input UIA elements inside
+that foreground time window and reads `HasKeyboardFocus` (UIA property ID
+30008) four ways on each: `Current`, explicit `GetCurrentPropertyValue`,
+`Cached`, and explicit `GetCachedPropertyValue` after `GetUpdatedCache` with a
+fresh `CacheRequest`. These values are reported even when foreground belongs
+to another process; in that case they are diagnostic evidence, not a focus
+acceptance pass. An older local x64 AOT binary returned `true` on all four
+source and input paths while an unrelated window was foreground, consistent
+with UIA host fallback; that negative-control JSON is
+`.cache/windows-ax-external/win-x64/old-30008-external.json`. The later
+provider property-ID correction must be checked against a newly published
+binary, not inferred from the direct COM unit test alone.
 
 The fixture is 9,000 LF rows plus `TAIL_AX_MARKER_世界😀` (>65,536 UTF-16
 units). The client checks exact 128-unit document prefix, source versus bounded
