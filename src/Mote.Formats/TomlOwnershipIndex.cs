@@ -25,8 +25,10 @@ internal sealed class TomlOwnershipIndex
     internal bool IsExhaustive { get; private set; } = true;
 
     /// <summary>
-    /// Whether table-array use stayed in the source-order subset that matches Tomlyn's
-    /// whole-document validator: repeated root array tables without nested table headers.
+    /// Whether source-order features stayed in the subset whose ownership is certified by
+    /// this trie and Tomlyn's statement parser. Reopening an array element after declaring
+    /// a nested header is excluded because Tomlyn's whole-document validator disagrees with
+    /// independent TOML parsers in that sequence.
     /// </summary>
     internal bool IsCertifiable { get; private set; } = true;
 
@@ -35,7 +37,6 @@ internal sealed class TomlOwnershipIndex
     {
         var parts = Parts(key);
         if (parts.Count == 0) return Conflict("Invalid table path.", key, sourceOffset);
-        if (array && parts.Count != 1) IsCertifiable = false;
         var parent = ResolveParent(_root, parts, true, key, sourceOffset, out var problem);
         if (problem is not null) return problem;
         if (parent is null) return null;
@@ -49,7 +50,9 @@ internal sealed class TomlOwnershipIndex
         }
         if (array && binding.Origin == Origin.ArrayTable)
         {
+            if (binding.HasChildHeader) IsCertifiable = false;
             binding.Scope = new Scope();
+            binding.HasChildHeader = false;
             _current = binding.Scope;
             return null;
         }
@@ -95,8 +98,12 @@ internal sealed class TomlOwnershipIndex
                 problem = Conflict($"Key '{parts[i]}' cannot contain another key or table.", key, sourceOffset);
                 return null;
             }
-            if (headerParents && binding.Origin == Origin.ArrayTable)
+            // A dotted assignment through a header-created namespace has nuanced
+            // validity rules that the local statement parser cannot adjudicate alone.
+            if (!headerParents && binding.Origin is Origin.ImplicitHeader or Origin.ExplicitTable or Origin.ArrayTable)
                 IsCertifiable = false;
+            if (headerParents && binding.Origin == Origin.ArrayTable)
+                binding.HasChildHeader = true;
             scope = binding.Scope!;
         }
         return scope;
@@ -146,6 +153,8 @@ internal sealed class TomlOwnershipIndex
     {
         internal Origin Origin = origin;
         internal Scope? Scope = scope;
+        /// <summary>Marks a nested header in the current array element, not prior elements.</summary>
+        internal bool HasChildHeader;
     }
 
     /// <summary>Only implicit header parents may later become explicit tables.</summary>

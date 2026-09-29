@@ -21,9 +21,10 @@ namespace Mote.Formats;
 /// bounded logical statement is individually accepted by Tomlyn, statement boundaries occur
 /// only at top-level newlines outside strings/collections, and the trie holds every key binding.
 /// Scalar and inline-table bindings seal their path; only header-created implicit parents may
-/// later become explicit tables. Repeated root array-table elements may be certified, but a
-/// nested table header beneath an array table remains Provisional: Tomlyn's validated
-/// source-order behavior conflicts with an independent TOML oracle for re-entry cases.
+/// later become explicit tables. Nested array-table headers may be certified while each
+/// parent element is current; reopening an array table after a nested header remains
+/// Provisional because Tomlyn's validated source-order behavior conflicts with independent
+/// TOML oracles in that sequence.
 /// </remarks>
 internal sealed class TomlIncrementalSession : IFormatSession
 {
@@ -184,6 +185,7 @@ internal sealed class TomlIncrementalSession : IFormatSession
         {
             var pair = pairs[0];
             if (pair.Key is null || pair.Value is null || ownership.AddAssignment(pair.Key, pair.Value, start) is not null) return false;
+            if (!ownership.IsCertifiable) return false;
             var span = Shift(pair.Span, start);
             if (Intersects(span, visible))
                 nodes.Add(new SemanticNode("entry", span, pair.Key.ToString().Trim(),

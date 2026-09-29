@@ -412,11 +412,10 @@ public sealed class IncrementalPolicyTests
         Assert.True(actual.Root.Children.Count < 40_000);
     }
 
-    /// <summary>Offscreen ownership conflicts or nested array-table scope cannot be silently certified.</summary>
+    /// <summary>Offscreen ownership conflicts cannot be silently certified.</summary>
     [Theory]
     [InlineData("k00000 = 0\n")]
-    [InlineData("[[items]]\nname = 'x'\n[[items.child]]\ny = 1\n")]
-    [InlineData("[[items]]\nname = 'x'\n[items.child]\ny = 1\n")]
+    [InlineData("[a.x.y]\n[a]\nx.z = 3\n")]
     public void Toml_large_full_session_downgrades_uncertain_ownership(string suffix)
     {
         var value = new string('x', 100);
@@ -445,11 +444,11 @@ public sealed class IncrementalPolicyTests
         Assert.True(actual.Root.Children.Count < 5_000);
     }
 
-    /// <summary>A duplicate inside the same final array-table element cannot be certified.</summary>
+    /// <summary>A duplicate or nested-header parent re-entry cannot be certified.</summary>
     [Theory]
     [InlineData("v = 'again'\n")]
-    [InlineData("[[item.child]]\ny = 1\n")]
-    [InlineData("[item.child]\ny = 1\n")]
+    [InlineData("[item.child]\ny = 1\n[[item]]\nv = 'new'\n")]
+    [InlineData("[[item.child]]\ny = 1\n[[item]]\nv = 'new'\n")]
     public void Toml_large_array_table_conflicts_or_nested_scopes_downgrade(string suffix)
     {
         var source = RootArrayTableCorpus() + suffix;
@@ -460,6 +459,23 @@ public sealed class IncrementalPolicyTests
         Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
         Assert.Null(actual.TotalDiagnosticCount);
         Assert.True(actual.Coverage.Length < source.Length);
+    }
+
+    /// <summary>Nested headers bind to the current element until the parent array is reopened.</summary>
+    [Theory]
+    [InlineData("[item.child]\ny = 1\n")]
+    [InlineData("[[item.child]]\ny = 1\n[[item.child]]\ny = 2\n")]
+    public void Toml_large_nested_array_tables_without_parent_reentry_are_complete(string suffix)
+    {
+        var source = RootArrayTableCorpus() + suffix;
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(source.Length - suffix.Length, suffix.Length), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Complete, actual.Completeness);
+        Assert.Equal(0, actual.TotalDiagnosticCount);
+        Assert.Equal(new TextSpan(0, source.Length), actual.Coverage);
+        Assert.Contains(actual.Root.Children, node => node.Kind is "table" or "array-table");
     }
 
     /// <summary>Builds a bounded >4 MiB TOML array-table corpus with one valid key per element.</summary>
