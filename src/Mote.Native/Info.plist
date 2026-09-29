@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>app.mote.editor</string>
+  <key>CFBundleName</key><string>mote</string>
+  <key>CFBundleDisplayName</key><string>mote</string>
+  <key>CFBundleExecutable</key><string>mote</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Structured text</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.plain-text</string>
+        <string>net.daringfireball.markdown</string>
+        <string>public.json</string>
+        <string>public.comma-separated-values-text</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
