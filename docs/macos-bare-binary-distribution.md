@@ -8,6 +8,8 @@ Apple supports code-signing **nonbundled code** with a Developer ID Application 
 
 This is a **known product limitation**, not evidence that a bare Mach-O cannot run a GUI. A stapled `.app`, `.dmg` or `.pkg` could change the trust experience, but treating any of those as the delivered application would violate the user's strict single-binary shape. A ZIP used temporarily to *submit* the binary to Apple's notary service does not alter the final installed runtime shape; whether a ZIP or raw Mach-O is acceptable as customer transport is a separate product decision. A ZIP itself cannot be stapled either. [Apple custom notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
 
+**Product decision, 2026-09-29:** the user explicitly accepted that a first launch may require an online Gatekeeper ticket lookup, and reaffirmed strict one-file delivery. Therefore release documentation must disclose the online-first limitation rather than substituting an `.app` or a sidecar to enable offline stapling. This decision does **not** waive the Developer ID, notarization, and fresh quarantined-launch verification gates below.
+
 ## Keep six different claims separate
 
 | Stage | What it establishes | What it does **not** establish |
