@@ -100,6 +100,27 @@ new-binary clipboard-copy attempt timed out before a
 same-binary retry and three later runs passed; the intermittent failure is not
 explained and the external workflow remains diagnostic rather than a CI gate.
 
+Final frozen-source local checkpoint (Windows 11 build 26200, x64; 2026-09-29):
+strict Native AOT publish contained exactly one `mote.exe` (6,147,584 bytes,
+SHA-256 `5EC410FC111070E4BF9941C7A45BC740BE1798D488260E1E5E6AFB3D31A32AE4`).
+`tests/NativeWindowsHorizontalWorkflow.ps1` exited zero on a 50 MiB one-line
+fixture: distant horizontal pan and vertical return, unique source-backed
+copy, exact Save/reopen bytes and original clipboard restoration. Report and
+physical canvas PNGs:
+`.temp/windows-horizontal/53c96c60fcc84d329805f134da96f9fb/`.
+The paired external WPF UIA client passed 19/19 focused checks with one
+logical Document in Raw/Control/Content, source focus and stale-range behavior:
+`.cache/windows-ax-external/win-x64/ribbon-final.json`. A real Microsoft
+Pinyin remote-pan probe observed the native candidate `1 你好` in the input
+ribbon and verified both cancellation and committed Save/reopen exact bytes:
+`.temp/ime-probes/remote-20260929-230343-477/` and
+`.temp/ime-probes/remote-20260929-230518-021/`. One initial cold run dropped
+the first `n` and was aborted without Save; another unfocused run was aborted
+before input injection. These negative observations remain unresolved rather
+than being erased by later passes. This local focused evidence does not prove
+Windows Arm64, macOS, other IMEs, Narrator/NVDA speech, or general release
+readiness; candidate-at-ribbon remains an explicit UX trade-off.
+
 [rich-edit styles]: https://learn.microsoft.com/en-us/windows/win32/controls/rich-edit-control-styles
 [caret coordinates]: https://learn.microsoft.com/en-us/windows/win32/controls/em-posfromchar
 [pixel scroll position]: https://learn.microsoft.com/en-us/windows/win32/controls/em-setscrollpos
