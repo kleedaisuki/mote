@@ -29,6 +29,8 @@ internal sealed unsafe class MacOnScreenCanvasSurface
     private nint _view;
     private nint _font;
     private nint _fontAttribute;
+    private nint _foregroundFromContextAttribute;
+    private nint _trueValue;
     private bool _capturing;
     private int _screenDrawCount;
     private int _hitTests;
@@ -198,7 +200,11 @@ internal sealed unsafe class MacOnScreenCanvasSurface
         try { _font = CoreTextNative.FontCreate(name, _theme.Typography.EditorFontSize, 0); }
         finally { CoreTextNative.Release(name); }
         _fontAttribute = CoreTextNative.FontAttributeName;
-        if (_font == 0 || _fontAttribute == 0)
+        _foregroundFromContextAttribute =
+            MacOnScreenCanvasNative.ForegroundColorFromContextAttributeName;
+        _trueValue = MacOnScreenCanvasNative.BooleanTrue;
+        if (_font == 0 || _fontAttribute == 0 ||
+            _foregroundFromContextAttribute == 0 || _trueValue == 0)
             throw new InvalidOperationException("The native theme font is unavailable.");
         var postScript = MacOnScreenCanvasNative.FontCopyPostScriptName(_font);
         if (postScript != 0)
@@ -390,6 +396,9 @@ internal sealed unsafe class MacOnScreenCanvasSurface
             CoreTextNative.AttributedReplace(attributed, new CoreTextNative.Range(0, 0), source);
             CoreTextNative.AttributedSetAttribute(attributed,
                 new CoreTextNative.Range(0, text.Length), _fontAttribute, _font);
+            CoreTextNative.AttributedSetAttribute(attributed,
+                new CoreTextNative.Range(0, text.Length),
+                _foregroundFromContextAttribute, _trueValue);
             var line = CoreTextNative.LineCreate(attributed);
             if (line == 0) throw new InvalidOperationException("CoreText line creation failed.");
             try { action(line); }

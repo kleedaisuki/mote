@@ -73,6 +73,11 @@ The PNGs come from `NSView.cacheDisplayInRect:toBitmapImageRep:` after the
 window has displayed, avoiding Screen Recording permissions. They verify the
 view's drawing path and are inspectable artifacts, **not** proof of physical
 compositor presentation or measured frame latency. Selection painting is
+configured with CoreText's `kCTForegroundColorFromContextAttributeName =
+kCFBooleanTrue`: without it, CoreText's attributed-string default painted
+black glyphs despite the themed CGContext fill (observed in hosted arm64
+run 36557417180). The correction requires new target-host screenshot review.
+Selection geometry is
 single-rectangle-per-row and not yet correct for discontiguous bidirectional
 selections; grapheme snapping only sees a bounded slice, whose hidden prefix
 could begin inside a cluster. Horizontal trackpad scrolling and text input are
@@ -88,3 +93,4 @@ execution and visual inspection before calling this path verified.
 - [CGBitmapContextCreate](https://developer.apple.com/documentation/coregraphics/cgbitmapcontextcreate)
 - [NSView cacheDisplayInRect:toBitmapImageRep:](https://developer.apple.com/documentation/appkit/nsview/cachedisplay%28in%3Ato%3A%29)
 - [NSEvent scrollingDeltaY](https://developer.apple.com/documentation/appkit/nsevent/scrollingdeltay)
+- [kCTForegroundColorFromContextAttributeName](https://developer.apple.com/documentation/coretext/kctforegroundcolorfromcontextattributename)

@@ -10,6 +10,29 @@ internal static class MacOnScreenCanvasNative
     private const string Runtime = "/usr/lib/libobjc.A.dylib";
     private const string Graphics = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
     private const string CoreText = "/System/Library/Frameworks/CoreText.framework/CoreText";
+    private const string CoreFoundation = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+
+    /// <summary>
+    /// CoreText normally paints black from the attributed string; this key with
+    /// kCFBooleanTrue delegates glyph color to the current CGContext fill color.
+    /// Both exported values are immortal framework constants, not owned CF objects.
+    /// </summary>
+    internal static nint ForegroundColorFromContextAttributeName =>
+        ResolveConstant(CoreText, "kCTForegroundColorFromContextAttributeName");
+
+    /// <summary>The immortal CoreFoundation true value used by CoreText attributes.</summary>
+    internal static nint BooleanTrue => ResolveConstant(CoreFoundation, "kCFBooleanTrue");
+
+    private static nint ResolveConstant(string framework, string symbol)
+    {
+        var library = NativeLibrary.Load(framework);
+        try
+        {
+            var value = Marshal.ReadIntPtr(NativeLibrary.GetExport(library, symbol));
+            return value != 0 ? value : throw new InvalidOperationException($"{symbol} is null.");
+        }
+        finally { NativeLibrary.Free(library); }
+    }
 
     /// <summary>Returns a retained PostScript font name for provenance metadata.</summary>
     [DllImport(CoreText, EntryPoint = "CTFontCopyPostScriptName")]
