@@ -275,6 +275,9 @@ jobs:
             -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
             -Rid $rid `
             -ReportPath ".cache/windows-ax-external/$rid/report.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "External UIA client found a behavioral failure or release blocker; inspect the uploaded $rid report."
+          }
       - name: Upload external Windows UIA diagnostic
         if: always() && startsWith(matrix.rid, 'win-')
         uses: actions/upload-artifact@v4
@@ -416,6 +419,28 @@ jobs:
         with:
           name: mac-ax-external-${{ matrix.rid }}
           path: .cache/ci-inventory/${{ matrix.rid }}/mac-ax-external.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Initial external keyboard/edit/save capability probe for the opt-in
+      # canvas. AX range movement is not a physical-paint or host-size oracle.
+      - name: Diagnose external macOS ARM canvas GUI workflow (non-gating)
+        if: always() && matrix.rid == 'osx-arm64'
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          & ./benchmarks/NativeCanvasGui/Measure-MacCanvasGui.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/osx-arm64/publish/mote'
+      - name: Upload external macOS ARM canvas GUI diagnostic
+        if: always() && matrix.rid == 'osx-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canvas-gui-osx-arm64
+          path: |
+            .cache/benchmarks/native-canvas-gui-osx-arm64.jsonl
+            .temp/benchmarks/native-canvas-gui/**/*.applescript
+            .temp/benchmarks/native-canvas-gui/**/*-stdout.txt
+            .temp/benchmarks/native-canvas-gui/**/*-stderr.txt
           if-no-files-found: warn
           retention-days: 14
       - name: Verify external macOS keyboard edit-save-reopen workflow
