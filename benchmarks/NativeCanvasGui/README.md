@@ -96,10 +96,18 @@ within the 10-second foreground budget. No focused role, key, or Save was
 reached; this is not evidence of a 100 MiB load regression. The strict default
 editor keyboard probe sets frontmost but does not assert that property, so this
 alone does not establish whether the canvas is activation-broken or the hosted
-property is misleading. On a foreground failure, the next diagnostic now
-**only reads** the target's AX focused role and the System Events foreground
-process PID/name once, retaining the original failure and sending no keyboard
-input. A target role is not by itself proof that keystrokes would route safely.
+property is misleading. The [read-only follow-up (`36579476337`)](https://github.com/kleedaisuki/mote/actions/runs/36579476337)
+again matched the 1 MiB control's window (1,879.3 ms), then saw 23
+`not-frontmost` attempts; the actual foreground process was **Finder PID 357**,
+and mote's `AXFocusedUIElement` had role **`AXScrollArea`**, not `AXTextArea`.
+The gate correctly sent **no keyboard input** to Finder. This is not just a
+misleading frontmost-property result, but it still cannot distinguish a hosted
+activation/session limitation from a canvas-specific first-responder defect.
+A macOS arm64 Native AOT job uploaded this non-gating artifact; the overall
+workflow's separate test jobs failed, so the run URL is not a release pass.
+A same-run default-editor foreground/focus control, or an AppKit activation
+probe, is the next discriminating check. No 100 MiB open/edit measurement was
+obtained from either attempt.
 
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS
