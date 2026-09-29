@@ -12,3 +12,22 @@ public readonly record struct TextChange(int Start, int DeleteLength, string Ins
 /// <param name="After">Snapshot after the mutation.</param>
 /// <param name="Change">Replacement expressed in coordinates of <paramref name="Before"/>.</param>
 public sealed record DocumentChangedEventArgs(TextSnapshot Before, TextSnapshot After, TextChange Change);
+
+/// <summary>Describes a UTF-16 replacement by extent without copying inserted text.</summary>
+/// <param name="Start">Start offset in the snapshot before the edit.</param>
+/// <param name="DeleteLength">Code units removed from the before snapshot.</param>
+/// <param name="InsertLength">Code units inserted into the after snapshot.</param>
+/// <remarks>Consumers that need the inserted characters may read <c>After.GetText(Start, InsertLength)</c>.</remarks>
+public readonly record struct TextChangeRange(int Start, int DeleteLength, int InsertLength);
+
+/// <summary>Describes an ordered document mutation using immutable snapshots and lengths only.</summary>
+/// <param name="Before">Snapshot before the mutation.</param>
+/// <param name="After">Snapshot after the mutation.</param>
+/// <param name="Change">Replacement extent in coordinates of <paramref name="Before"/>.</param>
+/// <remarks>
+/// <see cref="Document.ChangedRange"/> is delivered before the legacy
+/// <see cref="Document.Changed"/> callback for the same mutation. The event itself never
+/// requires one contiguous inserted-text string.
+/// </remarks>
+public sealed record DocumentChangedRangeEventArgs(
+    TextSnapshot Before, TextSnapshot After, TextChangeRange Change);

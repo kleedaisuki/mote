@@ -24,7 +24,7 @@ public sealed class Document : IDisposable
     private readonly List<HistoryEntry> _undo = [];
     private readonly List<HistoryEntry> _redo = [];
     private readonly Dictionary<object, object> _cache = new();
-    private readonly Queue<DocumentChangedEventArgs> _pendingChanges = new();
+    private readonly Queue<PendingMutation> _pendingChanges = new();
     private TextSnapshot _snapshot;
     private long _nextVersion;
     private long _nextStateId;
@@ -58,6 +58,12 @@ public sealed class Document : IDisposable
 
     /// <summary>Raised after each edit, undo, or redo, with immutable before/after snapshots.</summary>
     public event EventHandler<DocumentChangedEventArgs>? Changed;
+
+    /// <summary>
+    /// Raised before <see cref="Changed"/> for each mutation, carrying only snapshot
+    /// references and UTF-16 lengths so large Undo/Redo needs no contiguous text copy.
+    /// </summary>
+    public event EventHandler<DocumentChangedRangeEventArgs>? ChangedRange;
 
     /// <summary>Gets the current immutable snapshot.</summary>
     public TextSnapshot Snapshot { get { lock (_gate) { ThrowIfDisposed(); return _snapshot; } } }
@@ -134,7 +140,7 @@ public sealed class Document : IDisposable
     public TextSnapshot Apply(TextChange change)
     {
         ArgumentNullException.ThrowIfNull(change.InsertText);
-        DocumentChangedEventArgs args;
+        TextSnapshot after;
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -147,7 +153,8 @@ public sealed class Document : IDisposable
             var afterState = checked(++_nextStateId);
             var beforeRoot = _snapshot.Root;
             var afterRoot = RopeNode.Replace(beforeRoot, change.Start, change.DeleteLength, change.InsertText);
-            args = Commit(change, afterRoot);
+            var range = new TextChangeRange(change.Start, change.DeleteLength, change.InsertText.Length);
+            after = Commit(range, afterRoot, Changed is null ? null : change);
             _stateId = afterState;
             foreach (var undone in _redo) _historyCost -= undone.Cost;
             _redo.Clear();
@@ -158,23 +165,27 @@ public sealed class Document : IDisposable
             TrimHistory();
         }
         DrainChanges();
-        return args.After;
+        return after;
     }
 
     /// <summary>Restores the previous content state; returns false when history is empty.</summary>
     public bool Undo()
     {
-        DocumentChangedEventArgs args;
         lock (_gate)
         {
             ThrowIfDisposed();
             if (_undo.Count == 0) return false;
             var entry = _undo[^1];
-            var restored = new TextSnapshot(entry.BeforeRoot, checked(_nextVersion + 1));
-            var inverse = new TextChange(entry.Start, entry.InsertLength,
-                restored.GetText(entry.Start, entry.DeleteLength));
+            TextChange? legacy = null;
+            if (Changed is not null)
+            {
+                var restored = new TextSnapshot(entry.BeforeRoot, checked(_nextVersion + 1));
+                legacy = new TextChange(entry.Start, entry.InsertLength,
+                    restored.GetText(entry.Start, entry.DeleteLength));
+            }
             Pop(_undo);
-            args = Commit(inverse, entry.BeforeRoot);
+            Commit(new TextChangeRange(entry.Start, entry.InsertLength, entry.DeleteLength),
+                entry.BeforeRoot, legacy);
             _stateId = entry.BeforeStateId;
             _redo.Add(entry);
         }
@@ -185,17 +196,21 @@ public sealed class Document : IDisposable
     /// <summary>Reapplies an undone content state; returns false when redo history is empty.</summary>
     public bool Redo()
     {
-        DocumentChangedEventArgs args;
         lock (_gate)
         {
             ThrowIfDisposed();
             if (_redo.Count == 0) return false;
             var entry = _redo[^1];
-            var restored = new TextSnapshot(entry.AfterRoot, checked(_nextVersion + 1));
-            var change = new TextChange(entry.Start, entry.DeleteLength,
-                restored.GetText(entry.Start, entry.InsertLength));
+            TextChange? legacy = null;
+            if (Changed is not null)
+            {
+                var restored = new TextSnapshot(entry.AfterRoot, checked(_nextVersion + 1));
+                legacy = new TextChange(entry.Start, entry.DeleteLength,
+                    restored.GetText(entry.Start, entry.InsertLength));
+            }
             Pop(_redo);
-            args = Commit(change, entry.AfterRoot);
+            Commit(new TextChangeRange(entry.Start, entry.DeleteLength, entry.InsertLength),
+                entry.AfterRoot, legacy);
             _stateId = entry.AfterStateId;
             _undo.Add(entry);
         }
@@ -382,17 +397,17 @@ public sealed class Document : IDisposable
             _redo.Clear();
             _pendingChanges.Clear();
             Changed = null;
+            ChangedRange = null;
         }
     }
 
-    private DocumentChangedEventArgs Commit(TextChange change, RopeNode? root)
+    private TextSnapshot Commit(TextChangeRange change, RopeNode? root, TextChange? legacy)
     {
         var before = _snapshot;
         _snapshot = new TextSnapshot(root, checked(++_nextVersion));
         _cache.Clear();
-        var args = new DocumentChangedEventArgs(before, _snapshot, change);
-        _pendingChanges.Enqueue(args);
-        return args;
+        _pendingChanges.Enqueue(new PendingMutation(before, _snapshot, change, legacy));
+        return _snapshot;
     }
 
     private void DrainChanges()
@@ -405,8 +420,9 @@ public sealed class Document : IDisposable
         Exception? failure = null;
         while (true)
         {
-            DocumentChangedEventArgs args;
-            EventHandler<DocumentChangedEventArgs>? handler;
+            PendingMutation pending;
+            EventHandler<DocumentChangedRangeEventArgs>? rangeHandler;
+            EventHandler<DocumentChangedEventArgs>? legacyHandler;
             lock (_gate)
             {
                 if (_pendingChanges.Count == 0)
@@ -414,16 +430,33 @@ public sealed class Document : IDisposable
                     _notifying = false;
                     break;
                 }
-                args = _pendingChanges.Dequeue();
-                handler = Changed;
+                pending = _pendingChanges.Dequeue();
+                rangeHandler = ChangedRange;
+                legacyHandler = Changed;
             }
             try
             {
-                handler?.Invoke(this, args);
+                rangeHandler?.Invoke(this, new DocumentChangedRangeEventArgs(
+                    pending.Before, pending.After, pending.Change));
             }
             catch (Exception ex)
             {
-                // A faulty observer must not strand later committed versions in the queue.
+                failure ??= ex;
+            }
+            try
+            {
+                if (legacyHandler is not null)
+                {
+                    var change = pending.Legacy ?? new TextChange(pending.Change.Start,
+                        pending.Change.DeleteLength,
+                        pending.After.GetText(pending.Change.Start, pending.Change.InsertLength));
+                    legacyHandler.Invoke(this, new DocumentChangedEventArgs(
+                        pending.Before, pending.After, change));
+                }
+            }
+            catch (Exception ex)
+            {
+                // A faulty observer must not strand the other event or later versions.
                 failure ??= ex;
             }
         }
@@ -553,4 +586,8 @@ public sealed class Document : IDisposable
     {
         internal long Cost => checked(((long)InsertLength + DeleteLength) * sizeof(char));
     }
+
+    /// <summary>One queued mutation shared by both notification forms in version order.</summary>
+    private sealed record PendingMutation(TextSnapshot Before, TextSnapshot After,
+        TextChangeRange Change, TextChange? Legacy);
 }
