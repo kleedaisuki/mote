@@ -21,8 +21,9 @@ namespace Mote.Formats;
 /// bounded logical statement is individually accepted by Tomlyn, statement boundaries occur
 /// only at top-level newlines outside strings/collections, and the trie holds every key binding.
 /// Scalar and inline-table bindings seal their path; only header-created implicit parents may
-/// later become explicit tables. Array-of-tables documents remain Provisional because Tomlyn's
-/// validated source-order behavior differs from the trie in nested re-entry cases.
+/// later become explicit tables. Repeated root array-table elements may be certified, but a
+/// nested table header beneath an array table remains Provisional: Tomlyn's validated
+/// source-order behavior conflicts with an independent TOML oracle for re-entry cases.
 /// </remarks>
 internal sealed class TomlIncrementalSession : IFormatSession
 {
@@ -158,7 +159,7 @@ internal sealed class TomlIncrementalSession : IFormatSession
             if (statement.Length > 0 &&
                 (++count > MaxStatements || Continues(statement.ToString()) ||
                  !ProcessStatement(statement.ToString(), statementStart, visible, ownership, nodes))) return null;
-            if (!ownership.IsExhaustive) return null;
+            if (!ownership.IsExhaustive || !ownership.IsCertifiable) return null;
             ct.ThrowIfCancellationRequested();
             var lexical = AnalyzeVisible(snapshot, visible, ct);
             return new DocumentAnalysis(snapshot.Version, new TextSpan(0, snapshot.Length),
@@ -190,12 +191,9 @@ internal sealed class TomlIncrementalSession : IFormatSession
             return true;
         }
         var table = tables[0];
-        // Array-table re-entry can change the meaning of later nested headers. Differential
-        // probes found source-order cases where local ownership and Tomlyn disagree, so the
-        // streaming path never certifies an array-table document.
         if (table.Name is null || table.Items.Any() ||
-            table is TableArraySyntax ||
             ownership.AddHeader(table.Name, table is TableArraySyntax, start) is not null) return false;
+        if (!ownership.IsCertifiable) return false;
         var tableSpan = Shift(table.Span, start);
         if (Intersects(tableSpan, visible))
             nodes.Add(new SemanticNode(table is TableArraySyntax ? "array-table" : "table",

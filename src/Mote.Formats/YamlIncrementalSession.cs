@@ -146,6 +146,11 @@ internal sealed class YamlIncrementalSession : IFormatSession
         var singleQuote = false;
         var doubleQuote = false;
         var escaped = false;
+        var lastSignificant = '\0';
+        var lastChar = '\0';
+        var prefixToken = false;
+        var afterPrefix = false;
+        var justClosedSingle = false;
 
         bool FinishLine()
         {
@@ -174,7 +179,9 @@ internal sealed class YamlIncrementalSession : IFormatSession
             }
             lineLength = lineIndent = 0;
             structural = blockCandidate = mappingEntry = sequenceEntry = pendingColon = pendingDash =
-                valueSeen = comment = seen = singleQuote = doubleQuote = escaped = false;
+                valueSeen = comment = seen = singleQuote = doubleQuote = escaped = prefixToken = afterPrefix =
+                    justClosedSingle = false;
+            lastSignificant = lastChar = '\0';
             commentOnly = false;
             return unsafeLine;
         }
@@ -190,6 +197,8 @@ internal sealed class YamlIncrementalSession : IFormatSession
                     continue;
                 }
                 if (++lineLength > 1024 * 1024) return true;
+                var previousChar = lastChar;
+                lastChar = ch;
                 if (ch == '\r' || comment) continue;
                 if (!seen && ch is ' ' or '\t') { lineIndent++; continue; }
                 if (!seen && !char.IsWhiteSpace(ch))
@@ -200,16 +209,40 @@ internal sealed class YamlIncrementalSession : IFormatSession
                 }
                 else if (pendingDash) { if (char.IsWhiteSpace(ch)) { sequenceEntry = true; structuralMarks++; } pendingDash = false; }
                 if (pendingColon) { if (char.IsWhiteSpace(ch)) mappingEntry = true; pendingColon = false; }
+                if (char.IsWhiteSpace(ch) && prefixToken) { prefixToken = false; afterPrefix = true; }
                 if (doubleQuote)
                 {
-                    if (ch == '"' && !escaped) doubleQuote = false;
+                    if (ch == '"' && !escaped) { doubleQuote = false; lastSignificant = '"'; }
                     escaped = ch == '\\' && !escaped;
                     continue;
                 }
-                if (singleQuote) { if (ch == '\'') singleQuote = false; continue; }
-                if (ch == '"') { doubleQuote = true; continue; }
-                if (ch == '\'') { singleQuote = true; continue; }
+                if (singleQuote)
+                {
+                    justClosedSingle = ch == '\'';
+                    if (justClosedSingle) { singleQuote = false; lastSignificant = '\''; }
+                    continue;
+                }
+                if (ch is '"' or '\'')
+                {
+                    var startsQuoted = lastSignificant is '\0' or ':' or '[' or '{' or ',' or '?' ||
+                        lastSignificant == '-' && sequenceEntry || afterPrefix ||
+                        ch == '\'' && justClosedSingle && previousChar == '\'';
+                    if (startsQuoted)
+                    {
+                        if (ch == '"') doubleQuote = true;
+                        else singleQuote = true;
+                        lastSignificant = ch;
+                        afterPrefix = false;
+                        justClosedSingle = false;
+                        if (mappingEntry || sequenceEntry) valueSeen = true;
+                        continue;
+                    }
+                }
+                justClosedSingle = false;
                 if (ch == '#') { comment = true; continue; }
+                if (afterPrefix && !char.IsWhiteSpace(ch) && ch is not ('!' or '&')) afterPrefix = false;
+                if (ch is '!' or '&' && (lastSignificant is '\0' or ':' or '[' or '{' or ',' or '?' || afterPrefix ||
+                    lastSignificant == '-' && sequenceEntry)) prefixToken = true;
                 if (ch == '&' && ++anchorMarkers > MaxAnchorNames) return true;
                 if (ch is ':' or ',' or '[' or ']' or '{' or '}') structuralMarks++;
                 if (structuralMarks > MaxStructuralMarks) return true;
@@ -218,6 +251,7 @@ internal sealed class YamlIncrementalSession : IFormatSession
                 if ((mappingEntry || sequenceEntry) && !char.IsWhiteSpace(ch) && ch is not (':' or '-')) valueSeen = true;
                 if (structural && ch is '|' or '>') blockCandidate = true;
                 else if (blockCandidate && !char.IsWhiteSpace(ch) && !char.IsAsciiDigit(ch) && ch is not ('+' or '-')) blockCandidate = false;
+                if (!char.IsWhiteSpace(ch)) lastSignificant = ch;
             }
         }
         return lineLength > 1024 * 1024 || lineLength > 0 && FinishLine();
@@ -301,6 +335,7 @@ internal sealed class YamlIncrementalSession : IFormatSession
         private readonly List<SemanticNode> _nodes;
         private readonly CancellationToken _ct;
         private readonly Dictionary<string, Anchor> _anchors = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _shortScalarKeys = new(StringComparer.Ordinal);
         private int _anchorNameChars;
         private bool _anchorIndexIncomplete;
         private int _keyChars;
@@ -448,6 +483,16 @@ internal sealed class YamlIncrementalSession : IFormatSession
             _parser.MoveNext();
             if (!needed) return null;
             if (!identity.Supported) { Unsupported(scalar.Start, scalar.End, "scalar canonicalization unavailable"); return null; }
+            // Repeated field names dominate config files. A tiny per-analysis cache avoids
+            // rebuilding the same canonical string for every record; no global interning.
+            if (identity.Tag == "tag:yaml.org,2002:str" && scalar.Style == ScalarStyle.Plain &&
+                string.IsNullOrEmpty(scalar.Tag) && scalar.Value.Length <= 32)
+            {
+                if (_shortScalarKeys.TryGetValue(scalar.Value, out var cached)) return Retain(cached, span);
+                var created = Retain(Pack("S", identity.Tag, identity.Value), span);
+                if (created is not null && _shortScalarKeys.Count < 64) _shortScalarKeys.Add(scalar.Value, created);
+                return created;
+            }
             return Retain(Pack("S", identity.Tag, identity.Value), span);
         }
 
@@ -486,7 +531,11 @@ internal sealed class YamlIncrementalSession : IFormatSession
             ValidateCollectionTag(start, "map");
             AddVisible("mapping", start.Start, start.End, null);
             _parser.MoveNext();
-            var keys = new HashSet<string>(StringComparer.Ordinal);
+            // Most YAML records have only a few fields. Keep their keys in locals rather
+            // than allocating a HashSet and backing array for every tiny mapping.
+            string? key0 = null, key1 = null, key2 = null, key3 = null;
+            var keyCount = 0;
+            HashSet<string>? keys = null;
             var pairs = needed ? new List<string>() : null;
             var shapeChars = 0;
             var localKeyChars = 0;
@@ -494,23 +543,59 @@ internal sealed class YamlIncrementalSession : IFormatSession
             {
                 if (_parser.Current is null) throw new FormatException("Unexpected end of YAML mapping.");
                 var keyStart = _parser.Current.Start;
-                var key = ParseNode(true, depth + 1);
+                // Once global uniqueness is explicitly provisional, do not keep allocating
+                // canonical keys that cannot contribute to a truthful Complete result.
+                var key = ParseNode(!_budgetExceeded, depth + 1);
                 var keyEnd = _lastNodeEnd;
                 if (_parser.Current is null or MappingEnd) throw new FormatException("Mapping key has no value.");
                 var value = ParseNode(needed, depth + 1);
                 if (!_complete) _budgetExceeded = true;
-                if (_budgetExceeded && keys.Count != 0)
+                if (_budgetExceeded && keyCount != 0)
                 {
-                    keys.Clear();
+                    keys?.Clear();
+                    keys = null;
+                    key0 = key1 = key2 = key3 = null;
+                    keyCount = 0;
                     _keyChars -= localKeyChars;
                     localKeyChars = 0;
                 }
                 if (!_budgetExceeded && key is not null)
                 {
-                    if (!keys.Add(key)) AddDiagnostic(DiagnosticSeverity.Error, "yaml.duplicate-key", "Duplicate YAML mapping key after canonicalization.", keyStart, keyEnd);
-                    else if (_complete) { _keyChars += key.Length; localKeyChars += key.Length; }
+                    var added = keys is not null ? keys.Add(key) :
+                        key != key0 && key != key1 && key != key2 && key != key3;
+                    if (!added)
+                        AddDiagnostic(DiagnosticSeverity.Error, "yaml.duplicate-key", "Duplicate YAML mapping key after canonicalization.", keyStart, keyEnd);
+                    else
+                    {
+                        if (keys is null)
+                        {
+                            switch (keyCount)
+                            {
+                                case 0: key0 = key; break;
+                                case 1: key1 = key; break;
+                                case 2: key2 = key; break;
+                                case 3: key3 = key; break;
+                                default:
+                                    keys = new HashSet<string>(StringComparer.Ordinal) { key0!, key1!, key2!, key3!, key };
+                                    key0 = key1 = key2 = key3 = null;
+                                    break;
+                            }
+                        }
+                        keyCount++;
+                        if (_complete) { _keyChars += key.Length; localKeyChars += key.Length; }
+                    }
                 }
-                if (_keyChars > MaxKeyChars) { _complete = false; _budgetExceeded = true; keys.Clear(); _keyChars -= localKeyChars; localKeyChars = 0; }
+                if (_keyChars > MaxKeyChars)
+                {
+                    _complete = false;
+                    _budgetExceeded = true;
+                    keys?.Clear();
+                    keys = null;
+                    key0 = key1 = key2 = key3 = null;
+                    keyCount = 0;
+                    _keyChars -= localKeyChars;
+                    localKeyChars = 0;
+                }
                 if (needed && (key is null || value is null || shapeChars + key.Length + value.Length > MaxScalarChars))
                 {
                     if (key is not null && value is not null) Unsupported(start.Start, start.End, "collection key is too large");

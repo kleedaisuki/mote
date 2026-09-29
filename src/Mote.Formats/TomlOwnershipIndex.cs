@@ -24,11 +24,18 @@ internal sealed class TomlOwnershipIndex
     /// <summary>Whether the trie has kept every binding needed for duplicate detection.</summary>
     internal bool IsExhaustive { get; private set; } = true;
 
+    /// <summary>
+    /// Whether table-array use stayed in the source-order subset that matches Tomlyn's
+    /// whole-document validator: repeated root array tables without nested table headers.
+    /// </summary>
+    internal bool IsCertifiable { get; private set; } = true;
+
     /// <summary>Opens a table or creates one new array-of-tables element.</summary>
     internal Diagnostic? AddHeader(KeySyntax key, bool array, int sourceOffset)
     {
         var parts = Parts(key);
         if (parts.Count == 0) return Conflict("Invalid table path.", key, sourceOffset);
+        if (array && parts.Count != 1) IsCertifiable = false;
         var parent = ResolveParent(_root, parts, true, key, sourceOffset, out var problem);
         if (problem is not null) return problem;
         if (parent is null) return null;
@@ -88,6 +95,8 @@ internal sealed class TomlOwnershipIndex
                 problem = Conflict($"Key '{parts[i]}' cannot contain another key or table.", key, sourceOffset);
                 return null;
             }
+            if (headerParents && binding.Origin == Origin.ArrayTable)
+                IsCertifiable = false;
             scope = binding.Scope!;
         }
         return scope;
