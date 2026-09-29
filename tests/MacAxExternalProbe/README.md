@@ -66,6 +66,8 @@ experimental canvas binary and hosted runner's granted AX permission.
 After that first successful run, the client gained a graceful **Close** phase:
 it presses the same window's `AXCloseButton`, keeps the original editor
 `AXUIElement`, and demands that it stop exposing the old source before the
-wrapper accepts the editor's normal exit. This additional phase has not yet
-been validated by a hosted run; the earlier `36572346343` result proves only
-the preceding read-only checks.
+wrapper accepts the editor's normal exit. Hosted run `36576635105` passed
+this phase on both RIDs: `AXPress` returned success, a subsequent request on
+the retained element returned AX error `-25204` rather than old text, and
+the wrapper observed normal editor exit without fixture-byte changes. The
+earlier `36572346343` result proves only the preceding read-only checks.
