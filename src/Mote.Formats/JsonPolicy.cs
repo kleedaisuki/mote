@@ -4,8 +4,10 @@ using System.Text.Json;
 namespace Mote.Formats;
 
 /// <summary>Strict JSON policy with source-positioned syntax trees and duplicate-member diagnostics.</summary>
-public sealed class JsonPolicy : IDocumentPolicy
+public sealed class JsonPolicy : IIncrementalDocumentPolicy
 {
+    /// <inheritdoc />
+    public IFormatSession CreateSession() => new JsonIncrementalSession();
     /// <inheritdoc />
     public DocumentKind Kind => DocumentKind.Json;
     /// <inheritdoc />
@@ -140,8 +142,11 @@ public sealed class JsonPolicy : IDocumentPolicy
                 return null;
             }
             var key = StringValue("key");
-            string name = key.Value ?? string.Empty;
-            if (!names.Add(name)) Error("JSON_DUPLICATE_KEY", $"Duplicate object key '{name}'.", key.Span.Start, key.Span.Length);
+            // Invalid escapes have no decoded identity; merging all such keys under an
+            // invented empty name would create false duplicate-key diagnostics.
+            string? name = key.Value;
+            if (name is not null && !names.Add(name))
+                Error("JSON_DUPLICATE_KEY", $"Duplicate object key '{name}'.", key.Span.Start, key.Span.Length);
             Space();
             if (_position >= _text.Length || _text[_position] != ':')
             {
@@ -197,7 +202,8 @@ public sealed class JsonPolicy : IDocumentPolicy
                     if (!escaped) value = _text.Substring(start + 1, _position - start - 2);
                     else { using var parsed = JsonDocument.Parse(_text.Substring(start, _position - start)); value = parsed.RootElement.GetString(); }
                 }
-                catch (JsonException) { Error("JSON_STRING", "Invalid JSON string.", start, _position - start); }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+                { Error("JSON_STRING", "Invalid JSON string.", start, _position - start); }
             }
             var span = new TextSpan(start, _position - start);
             _tokens.Add(new SemanticToken(kind, span));

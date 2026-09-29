@@ -32,7 +32,6 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         cancellationToken.ThrowIfCancellationRequested();
 
         List<Run> next;
-        var complete = true;
         if (_complete && _version == snapshot.Version && changesSinceCommittedState.Count == 0)
             next = _runs;
         else if (_complete && changesSinceCommittedState.Count == 1 &&
@@ -54,12 +53,12 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         else
             next = ParseAll(snapshot, cancellationToken);
 
-        var result = Project(snapshot.Version, snapshot.Length, next, request, complete, cancellationToken);
+        var result = Project(snapshot.Version, snapshot.Length, next, request, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         _runs = next;
         _version = snapshot.Version;
         _length = snapshot.Length;
-        _complete = complete;
+        _complete = true;
         return result;
     }
 
@@ -219,7 +218,7 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
     }
 
     private static DocumentAnalysis Project(long version, int length, List<Run> runs,
-        AnalysisRequest request, bool complete, CancellationToken ct)
+        AnalysisRequest request, CancellationToken ct)
     {
         var children = new List<SemanticNode>();
         var diagnostics = new List<Diagnostic>();
@@ -244,9 +243,9 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
             }
         }
         return new DocumentAnalysis(version, new TextSpan(0, length),
-            complete ? AnalysisCompleteness.Complete : AnalysisCompleteness.CoveredRegion,
+            AnalysisCompleteness.Complete,
             new SemanticNode("document", new TextSpan(0, length), children: children),
-            diagnostics, tokens, complete ? total : null);
+            diagnostics, tokens, total);
     }
 
     private static DocumentAnalysis AnalyzeVisible(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)

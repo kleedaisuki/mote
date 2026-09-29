@@ -4,12 +4,15 @@ using Tomlyn.Syntax;
 namespace Mote.Formats;
 
 /// <summary>Full-fidelity TOML policy backed by Tomlyn's validated, lossless syntax tree.</summary>
-public sealed class TomlPolicy : IDocumentPolicy
+public sealed class TomlPolicy : IIncrementalDocumentPolicy
 {
     /// <inheritdoc />
     public DocumentKind Kind => DocumentKind.Toml;
     /// <inheritdoc />
     public string DisplayName => "TOML";
+
+    /// <inheritdoc />
+    public IFormatSession CreateSession() => new TomlIncrementalSession(this);
 
     /// <inheritdoc />
     public FormatAnalysis Analyze(string text, CancellationToken cancellationToken = default)
@@ -193,7 +196,7 @@ public sealed class TomlPolicy : IDocumentPolicy
     }
 
     /// <summary>Maps lexical kinds to stable editor classifications without emitting trivia noise.</summary>
-    private static string? TokenKindName(TokenKind kind) => kind switch
+    internal static string? TokenKindName(TokenKind kind) => kind switch
     {
         TokenKind.String or TokenKind.StringMulti or TokenKind.StringLiteral or TokenKind.StringLiteralMulti => "string",
         TokenKind.Integer or TokenKind.IntegerHexa or TokenKind.IntegerOctal or TokenKind.IntegerBinary or

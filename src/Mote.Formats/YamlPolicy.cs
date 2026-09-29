@@ -15,8 +15,15 @@ namespace Mote.Formats;
 /// without a known canonicalizer are warned rather than guessed. Malformed edits return
 /// diagnostics instead of retaining a stale semantic tree.
 /// </summary>
-public sealed class YamlPolicy : IDocumentPolicy
+public sealed class YamlPolicy : IIncrementalDocumentPolicy
 {
+    /// <inheritdoc />
+    public IFormatSession CreateSession() => new YamlIncrementalSession();
+
+    /// <summary>Shares strict YAML 1.2.2 scalar identity with the streaming session.</summary>
+    internal static (string Tag, string Value, bool Supported) ResolveScalarIdentity(Scalar scalar) =>
+        Projector.ScalarIdentity(scalar);
+
     /// <inheritdoc />
     public DocumentKind Kind => DocumentKind.Yaml;
     /// <inheritdoc />
@@ -383,7 +390,7 @@ public sealed class YamlPolicy : IDocumentPolicy
         /// numeric forms (for example underscores and signed hex), so it cannot define editor
         /// key equality when the document claims strict YAML 1.2 semantics.
         /// </summary>
-        private static (string Tag, string Value, bool Supported) ScalarIdentity(Scalar scalar)
+        internal static (string Tag, string Value, bool Supported) ScalarIdentity(Scalar scalar)
         {
             var inferred = ResolveCoreTag(scalar.Value, scalar.Style);
             var tag = NormalizeTag(scalar.Tag, "str");
@@ -448,6 +455,7 @@ public sealed class YamlPolicy : IDocumentPolicy
         private static bool TryCanonicalFloat(string text, out string canonical)
         {
             canonical = "";
+            if (text.Length == 0 || text[0] is not ('+' or '-' or '.' or >= '0' and <= '9')) return false;
             if (text is ".nan" or ".NaN" or ".NAN") { canonical = "nan"; return true; }
             if (text is ".inf" or ".Inf" or ".INF" or "+.inf" or "+.Inf" or "+.INF") { canonical = "+inf"; return true; }
             if (text is "-.inf" or "-.Inf" or "-.INF") { canonical = "-inf"; return true; }
