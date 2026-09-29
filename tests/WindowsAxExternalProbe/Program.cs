@@ -59,10 +59,11 @@ internal static class Program
             {
                 WriteIndented = true
             }), new UTF8Encoding(false));
-            Console.WriteLine($"Windows external UIA report: {reportPath}; failures={report.Failures.Count}; release-blockers={report.ReleaseBlockers.Count}");
+            Console.WriteLine($"Windows external UIA report: {reportPath}; failures={report.Failures.Count}; release-blockers={report.ReleaseBlockers.Count}; inconclusive={report.Inconclusive.Count}");
         }
 
-        return report.Failures.Count == 0 && report.ReleaseBlockers.Count == 0 ? 0 : 1;
+        return report.Failures.Count == 0 && report.ReleaseBlockers.Count == 0 &&
+            report.Inconclusive.Count == 0 ? 0 : 1;
     }
 
     /// <summary>Runs all checks against the real published process, retaining the original UIA proxy across the oversized call.</summary>
@@ -134,11 +135,17 @@ internal static class Program
             var rawDocuments = DocumentsInView(element, TreeWalker.RawViewWalker);
             var controlDocuments = DocumentsInView(element, TreeWalker.ControlViewWalker);
             var contentDocuments = DocumentsInView(element, TreeWalker.ContentViewWalker);
+            var focus = CaptureFocus(element, sourceElement, hostElement, process.Id);
+            report.Focus = focus;
+            if (fragmentExperiment && focus.Status == "focus-inconclusive-external-foreground")
+                report.Inconclusive.Add(focus.Status);
+            if (fragmentExperiment && focus.Status == "focus-inconsistent-mote-foreground")
+                report.ReleaseBlockers.Add($"Mote was stably foreground, but source UIA focus and global FocusedElement disagreed: {focus.Focused}");
             report.Tree = new TreeObservation(
                 Describe(element), Describe(sourceElement), Describe(hostElement), Describe(rawChild), Describe(controlChild),
-                Describe(contentChild), Describe(AutomationElement.FocusedElement),
-                element.Current.HasKeyboardFocus, sourceElement.Current.HasKeyboardFocus,
-                hostElement.Current.HasKeyboardFocus, rawDocuments, controlDocuments, contentDocuments);
+                Describe(contentChild), focus.Focused,
+                focus.CanvasHasKeyboardFocus, focus.SourceHasKeyboardFocus,
+                focus.HostHasKeyboardFocus, rawDocuments, controlDocuments, contentDocuments);
             if (rawDocuments.Count != 1 || controlDocuments.Count != 1 || contentDocuments.Count != 1)
             {
                 report.ReleaseBlockers.Add($"Expected one source-backed Document in each canvas subtree: Raw={rawDocuments.Count}, Control={controlDocuments.Count}, Content={contentDocuments.Count}; focused={report.Tree.Focused}. Single-editor accessibility is not established.");
@@ -304,6 +311,36 @@ internal static class Program
         return documents;
     }
 
+    /// <summary>
+    /// Samples foreground HWND before and after UIA focus reads. A foreign or
+    /// changing foreground makes focus inconclusive, not a passing assertion
+    /// or an attributed provider defect.
+    /// </summary>
+    private static FocusObservation CaptureFocus(AutomationElement canvas,
+        AutomationElement source, AutomationElement host, int processId)
+    {
+        var before = GetForegroundWindow();
+        GetWindowThreadProcessId(before, out var beforePid);
+        var focused = AutomationElement.FocusedElement;
+        var sourceHasFocus = source.Current.HasKeyboardFocus;
+        var hostHasFocus = host.Current.HasKeyboardFocus;
+        var canvasHasFocus = canvas.Current.HasKeyboardFocus;
+        var after = GetForegroundWindow();
+        GetWindowThreadProcessId(after, out var afterPid);
+        var stableMoteForeground = before != 0 && before == after &&
+            beforePid == processId && afterPid == processId;
+        var focusedIsSource = focused is not null &&
+            focused.GetRuntimeId().SequenceEqual(source.GetRuntimeId());
+        var status = !stableMoteForeground
+            ? "focus-inconclusive-external-foreground"
+            : focusedIsSource && sourceHasFocus && hostHasFocus
+                ? "focus-consistent-mote-foreground"
+                : "focus-inconsistent-mote-foreground";
+        return new FocusObservation(status, before.ToInt64(), after.ToInt64(),
+            beforePid, afterPid, processId, Describe(focused), focusedIsSource,
+            canvasHasFocus, sourceHasFocus, hostHasFocus);
+    }
+
     /// <summary>Polls a real HWND without accidentally accepting another editor process.</summary>
     private static nint WaitFor(Func<nint> find, Process process)
     {
@@ -347,6 +384,7 @@ internal static class Program
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowW(string className, string? title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowExW(nint parent, nint after, string className, string? title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextW(nint window, char[] text, int capacity);
+    [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out int pid);
     [DllImport("user32.dll")] private static extern nint SendMessageW(nint window, uint message, nuint wParam, nint lParam);
 }
@@ -370,11 +408,13 @@ internal sealed class ProbeReport
     public int ProcessId { get; set; }
     public OversizeObservation? Oversize { get; set; }
     public TreeObservation? Tree { get; set; }
+    public FocusObservation? Focus { get; set; }
     public string? NativeStderr { get; set; }
     public List<CheckResult> Checks { get; } = [];
     public List<Observation> Observations { get; } = [];
     public List<string> Failures { get; } = [];
     public List<string> ReleaseBlockers { get; } = [];
+    public List<string> Inconclusive { get; } = [];
 
     /// <summary>Adds an assertion without discarding later independent evidence.</summary>
     public void Check(string name, bool passed, string detail)
@@ -406,3 +446,9 @@ internal sealed record TreeObservation(string Canvas, string SourceDocument, str
     bool CanvasHasKeyboardFocus, bool SourceHasKeyboardFocus, bool HostHasKeyboardFocus,
     IReadOnlyList<string> RawDocuments, IReadOnlyList<string> ControlDocuments,
     IReadOnlyList<string> ContentDocuments);
+
+/// <summary>Near-simultaneous foreground and UIA-focus sample with an explicit inconclusive state.</summary>
+internal sealed record FocusObservation(string Status, long ForegroundBeforeHwnd,
+    long ForegroundAfterHwnd, int ForegroundBeforePid, int ForegroundAfterPid,
+    int MoteProcessId, string Focused, bool FocusedIsSource,
+    bool CanvasHasKeyboardFocus, bool SourceHasKeyboardFocus, bool HostHasKeyboardFocus);

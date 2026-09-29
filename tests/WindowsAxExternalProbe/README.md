@@ -41,6 +41,16 @@ source Document and return an exact 128-unit source prefix even though the
 physical RichEdit remains 16 units long. A fragment mode result is not a
 Narrator/NVDA or IME acceptance result.
 
+Focus is sampled with `GetForegroundWindow`/owner PID **before and after**
+the UIA `FocusedElement` and `HasKeyboardFocus` reads. Only when the same mote
+foreground HWND is stable across that interval does the fragment report
+`focus-consistent-mote-foreground` or a focus release blocker. A foreign or
+changing foreground reports `focus-inconclusive-external-foreground` in the
+JSON `Focus.Status` and `Inconclusive`, causing a nonzero diagnostic exit but
+**not** attributing a product defect. This distinction is necessary on hosted
+ARM64, where the runner's privacy-settings window can take global focus while
+the editor's local provider still reports focus for its last input HWND.
+
 The fixture is 9,000 LF rows plus `TAIL_AX_MARKER_世界😀` (>65,536 UTF-16
 units). The client checks exact 128-unit document prefix, source versus bounded
 RichEdit length, selected/visible ranges before and after oversized
@@ -111,3 +121,26 @@ win-arm64, nor actual Pinyin candidate behavior or Narrator/NVDA speech. Keep
 the fragment flag opt-in and CI diagnostic non-gating until those independent
 gates are checked. The baseline and experiment share a binary, so the tree
 difference is attributable to the flag rather than a changed AOT build.
+
+## Hosted paired fragment evidence (run 36577240864)
+
+Both win-x64 and win-arm64 published strict-AOT binaries returned **19/19**
+source-text behavior checks in baseline and fragment modes. Baseline retained
+two Document nodes per Raw/Control/Content view and a release blocker; the
+flagged mode returned one source Document per view, 128-unit source text from
+`FromHandle(input)`, a 16-unit physical host, and no tree blocker. Each RID's
+two reports have the same executable SHA-256. Reports are under the four
+`windows-ax-{external,fragment}-win-{x64,arm64}` artifacts in run 36577240864.
+
+The original run's global focus on x64 was the source Document in fragment
+mode, but on ARM64 it was a Windows OOBE privacy Button while the provider's
+source `HasKeyboardFocus` read true. That is **not** a demonstrated focus pass.
+The observation alone was ambiguous because an unrelated foreground window
+could race the query; subsequent provider source inspection identified a
+concrete risk that `GetGUIThreadInfo` reports thread-retained input focus even
+when mote is not foreground. An AX-only foreground gate has since been
+implemented and locally tested, but **has not yet passed a hosted ARM64 rerun**.
+The race-aware external sample above separately records stable mote foreground
+versus an inconclusive foreign/changing foreground without inventing a product
+verdict. Neither hosted run exercised Pinyin candidates or actual Narrator/NVDA
+speech.
