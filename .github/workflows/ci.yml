@@ -1,0 +1,159 @@
+# Build and test the complete single-file editor on both supported desktop platforms.
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore mote.sln
+      - name: Build complete solution, including desktop executable
+        run: dotnet build mote.sln --configuration Release --no-restore
+      - name: Test complete solution
+        run: dotnet test mote.sln --configuration Release --no-build --logger "trx;LogFileName=tests.trx"
+      - name: Build non-gating benchmark harness
+        run: dotnet build tests/Mote.Benchmarks/Mote.Benchmarks.csproj --configuration Release
+
+  native-aot:
+    name: Single-binary Native AOT / ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: windows-11-arm
+            rid: win-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      # Native AOT requires a native linker/toolchain, hence the native-architecture matrix.
+      - name: Publish native OS-shell executable
+        run: dotnet publish src/Mote.Native/Mote.Native.csproj --configuration Release --runtime ${{ matrix.rid }} --self-contained true -p:PublishAot=true -p:ContinuousIntegrationBuild=true -p:DebugType=none -p:GenerateDocumentationFile=false -p:StripSymbols=false
+      - name: Smoke-test native executable without a display server
+        shell: pwsh
+        run: |
+          $publish = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish"
+          $executable = if ($IsWindows) { Join-Path $publish 'mote.exe' } else { Join-Path $publish 'mote' }
+          if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Native executable missing: $executable" }
+          New-Item -ItemType Directory -Force -Path '.temp/ci-smoke' | Out-Null
+          $start = @{
+            FilePath = $executable
+            ArgumentList = '--check-runtime'
+            PassThru = $true
+            Wait = $true
+            RedirectStandardOutput = '.temp/ci-smoke/runtime-stdout.txt'
+            RedirectStandardError = '.temp/ci-smoke/runtime-stderr.txt'
+          }
+          if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+          $process = Start-Process @start
+          $output = Get-Content '.temp/ci-smoke/runtime-stdout.txt' -Raw
+          if ($process.ExitCode -ne 0) { throw "Native runtime check exited with code $($process.ExitCode): $(Get-Content '.temp/ci-smoke/runtime-stderr.txt' -Raw)" }
+          if ($output.Trim() -ne 'mote-native-ready') { throw "Unexpected runtime-check output: $output" }
+          Write-Host "Native runtime check passed: $executable"
+      - name: Smoke-test native GUI startup
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $publish = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish"
+          $executable = if ($IsWindows) { Join-Path $publish 'mote.exe' } else { Join-Path $publish 'mote' }
+          $start = @{
+            FilePath = $executable
+            ArgumentList = '--smoke-gui'
+            PassThru = $true
+            Wait = $true
+            RedirectStandardOutput = '.temp/ci-smoke/ui-stdout.txt'
+            RedirectStandardError = '.temp/ci-smoke/ui-stderr.txt'
+          }
+          if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+          $process = Start-Process @start
+          $output = Get-Content '.temp/ci-smoke/ui-stdout.txt' -Raw
+          if ($process.ExitCode -ne 0) { throw "Native GUI smoke exited with code $($process.ExitCode): $(Get-Content '.temp/ci-smoke/ui-stderr.txt' -Raw)" }
+          if ($output.Trim() -ne 'mote-native-gui-ready') { throw "Unexpected native GUI smoke output: $output" }
+          Write-Host "Native GUI initialized and closed cleanly: $executable"
+      - name: Verify macOS Launch Services can open the standalone executable
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $executable = (Resolve-Path "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote").Path
+          & open -W -a $executable --args --smoke-gui
+          if ($LASTEXITCODE -ne 0) { throw "Launch Services rejected standalone mote (exit $LASTEXITCODE)." }
+      - name: Inventory Native AOT publish payload
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $publish = "src/Mote.Native/bin/Release/net10.0/$rid/publish"
+          $executableName = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          $files = @(Get-ChildItem -LiteralPath $publish -File -Recurse | ForEach-Object {
+            [pscustomobject]@{
+              path = [IO.Path]::GetRelativePath((Resolve-Path $publish).Path, $_.FullName)
+              bytes = $_.Length
+            }
+          })
+          $other = @($files | Where-Object { $_.path -ne $executableName })
+          $nativeLibraries = @($other | Where-Object { $_.path -match '\.(dll|dylib|so)$' })
+          $inventory = [pscustomobject]@{
+            rid = $rid
+            executable = $executableName
+            payload_files = $files
+            non_executable_payload_count = $other.Count
+            bundled_native_library_count = $nativeLibraries.Count
+          }
+          $directory = ".cache/ci-inventory/$rid"
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          $path = Join-Path $directory 'publish-inventory.json'
+          $inventory | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path -Encoding utf8
+          Get-Content -LiteralPath $path
+          if (-not $IsWindows) {
+            $imports = & otool -L (Join-Path $publish $executableName)
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect native executable dependencies.' }
+            $imports | ForEach-Object { Write-Host $_ }
+            foreach ($line in $imports | Select-Object -Skip 1) {
+              $dependency = ($line.Trim() -split '\s+')[0]
+              if ($dependency -notmatch '^(/usr/lib/|/System/Library/)') {
+                throw "Non-system Mach-O import violates the one-binary contract: $dependency"
+              }
+            }
+          }
+      - name: Upload native dependency inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-inventory-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/publish-inventory.json
+          if-no-files-found: error
+      - name: Assert strict single-binary delivery contract
+        shell: pwsh
+        run: |
+          $inventory = Get-Content ".cache/ci-inventory/${{ matrix.rid }}/publish-inventory.json" -Raw | ConvertFrom-Json
+          if ($inventory.non_executable_payload_count -ne 0) {
+            throw "Native AOT publish is not one executable: $($inventory.non_executable_payload_count) additional payload files, including $($inventory.bundled_native_library_count) bundled native libraries. See uploaded inventory."
+          }

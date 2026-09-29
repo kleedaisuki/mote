@@ -1,0 +1,83 @@
+# Non-gating workload measurements run on hosted machines, not developer laptops.
+name: Benchmarks
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 2 * * 1'
+
+jobs:
+  measure:
+    name: ${{ matrix.os }} / ${{ matrix.workload }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            workload: markdown-1mib
+            arguments: '1'
+          - os: windows-latest
+            workload: open-edit-100mib
+            arguments: '100 --open-edit'
+          - os: windows-latest
+            workload: long-line-32mib
+            arguments: '32 --long-line'
+          - os: macos-latest
+            workload: markdown-1mib
+            arguments: '1'
+          - os: macos-latest
+            workload: open-edit-100mib
+            arguments: '100 --open-edit'
+          - os: macos-latest
+            workload: long-line-32mib
+            arguments: '32 --long-line'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Run workload without a timing threshold
+        run: dotnet run --project tests/Mote.Benchmarks/Mote.Benchmarks.csproj --configuration Release -- ${{ matrix.arguments }}
+      - name: Upload environment-tagged JSONL result
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.os }}-${{ matrix.workload }}
+          path: .cache/benchmarks/results.jsonl
+          if-no-files-found: error
+
+  native-startup:
+    name: Native GUI process timing / ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish single native executable
+        run: dotnet publish src/Mote.Native/Mote.Native.csproj --configuration Release --runtime ${{ matrix.rid }} --self-contained true -p:PublishAot=true -p:DebugType=none -p:GenerateDocumentationFile=false -p:StripSymbols=false
+      - name: Measure cold run and ten warm GUI smoke runs
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/$name"
+          & ./tests/Measure-NativeStartup.ps1 -ExecutablePath $executable -RuntimeIdentifier '${{ matrix.rid }}' -WarmRuns 10
+          if ($LASTEXITCODE -ne 0) { throw "Native startup measurement failed with code $LASTEXITCODE" }
+      - name: Upload process-level timing samples
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-startup-${{ matrix.rid }}
+          path: .cache/benchmarks/native-startup.jsonl
+          if-no-files-found: error
