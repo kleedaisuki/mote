@@ -345,13 +345,32 @@ internal static class MacCanvasHorizontalProbe
                         ObjC.Send(_shell.ProbeCanvasView, ObjC.Sel("displayIfNeeded"));
                         var bounds = MacOnScreenCanvasNative.GetRect(_shell.ProbeCanvasView,
                             ObjC.Sel("bounds"));
+                        var minimumHost = _shell.ProbeCanvasHostGeometry(0);
+                        var minimumCaret = _shell.GetCanvasCaretGeometry(tinyFrame, 0);
+                        _metrics.Add($"minimum-bounds-height={bounds.Size.Height.ToString("F3", CultureInfo.InvariantCulture)}");
+                        _metrics.Add($"minimum-physical-body-height={_shell.ProbeCanvasBodyRect.Size.Height.ToString("F3", CultureInfo.InvariantCulture)}");
+                        _metrics.Add($"minimum-frame-rows={tinyFrame.RowWindows.Length}");
+                        _metrics.Add($"minimum-host-present={minimumHost is not null}");
+                        _metrics.Add($"minimum-host-aligned={minimumHost?.Aligned}");
+                        _metrics.Add($"minimum-host-hidden={minimumHost?.Hidden}");
+                        _metrics.Add($"minimum-caret-present={minimumCaret is not null}");
+                        _metrics.Add($"minimum-caret-visible={minimumCaret?.IsVisible}");
+                        if (minimumCaret is { } physicalCaret)
+                            _metrics.Add($"minimum-caret-local-x={physicalCaret.X.ToString("F3", CultureInfo.InvariantCulture)}");
+                        _metrics.Add($"minimum-input-focused={_shell.ProbeCanvasInputFocused}");
+                        _check = "S7-minimum-physical-body";
                         if (bounds.Size.Height <= 37 ||
-                            _shell.ProbeCanvasHostGeometry(0) is not
-                                { Aligned: true, Hidden: false } ||
-                            !_shell.ProbeCanvasInputFocused ||
-                            _shell.GetCanvasCaretGeometry(tinyFrame, 0) is not
-                                { IsVisible: true })
-                            throw new InvalidOperationException("Minimum window lost body or input.");
+                            _shell.ProbeCanvasBodyRect.Size.Height <= 1)
+                            throw new InvalidOperationException("Minimum window lacks a physical source body.");
+                        _check = "S7-minimum-host";
+                        if (minimumHost is not { Aligned: true, Hidden: false })
+                            throw new InvalidOperationException("Minimum window lost the visible input ribbon.");
+                        _check = "S7-minimum-focus";
+                        if (!_shell.ProbeCanvasInputFocused)
+                            throw new InvalidOperationException("Minimum window lost input focus.");
+                        _check = "S7-minimum-caret";
+                        if (minimumCaret is not { IsVisible: true })
+                            throw new InvalidOperationException("Minimum window lost its source caret.");
                         _metrics.Add($"minimum-canvas-height={bounds.Size.Height.ToString("F3", CultureInfo.InvariantCulture)}");
                         _metrics.Add($"minimum-body-height={(bounds.Size.Height - 36).ToString("F3", CultureInfo.InvariantCulture)}");
                         _normalCanvasHeight = bounds.Size.Height;
