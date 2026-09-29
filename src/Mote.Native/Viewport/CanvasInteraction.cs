@@ -19,9 +19,10 @@ internal sealed record CanvasFrame(
 }
 
 /// <summary>
-/// Shared scroll and selection state for a read-only native canvas. The engine
-/// snapshot is canonical; OS views shape only <see cref="CanvasFrame.Slices"/>
-/// and translate their own hit-test results back into source offsets.
+/// Shared scroll and selection state for a source-backed native canvas. The
+/// engine snapshot is canonical; OS views shape only <see cref="CanvasFrame.Slices"/>
+/// and translate their own hit-test results back into source offsets. Text
+/// input remains the controller's versioned engine transaction, not view state.
 /// </summary>
 /// <remarks>
 /// This class does not perform glyph shaping or infer grapheme boundaries from
@@ -31,18 +32,20 @@ internal sealed record CanvasFrame(
 internal sealed class CanvasInteraction
 {
     private const int MaxVisibleSlices = 512;
-    private readonly NativeNavigationModel _selection = new();
+    private readonly NativeNavigationModel _selection;
     private readonly ContinuousViewport _viewport;
     private double _viewportHeight;
     private bool _dragging;
 
     /// <summary>Creates a source-backed canvas with no per-document line objects.</summary>
     internal CanvasInteraction(TextSnapshot snapshot, double lineHeight,
-        double viewportHeight, int maxSliceLength = 4096)
+        double viewportHeight, int maxSliceLength = 4096,
+        NativeNavigationModel? selection = null)
     {
         if (!double.IsFinite(viewportHeight) || viewportHeight <= 0)
             throw new ArgumentOutOfRangeException(nameof(viewportHeight));
         _viewport = new ContinuousViewport(snapshot, lineHeight, maxSliceLength);
+        _selection = selection ?? new NativeNavigationModel();
         _viewportHeight = viewportHeight;
     }
 
@@ -71,6 +74,13 @@ internal sealed class CanvasInteraction
 
     /// <summary>Reveals a source boundary, including one far beyond the former native page.</summary>
     internal void Reveal(int sourceOffset) => _viewport.ScrollToSource(sourceOffset);
+
+    /// <summary>
+    /// Rebinds the viewport after a canonical engine edit. The controller owns
+    /// transforming a shared selection exactly once via Document.Changed.
+    /// </summary>
+    internal void ApplyEdit(TextSnapshot after, TextChange change) =>
+        _viewport.ApplyEdit(after, change);
 
     /// <summary>Starts an OS pointer selection at a platform-resolved source cluster edge.</summary>
     internal void BeginSelection(int sourceOffset)

@@ -1,6 +1,6 @@
 # Continuous viewport model
 
-`ContinuousViewport` is a pure, source-backed view state for the future native canvas. It is not yet wired into the Win32/AppKit editor. The current native text-control workflow remains unchanged.
+`ContinuousViewport` is a pure, source-backed view state wired to an **opt-in experimental** Win32/AppKit canvas. The default native text-control workflow remains unchanged; opt-in input, composition, accessibility, and semantic-paint parity are separate acceptance gates rather than implied by this model.
 
 ## Coordinate and ownership contract
 
@@ -9,6 +9,10 @@
 - An edit transforms the anchor with right affinity and clears measured heights. This conservative invalidation prevents stale line identities or geometry. A later layout implementation may retain unaffected measurements using versioned dependency checks.
 - `GetVisibleSlices` returns at most `maxSlices` source intervals, each at most `maxSliceLength` UTF-16 units, excluding line delimiters. A 50 MiB line yields a focused window, **not** a complete line or exact global horizontal geometry. The platform shaper may read only these bounded intervals using `Snapshot.GetText(start, length)` and must explicitly request adjacent context/windows to validate shaping seams.
 - These are *logical-row* slices. Glyph shaping, grapheme-aware caret stops, bidi hit-testing, soft wrapping, and precise horizontal scroll metrics remain platform-layout work. Do not use the current slices as a claim of complete Unicode geometry or exact wrapped-line positions.
+
+## Bounded input island
+
+`CanvasInputWindowSelector` chooses one original-source logical-line interval around a global UTF-16 caret. The interval is at most 16 Ki UTF-16 units, excludes CR/LF delimiters, and requires both edges and the caret to be extended grapheme-cluster boundaries according to .NET `StringInfo`. It examines only bounded context and conservatively throws `CanvasInputWindowBoundaryException` when a cluster or its preceding context cannot be certified inside the limit. The controller must then invalidate the previous native host binding and keep the **new** immutable snapshot visible on the canvas; silently retaining an old host would risk editing the wrong document. This is source-integrity protection, not proof of font-shaping, bidirectional hit-test, or IME parity. Global selection, document edits, undo, and persistence remain engine/controller-owned; the native host is never a whole-file mirror.
 
 ## Cost model
 

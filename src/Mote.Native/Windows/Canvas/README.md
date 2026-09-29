@@ -1,5 +1,42 @@
 # Windows DirectWrite geometry probe
 
+## Experimental interactive input island (not default)
+
+`WindowsEditorShell(experimentalCanvas: true)` implements `INativeCanvasShell`
+inside the existing Win32 main window. A child DirectWrite/Direct2D canvas paints
+bounded `CanvasFrame.Slices` from the immutable engine snapshot, while a **visible**
+`RICHEDIT50W` control at the current caret row holds at most one controller-supplied
+logical-line input window (16 Ki UTF-16 units). No whole-document text is copied
+into a native control. The main window retains its menus, file pickers, preview,
+status bar and clipboard integration; the default constructor still uses the
+established bounded RichEdit page path.
+
+RichEdit `EN_CHANGE` is deferred until native dispatch completes and coalesced
+into one `CanvasCommittedEdit` in **absolute source coordinates**, tagged with
+document generation, immutable base version and binding nonce. IME preedit is
+never sent to the engine; composition vetoes commands and input rebinding.
+Controller rebinding after commit refreshes the input interval. Canvas wheel,
+scrollbar and pointer events operate on global source selection and do not
+rebind the native input text. Semantic colors use DirectWrite drawing-effect
+brushes on visible intervals; selected glyphs are overdrawn in the theme's
+selection foreground. Rendering remains read-only outside the input island.
+Global Delete/Backspace bypasses the bounded host when a selection crosses its
+interval or lands on an empty line. A confirmed character replacement also
+submits the global transaction when the host's own text remains identical
+(for example, selecting `a\nb` and typing `b` over its trailing `b`). Without
+these rules RichEdit may emit no `EN_CHANGE` despite a real document edit.
+
+The island's native input hard limit is 32 Ki, but paste bypasses it: `WM_PASTE`
+is intercepted and the exact `CF_UNICODETEXT` payload is read and submitted as
+one source-coordinate controller edit. RichEdit is never permitted to prefer
+an alternate `CF_RTF` payload or truncate the checked text. If plain Unicode
+clipboard text cannot be read, paste is visibly rejected **before any native
+mutation**. Very large clipboard payloads still allocate one managed string;
+streaming paste is a future performance improvement, not a data-safety gate. Actual
+Chinese Pinyin candidate placement/cancel, UIA ranges outside the island,
+Windows Arm64 interactive input and physical frame latency remain separate
+release gates. Do not infer those from synthetic window messages.
+
 `WindowsDirectWriteCanvas` is a read-only platform geometry adapter for the
 source-backed `ViewportSlice` model. It copies at most 16 Ki UTF-16 code units
 from one immutable snapshot into an OS `IDWriteTextLayout`; the slice excludes

@@ -56,8 +56,9 @@ AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
   Markdown. It waits 1/3/15 seconds for files <=4 Mi, <=32 Mi, or larger,
   respectively, and at most one completed pass is attempted per stable version.
   A new edit or page reanalysis cancels the pass; a retry after cancellation
-  pays the full delay again. Markdown beyond 16 Mi UTF-16 units is excluded
-  because its current full parse can materialize too much text. Even a `Full`
+  pays the full delay again. Large Markdown now uses a resource-admitted,
+  cancellable certifier: restricted flat documents may become `Complete`, while
+  structures outside that proved subset remain `Provisional`. Even a `Full`
   request can remain provisional: the status says so, visible diagnostics stay
   intact, and no global count is invented. Only certified `Complete` results
   promote the global count. The idle pass is deferred with an explicit status
@@ -69,12 +70,13 @@ AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
   units to coalesce typing, with immediate cancellation of stale work. Analysis
   cannot block the native input thread, but OS/format-specific peak memory and
   background CPU cost remain release gates.
-- A separate `Viewport/` model now represents continuous source-backed scrolling
-  and bounded visible slices without a per-line object graph. It is **not**
-  wired to the shipped native text control. Read-only DirectWrite and CoreText
-  geometry probes can be invoked with `--check-native-windows-canvas` and
-  `--check-native-mac-canvas`; they do not establish a painted interactive
-  canvas, IME parity, or accessibility.
+- A separate `Viewport/` model represents continuous source-backed scrolling
+  and bounded visible slices without a per-line object graph. The default
+  editor still uses the native page control. `--canvas-experimental [path]`
+  opts into an evolving continuous canvas with a visible caret-local OS input
+  host; it is **not** the default or a parity claim. Read-only DirectWrite and
+  CoreText geometry probes remain available through
+  `--check-native-windows-canvas` and `--check-native-mac-canvas`.
 - Native preview is a bounded, source-mapped semantic rendering: Markdown
   headings, paragraphs, lists, quotes and code; CSV rows and columns; and
   structured JSON/TOML/YAML trees. It is not yet a full CommonMark or
@@ -93,3 +95,45 @@ AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
 The controller translates user selection changes back into source coordinates and suppresses notifications caused by its own projection. `GoToLine` takes a **one-based** line number and uses the snapshot's indexed lookup. `FindNext` performs ordinal, case-sensitive KMP search across immutable rope chunks, including matches crossing chunk boundaries, without a whole-file string. The pure model provides `WriteSelection` for streaming original source; the current OS clipboard adapters require a contiguous string, so Copy/Cut materialize the selected range off the UI thread before invoking the clipboard. This can consume substantial memory for a very large selection and needs a measured platform-specific clipboard design.
 
 The model deliberately does not own page movement, platform prompts, or clipboard APIs. These remain controller/shell policy and mechanism respectively. Off-page selections remain in engine coordinates across page transitions; the native caret is parked at the new page until the user changes selection or explicitly edits there. The shell defers selection-collapse events from typing until after its text-change event, so typing over a global selection replaces the entire source range, not merely the visible page.
+
+## Experimental interactive canvas contract
+
+`--canvas-experimental` preserves the same engine-owned document, undo, I/O,
+format sessions, global UTF-16 navigation, and preview. `CanvasFrame` paints
+bounded source slices, while a visible RichEdit/NSTextView host receives OS text
+input for at most one 16 Ki UTF-16 single-line, grapheme-safe source interval.
+Every final edit carries document generation, base version, binding nonce, and
+an **absolute** `TextChange`; a mismatch is rejected rather than applied to a
+new document or stale selection. Composition text belongs to the OS until
+committed. The canvas never constructs a whole-document text-control mirror.
+The legacy contiguous analysis/preview bridge is separately capped to 64 Ki,
+even if two visible slices lie across a huge source gap. Thus a later visible
+slice may lack semantic overlay until a multi-range analysis path exists.
+
+This opt-in path is a product experiment, not a default-switch gate pass.
+The experimental Windows and macOS adapters are designed to route exact
+plain-text clipboard payloads larger than the input host directly to the
+controller as one global transaction; rich clipboard formatting is never
+imported into source text. Windows has local real-HWND evidence; macOS still
+requires hosted AppKit workflow evidence. The opt-in controller currently
+rejects an edit whose inserted-plus-removed UTF-16 bytes exceed the engine's
+32 MiB undo-history budget **before** mutation, with a visible error and a
+safe native-host rebind; it never silently accepts an immediately non-undoable
+50 MiB paste/delete. This cap is temporary until reversible persistent-root
+history is validated. Target-OS CJK IME composition,
+screen-reader access to off-host text, rich Unicode hit-test/candidate geometry,
+semantic colors on the native host row, background analysis latency, and
+end-to-end 100 MiB editing remain independent acceptance gates. Keep the
+working default page editor until those are demonstrated rather than inferred
+from a successful geometry or GUI smoke probe.
+
+In particular, an input method can finalize a candidate whose bounded host
+text is byte-for-byte unchanged while a much larger global selection is active.
+That finalization must not be confused with canceled preedit. Windows records
+only an explicit nonempty `GCS_RESULTSTR` as such evidence; the AppKit path
+still needs an observed final `insertText:replacementRange:`/marked-text trace
+before claiming this edge is safe. A synthetic `unmarkText` call or GUI smoke
+is not evidence of real Chinese/Japanese candidate behavior. RichEdit can also
+deliver Text Services Framework (TSF) composition notifications without the
+legacy IMM result signal; a real TSF commit/cancel trace is required to ensure
+that the conservative Windows cancel guard does not discard confirmed text.

@@ -96,6 +96,9 @@ internal static unsafe class CanvasWin32
         nint source, int sourceX, int sourceY, uint operation);
 }
 
+/// <summary>One bounded DirectWrite style range relative to a painted slice.</summary>
+internal readonly record struct WindowsCanvasColorSpan(int Start, int Length, ThemeColor Color);
+
 /// <summary>Direct2D DC rendering plus DirectWrite layout, using system COM interfaces only.</summary>
 internal sealed unsafe class WindowsCanvasPainter : IDisposable
 {
@@ -108,6 +111,7 @@ internal sealed unsafe class WindowsCanvasPainter : IDisposable
     private nint _textBrush;
     private nint _selectionBrush;
     private nint _selectedTextBrush;
+    private readonly Dictionary<ThemeColor, nint> _semanticBrushes = new();
 
     /// <summary>Creates a reusable painter for one OS theme and font policy.</summary>
     internal WindowsCanvasPainter(IThemePolicy theme)
@@ -191,9 +195,19 @@ internal sealed unsafe class WindowsCanvasPainter : IDisposable
         fill(_renderTarget, &rect, _selectionBrush);
     }
 
+    /// <summary>Draws a severity-colored two-pixel diagnostic mark on a visible glyph run.</summary>
+    internal void DiagnosticUnderline(float left, float top, float right, ThemeColor color)
+    {
+        if (right <= left) right = left + 8;
+        var rect = new RectF { Left = left, Top = top, Right = right, Bottom = top + 2 };
+        var fill = (delegate* unmanaged[Stdcall]<nint, RectF*, nint, void>)Slot(_renderTarget, 17);
+        fill(_renderTarget, &rect, SemanticBrush(color));
+    }
+
     /// <summary>Shapes and paints one bounded visible UTF-16 slice at its viewport origin.</summary>
     internal void Text(string text, float x, float y,
-        (float Left, float Top, float Right, float Bottom)? selected)
+        (float Left, float Top, float Right, float Bottom)? selected,
+        IReadOnlyList<WindowsCanvasColorSpan>? colors = null)
     {
         if (text.Length == 0) return;
         fixed (char* characters = text)
@@ -205,6 +219,21 @@ internal sealed unsafe class WindowsCanvasPainter : IDisposable
                 100_000, 10_000, &layout), "IDWriteFactory::CreateTextLayout");
             try
             {
+                if (colors is not null)
+                {
+                    var setEffect = (delegate* unmanaged[Stdcall]<nint, nint,
+                        TextRange, int>)Slot(layout, 38);
+                    foreach (var span in colors)
+                    {
+                        if (span.Start < 0 || span.Length <= 0 ||
+                            span.Start > text.Length - span.Length) continue;
+                        var brush = SemanticBrush(span.Color);
+                        Check(setEffect(layout, brush, new TextRange
+                        {
+                            Start = (uint)span.Start, Length = (uint)span.Length
+                        }), "IDWriteTextLayout::SetDrawingEffect");
+                    }
+                }
                 var origin = new PointF { X = x, Y = y };
                 var draw = (delegate* unmanaged[Stdcall]<nint, PointF, nint, nint,
                     int, void>)Slot(_renderTarget, 28);
@@ -240,6 +269,8 @@ internal sealed unsafe class WindowsCanvasPainter : IDisposable
     /// <summary>Releases all COM references in reverse ownership order.</summary>
     public void Dispose()
     {
+        foreach (var brush in _semanticBrushes.Values) Release(brush);
+        _semanticBrushes.Clear();
         Release(_selectedTextBrush); _selectedTextBrush = 0;
         Release(_selectionBrush); _selectionBrush = 0;
         Release(_textBrush); _textBrush = 0;
@@ -256,6 +287,14 @@ internal sealed unsafe class WindowsCanvasPainter : IDisposable
             Slot(_renderTarget, 8);
         nint brush = 0;
         Check(create(_renderTarget, &rgba, 0, &brush), "ID2D1RenderTarget::CreateSolidColorBrush");
+        return brush;
+    }
+
+    private nint SemanticBrush(ThemeColor color)
+    {
+        if (_semanticBrushes.TryGetValue(color, out var brush)) return brush;
+        brush = CreateBrush(color);
+        _semanticBrushes.Add(color, brush);
         return brush;
     }
 
@@ -316,5 +355,11 @@ internal sealed unsafe class WindowsCanvasPainter : IDisposable
     private struct RectF
     {
         internal float Left, Top, Right, Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TextRange
+    {
+        internal uint Start, Length;
     }
 }

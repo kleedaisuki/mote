@@ -21,6 +21,20 @@ internal static class Program
             return CheckMacCanvas();
         if (args.Length == 5 && args[0] == "--check-native-canvas-window")
             return CheckCanvasWindow(args[1], args[2], args[3], args[4]);
+        if (args.Length == 3 && args[0] == "--check-native-mac-canvas-clipboard")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            var result = Mac.Canvas.MacCanvasClipboardProbe.Run(args[1], args[2]);
+            if (result == 0) Console.WriteLine("mote-native-mac-canvas-clipboard-ready");
+            return result;
+        }
+        if (args.Length == 2 && args[0] == "--check-native-mac-canvas-delete")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            var result = Mac.Canvas.MacCanvasDeleteProbe.Run(args[1]);
+            if (result == 0) Console.WriteLine("mote-native-mac-canvas-delete-ready");
+            return result;
+        }
         if (args.Length == 3 && args[0] == "--check-native-mac-workflow")
         {
             if (!OperatingSystem.IsMacOS())
@@ -35,13 +49,18 @@ internal static class Program
         if (args.Length == 1 && args[0] is "--help" or "-h")
         {
             Console.WriteLine("Usage: mote [path] [--smoke-gui|--check-runtime]");
+            Console.WriteLine("Experimental canvas: mote --canvas-experimental [path]");
             Console.WriteLine("macOS diagnostic: mote --check-native-mac-workflow <input> <output>");
             Console.WriteLine("Canvas diagnostics: --check-native-windows-canvas | --check-native-mac-canvas");
+            Console.WriteLine("Experimental AppKit clipboard diagnostic: --check-native-mac-canvas-clipboard <input> <output>");
+            Console.WriteLine("Experimental AppKit global-delete diagnostic: --check-native-mac-canvas-delete <input>");
             Console.WriteLine("On-screen read-only canvas: --check-native-canvas-window <100MiB-many-line-file> <50MiB-one-line-file> <output-dir> <theme-id>");
             return 0;
         }
-        var smoke = args.Length == 1 && args[0] == "--smoke-gui";
-        if (!smoke && args.Length > 1)
+        var canvasMode = args.Length > 0 && args[0] == "--canvas-experimental";
+        var remaining = canvasMode ? args[1..] : args;
+        var smoke = remaining.Length == 1 && remaining[0] == "--smoke-gui";
+        if (!smoke && remaining.Length > 1)
         {
             Console.Error.WriteLine("mote opens one file per process; provide at most one path.");
             return 2;
@@ -71,10 +90,11 @@ internal static class Program
         }
 
         INativeEditorShell shell = OperatingSystem.IsWindows()
-            ? new Windows.WindowsEditorShell()
-            : new Mac.MacEditorShell();
+            ? new Windows.WindowsEditorShell(canvasMode)
+            : new Mac.MacEditorShell(canvasMode);
         var theme = ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark);
-        using var app = new NativeEditorController(shell, config, theme, smoke ? null : args.FirstOrDefault());
+        using var app = new NativeEditorController(shell, config, theme,
+            smoke ? null : remaining.FirstOrDefault());
         if (smoke)
         {
             shell.Shown += () =>

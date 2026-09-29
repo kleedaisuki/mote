@@ -4,6 +4,7 @@ using Mote.Engine;
 using Mote.Formats;
 using Mote.Telemetry;
 using Mote.Themes;
+using Mote.Native.Viewport;
 
 namespace Mote.Native;
 
@@ -16,12 +17,25 @@ internal sealed class NativeEditorController : IDisposable
     internal const int PageSize = 64 * 1024;
     internal const int PageSlack = 8 * 1024;
     private const int FullAnalysisLimit = 2 * 1024 * 1024;
+    // Document currently budgets undo by inserted+removed UTF-16 bytes. Until
+    // persistent-root history makes large edits reversible, never accept an
+    // island edit whose newest history entry would be discarded immediately.
+    private const long CanvasUndoBudgetBytes = 32L * 1024 * 1024;
     private readonly INativeEditorShell _shell;
+    private readonly INativeCanvasShell? _canvasShell;
     private readonly MoteConfiguration _configuration;
     private readonly IThemePolicy _theme;
     private readonly string? _startupPath;
     private Document _document = new();
     private NativeNavigationModel _navigation = new();
+    private CanvasInteraction? _canvas;
+    private long _canvasGeneration = 1;
+    private long _canvasBindingNonce;
+    private long _canvasBoundGeneration = -1;
+    private long _canvasBoundVersion = -1;
+    private int _canvasBoundActive = -1;
+    private int _canvasInputStart;
+    private int _canvasInputEnd;
     private string? _findQuery;
     private CancellationTokenSource? _findCancellation;
     private long _findSerial;
@@ -49,9 +63,13 @@ internal sealed class NativeEditorController : IDisposable
         IThemePolicy theme, string? startupPath)
     {
         _shell = shell;
+        _canvasShell = shell is INativeCanvasShell { CanvasEnabled: true } canvas
+            ? canvas : null;
         _configuration = configuration;
         _theme = theme;
         _startupPath = startupPath;
+        if (_canvasShell is not null)
+            _canvas = NewCanvas(_document.Snapshot);
         _sessionDriver = CreateSessionDriver(_policy);
         _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
         _document.Changed += DocumentChanged;
@@ -74,6 +92,13 @@ internal sealed class NativeEditorController : IDisposable
         shell.CutRequested += Cut;
         shell.ClosingRequested += Closing;
         shell.Shown += Shown;
+        if (_canvasShell is { } canvasShell)
+        {
+            canvasShell.CanvasEditCommitted += CanvasEdited;
+            canvasShell.CanvasScrollRequested += CanvasScrolled;
+            canvasShell.CanvasViewportResized += CanvasResized;
+            canvasShell.CanvasSelectionRequested += CanvasSelected;
+        }
     }
 
     /// <summary>Runs one native UI event loop on the calling thread.</summary>
@@ -198,6 +223,12 @@ internal sealed class NativeEditorController : IDisposable
         _document = replacement;
         _document.Changed += DocumentChanged;
         _navigation = new NativeNavigationModel();
+        ++_canvasGeneration;
+        _canvasBoundGeneration = -1;
+        _canvasBoundVersion = -1;
+        _canvasBoundActive = -1;
+        if (_canvasShell is not null)
+            _canvas = NewCanvas(replacement.Snapshot);
         _nativeProjectsGlobalSelection = false;
         _findCancellation?.Cancel();
         _findQuery = null;
@@ -294,6 +325,7 @@ internal sealed class NativeEditorController : IDisposable
 
     private void Edited(string editedDisplay)
     {
+        if (_canvasShell is not null) return;
         if (_projection is null) return;
         if (_projection.Difference(editedDisplay) is not { } change) return;
         var mark = MoteTelemetry.Mark();
@@ -450,6 +482,11 @@ internal sealed class NativeEditorController : IDisposable
     private void PreviousPage()
     {
         if (!_shell.CommitPendingText()) return;
+        if (_canvas is not null)
+        {
+            CanvasScrolled(-_canvas.ViewportHeight);
+            return;
+        }
         if (_pageStart == 0) return;
         InvalidateFind();
         _pageStart = Math.Max(0, _pageStart - PageSize);
@@ -463,6 +500,11 @@ internal sealed class NativeEditorController : IDisposable
     private void NextPage()
     {
         if (!_shell.CommitPendingText()) return;
+        if (_canvas is not null)
+        {
+            CanvasScrolled(_canvas.ViewportHeight);
+            return;
+        }
         var length = _document.Snapshot.Length;
         if (_pageStart + _pageLength >= length) return;
         InvalidateFind();
@@ -476,6 +518,7 @@ internal sealed class NativeEditorController : IDisposable
 
     private void SelectionChanged(int displayAnchor, int displayActive)
     {
+        if (_canvasShell is not null) return;
         if (_projectingSelection || _projection is null) return;
         if ((uint)displayAnchor > (uint)_projection.Display.Length ||
             (uint)displayActive > (uint)_projection.Display.Length) return;
@@ -493,6 +536,100 @@ internal sealed class NativeEditorController : IDisposable
             if (showedSearch) ShowDocument();
         }
         _nativeProjectsGlobalSelection = _navigation.SelectionLength > 0;
+    }
+
+    /// <summary>
+    /// Accepts exactly one final, version- and binding-tagged native edit. The
+    /// source document changes synchronously before the input callback returns,
+    /// so its next keystroke uses the new binding nonce and engine version.
+    /// </summary>
+    private void CanvasEdited(CanvasCommittedEdit edit)
+    {
+        if (_canvasShell is null || _disposed) return;
+        var snapshot = _document.Snapshot;
+        if (edit.DocumentGeneration != _canvasGeneration ||
+            edit.BaseVersion != snapshot.Version ||
+            edit.BindingNonce != _canvasBindingNonce) return;
+        // The OS adapter must report the exact global transaction, including
+        // any selection outside its bounded host. Never substitute a possibly
+        // stale controller selection for a later native selection change.
+        var change = edit.Change;
+        if (change.InsertText is null || change.Start < 0 || change.DeleteLength < 0 ||
+            change.Start > snapshot.Length - change.DeleteLength ||
+            edit.ActiveSourceOffset != (long)change.Start + change.InsertText.Length ||
+            (_navigation.SelectionLength > 0 &&
+             (change.Start != _navigation.SelectionStart ||
+              change.DeleteLength != _navigation.SelectionLength)) ||
+            (_navigation.SelectionLength == 0 &&
+             (change.Start < _canvasInputStart ||
+              (long)change.Start + change.DeleteLength > _canvasInputEnd)))
+        {
+            _shell.ShowError("The native input could not be mapped to the document safely.");
+            _canvasBoundVersion = -1;
+            ShowDocument();
+            return;
+        }
+        if (2L * (change.InsertText.Length + (long)change.DeleteLength) >
+            CanvasUndoBudgetBytes)
+        {
+            _shell.ShowError("This edit exceeds the current 32 MiB undo-history budget " +
+                "and was not applied. No document text was changed.");
+            _canvasBoundVersion = -1;
+            ShowDocument();
+            return;
+        }
+        try
+        {
+            var mark = MoteTelemetry.Mark();
+            _document.Apply(change);
+            var newCaret = change.Start + change.InsertText.Length;
+            _navigation.MoveCaret(_document.Snapshot, newCaret);
+            _canvas!.Reveal(newCaret);
+            InvalidateFind();
+            MoteTelemetry.Record(TelemetryEvent.EditCommitted,
+                dimensions: Dimensions(_document.Snapshot));
+            ShowDocument();
+            ScheduleAnalysis(mark);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            _shell.ShowError("The native input could not be committed safely.");
+            _canvasBoundVersion = -1;
+            ShowDocument();
+        }
+    }
+
+    /// <summary>Advances the same source-backed viewport, never a native text page.</summary>
+    private void CanvasScrolled(double pixels)
+    {
+        if (_canvas is null || !double.IsFinite(pixels) || pixels == 0) return;
+        _canvas.ScrollBy(pixels);
+        ShowDocument();
+        ScheduleAnalysis();
+    }
+
+    /// <summary>Recomputes only visible geometry after a native view resize.</summary>
+    private void CanvasResized(double height)
+    {
+        if (_canvas is null || !double.IsFinite(height) || height <= 0) return;
+        _canvas.Resize(height);
+        ShowDocument();
+        ScheduleAnalysis();
+    }
+
+    /// <summary>Stores OS hit-test endpoints as one global UTF-16 selection.</summary>
+    private void CanvasSelected(int anchor, int active)
+    {
+        if (_canvas is null || _disposed) return;
+        var snapshot = _document.Snapshot;
+        if ((uint)anchor > (uint)snapshot.Length || (uint)active > (uint)snapshot.Length)
+            return;
+        if (SafeBoundary(snapshot, anchor, backwards: true) != anchor ||
+            SafeBoundary(snapshot, active, backwards: true) != active) return;
+        if (anchor == _navigation.Anchor && active == _navigation.Active) return;
+        InvalidateFind();
+        _navigation.SetSelection(snapshot, anchor, active);
+        ShowDocument();
     }
 
     private void Find()
@@ -672,6 +809,19 @@ internal sealed class NativeEditorController : IDisposable
 
     private void RevealSelection()
     {
+        if (_canvas is { } canvas)
+        {
+            var frame = canvas.Frame();
+            var activeSource = _navigation.Active;
+            var first = frame.Slices.Count == 0 ? frame.TopAnchor.SourceOffset :
+                frame.Slices[0].SourceStart;
+            var last = frame.Slices.Count == 0 ? first :
+                frame.Slices[^1].SourceStart + frame.Slices[^1].SourceLength;
+            if (activeSource < first || activeSource > last) canvas.Reveal(activeSource);
+            ShowDocument();
+            ScheduleAnalysis();
+            return;
+        }
         var caret = _navigation.Active;
         if (caret >= _pageStart && caret <= _pageStart + _pageLength &&
             _navigation.SelectionStart >= _pageStart) return;
@@ -684,6 +834,7 @@ internal sealed class NativeEditorController : IDisposable
 
     private void ProjectSelectionOrMoveToPage()
     {
+        if (_canvas is not null) { ShowDocument(); return; }
         if (_projection is null) return;
         if (_navigation.Project(_pageStart, _projection) is null)
         {
@@ -699,6 +850,7 @@ internal sealed class NativeEditorController : IDisposable
 
     private void ProjectSelection()
     {
+        if (_canvas is not null) { ShowDocument(); return; }
         if (_projection is null) return;
         if (_navigation.Project(_pageStart, _projection) is not { } selection) return;
         _projectingSelection = true;
@@ -710,6 +862,20 @@ internal sealed class NativeEditorController : IDisposable
     private void ShowDocument()
     {
         var snapshot = _document.Snapshot;
+        var file = _document.FilePath is { } path ? Path.GetFileName(path) : "Untitled";
+        var title = $"{file}{(_document.IsModified ? " •" : "")} — mote";
+        var warnings = _configuration.Diagnostics.Count == 0 ? "" :
+            $" · Config warnings: {_configuration.Diagnostics.Count}";
+        var health = MoteTelemetry.Health;
+        var traceWarning = health.SinkFaulted || health.DroppedRecords > 0
+            ? " · Trace degraded" : "";
+        var statusSuffix = warnings + traceWarning +
+            (_operationStatus.Length == 0 ? "" : " · " + _operationStatus);
+        if (_canvasShell is not null)
+        {
+            ShowCanvasDocument(snapshot, title, statusSuffix);
+            return;
+        }
         _pageStart = Math.Min(_pageStart, snapshot.Length);
         _pageStart = SafeBoundary(snapshot, _pageStart, backwards: true);
         var targetLength = _pageLength > 0 ? _pageLength : PageSize;
@@ -720,17 +886,83 @@ internal sealed class NativeEditorController : IDisposable
             caret <= _pageStart + _pageLength
             ? _projection.ToDisplay(caret - _pageStart) : null;
         _requestedCaretSource = null;
-        var file = _document.FilePath is { } path ? Path.GetFileName(path) : "Untitled";
-        var title = $"{file}{(_document.IsModified ? " •" : "")} — mote";
         var pageStatus = snapshot.Length <= PageSize ? "" :
             $"Page {_pageStart:N0}–{_pageStart + _pageLength:N0} / {snapshot.Length:N0}; page navigation is discrete";
-        var warnings = _configuration.Diagnostics.Count == 0 ? "" :
-            $" · Config warnings: {_configuration.Diagnostics.Count}";
-        var health = MoteTelemetry.Health;
-        var traceWarning = health.SinkFaulted || health.DroppedRecords > 0 ? " · Trace degraded" : "";
         _shell.SetDocument(new NativeDocumentView(title, _projection.Display, _pageStart,
-            snapshot.Length, _document.IsModified, pageStatus + warnings + traceWarning +
-            (_operationStatus.Length == 0 ? "" : " · " + _operationStatus), focus));
+            snapshot.Length, _document.IsModified, pageStatus + statusSuffix, focus));
+    }
+
+    /// <summary>
+    /// Rebinds only when source version or caret-local input window changes.
+    /// Scrolling and status updates paint a new source-backed frame without
+    /// replacing the native input host's text or disturbing composition.
+    /// </summary>
+    private void ShowCanvasDocument(TextSnapshot snapshot, string title,
+        string statusSuffix)
+    {
+        var canvas = _canvas!;
+        var shell = _canvasShell!;
+        var frame = canvas.Frame();
+        var firstVisible = frame.Slices.Count == 0
+            ? Math.Clamp(frame.TopAnchor.SourceOffset, 0, snapshot.Length)
+            : frame.Slices[0].SourceStart;
+        _pageStart = SafeBoundary(snapshot, firstVisible, backwards: true);
+        var visibleEnd = frame.Slices.Count == 0 ? _pageStart :
+            frame.Slices[^1].SourceStart + frame.Slices[^1].SourceLength;
+        // Two visible slices can be separated by a 50 MiB logical line. The
+        // analysis/preview bridge is still contiguous, so bound that bridge
+        // independently of the source-backed canvas and never mirror the gap.
+        var bridgeEnd = SafeBoundary(snapshot,
+            (int)Math.Min(visibleEnd, (long)_pageStart + PageSize), backwards: true);
+        _pageLength = Math.Max(0, bridgeEnd - _pageStart);
+        _projection = new NativeTextProjection(snapshot.GetText(_pageStart, _pageLength),
+            _shell.LineEndingMode);
+        _requestedCaretSource = null;
+        var line = snapshot.GetLineIndexFromOffset(frame.TopAnchor.SourceOffset) + 1;
+        var status = $"Line {line:N0} / {snapshot.LineCount:N0} · continuous canvas (experimental)" +
+            statusSuffix;
+        var needsBinding = _canvasBoundGeneration != _canvasGeneration ||
+            _canvasBoundVersion != snapshot.Version ||
+            (_navigation.Active != _canvasBoundActive &&
+             (_navigation.Active < _canvasInputStart || _navigation.Active > _canvasInputEnd));
+        if (needsBinding)
+        {
+            CanvasInputWindow input;
+            try { input = CanvasInputWindowSelector.Select(snapshot, _navigation.Active); }
+            catch (CanvasInputWindowBoundaryException)
+            {
+                // Do not offer a half-grapheme context to the OS input method.
+                // The canvas remains readable; moving the caret can retry.
+                _canvasInputStart = _canvasInputEnd = _navigation.Active;
+                _canvasBoundActive = _navigation.Active;
+                _canvasBoundGeneration = _canvasGeneration;
+                _canvasBoundVersion = snapshot.Version;
+                ++_canvasBindingNonce;
+                shell.SetCanvasInputUnavailable(snapshot, frame,
+                    "No safe bounded text-input window at this caret.");
+                shell.SetCanvasSemantics(new NativeCanvasSemantics(snapshot.Version,
+                    AnalysisCompleteness.Provisional,
+                    new Mote.Formats.TextSpan(_pageStart, _pageLength), [], []));
+                shell.SetCanvasChrome(title, status + " · Input unavailable at this caret",
+                    _document.IsModified);
+                return;
+            }
+            _canvasInputStart = input.SourceStart;
+            _canvasInputEnd = input.SourceEnd;
+            _canvasBoundActive = _navigation.Active;
+            _canvasBoundGeneration = _canvasGeneration;
+            _canvasBoundVersion = snapshot.Version;
+            var nonce = ++_canvasBindingNonce;
+            shell.SetCanvasBinding(new NativeCanvasBinding(_canvasGeneration,
+                snapshot.Version, nonce, snapshot, frame, input.SourceStart,
+                input.SourceText, _navigation.Anchor, _navigation.Active,
+                title, status, _document.IsModified));
+            shell.SetCanvasSemantics(new NativeCanvasSemantics(snapshot.Version,
+                AnalysisCompleteness.Provisional,
+                new Mote.Formats.TextSpan(_pageStart, _pageLength), [], []));
+        }
+        else shell.SetCanvasFrame(frame);
+        shell.SetCanvasChrome(title, status, _document.IsModified);
     }
 
     private static int SafeBoundary(TextSnapshot snapshot, int offset, bool backwards)
@@ -866,6 +1098,10 @@ internal sealed class NativeEditorController : IDisposable
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
                         preview.Spans);
                     _shell.SetAnalysis(_visibleSessionAnalysis);
+                    _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
+                        result.Completeness, result.Coverage,
+                        VisibleSourceTokens(result.Tokens, pageStart, pageLength),
+                        VisibleSourceDiagnostics(result.Diagnostics, pageStart, pageLength)));
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
                         dimensions: Dimensions(snapshot));
                     MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation,
@@ -928,7 +1164,15 @@ internal sealed class NativeEditorController : IDisposable
     {
         _sessionDriver?.Record(change);
         _navigation.ApplyChange(change.Change, change.After);
+        _canvas?.ApplyEdit(change.After, change.Change);
     }
+
+    /// <summary>Creates one source-backed viewport sharing the controller's navigation state.</summary>
+    private CanvasInteraction NewCanvas(TextSnapshot snapshot) =>
+        new(snapshot, Math.Max(12, _theme.Typography.EditorFontSize *
+            _theme.Typography.LineHeightMultiplier), 640,
+            maxSliceLength: CanvasInputWindowSelector.MaxLength,
+            selection: _navigation);
 
     private static NativeFormatSessionDriver? CreateSessionDriver(IDocumentPolicy policy) =>
         policy is IIncrementalDocumentPolicy incremental
@@ -1002,6 +1246,10 @@ internal sealed class NativeEditorController : IDisposable
         _shell.SetAnalysis(new NativeAnalysisView(tokens,
             SessionDiagnosticSummary(result, _pageStart, _pageLength),
             preview.Text, $"{policy.DisplayName} · Complete · v{result.Version}", preview.Spans));
+        _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
+            result.Completeness, result.Coverage,
+            VisibleSourceTokens(result.Tokens, _pageStart, _pageLength),
+            VisibleSourceDiagnostics(result.Diagnostics, _pageStart, _pageLength)));
         MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
             dimensions: Dimensions(snapshot));
     }
@@ -1037,6 +1285,43 @@ internal sealed class NativeEditorController : IDisposable
                     new Mote.Formats.TextSpan(displayStart, displayEnd - displayStart)));
         }
         return projected;
+    }
+
+    /// <summary>Keeps only bounded absolute semantic spans needed by the canvas.</summary>
+    private static IReadOnlyList<SemanticToken> VisibleSourceTokens(
+        IReadOnlyList<SemanticToken> tokens, int start, int length)
+    {
+        var end = start + length;
+        var visible = new List<SemanticToken>(Math.Min(tokens.Count, 4096));
+        foreach (var token in tokens)
+        {
+            if (visible.Count == 4096) break;
+            var clippedStart = Math.Max(start, token.Span.Start);
+            var clippedEnd = Math.Min(end, token.Span.End);
+            if (clippedEnd > clippedStart)
+                visible.Add(new SemanticToken(token.Kind,
+                    new Mote.Formats.TextSpan(clippedStart, clippedEnd - clippedStart)));
+        }
+        visible.Sort(static (left, right) => left.Span.Start.CompareTo(right.Span.Start));
+        return visible;
+    }
+
+    /// <summary>Keeps at most one visible-page batch of absolute diagnostic spans.</summary>
+    private static IReadOnlyList<Diagnostic> VisibleSourceDiagnostics(
+        IReadOnlyList<Diagnostic> diagnostics, int start, int length)
+    {
+        var end = start + length;
+        var visible = new List<Diagnostic>(Math.Min(diagnostics.Count, 4096));
+        foreach (var diagnostic in diagnostics)
+        {
+            if (visible.Count == 4096) break;
+            var span = diagnostic.Span;
+            if (span.Length == 0 ? span.Start >= start && span.Start <= end :
+                span.Start < end && span.End > start)
+                visible.Add(diagnostic);
+        }
+        visible.Sort(static (left, right) => left.Span.Start.CompareTo(right.Span.Start));
+        return visible;
     }
 
     private static string DiagnosticSummary(IReadOnlyList<Diagnostic> diagnostics)

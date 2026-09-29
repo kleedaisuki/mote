@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Mote.Native.Mac.Canvas;
+using Mote.Native.Viewport;
 using Mote.Themes;
 
 namespace Mote.Native.Mac;
@@ -13,11 +15,12 @@ namespace Mote.Native.Mac;
 /// the controller remains the sole owner of text, undo history, and file operations.
 /// </summary>
 [SupportedOSPlatform("macos")]
-internal sealed unsafe class MacEditorShell : INativeEditorShell
+internal sealed unsafe class MacEditorShell : INativeCanvasShell
 {
     private const nuint WindowStyle = 1 | 2 | 4 | 8;
     private const nuint ResizeWidthAndHeight = 2 | 16;
     private static MacEditorShell? s_current;
+    private readonly bool _experimentalCanvas;
     private readonly ConcurrentQueue<Action> _posted = new();
     private nint _application;
     private nint _delegate;
@@ -25,6 +28,12 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     private nint _editor;
     private nint _preview;
     private nint _status;
+    private MacTextInputIsland? _canvas;
+    private NativeCanvasBinding? _pendingCanvasBinding;
+    private CanvasFrame? _pendingCanvasFrame;
+    private NativeCanvasSemantics? _pendingCanvasSemantics;
+    private (Mote.Engine.TextSnapshot Snapshot, CanvasFrame Frame, string Reason)?
+        _pendingCanvasUnavailable;
     private IThemePolicy? _theme;
     private NativeDocumentView? _pendingDocument;
     private NativeAnalysisView? _pendingAnalysis;
@@ -37,6 +46,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     private bool _compositionCommitRejected;
     private bool _closeApproved;
     private string _statusText = string.Empty;
+    private string _canvasTitle = "mote";
     private string _visibleText = string.Empty;
     private string _findQuery = string.Empty;
     private int _selectionAnchor;
@@ -47,6 +57,25 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     private string? _probeSavePath;
     private bool _probeConfirmDiscardOnce;
     private bool _probeDidConfirmDiscard;
+    private bool _probeCaptureCanvasErrors;
+    private string? _probeCanvasError;
+    private bool _deferredCanvasTheme;
+
+    /// <summary>Constructs the established editor or an explicit, opt-in canvas editor.</summary>
+    internal MacEditorShell(bool experimentalCanvas = false) =>
+        _experimentalCanvas = experimentalCanvas;
+
+    /// <inheritdoc />
+    public bool CanvasEnabled => _experimentalCanvas;
+
+    /// <inheritdoc />
+    public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
+    /// <inheritdoc />
+    public event Action<double>? CanvasScrollRequested;
+    /// <inheritdoc />
+    public event Action<double>? CanvasViewportResized;
+    /// <inheritdoc />
+    public event Action<int, int>? CanvasSelectionRequested;
 
     /// <inheritdoc />
     public NativeLineEndingMode LineEndingMode => NativeLineEndingMode.Preserve;
@@ -126,6 +155,12 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
                 if (_theme is not null) ApplyTheme(_theme);
                 if (_pendingDocument is not null) SetDocument(_pendingDocument);
                 if (_pendingAnalysis is not null) SetAnalysis(_pendingAnalysis);
+                if (_pendingCanvasBinding is { } binding) SetCanvasBinding(binding);
+                if (_pendingCanvasUnavailable is { } unavailable)
+                    SetCanvasInputUnavailable(unavailable.Snapshot, unavailable.Frame,
+                        unavailable.Reason);
+                if (_pendingCanvasFrame is { } frame) SetCanvasFrame(frame);
+                if (_pendingCanvasSemantics is { } semantics) SetCanvasSemantics(semantics);
                 if (_pendingSelection is { } selection) SetSelection(selection.Anchor, selection.Active);
                 ObjC.Send(_window, ObjC.Sel("makeKeyAndOrderFront:"), 0);
                 ObjC.Send(_application, ObjC.Sel("activateIgnoringOtherApps:"), 1);
@@ -134,7 +169,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
             }
             finally { ObjC.Send(pool, ObjC.Sel("release")); }
         }
-        finally { s_current = null; }
+        finally { _canvas?.Dispose(); s_current = null; }
     }
 
     /// <inheritdoc />
@@ -143,6 +178,11 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         _pendingDocument = view;
         _statusText = view.Status;
         if (_editor == 0) return;
+        if (_experimentalCanvas)
+        {
+            SetCanvasChrome(view.Title, view.Status, view.IsModified);
+            return;
+        }
         _settingText = true;
         try
         {
@@ -181,6 +221,13 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     {
         _pendingAnalysis = view;
         if (_editor == 0) return;
+        if (_experimentalCanvas)
+        {
+            SetPreview(view);
+            SetStatus(string.IsNullOrEmpty(view.DiagnosticsSummary)
+                ? view.Status : $"{view.Status}  ·  {view.DiagnosticsSummary}");
+            return;
+        }
         if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0)
         {
             _deferredAnalysisText = _visibleText;
@@ -214,12 +261,71 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     public void SetTheme(IThemePolicy theme)
     {
         _theme = theme;
-        if (_editor != 0) ApplyTheme(theme);
+        if (_editor == 0) return;
+        if (_experimentalCanvas && _canvas is { IsComposing: true })
+        {
+            _deferredCanvasTheme = true;
+            return;
+        }
+        ApplyTheme(theme);
+        _canvas?.SetTheme(theme);
+        _deferredCanvasTheme = false;
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasBinding(NativeCanvasBinding binding)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
+        _pendingCanvasBinding = binding;
+        _pendingCanvasUnavailable = null;
+        _pendingCanvasFrame = binding.Frame;
+        if (_canvas is null) return;
+        _canvas.Bind(binding);
+        SetCanvasChrome(binding.Title, binding.Status, binding.IsModified);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasFrame(CanvasFrame frame)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
+        _pendingCanvasFrame = frame;
+        _canvas?.SetFrame(frame);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasInputUnavailable(Mote.Engine.TextSnapshot snapshot,
+        CanvasFrame frame, string reason)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
+        _pendingCanvasBinding = null;
+        _pendingCanvasUnavailable = (snapshot, frame, reason);
+        _pendingCanvasFrame = frame;
+        _canvas?.SetUnavailable(snapshot, frame, reason);
+        SetStatus(reason);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasSemantics(NativeCanvasSemantics semantics)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
+        _pendingCanvasSemantics = semantics;
+        _canvas?.SetSemantics(semantics);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasChrome(string title, string status, bool isModified)
+    {
+        _canvasTitle = title;
+        _statusText = status;
+        if (_window == 0) return;
+        ObjC.Send(_window, ObjC.Sel("setTitle:"), ObjC.String(title));
+        SetStatus(status);
     }
 
     /// <inheritdoc />
     public void SetSelection(int displayAnchor, int displayActive)
     {
+        if (_experimentalCanvas) return;
         _pendingSelection = (displayAnchor, displayActive);
         if (_editor == 0) return;
         if (displayAnchor < 0 || displayActive < 0 ||
@@ -272,12 +378,27 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     /// <inheritdoc />
     public bool CommitPendingText()
     {
-        try { return CommitMarkedTextBeforeCommand(); }
+        try
+        {
+            var settled = _experimentalCanvas ? _canvas?.CommitPendingText() ?? true :
+                CommitMarkedTextBeforeCommand();
+            if (settled) ReplayCanvasTheme();
+            return settled;
+        }
         catch (Exception error)
         {
             ShowError(error.Message);
             return false;
         }
+    }
+
+    private void ReplayCanvasTheme()
+    {
+        if (!_deferredCanvasTheme || _theme is null || _canvas is null || _canvas.IsComposing)
+            return;
+        ApplyTheme(_theme);
+        _canvas.SetTheme(_theme);
+        _deferredCanvasTheme = false;
     }
 
     private static string? PromptText(string title, string explanation, string initialValue)
@@ -366,6 +487,11 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     /// <inheritdoc />
     public void ShowError(string message)
     {
+        if (_probeCaptureCanvasErrors)
+        {
+            _probeCanvasError = message;
+            return;
+        }
         var alert = ObjC.New("NSAlert");
         ObjC.Send(alert, ObjC.Sel("setAlertStyle:"), 2);
         ObjC.Send(alert, ObjC.Sel("setMessageText:"), ObjC.String("mote could not complete the operation"));
@@ -411,7 +537,8 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         ObjC.ManagedString(ObjC.Send(_editor, ObjC.Sel("string")));
 
     /// <summary>Gets the most recent controller title projected into the native window.</summary>
-    internal string ProbeTitle => _pendingDocument?.Title ?? string.Empty;
+    internal string ProbeTitle => _experimentalCanvas ? _canvasTitle :
+        _pendingDocument?.Title ?? string.Empty;
 
     /// <summary>Gets whether the controller still considers the current native page dirty.</summary>
     internal bool ProbeIsModified => _pendingDocument?.IsModified ?? false;
@@ -457,6 +584,61 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     /// <summary>Whether the probe observed the dirty-document discard path.</summary>
     internal bool ProbeDidConfirmDiscard => _probeDidConfirmDiscard;
 
+    /// <summary>Current canvas input binding version for published-binary probes.</summary>
+    internal long ProbeCanvasVersion => _pendingCanvasBinding?.BaseVersion ?? -1;
+
+    /// <summary>Immutable engine snapshot currently bound to the canvas probe.</summary>
+    internal Mote.Engine.TextSnapshot? ProbeCanvasSnapshot => _pendingCanvasBinding?.Snapshot;
+
+    /// <summary>Projects one global selection as if resolved by a canvas pointer.</summary>
+    internal void ProbeCanvasSelectGlobal(int anchor, int active) =>
+        CanvasSelectionRequested?.Invoke(anchor, active);
+
+    /// <summary>Exercises NSTextView's real command-dispatch delegate for deletion.</summary>
+    internal void ProbeCanvasDelete(bool forward) => ObjC.Send(_editor,
+        ObjC.Sel("doCommandBySelector:"),
+        ObjC.Sel(forward ? "deleteForward:" : "deleteBackward:"));
+
+    /// <summary>Controller-projected global selection in the experimental canvas.</summary>
+    internal (int Anchor, int Active) ProbeCanvasSelection =>
+        (_pendingCanvasFrame?.SelectionAnchor ?? -1,
+            _pendingCanvasFrame?.SelectionActive ?? -1);
+
+    /// <summary>Selects through the real bounded NSTextView for regression probes.</summary>
+    internal void ProbeCanvasSelect(int start, int length)
+    {
+        if (!_experimentalCanvas || _canvas is null || start < 0 || length < 0)
+            throw new InvalidOperationException("Canvas probe selection is unavailable.");
+        ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"),
+            new ObjC.Range((nuint)start, (nuint)length));
+    }
+
+    /// <summary>Latest bounded-paste rejection captured without opening a modal test dialog.</summary>
+    internal string? ProbeCanvasError => _probeCanvasError;
+
+    /// <summary>Routes probe-only paste errors to assertions instead of a blocking alert.</summary>
+    internal void ProbeCaptureCanvasErrors() => _probeCaptureCanvasErrors = true;
+
+    /// <summary>
+    /// Writes a real OS pasteboard payload and invokes the custom NSTextView paste
+    /// selector; the production paste preflight is not bypassed.
+    /// </summary>
+    internal void ProbeCanvasPaste(string plain, string? rtf)
+    {
+        if (!_experimentalCanvas || _canvas is null)
+            throw new InvalidOperationException("The canvas input host is unavailable.");
+        _probeCanvasError = null;
+        var board = ObjC.Send(ObjC.Class("NSPasteboard"), ObjC.Sel("generalPasteboard"));
+        ObjC.Send(board, ObjC.Sel("clearContents"));
+        if (ObjC.Send(board, ObjC.Sel("setString:forType:"),
+            ObjC.String(plain), ObjC.String("public.utf8-plain-text")) == 0)
+            throw new IOException("The native clipboard refused plain text.");
+        if (rtf is not null && ObjC.Send(board, ObjC.Sel("setString:forType:"),
+            ObjC.String(rtf), ObjC.String("public.rtf")) == 0)
+            throw new IOException("The native clipboard refused RTF test data.");
+        ObjC.Send(_editor, ObjC.Sel("pasteAsPlainText:"), 0);
+    }
+
     private void CreateWindow()
     {
         _window = ObjC.Send(ObjC.Send(ObjC.Class("NSWindow"), ObjC.Sel("alloc")),
@@ -472,7 +654,23 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         ObjC.Send(split, ObjC.Sel("setAutoresizingMask:"), (nint)ResizeWidthAndHeight);
         ObjC.Send(root, ObjC.Sel("addSubview:"), split);
 
-        var editorScroll = CreateScrollView(new ObjC.Rect(0, 0, 730, 730), true, out _editor);
+        nint editorScroll;
+        if (_experimentalCanvas)
+        {
+            _canvas = new MacTextInputIsland(
+                edit => CanvasEditCommitted?.Invoke(edit),
+                delta => CanvasScrollRequested?.Invoke(delta),
+                height => CanvasViewportResized?.Invoke(height),
+                (anchor, active) => CanvasSelectionRequested?.Invoke(anchor, active),
+                message =>
+                {
+                    if (_probeCaptureCanvasErrors) _probeCanvasError = message;
+                    else Post(() => ShowError(message));
+                });
+            editorScroll = _canvas.CreateView(new ObjC.Rect(0, 0, 730, 730));
+            _editor = _canvas.Editor;
+        }
+        else editorScroll = CreateScrollView(new ObjC.Rect(0, 0, 730, 730), true, out _editor);
         var previewScroll = CreateScrollView(new ObjC.Rect(730, 0, 390, 730), false, out _preview);
         ObjC.Send(split, ObjC.Sel("addSubview:"), editorScroll);
         ObjC.Send(split, ObjC.Sel("addSubview:"), previewScroll);
@@ -712,7 +910,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     {
         try
         {
-            if (!CommitMarkedTextBeforeCommand())
+            if (!CommitPendingText())
             {
                 ShowError("Finish or cancel the current text composition before this command.");
                 return;
@@ -737,6 +935,9 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&CommitCompositionCheck, "v@:@");
         Add(cls, "textView:doCommandBySelector:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, nint, byte>)&TextViewDoCommand, "c@:@:");
+        Add(cls, "textView:shouldChangeTextInRange:replacementString:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, ObjC.Range, nint, byte>)
+                &TextViewShouldChange, "c@:@{_NSRange=QQ}@");
         Add(cls, "windowShouldClose:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, byte>)&WindowShouldClose, "c@:@");
         Add(cls, "windowWillClose:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&WindowWillClose, "v@:@");
         Add(cls, "applicationShouldTerminate:",
@@ -781,6 +982,12 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell is null || shell._settingText) return;
         try
         {
+            if (shell._experimentalCanvas)
+            {
+                shell._canvas?.OnTextChanged();
+                shell.ReplayCanvasTheme();
+                return;
+            }
             // AppKit may announce caret collapse before textDidChange. Do not let
             // that transient page-local selection erase a global selection.
             shell._pendingNativeSelection = null;
@@ -801,7 +1008,11 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
             shell.ReplayDeferredDocument();
             shell.ReplayDeferredAnalysis();
         }
-        catch (Exception error) { shell.ShowError(error.Message); }
+        catch (Exception error)
+        {
+            if (shell._experimentalCanvas) shell._canvas?.DisableAfterFailure(error.Message);
+            else shell.ShowError(error.Message);
+        }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -811,6 +1022,16 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell is null || shell._settingText || shell._settingSelection) return;
         try
         {
+            if (shell._experimentalCanvas)
+            {
+                if (!shell._selectionDeliveryScheduled)
+                {
+                    shell._selectionDeliveryScheduled = true;
+                    ObjC.Send(shell._delegate, ObjC.Sel("performSelector:withObject:afterDelay:"),
+                        ObjC.Sel("moteDeliverSelection:"), 0, 0d);
+                }
+                return;
+            }
             shell._pendingNativeSelection = ObjC.SendRange(shell._editor, ObjC.Sel("selectedRange"));
             shell.CommitComposition();
             if (!shell._selectionDeliveryScheduled)
@@ -833,6 +1054,11 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         try
         {
             shell._selectionDeliveryScheduled = false;
+            if (shell._experimentalCanvas)
+            {
+                shell._canvas?.OnSelectionChanged();
+                return;
+            }
             if (shell._pendingNativeSelection is not { } range) return;
             shell._pendingNativeSelection = null;
             if (shell._compositionDirty ||
@@ -858,6 +1084,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell is null) return;
         try
         {
+            if (shell._experimentalCanvas) return;
             shell._compositionCheckScheduled = false;
             if (ObjC.Send(shell._editor, ObjC.Sel("hasMarkedText")) != 0)
                 shell.ScheduleCompositionCheck();
@@ -872,6 +1099,19 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     {
         var shell = s_current;
         if (shell is null) return 0;
+        if (shell._experimentalCanvas && IsDeletionCommand(command))
+        {
+            try
+            {
+                if (!shell.CommitPendingText()) return 1;
+                if (shell._canvas?.TryDeleteGlobalSelection() == true) return 1;
+            }
+            catch (Exception error)
+            {
+                shell._canvas?.DisableAfterFailure(error.Message);
+                return 1;
+            }
+        }
         if (command == ObjC.Sel("selectAll:"))
         {
             shell.NotifyAfterComposition(shell.SelectAllRequested);
@@ -890,6 +1130,27 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         return 0;
     }
 
+    private static bool IsDeletionCommand(nint command) =>
+        command == ObjC.Sel("deleteBackward:") ||
+        command == ObjC.Sel("deleteForward:") ||
+        command == ObjC.Sel("deleteWordBackward:") ||
+        command == ObjC.Sel("deleteWordForward:") ||
+        command == ObjC.Sel("deleteToBeginningOfLine:") ||
+        command == ObjC.Sel("deleteToEndOfLine:") ||
+        command == ObjC.Sel("deleteToBeginningOfParagraph:") ||
+        command == ObjC.Sel("deleteToEndOfParagraph:") ||
+        command == ObjC.Sel("deleteBackwardByDecomposingPreviousCharacter:");
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static byte TextViewShouldChange(nint self, nint selector,
+        nint view, ObjC.Range range, nint replacement)
+    {
+        var shell = s_current;
+        if (shell is null || !shell._experimentalCanvas || shell._canvas is null) return 1;
+        try { return shell._canvas.BeforeTextChange(range, replacement) ? (byte)1 : (byte)0; }
+        catch (Exception error) { shell.ShowError(error.Message); return 0; }
+    }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static byte WindowShouldClose(nint self, nint selector, nint sender)
     {
@@ -898,7 +1159,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell._closeApproved) return 1;
         try
         {
-            if (!shell.CommitMarkedTextBeforeCommand())
+            if (!shell.CommitPendingText())
             {
                 shell.ShowError("Finish or cancel the current text composition before closing.");
                 return 0;
@@ -927,7 +1188,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell._closeApproved) { shell.StopAndWake(); return 0; }
         try
         {
-            if (!shell.CommitMarkedTextBeforeCommand())
+            if (!shell.CommitPendingText())
             {
                 shell.ShowError("Finish or cancel the current text composition before quitting.");
                 return 0;

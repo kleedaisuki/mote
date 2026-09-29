@@ -4,6 +4,9 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
 using Mote.Themes;
+using Mote.Native.Viewport;
+using Mote.Native.Windows.Canvas;
+using Mote.Engine;
 
 namespace Mote.Native.Windows;
 
@@ -17,7 +20,7 @@ namespace Mote.Native.Windows;
 /// No native library ships with mote: msftedit.dll and comdlg32.dll are Windows components.
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class WindowsEditorShell : INativeEditorShell
+internal sealed class WindowsEditorShell : INativeCanvasShell
 {
     private const string WindowClassName = "MoteNativeEditorWindow";
     private const int EditorId = 101;
@@ -69,6 +72,27 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     private int _lastSelectionEnd;
     private string _lastFind = "";
     private string? _styleText;
+    private readonly bool _experimentalCanvas;
+    private WindowsRichEditIsland? _canvasIsland;
+    private NativeCanvasBinding? _pendingCanvasBinding;
+    private CanvasFrame? _pendingCanvasFrame;
+    private NativeCanvasSemantics? _pendingCanvasSemantics;
+
+    /// <summary>Creates the established editor or explicitly opts into the continuous canvas.</summary>
+    internal WindowsEditorShell(bool experimentalCanvas = false) =>
+        _experimentalCanvas = experimentalCanvas;
+
+    /// <inheritdoc />
+    public bool CanvasEnabled => _experimentalCanvas;
+
+    /// <inheritdoc />
+    public event Action<CanvasCommittedEdit>? CanvasEditCommitted;
+    /// <inheritdoc />
+    public event Action<double>? CanvasScrollRequested;
+    /// <inheritdoc />
+    public event Action<double>? CanvasViewportResized;
+    /// <inheritdoc />
+    public event Action<int, int>? CanvasSelectionRequested;
 
     /// <inheritdoc />
     public NativeLineEndingMode LineEndingMode => NativeLineEndingMode.CrLf;
@@ -170,7 +194,7 @@ internal sealed class WindowsEditorShell : INativeEditorShell
         InstallAccelerators();
         Win32.ShowWindow(_window, 5);
         Win32.UpdateWindow(_window);
-        Win32.SetFocus(_editor);
+        Win32.SetFocus(_canvasIsland?.InputHandle ?? _editor);
         Shown?.Invoke();
         while (_posted.TryDequeue(out var queued)) queued();
 
@@ -185,6 +209,7 @@ internal sealed class WindowsEditorShell : INativeEditorShell
             Win32.DispatchMessageW(ref message);
         }
         if (_accelerators != 0) Win32.DestroyAcceleratorTable(_accelerators);
+        _canvasIsland?.Dispose();
         if (_editorFont != 0) Win32.DeleteObject(_editorFont);
         if (_uiFont != 0) Win32.DeleteObject(_uiFont);
         _active = null;
@@ -197,12 +222,72 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     }
 
     /// <inheritdoc />
-    public bool CommitPendingText() => !_imeComposing;
+    public bool CommitPendingText() => !_imeComposing &&
+        (_canvasIsland is null || _canvasIsland.FlushPendingText());
+
+    /// <inheritdoc />
+    public void SetCanvasBinding(NativeCanvasBinding binding)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
+        ArgumentNullException.ThrowIfNull(binding);
+        if (_canvasIsland?.IsComposing == true)
+            throw new InvalidOperationException("An active IME composition cannot be rebound.");
+        if (_window != 0)
+        {
+            Win32.SetWindowTextW(_window, binding.Title);
+            UpdateStatus(binding.Status);
+        }
+        if (_canvasIsland is null) _pendingCanvasBinding = binding;
+        else _canvasIsland.Bind(binding);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasFrame(CanvasFrame frame)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
+        ArgumentNullException.ThrowIfNull(frame);
+        if (_canvasIsland is null) _pendingCanvasFrame = frame;
+        else _canvasIsland.SetFrame(frame);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasInputUnavailable(TextSnapshot snapshot, CanvasFrame frame, string reason)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
+        _canvasIsland?.SetInputUnavailable(snapshot, frame, reason);
+        UpdateStatus(reason);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasSemantics(NativeCanvasSemantics semantics)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
+        ArgumentNullException.ThrowIfNull(semantics);
+        if (_canvasIsland is null) _pendingCanvasSemantics = semantics;
+        else _canvasIsland.SetSemantics(semantics);
+    }
+
+    /// <inheritdoc />
+    public void SetCanvasChrome(string title, string status, bool isModified)
+    {
+        if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
+        if (_window != 0) Win32.SetWindowTextW(_window, title);
+        UpdateStatus(status);
+    }
 
     /// <inheritdoc />
     public void SetDocument(NativeDocumentView view)
     {
         ArgumentNullException.ThrowIfNull(view);
+        if (_experimentalCanvas)
+        {
+            if (_window != 0)
+            {
+                Win32.SetWindowTextW(_window, view.Title);
+                UpdateStatus(view.Status);
+            }
+            return;
+        }
         _document = view;
         if (_window == 0) return;
 
@@ -246,7 +331,7 @@ internal sealed class WindowsEditorShell : INativeEditorShell
         ArgumentNullException.ThrowIfNull(view);
         _analysis = view;
         if (_window == 0) return;
-        ScheduleStyle();
+        if (!_experimentalCanvas) ScheduleStyle();
         _settingText = true;
         try
         {
@@ -268,6 +353,8 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     public void SetTheme(IThemePolicy theme)
     {
         ArgumentNullException.ThrowIfNull(theme);
+        if (_canvasIsland?.IsComposing == true)
+            throw new InvalidOperationException("Theme changes cannot interrupt IME composition.");
         _theme = theme;
         if (_window == 0) return;
         Win32.SendMessageW(_editor, Win32.EM_SETBKGNDCOLOR, 0,
@@ -290,7 +377,9 @@ internal sealed class WindowsEditorShell : INativeEditorShell
         }
         if (oldEditorFont != 0) Win32.DeleteObject(oldEditorFont);
         if (oldUiFont != 0) Win32.DeleteObject(oldUiFont);
-        if (_analysis is not null) ScheduleStyle();
+        if (_experimentalCanvas)
+            _canvasIsland?.SetTheme(theme);
+        else if (_analysis is not null) ScheduleStyle();
         else
         {
             var selected = GetSelection();
@@ -484,6 +573,24 @@ internal sealed class WindowsEditorShell : INativeEditorShell
             0, 0, 100, 24, _window, (nint)StatusId, instance, 0);
         if (_editor == 0 || _preview == 0 || _status == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create native editor controls.");
+        if (_experimentalCanvas)
+        {
+            Win32.ShowWindow(_editor, 0);
+            _canvasIsland = new WindowsRichEditIsland(_window, _theme);
+            _canvasIsland.EditCommitted += edit => CanvasEditCommitted?.Invoke(edit);
+            _canvasIsland.ScrollRequested += delta => CanvasScrollRequested?.Invoke(delta);
+            _canvasIsland.ViewportResized += height => CanvasViewportResized?.Invoke(height);
+            _canvasIsland.SelectionRequested += (anchor, active) =>
+                CanvasSelectionRequested?.Invoke(anchor, active);
+            _canvasIsland.Faulted += message =>
+            {
+                UpdateStatus(message);
+                ShowError(message);
+            };
+            if (_pendingCanvasBinding is not null) _canvasIsland.Bind(_pendingCanvasBinding);
+            if (_pendingCanvasFrame is not null) _canvasIsland.SetFrame(_pendingCanvasFrame);
+            if (_pendingCanvasSemantics is not null) _canvasIsland.SetSemantics(_pendingCanvasSemantics);
+        }
         // RichEdit's default user-edit limit is much smaller than a viewport page.
         Win32.SendMessageW(_editor, Win32.EM_EXLIMITTEXT, 0, (nint)int.MaxValue);
         Win32.SendMessageW(_editor, Win32.EM_SETEVENTMASK, 0,
@@ -508,7 +615,8 @@ internal sealed class WindowsEditorShell : INativeEditorShell
         const int statusHeight = 25;
         var bodyHeight = Math.Max(0, height - statusHeight);
         var editorWidth = Math.Max(0, width * 2 / 3);
-        Win32.MoveWindow(_editor, 0, 0, editorWidth, bodyHeight, true);
+        if (_experimentalCanvas) _canvasIsland?.Resize(editorWidth, bodyHeight);
+        else Win32.MoveWindow(_editor, 0, 0, editorWidth, bodyHeight, true);
         Win32.MoveWindow(_preview, editorWidth, 0, width - editorWidth, bodyHeight, true);
         Win32.MoveWindow(_status, 4, bodyHeight, Math.Max(0, width - 8), statusHeight, true);
     }

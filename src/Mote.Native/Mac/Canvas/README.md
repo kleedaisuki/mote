@@ -94,3 +94,75 @@ execution and visual inspection before calling this path verified.
 - [NSView cacheDisplayInRect:toBitmapImageRep:](https://developer.apple.com/documentation/appkit/nsview/cachedisplay%28in%3Ato%3A%29)
 - [NSEvent scrollingDeltaY](https://developer.apple.com/documentation/appkit/nsevent/scrollingdeltay)
 - [kCTForegroundColorFromContextAttributeName](https://developer.apple.com/documentation/coretext/kctforegroundcolorfromcontextattributename)
+
+## Opt-in interactive input island (unverified)
+
+The experimental `--canvas-experimental` shell embeds a continuous, source-backed
+AppKit `NSView` in the existing editor window. A real, visible `NSTextView` inside
+an `NSScrollView` occupies only the active logical row and receives a single
+controller-supplied source window of at most 16 Ki UTF-16 units. It is not a
+hidden whole-document mirror. Off-host rows are read from immutable snapshots
+as bounded `ViewportSlice` values and shaped by CoreText. Wheel and pointer
+callbacks report source coordinates to the controller; semantic tokens are
+clipped to visible off-host rows and redrawn in theme policy colors. Bounded
+diagnostics receive severity-colored underlines or zero-width markers on
+those rows. The normal editor
+still uses its previous `NSTextView` path unless explicitly opted in.
+
+Each final native text change is converted by `NativeTextProjection` to one
+absolute source `TextChange` tagged with document generation, snapshot version,
+and binding nonce. The synchronous controller event must either publish a new
+binding before returning or reject the operation; a reentrant binding is
+applied only after the current AppKit delegate callback unwinds. Marked text
+stays in AppKit: candidate text is not submitted, input rebinds are rejected,
+theme changes are deferred, and save/open/close synchronously unmark and settle
+the final text or veto the command. Global selection outside the host replaces
+the controller's full source interval rather than only the local text range.
+The `shouldChangeTextInRange:replacementString:` delegate captures the exact
+native pre-edit range. For selected text, the inserted payload is reconstructed
+from the unchanged prefix/suffix of the before/after host strings; using the
+minimal-difference inserted text would corrupt repeated-text cases such as
+`abc`, select `ab`, type `a` (correct result: `ac`). A failed exact mapping or
+controller acknowledgement restores the canonical host; an unexpected AppKit
+callback failure disables/hides input rather than leaving a divergent editor.
+Backspace/Forward Delete on a global selection dispatches one absolute source
+deletion before AppKit's page-local command runs. This covers selections ending
+on an empty LF/CRLF row, where the native host has no characters and would
+emit no `textDidChange`; a dedicated AppKit probe tests both selection
+directions and both line-ending spellings.
+The host is plain-text-only. Its custom AppKit `paste:` and
+`pasteAsPlainText:` methods preflight the OS pasteboard's plain-text UTF-16
+length before insertion. Small pastes use native input; a larger plain-text
+paste becomes one exact absolute controller edit without ever entering the
+bounded host. Rich formatting is ignored. An impossible resulting Int32 source
+length, an edit above the controller's 32 MiB undo-history budget, or rich-only
+clipboard is rejected visibly without partial insertion.
+These paths still need target-host mixed-format/large-payload testing.
+The same pre-change delegate rejects any non-paste input that would exceed the
+bound, with a visible explanation; real IME preedit behavior near the bound
+still requires interactive testing. The published-binary in-process clipboard
+probe exercises mixed rich/plain 40 Ki direct paste with byte-exact source
+verification and Undo, 50 MiB explicit rejection with unchanged engine/native
+host/disk and retained Redo history, bounded host retention, no-edit Select
+All→Save/Close, exact selected repeated-text replacement, and small accepted
+Save As/reopen. A future persistent-root history policy may permit 50 MiB
+paste with Undo, but silently accepting a non-undoable edit is not allowed.
+During a window resize under marked text, only the existing host frame moves
+to keep AppKit's candidate rectangle attached; viewport reflow is delivered
+after composition settles. Real CJK candidate positioning remains a gate.
+When composition returns the original host string under a nonempty global
+selection, the current shell conservatively treats it as cancellation rather
+than deleting off-host text: it cannot distinguish an identical final IME
+candidate from cancel using text equality alone. A real CJK commit/cancel test
+and explicit final `insertText:replacementRange:` evidence are required before
+claiming semantic parity for this case; `unmarkText` alone is not proof.
+
+This path is **not yet product-ready**. In particular, this code has not passed
+target-host interactive open/edit/undo/save/reopen, real Chinese/Japanese/Korean
+IME candidate/cancel tests, or VoiceOver review. The native input host exposes
+only its bounded row through AppKit accessibility; document-wide accessibility
+semantics require a separate design. The opaque caret-row `NSTextView` currently
+uses the base theme foreground, so its local row lacks per-token colors and
+inline diagnostic underlines; preview/status still expose diagnostics. Do not
+infer any of these behaviors from the read-only
+canvas PNG probe.

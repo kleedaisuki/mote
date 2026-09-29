@@ -47,6 +47,21 @@ internal static class MacOnScreenCanvasNative
     internal static extern ObjC.Point SendPoint(nint receiver, nint selector);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    private static extern ObjC.Rect SendRectDirect(nint receiver, nint selector);
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSend_stret")]
+    private static extern void SendRectStret(out ObjC.Rect result, nint receiver, nint selector);
+
+    /// <summary>Returns CGRect with the architecture-correct Objective-C aggregate ABI.</summary>
+    internal static ObjC.Rect GetRect(nint receiver, nint selector)
+    {
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            return SendRectDirect(receiver, selector);
+        SendRectStret(out var result, receiver, selector);
+        return result;
+    }
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern ObjC.Point SendPoint(nint receiver, nint selector,
         ObjC.Point point, nint fromView);
 
@@ -70,4 +85,20 @@ internal static class MacOnScreenCanvasNative
 
     [DllImport(Graphics, EntryPoint = "CGContextClipToRect")]
     internal static extern void ClipToRect(nint context, ObjC.Rect rect);
+
+    [DllImport(Graphics, EntryPoint = "CGContextSetLineWidth")]
+    internal static extern void SetLineWidth(nint context, double width);
+
+    [DllImport(Graphics, EntryPoint = "CGContextSetRGBStrokeColor")]
+    internal static extern void SetStrokeColor(nint context, double red,
+        double green, double blue, double alpha);
+
+    [DllImport(Graphics, EntryPoint = "CGContextMoveToPoint")]
+    internal static extern void MoveToPoint(nint context, double x, double y);
+
+    [DllImport(Graphics, EntryPoint = "CGContextAddLineToPoint")]
+    internal static extern void AddLineToPoint(nint context, double x, double y);
+
+    [DllImport(Graphics, EntryPoint = "CGContextStrokePath")]
+    internal static extern void StrokePath(nint context);
 }
