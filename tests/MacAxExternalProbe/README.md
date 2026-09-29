@@ -46,3 +46,26 @@ An old element's behavior after **New** is not yet exercised: unlike
 generation token, and this first probe deliberately avoids a non-idempotent
 file-switch action. Add a separate, controlled New/close phase only after the
 basic provider and TCC route have passed on both macOS architectures.
+
+## Hosted evidence
+
+GitHub Actions run `36571266856` exposed a **test-client compile defect** on
+both RIDs: Swift rejected conditional `as?` casts to CoreFoundation types.
+The client now checks `CFGetTypeID` before converting those values. Run
+`36572346343` then passed the full external probe on both `osx-x64` and
+`osx-arm64` with `swift_typecheck_passed=true` and client exit code 0.
+Each report observed two `AXTextArea` nodes in the application tree (including
+the preview), exactly **one** source-backed editor, `Mote editor` via
+`AXDescription`, 70,773 UTF-16 source units, and correct CR/LF/CRLF, emoji,
+70,001-unit line, and offscreen tail mappings. The 65,537-unit request failed
+with AX error `-25212` and no returned string; a subsequent offscreen read
+succeeded. The uploaded reports are named `mac-ax-external-osx-x64` and
+`mac-ax-external-osx-arm64`. This evidence is specific to the published
+experimental canvas binary and hosted runner's granted AX permission.
+
+After that first successful run, the client gained a graceful **Close** phase:
+it presses the same window's `AXCloseButton`, keeps the original editor
+`AXUIElement`, and demands that it stop exposing the old source before the
+wrapper accepts the editor's normal exit. This additional phase has not yet
+been validated by a hosted run; the earlier `36572346343` result proves only
+the preceding read-only checks.

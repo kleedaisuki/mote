@@ -97,10 +97,18 @@ try {
     }
     finally { $probe.Dispose() }
 
-    $editor.Refresh()
-    if ($editor.HasExited -and $status -eq 'passed') {
-        $status = 'failed'
-        $result.error = "Editor exited during external AX probe: $($editor.ExitCode)."
+    if ($result.swift_report.closedByProbe -eq $true) {
+        if (-not $editor.WaitForExit(10000) -and $status -eq 'passed') {
+            $status = 'failed'
+            $result.error = 'AX close was accepted, but the editor did not exit within 10 seconds.'
+        }
+    }
+    else {
+        $editor.Refresh()
+        if ($editor.HasExited -and $status -eq 'passed') {
+            $status = 'failed'
+            $result.error = "Editor exited during external AX probe: $($editor.ExitCode)."
+        }
     }
     $diskHash = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($diskHash -cne $result.fixture_sha256) {

@@ -15,6 +15,7 @@ struct Report: Codable {
     let status: String
     let editorPID: Int32
     let clientPID: Int32
+    let closedByProbe: Bool
     let checks: [Check]
     let note: String
 }
@@ -25,6 +26,7 @@ final class Probe {
     private let expected: NSString
     private let app: AXUIElement
     private var checks: [Check] = []
+    private var closedByProbe = false
 
     init(pid: pid_t, fixture: String) throws {
         self.pid = pid
@@ -237,12 +239,48 @@ final class Probe {
         record("usable-after-oversize", afterError == .success && afterValue == "OFFSCREEN-TARGET-😀\n",
                "AX=\(afterError.rawValue), exact=\(afterValue == "OFFSCREEN-TARGET-😀\n")")
 
+        let (windowError, rawWindows) = attribute(app, "AXWindows")
+        let windows: [AXUIElement] = (rawWindows as? [AnyObject] ?? []).compactMap { raw in
+            CFGetTypeID(raw) == AXUIElementGetTypeID()
+                ? unsafeBitCast(raw, to: AXUIElement.self) : nil
+        }
+        let (buttonError, rawButton) = windows.isEmpty
+            ? (AXError.noValue, nil as AnyObject?)
+            : attribute(windows[0], "AXCloseButton")
+        let closeButton: AXUIElement? = rawButton.flatMap { raw in
+            CFGetTypeID(raw) == AXUIElementGetTypeID()
+                ? unsafeBitCast(raw, to: AXUIElement.self) : nil
+        }
+        record("close-button-available", windowError == .success &&
+               buttonError == .success && closeButton != nil,
+               "windows=\(windows.count), AXWindows=\(windowError.rawValue), AXCloseButton=\(buttonError.rawValue)")
+        if let closeButton {
+            let pressError = AXUIElementPerformAction(closeButton, "AXPress" as CFString)
+            closedByProbe = pressError == .success
+            record("graceful-close-request", closedByProbe, "AXPress=\(pressError.rawValue)")
+            if closedByProbe {
+                let deadline = Date().addingTimeInterval(8)
+                var oldTextVisible = true
+                var lastError = AXError.success
+                repeat {
+                    let (error, value) = text(editor, tail.location, tail.length)
+                    lastError = error
+                    oldTextVisible = error == .success && value == "OFFSCREEN-TARGET-😀\n"
+                    if !oldTextVisible { break }
+                    Thread.sleep(forTimeInterval: 0.1)
+                } while Date() < deadline
+                record("retained-element-cannot-read-closed-source", !oldTextVisible,
+                       "last AX=\(lastError.rawValue), old text still visible=\(oldTextVisible)")
+            }
+        }
+
         return report(checks.allSatisfy(\.passed) ? "passed" : "failed",
                       "External AX API only; not VoiceOver, physical keyboard, or IME evidence.")
     }
 
     private func report(_ status: String, _ note: String) -> Report {
-        Report(status: status, editorPID: pid, clientPID: getpid(), checks: checks, note: note)
+        Report(status: status, editorPID: pid, clientPID: getpid(),
+               closedByProbe: closedByProbe, checks: checks, note: note)
     }
 }
 
@@ -257,7 +295,7 @@ func main() -> Int32 {
         let probe = try Probe(pid: pid, fixture: CommandLine.arguments[2])
         report = probe.run()
     } catch {
-        report = Report(status: "probe-error", editorPID: pid, clientPID: getpid(),
+        report = Report(status: "probe-error", editorPID: pid, clientPID: getpid(), closedByProbe: false,
                         checks: [], note: String(describing: error))
     }
     let encoder = JSONEncoder()
