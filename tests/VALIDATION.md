@@ -144,3 +144,22 @@ Both macOS jobs reached `tests/NativeMacWorkflow.ps1` after successful Native AO
 Source inspection identified a concrete explanation for the macOS exit-0/empty-stdout combination: the old `MacEditorShell.WindowWillClose` sent AppKit `terminate:`, which exits the process **inside the callback** rather than returning from the shell event loop to `MacNativeWorkflowProbe.Run` and then `Program`'s success print. The Native owner changed close/quit to stop and wake the `NSApplication` loop, allowing managed post-run verification to execute. This is a supported root-cause diagnosis from the observed exit and pre-fix control flow, but the patched macOS executable still requires hosted runtime confirmation. The Windows CI wrapper error was independently corrected without altering the real Win32 workflow assertion.
 
 The CI order now inventories and statically checks imports, uploads that evidence, and applies the literal one-file assertion **before** any interactive GUI gate. A later GUI failure therefore cannot silently suppress the binary inventory. An external macOS Accessibility report and synthetic failed-GUI fixtures have separate `always()`/`failure()` uploads; neither relaxes the strict AppKit workflow gate.
+
+### Hosted native workflow pass and Accessibility-probe correction, 2026-09-29
+
+[Integrated GitHub Actions run 36548638781](https://github.com/kleedaisuki/mote/actions/runs/36548638781), commit `6c1fb2ca8a1a7bd2d2e3f8590b392fb5cece66a4`, finished **green in all six jobs**: managed solution tests on Windows/macOS plus native AOT publish/inventory/import/startup/workflow gates on all four RIDs. The four downloaded publish inventories are preserved under ignored `.cache/ci-run-36548638781/`:
+
+| RID | Native payload | Bytes | Other payload files | Bundled native libraries |
+| --- | --- | ---: | ---: | ---: |
+| `win-x64` | `mote.exe` | 5,664,768 | 0 | 0 |
+| `win-arm64` | `mote.exe` | 5,789,696 | 0 | 0 |
+| `osx-x64` | `mote` | 12,704,944 | 0 | 0 |
+| `osx-arm64` | `mote` | 12,433,288 | 0 | 0 |
+
+Both Windows import artifacts list the reviewed OS/API-set static imports and `unexpected_imports: []`. Both macOS `otool -L` system-path gates passed. These checks concern **static** native dependencies and disk payloads, not future dynamic loading, publisher trust, signing, or notarization.
+
+On **both Windows x64 and ARM64** hosted runners, the published executable passed the actual Win32/RichEdit open → `WM_CHAR` edit → Save → close → fresh-process reopen/readback workflow. Each job printed `native-windows-open-edit-save-reopen-ok`, with 11 source characters, 12 saved/reopened characters, and child exit code 0. This tests a real OS window/control and persistence, though not human keyboard focus, CJK IME, accessibility technology, or first physical paint.
+
+On **both macOS x64 and ARM64** hosted runners, the published executable passed the separately labeled **in-process AppKit/NSTextView** workflow: output `in-process-appkit-open-edit-save-new-reopen-ok`, exact 37-byte BOMless UTF-8 Save As output, unchanged input fingerprint, and native New/reopen text checks. The probe stages marked `中` and commits it before Save As, then discards a later marked edit during New. It is an AppKit component/integration check, **not** proof of external keyboard/AppleScript delivery, a real Chinese input method (IME), file-picker interaction, VoiceOver, or physical paint. The prior empty-stdout macOS failure was resolved by stopping/waking the AppKit run loop instead of calling `terminate:` inside a close callback, allowing managed post-run assertions and the success marker to execute.
+
+The downloaded **non-gating external Accessibility probe artifacts are not evidence of TCC denial**. Both report exit code 1 and AppleScript error `Can’t set enabled to UI elements enabled. (-10006)`: our probe's `set enabled` collided with the `System Events` property and attempted a write. Its earlier `external-accessibility-unavailable` label was therefore a **harness misclassification**. We changed the local variable to `axFlag` and reserved that status for permission-like errors; an unrelated AppleScript failure is now `external-automation-error`. The corrected external key-event probe has not run on macOS yet, so external automation/TCC status remains **unknown** pending a new hosted run. No product inference is drawn from the old probe failure.

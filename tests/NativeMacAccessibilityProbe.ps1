@@ -53,11 +53,11 @@ try {
         $script = Join-Path $scratch 'probe.applescript'
         [IO.File]::WriteAllText($script, @'
 tell application "System Events"
-    set enabled to UI elements enabled
+    set axFlag to UI elements enabled
     set targetProcess to first process whose name is "mote"
     set frontmost of targetProcess to true
     key code 123
-    return "ui_elements_enabled=" & enabled
+    return "ui_elements_enabled=" & axFlag
 end tell
 '@)
         $start = [Diagnostics.ProcessStartInfo]::new('/usr/bin/osascript')
@@ -74,10 +74,14 @@ end tell
         else {
             $result.accessibility_exit_code = $automation.ExitCode
             $result.status = if ($automation.ExitCode -eq 0) { 'external-key-event-succeeded' }
-                else { 'external-accessibility-unavailable' }
+                else { 'external-automation-error' }
         }
         $result.accessibility_stdout = $automation.StandardOutput.ReadToEnd().Trim()
         $result.accessibility_stderr = $automation.StandardError.ReadToEnd().Trim()
+        if ($result.status -eq 'external-automation-error' -and
+            $result.accessibility_stderr -match '(?i)not allowed.*(assistive|keystroke|apple event)|not authorized|accessibility.*(denied|disabled)|(-1743|-25211)') {
+            $result.status = 'external-accessibility-unavailable'
+        }
         $automation.Dispose()
     }
 }
