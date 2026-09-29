@@ -106,7 +106,9 @@ editor remains the established `NSTextView` shell. The experimental source body
 is one AppKit `NSView` that paints **every** visible logical row from bounded
 `CanvasFrame.RowWindows` with CoreText/CoreGraphics. A separate, always-visible
 36-DIP bottom ribbon contains a focused, plain-text `NSTextView` whose source
-window is at most 16 Ki UTF-16 units. It owns AppKit input, IME candidate
+binding is at most 8 Ki UTF-16 units, leaving room below the 16 Ki native
+pre-change hard limit for a transient ordinary edit or IME commit before
+synchronous rebinding. It owns AppKit input, IME candidate
 position, and local undo-independent text composition, not a whole-file copy or
 a second rendered source row. The source body height is the physical canvas
 height minus the ribbon, floored at zero; a zero-height body publishes no
@@ -168,6 +170,18 @@ input. This is API-level accessibility, not VoiceOver acceptance.
   focused input after restoring normal geometry. These are OS-backed view and
   selector checks, but the pan/click calls are diagnostic invocations, not an
   external physical trackpad or keyboard trace.
+- [Run 36598787518](https://github.com/kleedaisuki/mote/actions/runs/36598787518)
+  passed the revised published-Mach-O in-process horizontal probe on both
+  Mac RIDs after separating the 8 Ki requested input binding from the 16 Ki
+  native hard cap. At the start of the 50 MiB single-line document, an actual
+  `NSTextView insertText:replacementRange:` call inserted one character into
+  the canonical source; mote's Undo command restored the original length and remote
+  marker before the 40 MiB pan, hit-test, selection/copy, four PNG, tiny-body,
+  and source-file SHA checks all passed. The adapter now rejects any incoming
+  normal binding larger than 8 Ki, so a future controller change cannot
+  silently refill the native host to its pre-change limit. This closes the
+  prior **in-process** ordinary-insert veto, not external keyboard routing or
+  real CJK marked-text behavior.
 - External long-line keyboard/save routing, real CJK candidate/commit/cancel
   and resize behavior, VoiceOver navigation, bidirectional selection geometry,
   and practical latency remain release gates. Do not infer product parity from

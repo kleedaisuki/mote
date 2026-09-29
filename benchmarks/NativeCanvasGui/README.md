@@ -203,11 +203,41 @@ observer did not directly read hidden-island length, so the exact `16,384`
 host occupancy is a **deterministic source-model inference**, not a separate
 AX measurement. A discriminating fix test is a 16,383-versus-16,384-unit
 single-line boundary edit, followed by the existing 50 MiB Save/reopen oracle.
-The likely design correction is to reserve edit/composition slack in the
+The likely design correction was to reserve edit/composition slack in the
 selected native window, not raise the hard 16 KiB host bound or silently
-discard user input. This has **not** been implemented by the benchmark; the
-long-line external edit remains a release gap until the Native owner fixes and
-revalidates it.
+discard user input. Native commit `1e1bcc7` subsequently changed the Mac
+binding request to **8 Ki UTF-16 units** while keeping the 16 Ki native host
+limit; the following target-host run validates that narrower change.
+
+#### Post-fix hosted external keyboard and Save: `36598787518`
+
+[Run `36598787518`](https://github.com/kleedaisuki/mote/actions/runs/36598787518)
+on macOS arm64 passed **all three** synthetic Canvas cases with the new 8 Ki
+Mac binding. Every case passed the exact-PID/source-proxy first-responder gate,
+source selection `0/0→0/1→0/0` after non-mutating Shift+Right/Left, one
+external X, source length +1 and selection `1/0`, observed dirty title,
+streaming SHA-256 proof that exactly one `X` was prefixed to *all* original
+bytes after Save, and a fresh-process reopen with the expected source length
+and unchanged full-byte oracle. The 50 MiB single-line case no longer emitted
+`T2`/`E1`; its trace now includes `T1` admission, `D0` text change and `F2/F3`
+controller edit, matching the 1 MiB and 100 MiB controls.
+
+| Case | Parent start → AX source gate | X → source AX +1 | X → dirty title | X → exact Save | Point working set at focus / after Save | Reopened UTF-16 length |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 MiB CRLF control | 2,456.0 ms | 498.7 ms | 680.8 ms | 1,101.4 ms | 108.1 / 111.0 MiB | 1,048,577 |
+| 100 MiB CRLF many-line | 3,488.3 ms | 440.0 ms | 614.3 ms | 1,526.9 ms | 309.0 / 310.3 MiB | 104,857,601 |
+| 50 MiB single ASCII line | 2,537.1 ms | 341.7 ms | 455.1 ms | 977.3 ms | 217.2 / 223.1 MiB | 52,428,801 |
+
+These are **one process per case**, automation-inclusive observations on one
+hosted runner, not p50/p95, a cold-launch benchmark, first editable frame,
+or physical paint. The Mac peak-working-set counter remained unavailable;
+the table shows positive point-in-time resident sets only. The 100 MiB AX
+visible range changed `0/2176→2113/2240` after the native Next Page menu,
+which supports source-anchor movement but not pixel presentation. The 50 MiB
+long line now has an exact external edit/Save/reopen result; it still lacks a
+demonstrated **user-facing horizontal navigation** path, and IME behavior is
+outside this probe. The earlier 25-second modal veto is a historical pre-fix
+failure, not a remaining failure of this measured AOT binary.
 
 Mac timing is an **automation round-trip upper bound** including AppleScript
 compilation, `osascript` startup, AX polling, and process launch. macOS
