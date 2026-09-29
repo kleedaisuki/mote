@@ -31,7 +31,9 @@ jobs:
       - name: Build complete solution, including desktop executable
         run: dotnet build mote.sln --configuration Release --no-restore
       - name: Test complete solution
-        run: dotnet test mote.sln --configuration Release --no-build --logger "trx;LogFileName=tests.trx"
+        # The runner log already captures failures; avoid creating unuploaded
+        # project-local TestResults outside the repository .cache/.temp roots.
+        run: dotnet test mote.sln --configuration Release --no-build
       - name: Build non-gating benchmark harness
         run: dotnet build tests/Mote.Benchmarks/Mote.Benchmarks.csproj --configuration Release
 
@@ -239,6 +241,70 @@ jobs:
         run: |
           $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote"
           & ./tests/NativeMacWorkflow.ps1 -ExecutablePath $executable
+      # This opt-in canvas/input-island workflow is still experimental. Its
+      # published-binary result is retained for target-host review before gating.
+      - name: Diagnose macOS canvas mixed-clipboard workflow (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacCanvasClipboardWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS canvas clipboard diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-clipboard-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/canvas-clipboard*.txt
+            .cache/ci-inventory/${{ matrix.rid }}/canvas-clipboard.json
+            .temp/canvas-clipboard-*.txt
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Diagnose macOS canvas empty-host delete (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacCanvasDeleteWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS canvas delete diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-delete-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-delete*.txt
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-delete.json
+            .temp/canvas-delete-*.txt
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Diagnose macOS native config and trace placement (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacConfigWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS config and trace diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-config-runtime-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-config-runtime.json
+            .temp/mac-config-runtime/**
+          if-no-files-found: warn
+          retention-days: 14
       - name: Probe hosted macOS external Accessibility automation
         if: always() && startsWith(matrix.rid, 'osx-')
         shell: pwsh
