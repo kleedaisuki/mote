@@ -8,4 +8,8 @@
     <IsAotCompatible>true</IsAotCompatible>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('osx'))">
+    <!-- Embed metadata in the Mach-O instead of adding a separate Info.plist file. -->
+    <LinkerArg Include="-Wl,-sectcreate,__TEXT,__info_plist,$(MSBuildProjectDirectory)/Info.plist" />
+  </ItemGroup>
 </Project>

@@ -35,6 +35,8 @@ jobs:
           echo '=== Mach-O ==='
           file "$out/SingleBinaryAppKit"
           otool -L "$out/SingleBinaryAppKit"
+          echo '=== embedded Info.plist section ==='
+          otool -s __TEXT __info_plist "$out/SingleBinaryAppKit" | sed -n '1,12p'
           echo '=== AppKit/IME protocol check ==='
           "$out/SingleBinaryAppKit"
           echo '=== native window smoke ==='
@@ -51,8 +53,17 @@ jobs:
               raise SystemExit(result.returncode)
           PY
           echo '=== Launch Services bare-file probe (non-gating) ==='
-          if open -a "$out/SingleBinaryAppKit" --args --window; then
+          binary="$(pwd)/$out/SingleBinaryAppKit"
+          if open -a "$binary" --args --window; then
             echo 'open -a bare Mach-O accepted'
           else
             echo 'open -a bare Mach-O rejected'
+          fi
+          echo '=== ad-hoc signature and identity (non-gating) ==='
+          codesign --force --sign - --options runtime "$binary"
+          codesign -dv --verbose=4 "$binary" 2>&1 | grep -E 'Identifier=|Runtime Version|Format=' || true
+          if open -a "$binary" --args --window; then
+            echo 'open -a signed bare Mach-O accepted'
+          else
+            echo 'open -a signed bare Mach-O rejected'
           fi
