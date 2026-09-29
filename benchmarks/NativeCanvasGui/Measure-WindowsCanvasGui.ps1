@@ -2,7 +2,10 @@
 # Host readiness and edit acceptance are observed; no physical paint is measured.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
-    [ValidateSet('many', 'long')][string[]] $Cases = @('many', 'long')
+    [ValidateSet('many', 'long')][string[]] $Cases = @('many', 'long'),
+    [ValidateSet(1, 10, 100)][int] $ManyMiB = 100,
+    [ValidateRange(1, 100)][int] $EditCount = 1,
+    [switch] $Trace
 )
 
 Set-StrictMode -Version Latest
@@ -48,11 +51,19 @@ function Wait-Observed {
     throw "$Failure Last observation: $state"
 }
 
+# Nearest-rank summaries retain their raw-sample count; p95 is not a CI SLA.
+function Get-Rank {
+    param([double[]] $Values, [double] $Fraction)
+    if ($Values.Length -eq 0) { return $null }
+    $sorted = [double[]]@($Values | Sort-Object)
+    return $sorted[[Math]::Ceiling($Fraction * $sorted.Length) - 1]
+}
+
 function Invoke-Case {
     param([string] $Name)
-    $fileName = if ($Name -eq 'many') { 'many-100.txt' } else { 'long-50.txt' }
+    $fileName = if ($Name -eq 'many') { "many-$ManyMiB.txt" } else { 'long-50.txt' }
     $file = Join-Path $scratch $fileName
-    if ($Name -eq 'many') { [MoteCanvasFixture]::WriteManyLines($file) }
+    if ($Name -eq 'many') { [MoteCanvasFixture]::WriteManyLines($file, $ManyMiB) }
     else { [MoteCanvasFixture]::WriteLongLine($file) }
     $originalLength = (Get-Item -LiteralPath $file).Length
     $originalHash = [MoteCanvasFixture]::Sha256($file)
@@ -62,7 +73,7 @@ function Invoke-Case {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.Environment['MOTE_HOME'] = Join-Path $scratch 'mote-home'
-    $start.Environment['MOTE_TRACE'] = '0'
+    $start.Environment['MOTE_TRACE'] = if ($Trace) { '1' } else { '0' }
     [void]$start.ArgumentList.Add('--canvas-experimental')
     [void]$start.ArgumentList.Add($file)
     $script:phase = "launch-$Name"
@@ -82,6 +93,8 @@ function Invoke-Case {
         runtime = [Environment]::Version.ToString()
         executable_sha256 = [MoteCanvasFixture]::Sha256($exe)
         mode = $Name
+        edit_count = $EditCount
+        trace_enabled = [bool]$Trace
         source_bytes = $originalLength
         observer = 'external-Win32-window-focus-control-and-disk;not-physical-paint'
         poll_interval_ms = 20
@@ -90,6 +103,14 @@ function Invoke-Case {
         open_to_bound_host_ms = $null
         open_to_host_ready_ms = $null
         edit_to_dirty_ms = $null
+        native_input_ack_p50_ms = $null
+        native_input_ack_p95_ms = $null
+        edit_to_presentation_p50_ms = $null
+        edit_to_presentation_p95_ms = $null
+        edit_to_presentation_count = 0
+        edit_to_presentation_samples_ms = @()
+        trace_sample_complete = $null
+        gc_observation = 'unavailable-without-Native-AOT-EventPipe-or-internal-GC-marks'
         edit_to_save_ms = $null
         vertical_scroll_ms = $null
         vertical_scroll_position = $null
@@ -147,15 +168,27 @@ function Invoke-Case {
         } else { $null }
 
         $script:phase = "edit-$Name"
-        [void][MoteCanvasGuiProbe]::SendMessageW($script:input, 0x00B1,
-            [UIntPtr]::Zero, [IntPtr]::Zero) # EM_SETSEL at the first source position.
-        $editAt = $watch.Elapsed.TotalMilliseconds
-        [void][MoteCanvasGuiProbe]::SendMessageW($script:input, 0x0102,
-            [UIntPtr][int][char]'X', [IntPtr]::Zero) # WM_CHAR through the real input island.
-        Wait-Observed {
-            return [MoteCanvasGuiProbe]::WindowTitle($script:main).Contains('•')
-        } "The $Name canvas did not accept one native WM_CHAR edit." 15000
-        $result.edit_to_dirty_ms = $watch.Elapsed.TotalMilliseconds - $editAt
+        $ack = [Collections.Generic.List[double]]::new()
+        for ($edit = 1; $edit -le $EditCount; $edit++) {
+            [void][MoteCanvasGuiProbe]::SendMessageW($script:input, 0x00B1,
+                [UIntPtr]::Zero, [IntPtr]::Zero) # EM_SETSEL at source start.
+            $editAt = $watch.Elapsed.TotalMilliseconds
+            [void][MoteCanvasGuiProbe]::SendMessageW($script:input, 0x0102,
+                [UIntPtr][int][char]'X', [IntPtr]::Zero) # Real input-island WM_CHAR.
+            $ack.Add($watch.Elapsed.TotalMilliseconds - $editAt)
+            if ($edit -eq 1) {
+                Wait-Observed {
+                    return [MoteCanvasGuiProbe]::WindowTitle($script:main).Contains('•')
+                } "The $Name canvas did not accept one native WM_CHAR edit." 15000
+                $result.edit_to_dirty_ms = $watch.Elapsed.TotalMilliseconds - $editAt
+            }
+            # Foreground semantic publication is debounced by 80 ms. Spacing
+            # edits avoids silently timing only the final coalesced update.
+            if ($edit -lt $EditCount) { Start-Sleep -Milliseconds 300 }
+        }
+        $result.native_input_ack_p50_ms = Get-Rank $ack.ToArray() 0.50
+        $result.native_input_ack_p95_ms = Get-Rank $ack.ToArray() 0.95
+        if ($Trace) { Start-Sleep -Milliseconds 200 }
         $result.host_length_after = [MoteCanvasGuiProbe]::InputLength($script:input)
         if ($result.host_length_after -gt 16384) { throw 'Input host expanded beyond 16 Ki units.' }
         $script:child.Refresh()
@@ -167,11 +200,13 @@ function Invoke-Case {
         if (-not [MoteCanvasGuiProbe]::PostMessageW($script:main, 0x0111,
             [UIntPtr]203, [IntPtr]::Zero)) { throw 'Could not post native Save command.' }
         Wait-Observed {
-            return (Get-Item -LiteralPath $file).Length -eq $originalLength + 1
+            return (Get-Item -LiteralPath $file).Length -eq $originalLength + $EditCount
         } "The $Name Save did not reach the expected byte length." 30000
         $result.edit_to_save_ms = $watch.Elapsed.TotalMilliseconds - $editAt
-        if (-not [MoteCanvasFixture]::HasOnePrefixedEdit($file, $originalLength,
-            $originalHash)) { throw "The $Name saved file differs from one exact prefixed X." }
+        if (-not [MoteCanvasFixture]::HasPrefixedEdits($file, $originalLength,
+            $originalHash, $EditCount)) {
+            throw "The $Name saved file differs from $EditCount exact prefixed X edits."
+        }
 
         $script:phase = "scroll-$Name"
         if ($Name -eq 'many') {
@@ -205,6 +240,29 @@ function Invoke-Case {
             [UIntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close native window.' }
         if (-not $script:child.WaitForExit(15000) -or $script:child.ExitCode -ne 0) {
             throw 'Native canvas did not exit cleanly.'
+        }
+        if ($Trace) {
+            $traceRoot = Join-Path $scratch 'mote-home/traces'
+            $durations = [Collections.Generic.List[double]]::new()
+            if (Test-Path -LiteralPath $traceRoot) {
+                $traceOutput = Join-Path $cacheRoot ('native-canvas-traces/' +
+                    [IO.Path]::GetFileName($scratch) + '-' + $Name)
+                New-Item -ItemType Directory -Force -Path $traceOutput | Out-Null
+                foreach ($traceFile in Get-ChildItem -LiteralPath $traceRoot -Filter '*.jsonl' -File) {
+                    Copy-Item -LiteralPath $traceFile.FullName -Destination $traceOutput
+                    foreach ($line in Get-Content -LiteralPath $traceFile.FullName) {
+                        $record = $line | ConvertFrom-Json
+                        if ($record.operation -ceq 'document.edit_to_presentation') {
+                            $durations.Add([double]$record.duration_us / 1000)
+                        }
+                    }
+                }
+            }
+            $result.edit_to_presentation_count = $durations.Count
+            $result.edit_to_presentation_samples_ms = @($durations.ToArray())
+            $result.trace_sample_complete = $durations.Count -eq $EditCount
+            $result.edit_to_presentation_p50_ms = Get-Rank $durations.ToArray() 0.50
+            $result.edit_to_presentation_p95_ms = Get-Rank $durations.ToArray() 0.95
         }
         $result.stage = 'complete'
         $result.status = 'passed'

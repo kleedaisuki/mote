@@ -11,8 +11,13 @@ public static class MoteCanvasFixture
     private const int MiB = 1024 * 1024;
 
     /// <summary>Writes 100 MiB of repeating fixed-width CRLF source rows.</summary>
-    public static void WriteManyLines(string path)
+    public static void WriteManyLines(string path) => WriteManyLines(path, 100);
+
+    /// <summary>Writes a byte-exact 1, 10, or 100 MiB line corpus for typing comparisons.</summary>
+    public static void WriteManyLines(string path, int sizeMiB)
     {
+        if (sizeMiB is not (1 or 10 or 100))
+            throw new ArgumentOutOfRangeException(nameof(sizeMiB));
         var block = new byte[2048 * 64];
         for (var row = 0; row < 2048; row++)
         {
@@ -24,9 +29,10 @@ public static class MoteCanvasFixture
         }
         using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write,
             FileShare.None, block.Length);
-        for (var i = 0; i < 800; i++) stream.Write(block);
+        for (var i = 0; i < sizeMiB * 8; i++) stream.Write(block);
         stream.Flush(true);
-        if (stream.Length != 100L * MiB) throw new InvalidOperationException("Many-line fixture size differs.");
+        if (stream.Length != (long)sizeMiB * MiB)
+            throw new InvalidOperationException("Many-line fixture size differs.");
     }
 
     /// <summary>Writes 50 MiB of one ASCII line, with no terminator.</summary>
@@ -50,12 +56,20 @@ public static class MoteCanvasFixture
 
     /// <summary>Proves Save produced exactly one prefixed X and retained every original byte.</summary>
     public static bool HasOnePrefixedEdit(string path, long originalLength, string originalSha256)
+        => HasPrefixedEdits(path, originalLength, originalSha256, 1);
+
+    /// <summary>Proves Save produced only the requested prefix edits, preserving the source suffix.</summary>
+    public static bool HasPrefixedEdits(string path, long originalLength,
+        string originalSha256, int count)
     {
+        if (count < 1 || count > 1000) throw new ArgumentOutOfRangeException(nameof(count));
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite, 128 * 1024);
-            if (stream.Length != originalLength + 1 || stream.ReadByte() != 'X') return false;
+            if (stream.Length != originalLength + count) return false;
+            for (var i = 0; i < count; i++)
+                if (stream.ReadByte() != 'X') return false;
             var remainingHash = Convert.ToHexString(SHA256.HashData(stream));
             return string.Equals(remainingHash, originalSha256, StringComparison.OrdinalIgnoreCase);
         }

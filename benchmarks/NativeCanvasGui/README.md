@@ -2,8 +2,8 @@
 
 These scripts exercise the **opt-in** `mote --canvas-experimental` process, not
 the default native editor or the read-only canvas geometry probe. They generate
-only synthetic data: exactly 100 MiB of fixed-width CRLF lines and 50 MiB of
-one unbroken ASCII line. All fixtures and AppleScript intermediates stay under
+only synthetic data: exactly 1, 10, or 100 MiB of fixed-width CRLF lines and
+50 MiB of one unbroken ASCII line. All fixtures and AppleScript intermediates stay under
 repository `.temp/benchmarks/native-canvas-gui/`; compact JSONL observations
 stay under `.cache/benchmarks/`. A successful run removes its scratch directory;
 a failed run retains it for diagnosis. No real document body is logged.
@@ -13,6 +13,12 @@ a failed run retains it for diagnosis. No real document body is logged.
 ```powershell
 ./benchmarks/NativeCanvasGui/Measure-WindowsCanvasGui.ps1 `
   -ExecutablePath .cache/canvas-large-undo/publish-win-x64/mote.exe
+
+# Repeat one-character typing in one process without coalescing the 80 ms
+# semantic debounce. Run several fresh processes for uncertainty estimates.
+./benchmarks/NativeCanvasGui/Measure-WindowsCanvasGui.ps1 `
+  -ExecutablePath .cache/benchmarks/native-canvas-range-win-x64/mote.exe `
+  -Cases many -ManyMiB 100 -EditCount 20 -Trace
 ```
 
 For each fresh process, it waits for the exact-PID native window, visible
@@ -23,6 +29,16 @@ bytes by streaming SHA-256. The many-line case dispatches `WM_VSCROLL/SB_BOTTOM`
 and requires the canvas scrollbar to advance. The one-line case sends one wheel
 message and requires the host to remain bounded; it does **not** claim horizontal
 scrolling, which the interactive canvas does not currently implement.
+
+`-ManyMiB` selects 1, 10, or 100 MiB; `-EditCount` inserts that many `X`
+characters at source start and verifies their exact saved bytes. `-Trace`
+enables the product's own numeric, text-free trace and leaves 300 ms between
+edits plus a final 200 ms for the 80 ms semantic debounce. It retains raw
+trace JSONL under `.cache/benchmarks/native-canvas-traces/` and reports the
+count and nearest-rank p50/p95 of `document.edit_to_presentation` samples.
+That phase ends at semantic publication, **not physical paint**; a complete
+trace requires the count to equal `-EditCount`. The script does not measure GC
+collections in the shipped Native AOT binary, where EventPipe is disabled.
 
 `open_to_host_ready_ms` is parent process start to *externally observed,
 focused host*, sampled at 20 ms intervals and including launcher/poll overhead.
