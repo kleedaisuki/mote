@@ -196,12 +196,11 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Native GUI smoke exited with code $($process.ExitCode): $(Get-Content '.temp/ci-smoke/ui-stderr.txt' -Raw)" }
           if ($output.Trim() -ne 'mote-native-gui-ready') { throw "Unexpected native GUI smoke output: $output" }
           Write-Host "Native GUI initialized and closed cleanly: $executable"
-      # This opt-in read-only canvas is not the default editor. Retain the report
-      # and real view PNGs even on failure; promote only after target-OS review.
-      - name: Diagnose on-screen read-only canvas (non-gating)
+      # This opt-in read-only canvas is not the default editor. Gate only its
+      # source-backed scroll/selection/contrast contract; retain PNGs on failure.
+      - name: Verify read-only on-screen native canvas
         shell: pwsh
         timeout-minutes: 12
-        continue-on-error: true
         run: |
           $rid = '${{ matrix.rid }}'
           $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
