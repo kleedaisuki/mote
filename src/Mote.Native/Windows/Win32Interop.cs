@@ -19,6 +19,7 @@ internal static class Win32
     internal const uint ES_READONLY = 0x0800;
     internal const uint ES_WANTRETURN = 0x1000;
     internal const uint WS_EX_CLIENTEDGE = 0x00000200;
+    internal const uint WS_EX_DLGMODALFRAME = 0x00000001;
     internal const uint WS_CLIPCHILDREN = 0x02000000;
     internal const uint MF_STRING = 0;
     internal const uint MF_POPUP = 0x10;
@@ -35,6 +36,13 @@ internal static class Win32
     internal const int WM_SIZE = 0x0005;
     internal const int WM_CLOSE = 0x0010;
     internal const int WM_COMMAND = 0x0111;
+    internal const int WM_NOTIFY = 0x004E;
+    internal const int WM_KEYDOWN = 0x0100;
+    internal const uint WM_CHAR = 0x0102;
+    internal const uint WM_CUT = 0x0300;
+    internal const uint WM_COPY = 0x0301;
+    internal const uint WM_PASTE = 0x0302;
+    internal const uint WM_CLEAR = 0x0303;
     internal const int WM_TIMER = 0x0113;
     internal const uint WM_NCDESTROY = 0x0082;
     internal const uint WM_IME_STARTCOMPOSITION = 0x010D;
@@ -58,7 +66,9 @@ internal static class Win32
     internal const int EM_SETEVENTMASK = WM_USER + 69;
     internal const int EM_GETEVENTMASK = WM_USER + 59;
     internal const int EN_CHANGE = 0x0300;
+    internal const int EN_SELCHANGE = 0x0702;
     internal const int ENM_CHANGE = 1;
+    internal const int ENM_SELCHANGE = 0x00080000;
     internal const uint GT_USECRLF = 1;
     internal const uint CP_UNICODE = 1200;
     internal const uint SCF_SELECTION = 1;
@@ -67,6 +77,8 @@ internal static class Win32
     internal const uint CFM_SIZE = 0x80000000;
     internal const uint CFM_FACE = 0x20000000;
     internal const uint CFM_COLOR = 0x40000000;
+    internal const uint CF_UNICODETEXT = 13;
+    internal const uint GMEM_MOVEABLE = 0x0002;
     internal const byte FVIRTKEY = 0x01;
     internal const byte FCONTROL = 0x08;
 
@@ -186,6 +198,22 @@ internal static class Win32
         internal ushort Command;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NotificationHeader
+    {
+        internal nint Window;
+        internal nuint Id;
+        internal int Code;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SelectionChange
+    {
+        internal NotificationHeader Header;
+        internal CharacterRange Range;
+        internal uint Type;
+    }
+
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern nint LoadLibraryW(string fileName);
@@ -200,6 +228,16 @@ internal static class Win32
     internal static extern nint DefWindowProcW(nint window, uint message, nuint wParam, nint lParam);
     [DllImport("user32.dll")]
     internal static extern bool DestroyWindow(nint window);
+    [DllImport("user32.dll")]
+    internal static extern bool EnableWindow(nint window, bool enable);
+    [DllImport("user32.dll")]
+    internal static extern bool SetForegroundWindow(nint window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int GetWindowTextW(nint window, [Out] char[] text, int capacity);
+    [DllImport("user32.dll")]
+    internal static extern int GetWindowTextLengthW(nint window);
+    [DllImport("user32.dll")]
+    internal static extern bool IsDialogMessageW(nint dialog, ref Message message);
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool PostMessageW(nint window, uint message, nuint wParam, nint lParam);
     [DllImport("user32.dll", SetLastError = true)]
@@ -264,6 +302,24 @@ internal static class Win32
     internal static extern bool DestroyAcceleratorTable(nint table);
     [DllImport("user32.dll")]
     internal static extern bool InvalidateRect(nint window, nint rect, bool erase);
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool OpenClipboard(nint owner);
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool EmptyClipboard();
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint SetClipboardData(uint format, nint data);
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool CloseClipboard();
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern nint GlobalAlloc(uint flags, nuint bytes);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern nint GlobalLock(nint memory);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool GlobalUnlock(nint memory);
+    [DllImport("kernel32.dll")]
+    internal static extern nint GlobalFree(nint memory);
+    [DllImport("gdi32.dll")]
+    internal static extern nint GetStockObject(int index);
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
     internal static extern nint CreateFontW(int height, int width, int escapement, int orientation,
         int weight, uint italic, uint underline, uint strikeout, uint charSet, uint outputPrecision,

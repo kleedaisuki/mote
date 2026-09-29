@@ -1,4 +1,5 @@
 using System.Text;
+using Mote.Engine;
 using Mote.Formats;
 
 namespace Mote.Native;
@@ -31,6 +32,33 @@ internal static class NativePreviewBuilder
                 break;
             case DocumentKind.PlainText:
                 output.Plain(analysis.SourceText, analysis.Root.Span);
+                break;
+            default:
+                output.Tree(analysis.Root);
+                break;
+        }
+        return output.Finish();
+    }
+
+    /// <summary>Builds a preview from a versioned session result with absolute source spans.</summary>
+    public static NativePreview Build(DocumentAnalysis analysis, DocumentKind kind,
+        TextSnapshot snapshot, int pageStart, int pageLength)
+    {
+        var output = new Builder(0);
+        if (analysis.Completeness != AnalysisCompleteness.Complete)
+            output.Add($"{analysis.Completeness} preview — incomplete context", "comment",
+                analysis.Coverage);
+        switch (kind)
+        {
+            case DocumentKind.Markdown:
+                foreach (var node in analysis.Root.Children) output.Markdown(node);
+                break;
+            case DocumentKind.Csv:
+                output.Csv(analysis.Root);
+                break;
+            case DocumentKind.PlainText:
+                output.Plain(snapshot.GetText(pageStart, pageLength),
+                    new TextSpan(pageStart, pageLength));
                 break;
             default:
                 output.Tree(analysis.Root);

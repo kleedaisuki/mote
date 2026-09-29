@@ -33,7 +33,14 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     private const int FormatId = 208;
     private const int PreviousId = 209;
     private const int NextId = 210;
+    private const int SelectAllId = 211;
+    private const int CopyId = 212;
+    private const int FindId = 213;
+    private const int FindNextId = 214;
+    private const int GoToLineId = 215;
+    private const int CutId = 216;
     private const nuint StyleTimerId = 1;
+    private const uint SelectionMessage = Win32.WM_APP + 1;
     private static readonly Win32.WindowProcedure WindowProcedure = Dispatch;
     private static readonly Win32.SubclassProcedure EditorSubclassProcedure = EditorSubclass;
     private static WindowsEditorShell? _creating;
@@ -55,6 +62,12 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     private IThemePolicy _theme = ThemePolicies.Get(ThemePolicies.DefaultId);
     private bool _settingText;
     private bool _imeComposing;
+    private bool _settingSelection;
+    private bool _pendingSelection;
+    private bool _selectionPostQueued;
+    private int _lastSelectionStart;
+    private int _lastSelectionEnd;
+    private string _lastFind = "";
     private string? _styleText;
 
     /// <inheritdoc />
@@ -82,6 +95,8 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     /// <inheritdoc />
     public event Action<string>? TextChanged;
     /// <inheritdoc />
+    public event Action<int, int>? SelectionChanged;
+    /// <inheritdoc />
     public event Action? NewRequested;
     /// <inheritdoc />
     public event Action? OpenRequested;
@@ -99,6 +114,18 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     public event Action? PagePreviousRequested;
     /// <inheritdoc />
     public event Action? PageNextRequested;
+    /// <inheritdoc />
+    public event Action? FindRequested;
+    /// <inheritdoc />
+    public event Action? FindNextRequested;
+    /// <inheritdoc />
+    public event Action? GoToLineRequested;
+    /// <inheritdoc />
+    public event Action? SelectAllRequested;
+    /// <inheritdoc />
+    public event Action? CopyRequested;
+    /// <inheritdoc />
+    public event Action? CutRequested;
     /// <inheritdoc />
     public event EventHandler<NativeClosingEventArgs>? ClosingRequested;
     /// <inheritdoc />
@@ -168,6 +195,9 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     {
         if (_window != 0) Win32.PostMessageW(_window, Win32.WM_CLOSE, 0, 0);
     }
+
+    /// <inheritdoc />
+    public bool CommitPendingText() => !_imeComposing;
 
     /// <inheritdoc />
     public void SetDocument(NativeDocumentView view)
@@ -275,6 +305,68 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     public string? PickOpenFile() => PickFile(save: false, null);
 
     /// <inheritdoc />
+    public string? PromptFind()
+    {
+        var value = Win32TextPrompt.Show(_window, "Find in document", "Find:", _lastFind);
+        if (string.IsNullOrEmpty(value)) return null;
+        _lastFind = value;
+        return value;
+    }
+
+    /// <inheritdoc />
+    public int? PromptGoToLine()
+    {
+        while (true)
+        {
+            var value = Win32TextPrompt.Show(_window, "Go to line", "Line number:", "1");
+            if (value is null) return null;
+            if (int.TryParse(value, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var line) && line > 0)
+                return line;
+            ShowError("Enter a positive one-based line number.");
+        }
+    }
+
+    /// <inheritdoc />
+    public void SetClipboardText(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var chars = (text + '\0').ToCharArray();
+        var memory = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (nuint)checked(chars.Length * sizeof(char)));
+        if (memory == 0) throw ClipboardFailure("The selection cannot be allocated for the clipboard.");
+        try
+        {
+            var pointer = Win32.GlobalLock(memory);
+            if (pointer == 0) throw ClipboardFailure("The clipboard memory cannot be locked.");
+            try { Marshal.Copy(chars, 0, pointer, chars.Length); }
+            finally
+            {
+                if (!Win32.GlobalUnlock(memory) && Marshal.GetLastPInvokeError() != 0)
+                    throw ClipboardFailure("The clipboard memory could not be unlocked.");
+            }
+            if (!Win32.OpenClipboard(_window)) throw ClipboardFailure("The system clipboard is busy.");
+            try
+            {
+                if (!Win32.EmptyClipboard()) throw ClipboardFailure("The system clipboard could not be cleared.");
+                if (Win32.SetClipboardData(Win32.CF_UNICODETEXT, memory) == 0)
+                    throw ClipboardFailure("The system clipboard rejected Unicode text.");
+                memory = 0; // Windows owns the movable block after SetClipboardData succeeds.
+            }
+            finally
+            {
+                if (!Win32.CloseClipboard()) throw ClipboardFailure("The system clipboard could not be closed.");
+            }
+        }
+        finally
+        {
+            if (memory != 0) Win32.GlobalFree(memory);
+        }
+    }
+
+    private static Win32Exception ClipboardFailure(string message) =>
+        new(Marshal.GetLastPInvokeError(), message);
+
+    /// <inheritdoc />
     public string? PickSaveFile(string? currentPath) => PickFile(save: true, currentPath);
 
     /// <inheritdoc />
@@ -325,6 +417,27 @@ internal sealed class WindowsEditorShell : INativeEditorShell
                 }
                 HandleCommand((int)(wParam & 0xFFFF));
                 return 0;
+            case Win32.WM_NOTIFY:
+                if (_editor != 0 && lParam != 0 && !_settingText && !_settingSelection)
+                {
+                    var header = Marshal.PtrToStructure<Win32.NotificationHeader>(lParam);
+                    if (header.Window == _editor && header.Code == Win32.EN_SELCHANGE)
+                    {
+                        // RichEdit can collapse selection before EN_CHANGE for a typed edit.
+                        // Dispatch after the input message so the controller sees text first.
+                        _pendingSelection = true;
+                        if (!_selectionPostQueued)
+                        {
+                            _selectionPostQueued = true;
+                            Win32.PostMessageW(_window, SelectionMessage, 0, 0);
+                        }
+                    }
+                }
+                return 0;
+            case SelectionMessage:
+                _selectionPostQueued = false;
+                FlushSelection();
+                return 0;
             case Win32.WM_TIMER when wParam == StyleTimerId:
                 Win32.KillTimer(_window, StyleTimerId);
                 if (_imeComposing)
@@ -373,7 +486,8 @@ internal sealed class WindowsEditorShell : INativeEditorShell
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create native editor controls.");
         // RichEdit's default user-edit limit is much smaller than a viewport page.
         Win32.SendMessageW(_editor, Win32.EM_EXLIMITTEXT, 0, (nint)int.MaxValue);
-        Win32.SendMessageW(_editor, Win32.EM_SETEVENTMASK, 0, (nint)Win32.ENM_CHANGE);
+        Win32.SendMessageW(_editor, Win32.EM_SETEVENTMASK, 0,
+            (nint)(Win32.ENM_CHANGE | Win32.ENM_SELCHANGE));
         if (!Win32.SetWindowSubclass(_editor, EditorSubclassProcedure, 1, 0))
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot protect RichEdit IME composition.");
         SetTheme(_theme);
@@ -413,6 +527,13 @@ internal sealed class WindowsEditorShell : INativeEditorShell
         Win32.AppendMenuW(file, Win32.MF_STRING, ExitId, "E&xit");
         Win32.AppendMenuW(edit, Win32.MF_STRING, UndoId, "&Undo\tCtrl+Z");
         Win32.AppendMenuW(edit, Win32.MF_STRING, RedoId, "&Redo\tCtrl+Y");
+        Win32.AppendMenuW(edit, Win32.MF_SEPARATOR, 0, null);
+        Win32.AppendMenuW(edit, Win32.MF_STRING, SelectAllId, "Select &All\tCtrl+A");
+        Win32.AppendMenuW(edit, Win32.MF_STRING, CopyId, "&Copy\tCtrl+C");
+        Win32.AppendMenuW(edit, Win32.MF_STRING, CutId, "Cu&t\tCtrl+X");
+        Win32.AppendMenuW(edit, Win32.MF_STRING, FindId, "&Find…\tCtrl+F");
+        Win32.AppendMenuW(edit, Win32.MF_STRING, FindNextId, "Find &Next\tF3");
+        Win32.AppendMenuW(edit, Win32.MF_STRING, GoToLineId, "Go to &Line…\tCtrl+G");
         Win32.AppendMenuW(edit, Win32.MF_STRING, FormatId, "&Format document\tCtrl+Shift+F");
         Win32.AppendMenuW(view, Win32.MF_STRING, PreviousId, "&Previous page\tF7");
         Win32.AppendMenuW(view, Win32.MF_STRING, NextId, "&Next page\tF8");
@@ -431,6 +552,9 @@ internal sealed class WindowsEditorShell : INativeEditorShell
             Key('N', NewId), Key('O', OpenId), Key('S', SaveId),
             Key('S', SaveAsId, Win32.FCONTROL | Win32.FVIRTKEY | 0x04),
             Key('Z', UndoId), Key('Y', RedoId),
+            Key('Z', RedoId, Win32.FCONTROL | Win32.FVIRTKEY | 0x04),
+            Key('A', SelectAllId), Key('C', CopyId), Key('X', CutId), Key('F', FindId),
+            Key('G', GoToLineId), Key(0x72, FindNextId, Win32.FVIRTKEY),
             Key('F', FormatId, Win32.FCONTROL | Win32.FVIRTKEY | 0x04),
             Key(0x76, PreviousId, Win32.FVIRTKEY), Key(0x77, NextId, Win32.FVIRTKEY)
         };
@@ -439,6 +563,8 @@ internal sealed class WindowsEditorShell : INativeEditorShell
 
     private void HandleCommand(int id)
     {
+        if (id is CopyId or CutId or FindId or FindNextId or GoToLineId)
+            FlushSelection();
         switch (id)
         {
             case NewId: NewRequested?.Invoke(); break;
@@ -449,6 +575,12 @@ internal sealed class WindowsEditorShell : INativeEditorShell
             case UndoId: UndoRequested?.Invoke(); break;
             case RedoId: RedoRequested?.Invoke(); break;
             case FormatId: FormatRequested?.Invoke(); break;
+            case SelectAllId: SelectAllRequested?.Invoke(); break;
+            case CopyId: CopyRequested?.Invoke(); break;
+            case CutId: CutRequested?.Invoke(); break;
+            case FindId: FindRequested?.Invoke(); break;
+            case FindNextId: FindNextRequested?.Invoke(); break;
+            case GoToLineId: GoToLineRequested?.Invoke(); break;
             case PreviousId: PagePreviousRequested?.Invoke(); break;
             case NextId: PageNextRequested?.Invoke(); break;
         }
@@ -469,6 +601,22 @@ internal sealed class WindowsEditorShell : INativeEditorShell
     {
         var shell = _active ?? _creating;
         if (shell is null) return Win32.DefSubclassProc(window, message, wParam, lParam);
+        if (message == Win32.WM_COPY)
+        {
+            shell.FlushSelection();
+            shell.CopyRequested?.Invoke();
+            return 0;
+        }
+        if (message == Win32.WM_CUT)
+        {
+            shell.FlushSelection();
+            shell.CutRequested?.Invoke();
+            return 0;
+        }
+        if (message is Win32.WM_CHAR or Win32.WM_PASTE or
+            Win32.WM_CLEAR or Win32.WM_IME_STARTCOMPOSITION ||
+            message == Win32.WM_KEYDOWN && (wParam == 0x08 || wParam == 0x2E))
+            shell.FlushSelection();
         if (message == Win32.WM_IME_STARTCOMPOSITION) shell._imeComposing = true;
         var result = Win32.DefSubclassProc(window, message, wParam, lParam);
         if (message == Win32.WM_IME_ENDCOMPOSITION)
@@ -479,6 +627,18 @@ internal sealed class WindowsEditorShell : INativeEditorShell
         if (message == Win32.WM_NCDESTROY)
             Win32.RemoveWindowSubclass(window, EditorSubclassProcedure, subclassId);
         return result;
+    }
+
+    private void FlushSelection()
+    {
+        if (!_pendingSelection) return;
+        _pendingSelection = false;
+        var range = GetSelection();
+        if (range.Min == _lastSelectionStart && range.Max == _lastSelectionEnd) return;
+        _lastSelectionStart = range.Min;
+        _lastSelectionEnd = range.Max;
+        // RichEdit exposes ordered endpoints, not the active edge of a reverse selection.
+        SelectionChanged?.Invoke(range.Min, range.Max);
     }
 
     private void ScheduleStyle()
@@ -612,7 +772,13 @@ internal sealed class WindowsEditorShell : INativeEditorShell
         return range;
     }
 
-    private void SetSelection(int start, int end) => SetSelection(_editor, start, end);
+    /// <inheritdoc />
+    public void SetSelection(int displayAnchor, int displayActive)
+    {
+        if (_editor == 0) return;
+        SetSelection(_editor, Math.Clamp(displayAnchor, 0, _visibleText.Length),
+            Math.Clamp(displayActive, 0, _visibleText.Length));
+    }
 
     private void SetSelection(nint control, int start, int end)
     {
@@ -622,7 +788,15 @@ internal sealed class WindowsEditorShell : INativeEditorShell
             Min = offsets.ToNative(start),
             Max = offsets.ToNative(end)
         };
-        Win32.SendMessageW(control, Win32.EM_EXSETSEL, 0, ref range);
+        var wasSettingSelection = _settingSelection;
+        _settingSelection = true;
+        try { Win32.SendMessageW(control, Win32.EM_EXSETSEL, 0, ref range); }
+        finally { _settingSelection = wasSettingSelection; }
+        if (control == _editor)
+        {
+            _lastSelectionStart = Math.Min(start, end);
+            _lastSelectionEnd = Math.Max(start, end);
+        }
     }
 
     private void SetSelectionColor(ThemeColor color) =>

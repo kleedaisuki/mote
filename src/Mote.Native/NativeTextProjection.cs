@@ -77,6 +77,18 @@ internal sealed class NativeTextProjection
     public int ToDisplay(int sourceOffset) => _sourceToDisplay[sourceOffset];
 
     /// <summary>
+    /// Converts a display boundary to a source boundary. A position inside a synthesized
+    /// CRLF maps before or after its original one-character delimiter as requested.
+    /// </summary>
+    public int ToSourceBoundary(int displayOffset, bool towardEnd = false)
+    {
+        if ((uint)displayOffset >= (uint)_displayToSourceFloor.Length)
+            throw new ArgumentOutOfRangeException(nameof(displayOffset));
+        return towardEnd ? _displayToSourceCeiling[displayOffset] :
+            _displayToSourceFloor[displayOffset];
+    }
+
+    /// <summary>
     /// Computes a single engine replacement from an edited native page. Unchanged source
     /// outside the replacement keeps its exact original newline spelling.
     /// </summary>

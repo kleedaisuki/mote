@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -27,10 +28,25 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     private IThemePolicy? _theme;
     private NativeDocumentView? _pendingDocument;
     private NativeAnalysisView? _pendingAnalysis;
+    private bool _deferredDocument;
+    private string? _deferredAnalysisText;
     private bool _settingText;
+    private bool _settingSelection;
+    private bool _compositionDirty;
+    private bool _compositionCheckScheduled;
+    private bool _compositionCommitRejected;
     private bool _closeApproved;
     private string _statusText = string.Empty;
     private string _visibleText = string.Empty;
+    private string _findQuery = string.Empty;
+    private int _selectionAnchor;
+    private ObjC.Range? _pendingNativeSelection;
+    private bool _selectionDeliveryScheduled;
+    private (int Anchor, int Active)? _pendingSelection;
+    private string? _probeOpenPath;
+    private string? _probeSavePath;
+    private bool _probeConfirmDiscardOnce;
+    private bool _probeDidConfirmDiscard;
 
     /// <inheritdoc />
     public NativeLineEndingMode LineEndingMode => NativeLineEndingMode.Preserve;
@@ -53,6 +69,8 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     /// <inheritdoc />
     public event Action<string>? TextChanged;
     /// <inheritdoc />
+    public event Action<int, int>? SelectionChanged;
+    /// <inheritdoc />
     public event Action? NewRequested;
     /// <inheritdoc />
     public event Action? OpenRequested;
@@ -70,6 +88,18 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     public event Action? PagePreviousRequested;
     /// <inheritdoc />
     public event Action? PageNextRequested;
+    /// <inheritdoc />
+    public event Action? FindRequested;
+    /// <inheritdoc />
+    public event Action? FindNextRequested;
+    /// <inheritdoc />
+    public event Action? GoToLineRequested;
+    /// <inheritdoc />
+    public event Action? SelectAllRequested;
+    /// <inheritdoc />
+    public event Action? CopyRequested;
+    /// <inheritdoc />
+    public event Action? CutRequested;
     /// <inheritdoc />
     public event EventHandler<NativeClosingEventArgs>? ClosingRequested;
     /// <inheritdoc />
@@ -96,6 +126,7 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
                 if (_theme is not null) ApplyTheme(_theme);
                 if (_pendingDocument is not null) SetDocument(_pendingDocument);
                 if (_pendingAnalysis is not null) SetAnalysis(_pendingAnalysis);
+                if (_pendingSelection is { } selection) SetSelection(selection.Anchor, selection.Active);
                 ObjC.Send(_window, ObjC.Sel("makeKeyAndOrderFront:"), 0);
                 ObjC.Send(_application, ObjC.Sel("activateIgnoringOtherApps:"), 1);
                 Post(() => Shown?.Invoke());
@@ -118,16 +149,26 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
             // A canonical echo after typing must not reset the native caret or IME state.
             if (!string.Equals(_visibleText, view.Text, StringComparison.Ordinal))
             {
-                ObjC.Send(_editor, ObjC.Sel("setString:"), ObjC.String(view.Text));
-                _visibleText = view.Text;
+                if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0)
+                    _deferredDocument = true;
+                else
+                {
+                    _pendingNativeSelection = null;
+                    ObjC.Send(_editor, ObjC.Sel("setString:"), ObjC.String(view.Text));
+                    _visibleText = view.Text;
+                    _selectionAnchor = 0;
+                    _deferredDocument = false;
+                }
             }
-            if (view.FocusDisplayOffset is { } focus)
+            if (!_deferredDocument && view.FocusDisplayOffset is { } focus)
             {
                 if (focus < 0 || focus > view.Text.Length)
                     throw new ArgumentOutOfRangeException(nameof(view), "Focus must belong to the displayed page.");
                 var caret = new ObjC.Range((nuint)focus, 0);
                 ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), caret);
                 ObjC.Send(_editor, ObjC.Sel("scrollRangeToVisible:"), caret);
+                _selectionAnchor = focus;
+                _pendingNativeSelection = null;
             }
             ObjC.Send(_window, ObjC.Sel("setTitle:"), ObjC.String(view.Title));
             SetStatus(view.Status);
@@ -140,7 +181,12 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     {
         _pendingAnalysis = view;
         if (_editor == 0) return;
-        if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0) return;
+        if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0)
+        {
+            _deferredAnalysisText = _visibleText;
+            return;
+        }
+        _deferredAnalysisText = null;
         var length = checked((int)ObjC.Send(ObjC.Send(_editor, ObjC.Sel("string")), ObjC.Sel("length")));
         var baseColor = Color(_theme?.Palette.EditorForeground ?? new ThemeColor(216, 218, 223));
         ObjC.Send(_editor, ObjC.Sel("setTextColor:range:"), baseColor,
@@ -171,10 +217,94 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (_editor != 0) ApplyTheme(theme);
     }
 
+    /// <inheritdoc />
+    public void SetSelection(int displayAnchor, int displayActive)
+    {
+        _pendingSelection = (displayAnchor, displayActive);
+        if (_editor == 0) return;
+        if (displayAnchor < 0 || displayActive < 0 ||
+            displayAnchor > _visibleText.Length || displayActive > _visibleText.Length)
+            throw new ArgumentOutOfRangeException(nameof(displayAnchor), "Selection must belong to the visible page.");
+        var start = Math.Min(displayAnchor, displayActive);
+        var range = new ObjC.Range((nuint)start, (nuint)Math.Abs(displayActive - displayAnchor));
+        _settingSelection = true;
+        try
+        {
+            _pendingNativeSelection = null;
+            ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), range);
+            ObjC.Send(_editor, ObjC.Sel("scrollRangeToVisible:"), range);
+            _selectionAnchor = displayAnchor;
+        }
+        finally { _settingSelection = false; }
+    }
+
+    /// <inheritdoc />
+    public string? PromptFind()
+    {
+        var value = PromptText("Find in document", "Search text", _findQuery);
+        if (string.IsNullOrEmpty(value)) return null;
+        _findQuery = value;
+        return value;
+    }
+
+    /// <inheritdoc />
+    public int? PromptGoToLine()
+    {
+        var value = PromptText("Go to line", "One-based line number", "1");
+        if (value is null) return null;
+        if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var line) && line > 0)
+            return line;
+        ShowError("Enter a positive line number.");
+        return null;
+    }
+
+    /// <inheritdoc />
+    public void SetClipboardText(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var board = ObjC.Send(ObjC.Class("NSPasteboard"), ObjC.Sel("generalPasteboard"));
+        ObjC.Send(board, ObjC.Sel("clearContents"));
+        if (ObjC.Send(board, ObjC.Sel("setString:forType:"),
+            ObjC.String(text), ObjC.String("public.utf8-plain-text")) == 0)
+            throw new IOException("The macOS pasteboard rejected the selected text.");
+    }
+
+    /// <inheritdoc />
+    public bool CommitPendingText()
+    {
+        try { return CommitMarkedTextBeforeCommand(); }
+        catch (Exception error)
+        {
+            ShowError(error.Message);
+            return false;
+        }
+    }
+
+    private static string? PromptText(string title, string explanation, string initialValue)
+    {
+        var alert = ObjC.New("NSAlert");
+        ObjC.Send(alert, ObjC.Sel("setMessageText:"), ObjC.String(title));
+        ObjC.Send(alert, ObjC.Sel("setInformativeText:"), ObjC.String(explanation));
+        var field = ObjC.Send(ObjC.Send(ObjC.Class("NSTextField"), ObjC.Sel("alloc")),
+            ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 0, 300, 24));
+        ObjC.Send(field, ObjC.Sel("setStringValue:"), ObjC.String(initialValue));
+        ObjC.Send(alert, ObjC.Sel("setAccessoryView:"), field);
+        ObjC.Send(alert, ObjC.Sel("addButtonWithTitle:"), ObjC.String("Go"));
+        ObjC.Send(alert, ObjC.Sel("addButtonWithTitle:"), ObjC.String("Cancel"));
+        ObjC.Send(ObjC.Send(alert, ObjC.Sel("window")), ObjC.Sel("makeFirstResponder:"), field);
+        if (ObjC.Send(alert, ObjC.Sel("runModal")) != 1000) return null;
+        return ObjC.ManagedString(ObjC.Send(field, ObjC.Sel("stringValue")));
+    }
+
 
     /// <inheritdoc />
     public string? PickOpenFile()
     {
+        if (_probeOpenPath is { } probePath)
+        {
+            _probeOpenPath = null;
+            return probePath;
+        }
         var panel = ObjC.Send(ObjC.Class("NSOpenPanel"), ObjC.Sel("openPanel"));
         ObjC.Send(panel, ObjC.Sel("setCanChooseDirectories:"), 0);
         ObjC.Send(panel, ObjC.Sel("setAllowsMultipleSelection:"), 0);
@@ -184,6 +314,11 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     /// <inheritdoc />
     public string? PickSaveFile(string? currentPath)
     {
+        if (_probeSavePath is { } probePath)
+        {
+            _probeSavePath = null;
+            return probePath;
+        }
         var panel = ObjC.Send(ObjC.Class("NSSavePanel"), ObjC.Sel("savePanel"));
         if (!string.IsNullOrEmpty(currentPath))
         {
@@ -199,6 +334,12 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
     /// <inheritdoc />
     public bool ConfirmDiscard()
     {
+        if (_probeConfirmDiscardOnce)
+        {
+            _probeConfirmDiscardOnce = false;
+            _probeDidConfirmDiscard = true;
+            return true;
+        }
         var alert = ObjC.New("NSAlert");
         ObjC.Send(alert, ObjC.Sel("setMessageText:"), ObjC.String("Discard unsaved changes?"));
         ObjC.Send(alert, ObjC.Sel("setInformativeText:"),
@@ -253,6 +394,57 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         var url = ObjC.Send(panel, ObjC.Sel("URL"));
         return url == 0 ? null : ObjC.ManagedString(ObjC.Send(url, ObjC.Sel("path")));
     }
+
+    /// <summary>Gets the actual native editor text for the in-process AppKit workflow probe.</summary>
+    internal string ProbeNativeText => _editor == 0 ? string.Empty :
+        ObjC.ManagedString(ObjC.Send(_editor, ObjC.Sel("string")));
+
+    /// <summary>Gets the most recent controller title projected into the native window.</summary>
+    internal string ProbeTitle => _pendingDocument?.Title ?? string.Empty;
+
+    /// <summary>Gets whether the controller still considers the current native page dirty.</summary>
+    internal bool ProbeIsModified => _pendingDocument?.IsModified ?? false;
+
+    /// <summary>Gets the canonical page last sent by the controller, excluding marked preedit.</summary>
+    internal string ProbeProjectedText => _pendingDocument?.Text ?? string.Empty;
+
+    /// <summary>Whether AppKit currently owns uncommitted marked text.</summary>
+    internal bool ProbeHasMarkedText => _editor != 0 &&
+        ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0;
+
+    /// <summary>Inserts through NSTextView's native text-input method, not the engine API.</summary>
+    internal void ProbeInsertAtEnd(string value)
+    {
+        var caret = new ObjC.Range((nuint)ProbeNativeText.Length, 0);
+        ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), caret);
+        ObjC.Send(_editor, ObjC.Sel("insertText:replacementRange:"),
+            ObjC.String(value), new ObjC.Range(nuint.MaxValue, 0));
+    }
+
+    /// <summary>Stages a marked-text candidate through the real NSTextInputClient protocol.</summary>
+    internal void ProbeSetMarkedAtEnd(string value)
+    {
+        var caret = new ObjC.Range((nuint)ProbeNativeText.Length, 0);
+        ObjC.Send(_editor, ObjC.Sel("setSelectedRange:"), caret);
+        ObjC.Send(_editor, ObjC.Sel("setMarkedText:selectedRange:replacementRange:"),
+            ObjC.String(value), new ObjC.Range((nuint)value.Length, 0),
+            new ObjC.Range(nuint.MaxValue, 0));
+    }
+
+    /// <summary>Requests a native menu action; only used by the dedicated published-binary workflow probe.</summary>
+    internal void ProbeInvokeMenu(string selector) => ObjC.Send(_delegate, ObjC.Sel(selector), 0);
+
+    /// <summary>Supplies a deterministic native picker result for one probe action.</summary>
+    internal void ProbePickOpen(string path) => _probeOpenPath = path;
+
+    /// <summary>Supplies a deterministic native picker result for one probe action.</summary>
+    internal void ProbePickSave(string path) => _probeSavePath = path;
+
+    /// <summary>Approves one probe-only discard after a marked-text commit.</summary>
+    internal void ProbeApproveDiscardOnce() => _probeConfirmDiscardOnce = true;
+
+    /// <summary>Whether the probe observed the dirty-document discard path.</summary>
+    internal bool ProbeDidConfirmDiscard => _probeDidConfirmDiscard;
 
     private void CreateWindow()
     {
@@ -333,9 +525,13 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
             ("Close", "performClose:", "w")], true);
         AddMenu(main, "Edit", [
             ("Undo", "moteUndo:", "z"), ("Redo", "moteRedo:", "Z"),
-            ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
-            ("Paste", "pasteAsPlainText:", "v"), ("Select All", "selectAll:", "a"),
+            ("Cut", "moteCut:", "x"), ("Copy", "moteCopy:", "c"),
+            ("Paste", "pasteAsPlainText:", "v"), ("Select All", "moteSelectAll:", "a"),
             ("Format Document", "moteFormat:", "")], true);
+        AddMenu(main, "Find", [
+            ("Find…", "moteFind:", "f"),
+            ("Find Next", "moteFindNext:", "g"),
+            ("Go to Line…", "moteGoToLine:", "l")], true);
         AddMenu(main, "View", [
             ("Previous Page", "motePreviousPage:", ""),
             ("Next Page", "moteNextPage:", "")], true);
@@ -444,6 +640,77 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
 
     private void SetStatus(string value) => ObjC.Send(_status, ObjC.Sel("setStringValue:"), ObjC.String(value));
 
+    private void ReplayDeferredAnalysis()
+    {
+        if (_deferredAnalysisText is null || _editor == 0 ||
+            ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0) return;
+        if (string.Equals(_deferredAnalysisText, _visibleText, StringComparison.Ordinal) &&
+            _pendingAnalysis is { } analysis)
+            SetAnalysis(analysis);
+        else
+            _deferredAnalysisText = null;
+    }
+
+    private void ReplayDeferredDocument()
+    {
+        if (!_deferredDocument || _editor == 0 ||
+            ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0) return;
+        _deferredDocument = false;
+        if (_pendingDocument is { } view) SetDocument(view);
+    }
+
+    private void ScheduleCompositionCheck()
+    {
+        if (_compositionCheckScheduled) return;
+        _compositionCheckScheduled = true;
+        ObjC.Send(_delegate, ObjC.Sel("performSelector:withObject:afterDelay:"),
+            ObjC.Sel("moteCommitComposition:"), 0, 0.1d);
+    }
+
+    private void CommitComposition()
+    {
+        if (!_compositionDirty || ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0) return;
+        _compositionDirty = false;
+        _pendingNativeSelection = null;
+        var value = ObjC.ManagedString(ObjC.Send(_editor, ObjC.Sel("string")));
+        _visibleText = value;
+        TextChanged?.Invoke(value);
+        _compositionCommitRejected = !string.Equals(_visibleText, value, StringComparison.Ordinal);
+        ReplayDeferredDocument();
+        ReplayDeferredAnalysis();
+    }
+
+    /// <summary>Commits visible marked text before any command that can save or discard the document.</summary>
+    private bool CommitMarkedTextBeforeCommand()
+    {
+        if (_editor == 0) return true;
+        if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) == 0 && !_compositionDirty)
+            return true;
+        if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0)
+        {
+            _compositionCommitRejected = false;
+            _compositionDirty = true;
+            ObjC.Send(_editor, ObjC.Sel("unmarkText"));
+            if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0) return false;
+        }
+        CommitComposition();
+        return !_compositionDirty && !_compositionCommitRejected;
+    }
+
+    private void NotifyAfterComposition(Action? callback)
+    {
+        try
+        {
+            if (!CommitMarkedTextBeforeCommand())
+            {
+                ShowError("Finish or cancel the current text composition before this command.");
+                return;
+            }
+            callback?.Invoke();
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
     private static string RegisterDelegateClass()
     {
         const string className = "MoteNativeEditorDelegate";
@@ -451,6 +718,14 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         var cls = ObjC.AllocateClassPair(existing, className, 0);
         if (cls == 0) return className;
         Add(cls, "textDidChange:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&TextDidChange, "v@:@");
+        Add(cls, "textViewDidChangeSelection:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&TextViewDidChangeSelection, "v@:@");
+        Add(cls, "moteDeliverSelection:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&DeliverSelection, "v@:@");
+        Add(cls, "moteCommitComposition:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&CommitCompositionCheck, "v@:@");
+        Add(cls, "textView:doCommandBySelector:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, nint, byte>)&TextViewDoCommand, "c@:@:");
         Add(cls, "windowShouldClose:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, byte>)&WindowShouldClose, "c@:@");
         Add(cls, "windowWillClose:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&WindowWillClose, "v@:@");
         Add(cls, "applicationShouldTerminate:",
@@ -465,6 +740,12 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         Add(cls, "moteFormat:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Format, "v@:@");
         Add(cls, "motePreviousPage:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&PreviousPage, "v@:@");
         Add(cls, "moteNextPage:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&NextPage, "v@:@");
+        Add(cls, "moteFind:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Find, "v@:@");
+        Add(cls, "moteFindNext:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&FindNext, "v@:@");
+        Add(cls, "moteGoToLine:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&GoToLine, "v@:@");
+        Add(cls, "moteSelectAll:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SelectAll, "v@:@");
+        Add(cls, "moteCopy:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Copy, "v@:@");
+        Add(cls, "moteCut:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Cut, "v@:@");
         ObjC.RegisterClassPair(cls);
         return className;
     }
@@ -488,11 +769,113 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell is null || shell._settingText) return;
         try
         {
+            // AppKit may announce caret collapse before textDidChange. Do not let
+            // that transient page-local selection erase a global selection.
+            shell._pendingNativeSelection = null;
             var value = ObjC.ManagedString(ObjC.Send(shell._editor, ObjC.Sel("string")));
             shell._visibleText = value;
+            if (ObjC.Send(shell._editor, ObjC.Sel("hasMarkedText")) != 0)
+            {
+                shell._compositionDirty = true;
+                shell.ScheduleCompositionCheck();
+                return;
+            }
+            var finishingComposition = shell._compositionDirty;
+            shell._compositionDirty = false;
             shell.TextChanged?.Invoke(value);
+            if (finishingComposition)
+                shell._compositionCommitRejected = !string.Equals(shell._visibleText, value,
+                    StringComparison.Ordinal);
+            shell.ReplayDeferredDocument();
+            shell.ReplayDeferredAnalysis();
         }
         catch (Exception error) { shell.ShowError(error.Message); }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void TextViewDidChangeSelection(nint self, nint selector, nint notification)
+    {
+        var shell = s_current;
+        if (shell is null || shell._settingText || shell._settingSelection) return;
+        try
+        {
+            shell._pendingNativeSelection = ObjC.SendRange(shell._editor, ObjC.Sel("selectedRange"));
+            shell.CommitComposition();
+            if (!shell._selectionDeliveryScheduled)
+            {
+                shell._selectionDeliveryScheduled = true;
+                ObjC.Send(shell._delegate, ObjC.Sel("performSelector:withObject:afterDelay:"),
+                    ObjC.Sel("moteDeliverSelection:"), 0, 0d);
+            }
+            shell.ReplayDeferredDocument();
+            shell.ReplayDeferredAnalysis();
+        }
+        catch (Exception error) { shell.ShowError(error.Message); }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void DeliverSelection(nint self, nint selector, nint sender)
+    {
+        var shell = s_current;
+        if (shell is null) return;
+        try
+        {
+            shell._selectionDeliveryScheduled = false;
+            if (shell._pendingNativeSelection is not { } range) return;
+            shell._pendingNativeSelection = null;
+            if (shell._compositionDirty ||
+                ObjC.Send(shell._editor, ObjC.Sel("hasMarkedText")) != 0) return;
+            if (range.Location > (nuint)shell._visibleText.Length ||
+                range.Length > (nuint)shell._visibleText.Length - range.Location) return;
+            var start = checked((int)range.Location);
+            var end = checked((int)(range.Location + range.Length));
+            // NSTextView exposes only an ordered range. Retain the prior anchor
+            // when keyboard extension keeps it at one of the new boundaries.
+            var anchor = shell._selectionAnchor == end && start != end ? end : start;
+            var active = anchor == end ? start : end;
+            shell._selectionAnchor = anchor;
+            shell.SelectionChanged?.Invoke(anchor, active);
+        }
+        catch (Exception error) { shell.ShowError(error.Message); }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void CommitCompositionCheck(nint self, nint selector, nint sender)
+    {
+        var shell = s_current;
+        if (shell is null) return;
+        try
+        {
+            shell._compositionCheckScheduled = false;
+            if (ObjC.Send(shell._editor, ObjC.Sel("hasMarkedText")) != 0)
+                shell.ScheduleCompositionCheck();
+            else
+                shell.CommitComposition();
+        }
+        catch (Exception error) { shell.ShowError(error.Message); }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static byte TextViewDoCommand(nint self, nint selector, nint view, nint command)
+    {
+        var shell = s_current;
+        if (shell is null) return 0;
+        if (command == ObjC.Sel("selectAll:"))
+        {
+            shell.NotifyAfterComposition(shell.SelectAllRequested);
+            return 1;
+        }
+        if (command == ObjC.Sel("copy:"))
+        {
+            shell.NotifyAfterComposition(shell.CopyRequested);
+            return 1;
+        }
+        if (command == ObjC.Sel("cut:"))
+        {
+            shell.NotifyAfterComposition(shell.CutRequested);
+            return 1;
+        }
+        return 0;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -502,6 +885,11 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell is null) return 1;
         try
         {
+            if (!shell.CommitMarkedTextBeforeCommand())
+            {
+                shell.ShowError("Finish or cancel the current text composition before closing.");
+                return 0;
+            }
             var args = new NativeClosingEventArgs();
             shell.ClosingRequested?.Invoke(shell, args);
             shell._closeApproved = !args.Cancel;
@@ -524,6 +912,11 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
         if (shell is null || shell._closeApproved) return 1;
         try
         {
+            if (!shell.CommitMarkedTextBeforeCommand())
+            {
+                shell.ShowError("Finish or cancel the current text composition before quitting.");
+                return 0;
+            }
             var args = new NativeClosingEventArgs();
             shell.ClosingRequested?.Invoke(shell, args);
             return args.Cancel ? 0 : 1;
@@ -541,29 +934,47 @@ internal sealed unsafe class MacEditorShell : INativeEditorShell
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void New(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.NewRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.NewRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Open(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.OpenRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.OpenRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Save(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.SaveRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.SaveRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SaveAs(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.SaveAsRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.SaveAsRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Undo(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.UndoRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.UndoRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Redo(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.RedoRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.RedoRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Format(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.FormatRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.FormatRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void PreviousPage(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.PagePreviousRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.PagePreviousRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void NextPage(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.Notify(shell.PageNextRequested); }
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.PageNextRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Find(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.FindRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void FindNext(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.FindNextRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void GoToLine(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.GoToLineRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void SelectAll(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.SelectAllRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Copy(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.CopyRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Cut(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.NotifyAfterComposition(shell.CutRequested); }
 }

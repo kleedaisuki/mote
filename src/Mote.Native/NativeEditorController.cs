@@ -21,7 +21,15 @@ internal sealed class NativeEditorController : IDisposable
     private readonly IThemePolicy _theme;
     private readonly string? _startupPath;
     private Document _document = new();
+    private NativeNavigationModel _navigation = new();
+    private string? _findQuery;
+    private CancellationTokenSource? _findCancellation;
+    private long _findSerial;
+    private long _clipboardSerial;
+    private bool _projectingSelection;
+    private bool _nativeProjectsGlobalSelection;
     private IDocumentPolicy _policy = DocumentPolicies.ForKind(DocumentKind.PlainText);
+    private NativeFormatSessionDriver? _sessionDriver;
     private NativeTextProjection? _projection;
     private CancellationTokenSource? _analysisCancellation;
     private long _analysisSerial;
@@ -42,7 +50,10 @@ internal sealed class NativeEditorController : IDisposable
         _configuration = configuration;
         _theme = theme;
         _startupPath = startupPath;
+        _sessionDriver = CreateSessionDriver(_policy);
+        _document.Changed += DocumentChanged;
         shell.TextChanged += Edited;
+        shell.SelectionChanged += SelectionChanged;
         shell.NewRequested += New;
         shell.OpenRequested += Open;
         shell.SaveRequested += Save;
@@ -52,6 +63,12 @@ internal sealed class NativeEditorController : IDisposable
         shell.FormatRequested += Format;
         shell.PagePreviousRequested += PreviousPage;
         shell.PageNextRequested += NextPage;
+        shell.FindRequested += Find;
+        shell.FindNextRequested += FindNext;
+        shell.GoToLineRequested += GoToLine;
+        shell.SelectAllRequested += SelectAll;
+        shell.CopyRequested += Copy;
+        shell.CutRequested += Cut;
         shell.ClosingRequested += Closing;
         shell.Shown += Shown;
     }
@@ -66,6 +83,10 @@ internal sealed class NativeEditorController : IDisposable
         _disposed = true;
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
+        _document.Changed -= DocumentChanged;
+        _sessionDriver?.Dispose();
+        _findCancellation?.Cancel();
+        _findCancellation?.Dispose();
         _document.Dispose();
     }
 
@@ -92,6 +113,7 @@ internal sealed class NativeEditorController : IDisposable
 
     private bool CanReplace()
     {
+        if (!_shell.CommitPendingText()) return false;
         if (_saving)
         {
             _shell.ShowError("Wait for the current save to finish before replacing this document.");
@@ -127,6 +149,13 @@ internal sealed class NativeEditorController : IDisposable
                     return;
                 }
                 if (opened is null) return;
+                if (!SettleInputBeforeAsyncResult())
+                {
+                    opened.Dispose();
+                    MoteTelemetry.RecordElapsed(TelemetryOperation.OpenToEditable,
+                        openMark, status: TelemetryStatus.Cancelled);
+                    return;
+                }
                 if (_saving)
                 {
                     opened.Dispose();
@@ -156,13 +185,23 @@ internal sealed class NativeEditorController : IDisposable
     {
         ++_openSerial;
         CancelAnalysis();
+        _document.Changed -= DocumentChanged;
+        _sessionDriver?.Dispose();
         _document.Dispose();
         _document = replacement;
+        _document.Changed += DocumentChanged;
+        _navigation = new NativeNavigationModel();
+        _nativeProjectsGlobalSelection = false;
+        _findCancellation?.Cancel();
+        _findQuery = null;
+        ++_findSerial;
+        ++_clipboardSerial;
         ++_formatSerial;
         _operationStatus = "";
         _policy = replacement.FilePath is { } path
             ? DocumentPolicies.ForPath(path)
             : DocumentPolicies.ForKind(DocumentKind.PlainText);
+        _sessionDriver = CreateSessionDriver(_policy);
         _pageStart = 0;
         _pageLength = 0;
         _requestedCaretSource = 0;
@@ -176,6 +215,7 @@ internal sealed class NativeEditorController : IDisposable
 
     private void StartSave(bool saveAs)
     {
+        if (!_shell.CommitPendingText()) return;
         if (_saving) return;
         var pickerWasUsed = saveAs || _document.FilePath is null;
         var path = pickerWasUsed
@@ -212,15 +252,25 @@ internal sealed class NativeEditorController : IDisposable
             {
                 _saving = false;
                 if (_disposed) return;
-                if (error is not null) _shell.ShowError($"Save failed; the original file was retained. {error.Message}");
-                else if (!cancelled)
+                if (error is not null)
                 {
-                    _policy = document.FilePath is { } savedPath
-                        ? DocumentPolicies.ForPath(savedPath) : _policy;
-                    MoteTelemetry.Record(TelemetryEvent.SaveCompleted);
-                    ShowDocument();
-                    ScheduleAnalysis();
+                    _shell.ShowError($"Save failed; the original file was retained. {error.Message}");
+                    return;
                 }
+                if (cancelled) return;
+                // File identity already changed in Document.SaveAsync. Policy selection
+                // must not depend on whether a newly started IME composition can settle.
+                if (document.FilePath is { } savedPath)
+                    SelectPolicy(DocumentPolicies.ForPath(savedPath));
+                MoteTelemetry.Record(TelemetryEvent.SaveCompleted);
+                ScheduleAnalysis();
+                if (!SettleInputBeforeAsyncResult())
+                {
+                    _operationStatus = "Save view update postponed during text composition.";
+                    ShowDocument();
+                    return;
+                }
+                ShowDocument();
             });
         });
     }
@@ -241,8 +291,29 @@ internal sealed class NativeEditorController : IDisposable
         var mark = MoteTelemetry.Mark();
         try
         {
-            _document.Apply(new TextChange(_pageStart + change.Start, change.DeleteLength, change.InsertText));
-            var newCaret = _pageStart + change.Start + change.InsertText.Length;
+            var globalSelection = _nativeProjectsGlobalSelection &&
+                _navigation.SelectionLength > 0 &&
+                (_navigation.SelectionStart < _pageStart ||
+                 _navigation.SelectionStart + _navigation.SelectionLength > _pageStart + _pageLength);
+            var applied = globalSelection
+                ? new TextChange(_navigation.SelectionStart, _navigation.SelectionLength,
+                    change.InsertText)
+                : new TextChange(_pageStart + change.Start, change.DeleteLength,
+                    change.InsertText);
+            _document.Apply(applied);
+            var newCaret = applied.Start + applied.InsertText.Length;
+            _navigation.MoveCaret(_document.Snapshot, newCaret);
+            _nativeProjectsGlobalSelection = false;
+            InvalidateFind();
+            if (globalSelection)
+            {
+                _pageStart = Math.Max(0, applied.Start - 1024);
+                _pageLength = 0;
+                _requestedCaretSource = newCaret;
+                ShowDocument();
+                ScheduleAnalysis(mark);
+                return;
+            }
             var desiredLength = _pageLength + change.InsertText.Length - change.DeleteLength;
             if (desiredLength > PageSize + PageSlack)
             {
@@ -274,16 +345,33 @@ internal sealed class NativeEditorController : IDisposable
 
     private void Undo()
     {
-        if (_document.Undo()) { _pageLength = 0; ShowDocument(); ScheduleAnalysis(); }
+        if (!_shell.CommitPendingText()) return;
+        if (_document.Undo())
+        {
+            _pageLength = 0;
+            ShowDocument();
+            RevealSelection();
+            ProjectSelection();
+            ScheduleAnalysis();
+        }
     }
 
     private void Redo()
     {
-        if (_document.Redo()) { _pageLength = 0; ShowDocument(); ScheduleAnalysis(); }
+        if (!_shell.CommitPendingText()) return;
+        if (_document.Redo())
+        {
+            _pageLength = 0;
+            ShowDocument();
+            RevealSelection();
+            ProjectSelection();
+            ScheduleAnalysis();
+        }
     }
 
     private void Format()
     {
+        if (!_shell.CommitPendingText()) return;
         var snapshot = _document.Snapshot;
         if (snapshot.Length > FullAnalysisLimit)
         {
@@ -310,6 +398,19 @@ internal sealed class NativeEditorController : IDisposable
             Post(() =>
             {
                 if (_disposed || serial != _formatSerial) return;
+                if (!ReferenceEquals(document, _document) ||
+                    _document.Snapshot.Version != snapshot.Version)
+                {
+                    _operationStatus = "Format result discarded after a newer edit.";
+                    ShowDocument();
+                    return;
+                }
+                if (!SettleInputBeforeAsyncResult())
+                {
+                    _operationStatus = "Formatting cancelled during text composition.";
+                    ShowDocument();
+                    return;
+                }
                 _operationStatus = "";
                 if (error is not null)
                 {
@@ -327,6 +428,7 @@ internal sealed class NativeEditorController : IDisposable
                 if (changed && formatted is not null)
                 {
                     _document.Apply(new TextChange(0, snapshot.Length, formatted));
+                    _navigation.MoveCaret(_document.Snapshot, 0);
                     _pageStart = 0;
                     _pageLength = 0;
                     _requestedCaretSource = 0;
@@ -339,23 +441,262 @@ internal sealed class NativeEditorController : IDisposable
 
     private void PreviousPage()
     {
+        if (!_shell.CommitPendingText()) return;
         if (_pageStart == 0) return;
+        InvalidateFind();
         _pageStart = Math.Max(0, _pageStart - PageSize);
         _pageLength = 0;
         _requestedCaretSource = _pageStart;
         ShowDocument();
+        ProjectSelectionOrMoveToPage();
         ScheduleAnalysis();
     }
 
     private void NextPage()
     {
+        if (!_shell.CommitPendingText()) return;
         var length = _document.Snapshot.Length;
         if (_pageStart + _pageLength >= length) return;
+        InvalidateFind();
         _pageStart += _pageLength;
         _pageLength = 0;
         _requestedCaretSource = _pageStart;
         ShowDocument();
+        ProjectSelectionOrMoveToPage();
         ScheduleAnalysis();
+    }
+
+    private void SelectionChanged(int displayAnchor, int displayActive)
+    {
+        if (_projectingSelection || _projection is null) return;
+        if ((uint)displayAnchor > (uint)_projection.Display.Length ||
+            (uint)displayActive > (uint)_projection.Display.Length) return;
+        var forward = displayActive >= displayAnchor;
+        var anchor = _projection.ToSourceBoundary(displayAnchor, towardEnd: !forward);
+        var active = _projection.ToSourceBoundary(displayActive, towardEnd: forward &&
+            displayActive != displayAnchor);
+        var nextAnchor = _pageStart + anchor;
+        var nextActive = _pageStart + active;
+        if (nextAnchor != _navigation.Anchor || nextActive != _navigation.Active)
+        {
+            var showedSearch = _operationStatus == "Searching document…";
+            InvalidateFind();
+            _navigation.SetSelection(_document.Snapshot, nextAnchor, nextActive);
+            if (showedSearch) ShowDocument();
+        }
+        _nativeProjectsGlobalSelection = _navigation.SelectionLength > 0;
+    }
+
+    private void Find()
+    {
+        if (!_shell.CommitPendingText()) return;
+        var query = _shell.PromptFind();
+        if (string.IsNullOrEmpty(query)) return;
+        _findQuery = query;
+        StartFind(query);
+    }
+
+    private void FindNext()
+    {
+        if (!_shell.CommitPendingText()) return;
+        if (_findQuery is null) { Find(); return; }
+        StartFind(_findQuery);
+    }
+
+    private void StartFind(string query)
+    {
+        InvalidateFind();
+        var cancellation = new CancellationTokenSource();
+        _findCancellation = cancellation;
+        var serial = _findSerial;
+        var document = _document;
+        var snapshot = document.Snapshot;
+        var startAnchor = _navigation.Anchor;
+        var startActive = _navigation.Active;
+        _operationStatus = "Searching document…";
+        ShowDocument();
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var result = new NativeNavigationModel();
+                result.SetSelection(snapshot, startAnchor, startActive);
+                var found = result.FindNext(snapshot, query, wrap: true, cancellation.Token);
+                Post(() =>
+                {
+                    if (_disposed || cancellation.IsCancellationRequested ||
+                        serial != _findSerial || !ReferenceEquals(document, _document) ||
+                        snapshot.Version != _document.Snapshot.Version) return;
+                    if (!SettleInputBeforeAsyncResult())
+                    {
+                        _operationStatus = "Search cancelled during text composition.";
+                        ShowDocument();
+                        return;
+                    }
+                    if (_disposed || cancellation.IsCancellationRequested || serial != _findSerial ||
+                        !ReferenceEquals(document, _document) ||
+                        snapshot.Version != _document.Snapshot.Version) return;
+                    _operationStatus = found ? $"Found at {result.SelectionStart:N0}" :
+                        "No match in document";
+                    if (found)
+                    {
+                        _navigation.SetSelection(snapshot, result.Anchor, result.Active);
+                        RevealSelection();
+                        ProjectSelection();
+                    }
+                    else ShowDocument();
+                });
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    private void GoToLine()
+    {
+        if (!_shell.CommitPendingText()) return;
+        var line = _shell.PromptGoToLine();
+        if (line is null) return;
+        try
+        {
+            InvalidateFind();
+            _navigation.GoToLine(_document.Snapshot, line.Value);
+            RevealSelection();
+            ProjectSelection();
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            _shell.ShowError($"Line must be between 1 and {_document.Snapshot.LineCount:N0}.");
+        }
+    }
+
+    private void SelectAll()
+    {
+        if (!_shell.CommitPendingText()) return;
+        InvalidateFind();
+        _navigation.SelectAll(_document.Snapshot);
+        ProjectSelection();
+    }
+
+    private void Copy() => CopyOrCut(cut: false);
+
+    private void Cut() => CopyOrCut(cut: true);
+
+    private void CopyOrCut(bool cut)
+    {
+        if (!_shell.CommitPendingText()) return;
+        var length = _navigation.SelectionLength;
+        if (length == 0) return;
+        var serial = ++_clipboardSerial;
+        var start = _navigation.SelectionStart;
+        var anchor = _navigation.Anchor;
+        var active = _navigation.Active;
+        var document = _document;
+        var snapshot = document.Snapshot;
+        _operationStatus = cut ? "Preparing cut…" : "Preparing copy…";
+        ShowDocument();
+        _ = Task.Run(() =>
+        {
+            string? selected = null;
+            Exception? error = null;
+            try { selected = snapshot.GetText(start, length); }
+            catch (Exception ex) { error = ex; }
+            Post(() =>
+            {
+                if (_disposed || serial != _clipboardSerial) return;
+                if (cut && (!ReferenceEquals(document, _document) ||
+                    snapshot.Version != _document.Snapshot.Version ||
+                    anchor != _navigation.Anchor || active != _navigation.Active))
+                {
+                    _operationStatus = "Cut cancelled after a newer edit or selection change.";
+                    ShowDocument();
+                    return;
+                }
+                if (cut && !SettleInputBeforeAsyncResult())
+                {
+                    _operationStatus = "Cut cancelled during text composition.";
+                    ShowDocument();
+                    return;
+                }
+                _operationStatus = "";
+                if (error is not null || selected is null)
+                {
+                    _shell.ShowError("The selection could not be copied; the document was not changed.");
+                    ShowDocument();
+                    return;
+                }
+                if (cut && (!ReferenceEquals(document, _document) ||
+                    snapshot.Version != _document.Snapshot.Version ||
+                    anchor != _navigation.Anchor || active != _navigation.Active))
+                {
+                    _operationStatus = "Cut cancelled after a newer edit or selection change.";
+                    ShowDocument();
+                    return;
+                }
+                try { _shell.SetClipboardText(selected); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _shell.ShowError("The system clipboard rejected the selection; the document was not changed.");
+                    ShowDocument();
+                    return;
+                }
+                if (cut)
+                {
+                    InvalidateFind();
+                    try { _document.Apply(new TextChange(start, length, "")); }
+                    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                    {
+                        _shell.ShowError($"Cut could not safely change the selection: {ex.Message}");
+                        ShowDocument();
+                        return;
+                    }
+                    _navigation.MoveCaret(_document.Snapshot, start);
+                    _pageStart = Math.Max(0, start - 1024);
+                    _pageLength = 0;
+                    _requestedCaretSource = start;
+                    ShowDocument();
+                    ProjectSelection();
+                    ScheduleAnalysis();
+                }
+                else ShowDocument();
+            });
+        });
+    }
+
+    private void RevealSelection()
+    {
+        var caret = _navigation.Active;
+        if (caret >= _pageStart && caret <= _pageStart + _pageLength &&
+            _navigation.SelectionStart >= _pageStart) return;
+        _pageStart = Math.Max(0, _navigation.SelectionStart - 1024);
+        _pageLength = 0;
+        _requestedCaretSource = caret;
+        ShowDocument();
+        ScheduleAnalysis();
+    }
+
+    private void ProjectSelectionOrMoveToPage()
+    {
+        if (_projection is null) return;
+        if (_navigation.Project(_pageStart, _projection) is null)
+        {
+            // An off-page selection remains global; only the native caret is parked
+            // at this page. Copy/Find continue to use canonical engine coordinates.
+            _projectingSelection = true;
+            try { _shell.SetSelection(0, 0); }
+            finally { _projectingSelection = false; }
+            _nativeProjectsGlobalSelection = false;
+        }
+        else ProjectSelection();
+    }
+
+    private void ProjectSelection()
+    {
+        if (_projection is null) return;
+        if (_navigation.Project(_pageStart, _projection) is not { } selection) return;
+        _projectingSelection = true;
+        try { _shell.SetSelection(selection.Anchor, selection.Active); }
+        finally { _projectingSelection = false; }
+        _nativeProjectsGlobalSelection = _navigation.SelectionLength > 0;
     }
 
     private void ShowDocument()
@@ -374,7 +715,7 @@ internal sealed class NativeEditorController : IDisposable
         var file = _document.FilePath is { } path ? Path.GetFileName(path) : "Untitled";
         var title = $"{file}{(_document.IsModified ? " •" : "")} — mote";
         var pageStatus = snapshot.Length <= PageSize ? "" :
-            $"Page {_pageStart:N0}–{_pageStart + _pageLength:N0} / {snapshot.Length:N0}; whole-document selection unavailable";
+            $"Page {_pageStart:N0}–{_pageStart + _pageLength:N0} / {snapshot.Length:N0}; page navigation is discrete";
         var warnings = _configuration.Diagnostics.Count == 0 ? "" :
             $" · Config warnings: {_configuration.Diagnostics.Count}";
         var health = MoteTelemetry.Health;
@@ -406,6 +747,12 @@ internal sealed class NativeEditorController : IDisposable
         var policy = _policy;
         var pageStart = _pageStart;
         var pageLength = _pageLength;
+        if (_sessionDriver is { } driver)
+        {
+            ScheduleSessionAnalysis(driver, document, snapshot, policy,
+                pageStart, pageLength, cancellation, serial, editMark);
+            return;
+        }
         var full = snapshot.Length <= FullAnalysisLimit;
         if (!full && policy.Kind is not (DocumentKind.PlainText or DocumentKind.Markdown or DocumentKind.Csv))
         {
@@ -462,6 +809,99 @@ internal sealed class NativeEditorController : IDisposable
         });
     }
 
+    private void ScheduleSessionAnalysis(NativeFormatSessionDriver driver,
+        Document document, TextSnapshot snapshot, IDocumentPolicy policy,
+        int pageStart, int pageLength, CancellationTokenSource cancellation,
+        long serial, TelemetryMark editMark)
+    {
+        var scope = snapshot.Length <= FullAnalysisLimit ? AnalysisScope.Full : AnalysisScope.Visible;
+        var request = new AnalysisRequest(new Mote.Formats.TextSpan(pageStart, pageLength), scope);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(80, cancellation.Token).ConfigureAwait(false);
+                using var parse = MoteTelemetry.Start(TelemetryOperation.AnalysisParse,
+                    Dimensions(snapshot));
+                var result = await driver.AnalyzeAsync(snapshot, request,
+                    cancellation.Token).ConfigureAwait(false);
+                cancellation.Token.ThrowIfCancellationRequested();
+                Post(() =>
+                {
+                    if (_disposed || cancellation.IsCancellationRequested ||
+                        serial != _analysisSerial || !ReferenceEquals(document, _document) ||
+                        !ReferenceEquals(driver, _sessionDriver) ||
+                        result.Version != _document.Snapshot.Version || pageStart != _pageStart)
+                    {
+                        MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded);
+                        return;
+                    }
+                    using var present = MoteTelemetry.Start(
+                        TelemetryOperation.AnalysisToPresentation, Dimensions(snapshot));
+                    var tokens = ProjectTokens(result.Tokens, pageStart, pageLength,
+                        _projection!);
+                    var diagnostics = SessionDiagnosticSummary(result);
+                    var preview = NativePreviewBuilder.Build(result, policy.Kind, snapshot,
+                        pageStart, pageLength);
+                    _shell.SetAnalysis(new NativeAnalysisView(tokens, diagnostics,
+                        preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
+                        preview.Spans));
+                    MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
+                        dimensions: Dimensions(snapshot));
+                    MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation,
+                        editMark, Dimensions(snapshot));
+                });
+            }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Post(() =>
+                {
+                    if (!_disposed && serial == _analysisSerial &&
+                        ReferenceEquals(driver, _sessionDriver))
+                        _shell.SetAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
+                            $"{policy.DisplayName}: {ex.Message}"));
+                });
+            }
+        });
+    }
+
+    private static string SessionDiagnosticSummary(DocumentAnalysis result)
+    {
+        if (result.Completeness != AnalysisCompleteness.Complete)
+            return $"{result.Completeness} in {result.Coverage.Start:N0}–" +
+                $"{result.Coverage.End:N0}; global diagnostics unknown. " +
+                (result.Diagnostics.Count == 0 ? "No diagnostics in current projection." :
+                    DiagnosticSummary(result.Diagnostics));
+        var count = result.TotalDiagnosticCount ?? result.Diagnostics.Count;
+        if (count == 0) return "No diagnostics.";
+        if (result.Diagnostics.Count == 0)
+            return $"{count:N0} document diagnostics; none in displayed viewport.";
+        var shown = DiagnosticSummary(result.Diagnostics);
+        return $"{count:N0} document diagnostics; shown: {shown}";
+    }
+
+    private void DocumentChanged(object? sender, DocumentChangedEventArgs change)
+    {
+        _sessionDriver?.Record(change);
+        _navigation.ApplyChange(change.Change, change.After);
+    }
+
+    private static NativeFormatSessionDriver? CreateSessionDriver(IDocumentPolicy policy) =>
+        policy is IIncrementalDocumentPolicy incremental
+            ? new NativeFormatSessionDriver(incremental) : null;
+
+    private void SelectPolicy(IDocumentPolicy policy)
+    {
+        if (ReferenceEquals(policy, _policy)) return;
+        ++_formatSerial;
+        CancelAnalysis();
+        _sessionDriver?.Dispose();
+        _policy = policy;
+        _sessionDriver = CreateSessionDriver(policy);
+    }
+
     private static IReadOnlyList<SemanticToken> ProjectTokens(IReadOnlyList<SemanticToken> tokens,
         int analysisStart, int pageLength, NativeTextProjection projection)
     {
@@ -498,8 +938,18 @@ internal sealed class NativeEditorController : IDisposable
         _analysisCancellation = null;
     }
 
+    private void InvalidateFind()
+    {
+        _findCancellation?.Cancel();
+        _findCancellation?.Dispose();
+        _findCancellation = null;
+        ++_findSerial;
+        if (_operationStatus == "Searching document…") _operationStatus = "";
+    }
+
     private void Closing(object? sender, NativeClosingEventArgs e)
     {
+        if (!_shell.CommitPendingText()) { e.Cancel = true; return; }
         if (_saving) { e.Cancel = true; return; }
         if (_document.IsModified && !_shell.ConfirmDiscard()) e.Cancel = true;
     }
@@ -511,6 +961,13 @@ internal sealed class NativeEditorController : IDisposable
         try { _shell.Post(action); return true; }
         catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException) { return false; }
     }
+
+    /// <summary>
+    /// Every asynchronous UI completion that can mutate the engine or current projection
+    /// first settles native IME preedit against the still-current document. Callers then
+    /// recheck their captured document identity and version before applying the result.
+    /// </summary>
+    private bool SettleInputBeforeAsyncResult() => !_disposed && _shell.CommitPendingText();
 
     private static TelemetryDimensions Dimensions(TextSnapshot snapshot) =>
         new(DocumentBytes: snapshot.Length * sizeof(char), Version: snapshot.Version);

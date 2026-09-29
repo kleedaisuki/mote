@@ -15,9 +15,21 @@ internal static class Program
             Console.WriteLine("mote-native-ready");
             return 0;
         }
+        if (args.Length == 3 && args[0] == "--check-native-mac-workflow")
+        {
+            if (!OperatingSystem.IsMacOS())
+            {
+                Console.Error.WriteLine("This native workflow probe requires macOS.");
+                return 3;
+            }
+            var result = Mac.MacNativeWorkflowProbe.Run(args[1], args[2]);
+            if (result == 0) Console.WriteLine("mote-native-mac-workflow-ready");
+            return result;
+        }
         if (args.Length == 1 && args[0] is "--help" or "-h")
         {
             Console.WriteLine("Usage: mote [path] [--smoke-gui|--check-runtime]");
+            Console.WriteLine("macOS diagnostic: mote --check-native-mac-workflow <input> <output>");
             return 0;
         }
         var smoke = args.Length == 1 && args[0] == "--smoke-gui";

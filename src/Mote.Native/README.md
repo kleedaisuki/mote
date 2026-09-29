@@ -43,15 +43,19 @@ AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
   slack before a focus-preserving rebase. This avoids the
   gigabyte-scale full-control mirror observed for large text and long lines,
   but page navigation is **not** a finished virtualized whole-file editor.
-  Whole-document selection/copy/find and continuous scroll are not yet wired
-  to the platform commands. A 64 KiB page within a single 50 MiB line still
+  Global Select All, Copy, Cut, Find Next and Go To Line use engine offsets;
+  continuous scroll and off-page screen-reader text exposure are not yet
+  implemented. A 64 KiB page within a single 50 MiB line still
   needs measured shaping and caret behavior.
-- Format analysis is version-checked and canceled when superseded. The legacy
-  policy path performs complete analysis only through 2 MiB; larger Markdown,
-  CSV, and plain text use explicitly labeled viewport samples, while other
-  formats defer global diagnostics. An empty partial diagnostic list never
-  means the whole file is valid. Incremental policy sessions are being built
-  in `Mote.Formats` but are not yet wired here.
+- Format analysis is version-checked and canceled when superseded. Policies
+  offering `IIncrementalDocumentPolicy` get one serialized per-document session
+  with a bounded versioned edit chain; Plain, CSV and Markdown currently offer
+  this capability. CSV and plain text can report complete large-file facts;
+  large Markdown may report a provisional viewport until a complete cache is
+  available. The legacy fallback performs complete analysis only through
+  2 Mi UTF-16 units and explicitly labels larger projections as partial or
+  unavailable. An empty partial diagnostic list never means the whole file
+  is valid. A future policy can adopt sessions without changing the shell.
 - Native preview is a bounded, source-mapped semantic rendering: Markdown
   headings, paragraphs, lists, quotes and code; CSV rows and columns; and
   structured JSON/TOML/YAML trees. It is not yet a full CommonMark or
@@ -67,6 +71,6 @@ AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
 
 `NativeNavigationModel` holds the caret and selection in **global, canonical UTF-16 source offsets**, independent of the bounded native text page. The native control's selection is only a projection: `Project(pageStart, projection)` clips both endpoints to the visible page, preserves selection direction, and converts source offsets through `NativeTextProjection`. A null projection means the caret or selection is off-page, not that the global selection was lost.
 
-The controller should translate user selection changes back into source coordinates, suppressing notifications caused by its own `SetDocument` / selection updates. It should call `ApplyChange` after a committed engine edit, `Clamp` after snapshot replacement, and `Project` whenever the page changes. `GoToLine` takes a **one-based** line number and uses the snapshot's indexed lookup. `FindNext` performs ordinal, case-sensitive KMP search across immutable rope chunks, including matches crossing chunk boundaries, without a whole-file string. `WriteSelection` streams the original source range to a `TextWriter`; clipboard adapters may still need to allocate according to the platform clipboard contract and should define a user-visible cap rather than silently truncating.
+The controller translates user selection changes back into source coordinates and suppresses notifications caused by its own projection. `GoToLine` takes a **one-based** line number and uses the snapshot's indexed lookup. `FindNext` performs ordinal, case-sensitive KMP search across immutable rope chunks, including matches crossing chunk boundaries, without a whole-file string. The pure model provides `WriteSelection` for streaming original source; the current OS clipboard adapters require a contiguous string, so Copy/Cut materialize the selected range off the UI thread before invoking the clipboard. This can consume substantial memory for a very large selection and needs a measured platform-specific clipboard design.
 
-The model deliberately does not own page movement, platform prompts, or clipboard APIs. These remain controller/shell policy and mechanism respectively, so one document selection survives any viewport change.
+The model deliberately does not own page movement, platform prompts, or clipboard APIs. These remain controller/shell policy and mechanism respectively. Off-page selections remain in engine coordinates across page transitions; the native caret is parked at the new page until the user changes selection or explicitly edits there. The shell defers selection-collapse events from typing until after its text-change event, so typing over a global selection replaces the entire source range, not merely the visible page.

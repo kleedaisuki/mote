@@ -66,6 +66,9 @@ internal static class ObjC
     internal static extern nint Send(nint receiver, nint selector, nint arg1, nint arg2, byte arg3);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint Send(nint receiver, nint selector, nint arg1, nint arg2, double arg3);
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, Rect rect);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
@@ -88,7 +91,13 @@ internal static class ObjC
     internal static extern nint Send(nint receiver, nint selector, nint arg, Range range);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint Send(nint receiver, nint selector, nint arg, Range range1, Range range2);
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, Range range);
+
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern Range SendRange(nint receiver, nint selector);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, Size size);

@@ -58,6 +58,8 @@ internal interface INativeEditorShell
 
     /// <summary>Raised after a user edit with the complete bounded page text.</summary>
     event Action<string>? TextChanged;
+    /// <summary>Raised for user-driven selection changes in visible page display offsets.</summary>
+    event Action<int, int>? SelectionChanged;
     /// <summary>Raised by the New command.</summary>
     event Action? NewRequested;
     /// <summary>Raised by the Open command.</summary>
@@ -76,6 +78,18 @@ internal interface INativeEditorShell
     event Action? PagePreviousRequested;
     /// <summary>Raised by next-page navigation for large documents.</summary>
     event Action? PageNextRequested;
+    /// <summary>Raised when the user requests a new global search query.</summary>
+    event Action? FindRequested;
+    /// <summary>Raised when the user repeats the previous global search.</summary>
+    event Action? FindNextRequested;
+    /// <summary>Raised when the user requests global line navigation.</summary>
+    event Action? GoToLineRequested;
+    /// <summary>Raised by global Select All, never the page-local native default.</summary>
+    event Action? SelectAllRequested;
+    /// <summary>Raised by global Copy, never the page-local native default.</summary>
+    event Action? CopyRequested;
+    /// <summary>Raised by global Cut, never the page-local native default.</summary>
+    event Action? CutRequested;
     /// <summary>Raised before the window closes and may veto it.</summary>
     event EventHandler<NativeClosingEventArgs>? ClosingRequested;
     /// <summary>Raised after the native window has become visible and editable.</summary>
@@ -89,6 +103,19 @@ internal interface INativeEditorShell
     void SetAnalysis(NativeAnalysisView view);
     /// <summary>Applies a compile-time theme policy to platform controls.</summary>
     void SetTheme(IThemePolicy theme);
+    /// <summary>
+    /// Settles native IME preedit into a synchronous TextChanged callback before a command
+    /// may replace the document or persist its bytes; false vetoes that command.
+    /// </summary>
+    bool CommitPendingText();
+    /// <summary>Projects a global source selection into visible display positions.</summary>
+    void SetSelection(int displayAnchor, int displayActive);
+    /// <summary>Prompts for a search term; null means cancel.</summary>
+    string? PromptFind();
+    /// <summary>Prompts for a one-based document line number; null means cancel.</summary>
+    int? PromptGoToLine();
+    /// <summary>Places an exact selected source string on the OS clipboard.</summary>
+    void SetClipboardText(string text);
     /// <summary>Returns a selected absolute local path, or null on cancel.</summary>
     string? PickOpenFile();
     /// <summary>Returns a selected absolute target path, or null on cancel.</summary>

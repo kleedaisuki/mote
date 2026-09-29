@@ -16,6 +16,22 @@ or application bundle is needed for this adapter.
 - Semantic colors use `NSTextView`'s source-range foreground attributes. An
   analysis pass is deferred while `hasMarkedText` is true, to avoid interfering
   with an active IME composition. `SetAnalysis` does not replace source text.
+- `textDidChange:` does not forward marked-text preedit to the engine. It
+  forwards the final visible page once composition ends; a short AppKit runloop
+  check catches an unmark without another text notification. If a canonical
+  `SetDocument` differs during marked text, replacement is deferred until
+  unmark. This avoids programmatically tearing a CJK composition but has not
+  yet been verified with a real input method on macOS.
+- `CommitPendingText` is a synchronous identity-boundary gate. It asks AppKit's
+  `NSTextInputClient.unmarkText` to accept visible marked text, forwards that
+  final page to the current controller document exactly once, then returns
+  success only after marked text is gone and the controller has not replaced
+  the visible text with a rejection rollback. Native New/Open/Save/Save As,
+  close/quit, and navigation command callbacks invoke the same gate before
+  raising their events. The controller must also call it immediately before
+  an *asynchronous* open completion swaps document identity: a composition can
+  start after the original Open command. If the gate fails, that identity swap
+  or save must not proceed.
 - Both text views enable attributed text because AppKit's range-specific color
   and font APIs do not work on plain-text controls. This is presentation only:
   the engine receives plain `NSString` characters, image import is disabled,
@@ -25,6 +41,19 @@ or application bundle is needed for this adapter.
 - `TextChanged` copies the entire *bounded page*, not the entire document. The
   controller must keep the page size bounded and reconcile page replacement
   against its immutable document snapshot.
+- The native selection delegate reports the text view's ordered `NSRange` in
+  displayed UTF-16 coordinates. AppKit does not expose the drag anchor
+  orientation through `selectedRange`; the adapter preserves a known prior
+  anchor when it remains at a boundary (for keyboard extension), otherwise
+  reports the ordered endpoints. Reverse mouse drags can therefore lose their
+  direction, although the selected range itself remains correct.
+  Programmatic `SetSelection` suppresses this notification. Selection events
+  are queued to the next runloop turn and discarded if `textDidChange:` arrives
+  first, so a transient caret collapse cannot erase a global selection before
+  the controller processes the edit. The Find, Find Next,
+  Go To Line, Select All and Copy menu shortcuts route to the controller rather
+  than using the bounded text view's page-local actions. Global clipboard copy
+  writes `public.utf8-plain-text` to `NSPasteboard`.
 - Native `NSString` conversion copies UTF-16 code units, not UTF-8, so embedded
   NUL and source line endings are not changed by the bridge. This does not yet
   constitute a GUI-tested guarantee that every IME preserves CR-only text.
@@ -51,12 +80,38 @@ binary, window creation, an editable frame, close veto, typing/IME, file panels,
 and a smoke-run exit. Manual VoiceOver validation remains necessary; a standard
 `NSTextView` is a strong platform mechanism but not proof of integration quality.
 
+`--check-native-mac-workflow <input> <output>` is a **published-binary,
+in-process AppKit workflow probe**. It requires a small input, a nonexistent
+output directly inside the repository's real `.temp/` directory, and leaves
+the input untouched. After the real native window has opened the input, it
+inserts through `NSTextInputClient.insertText:replacementRange:`, invokes the
+real `NSTextInputClient.setMarkedText:selectedRange:replacementRange:` to
+stage a Unicode candidate, asserts that preedit is visible but *not* in the
+controller's canonical page, then invokes the native Save As action while
+marked text is active. The command gate must unmark and commit it before Save
+As captures a snapshot. A one-shot probe picker supplies the output path;
+the probe then stages a second marked candidate, invokes New while it remains
+marked, and approves exactly one dirty-document discard. It asserts that the
+dirty prompt was reached *after* the pending candidate entered the canonical
+document, then
+reopens the saved file through the native Open action. It checks the actual
+`NSTextView` text after reopen and independently decodes the saved file with
+`Document.OpenAsync`; the published executable returns a specific success
+marker only when all checks pass. This does **not** synthesize external
+keyboard events, exercise the real file picker, grant Accessibility permission,
+or validate Chinese/Japanese IME composition. Those require a TCC-authorized
+interactive runner/manual test.
+
 ## Platform references
 
 - [NSApplicationLoad](https://developer.apple.com/documentation/appkit/nsapplicationload)
 - [NSApplication lifecycle](https://developer.apple.com/documentation/appkit/nsapplication)
 - [NSTextView and native text editing](https://developer.apple.com/documentation/appkit/nstextview)
 - [NSTextViewDelegate](https://developer.apple.com/documentation/appkit/nstextviewdelegate)
+- [NSTextView selection notification](https://developer.apple.com/documentation/appkit/nstextview/didchangeselectionnotification)
+- [NSTextView command delegation](https://developer.apple.com/documentation/appkit/nstextviewdelegate/textview%28_%3Adocommandby%3A%29)
+- [NSPasteboard string type](https://developer.apple.com/documentation/appkit/nspasteboard/pasteboardtype/string)
+- [NSTextInputClient.unmarkText](https://developer.apple.com/documentation/appkit/nstextinputclient/unmarktext%28%29)
 - [Range text colors](https://developer.apple.com/documentation/appkit/nstext/settextcolor%28_%3Arange%3A%29)
 - [Range fonts](https://developer.apple.com/documentation/appkit/nstext/setfont%28_%3Arange%3A%29)
 - [Plain-text paste](https://developer.apple.com/documentation/appkit/nstextview/pasteasplaintext%28_%3A%29)
