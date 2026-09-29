@@ -143,10 +143,13 @@ function Assert-PublishUnchanged {
 # Inspect exactly the selected MOTE_HOME, parse every JSONL line, and reject content/path leakage.
 function Assert-Home {
     param([string] $MoteHome, [string] $CaseName, [bool] $HasConfig, [string] $TraceSubdir)
-    $files = if ([IO.Directory]::Exists($MoteHome)) {
-        @([IO.Directory]::EnumerateFiles($MoteHome, '*', [IO.SearchOption]::AllDirectories) |
+    # An if expression unwraps zero or one PowerShell pipeline results. Keep
+    # these as arrays even for an absent or single-file home under StrictMode.
+    $files = @()
+    if ([IO.Directory]::Exists($MoteHome)) {
+        $files = @([IO.Directory]::EnumerateFiles($MoteHome, '*', [IO.SearchOption]::AllDirectories) |
             ForEach-Object { [IO.Path]::GetRelativePath($MoteHome, $_).Replace([IO.Path]::DirectorySeparatorChar, '/') } | Sort-Object)
-    } else { @() }
+    }
     $expectedCount = [int]$HasConfig + [int](-not [string]::IsNullOrEmpty($TraceSubdir))
     if ($files.Count -ne $expectedCount) {
         throw "$CaseName created unexpected MOTE_HOME files: $($files -join ', ')"
@@ -154,11 +157,13 @@ function Assert-Home {
     if ($HasConfig -and -not ($files -ccontains 'config.toml')) {
         throw "$CaseName lost or moved the user config file."
     }
-    $directories = if ([IO.Directory]::Exists($MoteHome)) {
-        @([IO.Directory]::EnumerateDirectories($MoteHome, '*', [IO.SearchOption]::AllDirectories) |
+    $directories = @()
+    if ([IO.Directory]::Exists($MoteHome)) {
+        $directories = @([IO.Directory]::EnumerateDirectories($MoteHome, '*', [IO.SearchOption]::AllDirectories) |
             ForEach-Object { [IO.Path]::GetRelativePath($MoteHome, $_).Replace([IO.Path]::DirectorySeparatorChar, '/') } | Sort-Object)
-    } else { @() }
-    $expectedDirectories = if ($TraceSubdir) { @($TraceSubdir) } else { @() }
+    }
+    $expectedDirectories = @()
+    if ($TraceSubdir) { $expectedDirectories = @($TraceSubdir) }
     if ($directories.Count -ne $expectedDirectories.Count -or
         ($directories.Count -eq 1 -and $directories[0] -cne $expectedDirectories[0])) {
         throw "$CaseName created unexpected MOTE_HOME directories: $($directories -join ', ')"
