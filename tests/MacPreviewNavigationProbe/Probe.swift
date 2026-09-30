@@ -226,8 +226,10 @@ private func inspect(pid: pid_t, expectedLength: Int, action: String) -> Report 
                   previewSelectionStart: previewSelected?.location,
                   previewSelectionLength: previewSelected?.length,
                   previewFocused: previewFocused, previewEditable: editable,
-                  boundsX: frame?.minX, boundsY: frame?.minY,
-                  boundsWidth: frame?.width, boundsHeight: frame?.height,
+                  boundsX: frame.map { Double($0.minX) },
+                  boundsY: frame.map { Double($0.minY) },
+                  boundsWidth: frame.map { Double($0.width) },
+                  boundsHeight: frame.map { Double($0.height) },
                   actionError: actionError)
 }
 
