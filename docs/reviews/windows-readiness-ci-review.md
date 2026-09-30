@@ -79,3 +79,69 @@ new readiness steps are now non-gating; existing mandatory gates are unchanged.
 Remaining acceptance requires actual hosted execution and retained evidence.
 No local GUI run, action service fault injection, timing threshold, or general
 JSON correctness validation was performed or implied by this review.
+
+## Natural-close trace CI delta review
+
+Separately reviewed the subsequent uncommitted natural-close step/upload against
+HEAD `ca065a0` and the committed benchmark change `e49c756`, including
+`NativeTraceEvidence.ps1` and `NaturalCloseTraceReview.md`. The original
+readiness review above remains historical evidence, not the hash of this delta.
+The reviewed current raw workflow SHA-256 is
+`579A746C10CC84057BD907DC6744E0BD29B5EB9D8AD3EF053C2259B8F5D0CB95`.
+
+**Disposition: no substantive finding in the natural-close CI delta.** No
+workflow/production edit, GUI operation, native process, or old local binary was
+used in this review.
+
+### Contract and integration checks
+
+- The new step reuses the earlier win-x64 Python setup, creates a separately
+  pinned fresh one-case corpus, and invokes the committed external readiness
+  adapter with `NaturalCloseTrace` and a supported 1000 ms observation period.
+  Both diagnostic execution and upload are explicitly non-gating. Existing
+  mandatory gates remain unchanged.
+- The shared append-only JSONL now intentionally includes an earlier untraced
+  readiness sample plus this sample. Filtering `natural_close_trace` before
+  requiring exactly one row avoids a false failure caused by those two rows,
+  without treating an arbitrary tail row as this sample. Earlier readiness
+  upload occurs before this append; later trace upload retains both rows.
+- All accessed evidence fields match the helper's actual return contract:
+  `causal_integrity`, `terminal_session`, `dropped_records` and the nested
+  `endpoints`. Quoted PowerShell access to keys containing dots, such as
+  `endpoints.'document.open_to_editable'.status`, operates correctly after
+  JSON deserialization. Driver serialization depth 8 preserves these objects.
+- A successful probe requires the same current binary/source and three fixture
+  digests, normal termination, exit code zero, trace integrity, a successful
+  terminal session, no record loss, and successful open/editable endpoints.
+  The committed driver already requires source discovery/selection and refuses
+  edit/Save trace operations before setting sample status to passed. Failed
+  driver execution propagates through `Out-Host` as a terminating error.
+- Missing/cancelled draw endpoints intentionally do not fail this source/open
+  capability diagnostic. The message explicitly asks readers to inspect draw
+  status separately. Neither parent/child clock subtraction nor physical paint
+  inference is introduced; configuration remains uninstrumented/null.
+- The trace artifact captures the full GUID/ordinal trace subtree, including
+  copied raw JSONL, manifest, and auditor summary, together with parent rows and
+  corpus manifests. Raw files copied before an audit failure remain uploadable;
+  failures before trace collection may legitimately leave only parent/corpus
+  evidence. Fixture bytes and scratch MOTE_HOME are not uploaded. Explicit
+  `traces/**` starts below hidden `.cache`, consistent with the glob analysis
+  above. No artifact-name collision is introduced.
+
+### Independent bounded verification
+
+- PyYAML 6.0.3 parsed the updated actual workflow and confirmed the new step is
+  non-gating. PowerShell 7.6.5 parsed its extracted complete run block with
+  `Parser.ParseFile`: **zero errors**.
+- Executed the actual extracted row predicate against JSON-round-tripped,
+  helper-shaped synthetic rows: **12/12 checks passed**. Covered acceptance
+  with a missing draw endpoint; rejection of failed status, wrong binary,
+  wrong source, forced termination, nonzero exit, mutated copied fixture,
+  non-null edit/Save/configuration fields, cancelled open, and record loss.
+  Nested dotted-key access was exercised, not merely parsed.
+- Verification artifacts remain repository-local at
+  `.temp/windows-readiness-ci-review/natural-close-block.ps1` and
+  `.temp/windows-readiness-ci-review/validate-natural-close-predicate.ps1`.
+  These synthetic checks establish field/predicate semantics, not real trace
+  flush, natural-close success, or hosted GUI capability. Existing adapter and
+  artifact-auditor preflight tests were not repeated.

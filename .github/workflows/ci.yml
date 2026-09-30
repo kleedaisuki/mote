@@ -186,6 +186,64 @@ jobs:
             .cache/native-acceptance/corpus-*.json
           if-no-files-found: warn
           retention-days: 14
+      # Keep parent launch observation and child causal durations separate.
+      # Natural draw callback return is not physical or compositor paint.
+      - name: Diagnose Windows AOT natural-close open trace (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PYTHONDONTWRITEBYTECODE = '1'
+          $manifestPath = (python benchmarks/NativeAcceptance/acceptance.py prepare `
+            --sizes 1 --formats json --shapes long).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Natural-close corpus preparation failed.' }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.cases.Count -ne 1 -or $manifest.cases[0].case -cne 'json-long-1') {
+            throw 'Unexpected natural-close corpus.'
+          }
+          $case = $manifest.cases[0]
+          $pinnedSha = 'bae792983708d005e143e90cfcb3a2110554dd590dd299059fb0d842dc20b5dd'
+          if ($case.sha256 -cne $pinnedSha) { throw 'Natural-close corpus SHA differs from independent pin.' }
+          $exe = 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe'
+          & ./benchmarks/NativeStartup/Measure-WindowsOrdinary.ps1 `
+            -ExecutablePath $exe -FixturePath (Join-Path (Get-Location) $case.fixture) `
+            -FixtureSha256 $pinnedSha -SizeMiB 1 -Runs 1 -ReadinessOnly `
+            -NaturalCloseTrace -TraceObservationMilliseconds 1000 | Out-Host
+          $rows = @(Get-Content -LiteralPath '.cache/native-startup/ordinary-windows.jsonl' |
+            ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.natural_close_trace })
+          if ($rows.Count -ne 1) { throw "Expected one natural-close row, found $($rows.Count)." }
+          $row = $rows[0]
+          $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $head = (git rev-parse HEAD).Trim()
+          if ($row.status -cne 'passed' -or $row.git_head -cne $head -or
+              $row.executable_sha256 -cne $exeSha -or $row.original_fixture_sha256 -cne $pinnedSha -or
+              $row.copied_fixture_sha256_after_probe -cne $pinnedSha -or
+              $row.input_fixture_sha256_after_probe -cne $pinnedSha -or
+              $row.termination -cne 'natural-close' -or $row.child_exit_code -ne 0 -or
+              $row.child_trace_evidence.causal_integrity -cne 'pass' -or
+              $row.child_trace_evidence.terminal_session -cne 'one-successful-root' -or
+              $row.child_trace_evidence.dropped_records -ne 0 -or
+              $row.child_trace_evidence.endpoints.'document.open'.status -cne 'success' -or
+              $row.child_trace_evidence.endpoints.'document.open_to_editable'.status -cne 'success' -or
+              $row.edit_dirty_ack_ms -ne $null -or $row.save_exact_ms -ne $null -or
+              $row.configuration_ms -ne $null) {
+            throw 'Natural-close source, provenance, trace, or no-mutation contract failed.'
+          }
+          Write-Host "Natural-close child open trace collected for $head; inspect draw status separately."
+      - name: Upload Windows natural-close trace diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-natural-close-win-x64
+          path: |
+            .cache/native-startup/ordinary-windows.jsonl
+            .cache/native-startup/traces/**
+            .cache/native-acceptance/corpus-*.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify OS-native offscreen text-canvas probe
         shell: pwsh
         timeout-minutes: 2

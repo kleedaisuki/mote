@@ -82,7 +82,7 @@ Trace-on parent numbers are separate from the prior trace-off pilot: different
 binaries/runner instances/regimes cannot quantify tracing overhead. Configuration
 remains unavailable without a separately coordinated production phase contract.
 
-## Fresh-hosted command proposal — target run pending
+## Fresh-hosted non-gating CI command — target run pending
 
 Generate `json-long-1` outside timing; use the root owner's fresh exact-checkout
 strict Native AOT publish and preserve its binary/provenance evidence:
@@ -94,15 +94,19 @@ $manifestPath = (python benchmarks/NativeAcceptance/acceptance.py prepare `
 if ($LASTEXITCODE -ne 0) { throw 'Synthetic JSON preparation failed.' }
 $case = (Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).cases[0]
 & ./benchmarks/NativeStartup/Measure-WindowsOrdinary.ps1 `
-    -ExecutablePath .cache/FRESH_STRICT_PUBLISH/mote.exe `
+    -ExecutablePath src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe `
     -FixturePath (Join-Path (Get-Location) $case.fixture) `
     -FixtureSha256 $case.sha256 -SizeMiB 1 -Runs 1 -ReadinessOnly `
     -NaturalCloseTrace -TraceObservationMilliseconds 1000
 ```
 
-`FRESH_STRICT_PUBLISH` is a wiring placeholder, not a verified local binary.
-Use a bounded, **non-gating** first target step; `if: always()` upload corpus
-manifest, `ordinary-windows.jsonl` and `.cache/native-startup/traces/**`. Inspect
+The CI job now invokes this after its fresh strict single-binary publish and
+the separate trace-off readiness step. Both the diagnostic and its `if: always()`
+artifact upload are **non-gating**. The job pins the corpus digest, checkout HEAD
+and published binary hash, requires a normal terminal session and child open
+and open→editable successes, but does not require draw success on this first
+capability run. It uploads the corpus manifest, `ordinary-windows.jsonl` and
+`.cache/native-startup/traces/**`. Inspect
 logs, termination, byte hashes, normal session, causal summary and endpoint
 outcomes independently of workflow success. Do not use an older local binary.
 Only a later fair same-binary/same-host off/on pair can quantify overhead.
