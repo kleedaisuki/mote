@@ -111,6 +111,21 @@ visit budget also counts hidden definition groups and marker-owner search, so
 invisible syntax cannot bypass display caps. Focused additions passed; see the
 format evidence document for exact runs rather than summing overlapping suites.
 All three independent reviews have closed their concrete findings in current
-source. Exact target results remain to be appended rather than inferred from
-these host checks. Existing CSV Flow is explicitly a
+source. The hosted target result below is separate from these host checks.
+Existing CSV Flow is explicitly a
 compatibility surface pending real virtual Grid, not the final table renderer.
+
+## Hosted target result (2026-09-30)
+
+The first integrated [CI run 36727036440](https://github.com/kleedaisuki/mote/actions/runs/36727036440)
+at `f4cf5d5` completed all six strict jobs successfully: Windows/macOS solution
+tests and single-binary Native AOT on win-x64, win-arm64, osx-x64 and osx-arm64.
+The separately non-gating, published-binary AppKit Flow diagnostic emitted the
+exact `mote-native-mac-flow-rendering-ready` marker in both the
+[osx-arm64 job 109926461539](https://github.com/kleedaisuki/mote/actions/runs/36727036440/job/109926461539)
+and [osx-x64 job 109926461667](https://github.com/kleedaisuki/mote/actions/runs/36727036440/job/109926461667).
+Its PowerShell wrapper requires process exit zero and that exact marker; the
+workflow bounds it to three minutes. This is actual target-architecture evidence
+for the synthetic, owned AppKit window and its attributed text/style/layout
+assertions. It does not establish ordinary Continuous coexistence, external
+Copy, physical editing, real IME, VoiceOver, pixel fidelity or latency.
