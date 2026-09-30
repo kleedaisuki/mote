@@ -249,6 +249,26 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+      # One-process-per-case screen observation after HKCU has been restored;
+      # no p95 or physical-compositor latency claim from this first hosted pass.
+      - name: Diagnose Windows external paint latency (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 12
+        continue-on-error: true
+        run: |
+          & ./benchmarks/NativePaintLatency/Measure-WindowsScreen.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe' `
+            -Cases @('many-1','many-100') -Repetitions 1
+      - name: Upload Windows external paint-latency observations
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-paint-latency-win-x64
+          path: .cache/benchmarks/native-paint-latency/**/screen-observations.jsonl
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       # The large opt-in canvas path is still diagnostic until hosted evidence
       # confirms both exact large-paste/Undo cases without a release claim.
       - name: Diagnose Windows canvas large Undo workflow (non-gating)
