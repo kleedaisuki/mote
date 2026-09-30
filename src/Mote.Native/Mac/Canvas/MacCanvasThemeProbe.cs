@@ -101,8 +101,11 @@ internal static class MacCanvasThemeProbe
         private long _baseVersion;
         private long _editedVersion;
         private long _undoVersion;
+        private int _insertionOffset;
         private NativeDocumentStamp _editedStamp;
         private (int Anchor, int Active) _selection;
+        private string _initialSource = string.Empty;
+        private string _expectedEditedSource = string.Empty;
         private string _editedSource = string.Empty;
         private bool _done;
         private bool _undoRestored;
@@ -152,6 +155,15 @@ internal static class MacCanvasThemeProbe
                         $"stamp={CurrentStampNullable() is not null};" +
                         $"analysis={_shell.ProbeAnalysis is not null};" +
                         $"heading-spans={_shell.ProbeAnalysis?.PreviewSpans?.Count(static span => span.Kind == "heading") ?? 0};");
+                else if (_stage == 2)
+                    Console.Error.WriteLine("Mac theme edit readiness: " +
+                        $"version-advanced={CurrentVersion() > _baseVersion};" +
+                        $"analysis-ready={AnalysisReady()};" +
+                        $"exact-edit={CurrentSource() == _expectedEditedSource};" +
+                        $"source-ends-z={CurrentSource().EndsWith('Z')};" +
+                        $"input-start={_shell.ProbeCanvasInputStart};" +
+                        $"input-length={_shell.ProbeNativeText.Length};" +
+                        $"insertion-offset={_insertionOffset};");
                 Fail("deadline");
                 return;
             }
@@ -169,11 +181,18 @@ internal static class MacCanvasThemeProbe
                         _shell.ProbeThemeId == ThemePolicies.DarkId && AnalysisReady():
                         _check = "native-edit";
                         _baseVersion = CurrentVersion();
+                        _initialSource = CurrentSource();
+                        _insertionOffset = _mode == "canvas"
+                            ? checked(_shell.ProbeCanvasInputStart + _shell.ProbeNativeText.Length)
+                            : _initialSource.Length;
+                        if (_insertionOffset < 0 || _insertionOffset > _initialSource.Length)
+                            throw new InvalidOperationException("Theme input offset is outside source.");
+                        _expectedEditedSource = _initialSource.Insert(_insertionOffset, "Z");
                         _shell.ProbeInsertAtEnd("Z");
                         _stage = 2;
                         break;
                     case 2 when CurrentVersion() > _baseVersion && AnalysisReady() &&
-                        CurrentSource().EndsWith('Z'):
+                        CurrentSource() == _expectedEditedSource:
                         _check = "dark-before";
                         _editedVersion = CurrentVersion();
                         _editedStamp = CurrentStamp();
@@ -207,7 +226,7 @@ internal static class MacCanvasThemeProbe
                         _stage = 5;
                         break;
                     case 5 when CurrentVersion() > _editedVersion &&
-                        CurrentSource() == File.ReadAllText(_input):
+                        CurrentSource() == _initialSource:
                         _check = "undo";
                         _undoVersion = CurrentVersion();
                         _undoRestored = true;
