@@ -894,6 +894,26 @@ jobs:
           if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-csv-grid-ready')) {
             throw "AppKit CSV Grid diagnostic failed (exit $code)."
           }
+      # Two process-owned hidden NSScroller instances only; probe source bytes
+      # are independently reviewed and no clipboard or desktop input is used.
+      - name: Diagnose native macOS logical Grid scrollers (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $hash = (Get-FileHash src/Mote.Native/Mac/MacGridScrollerProbe.cs -Algorithm SHA256).Hash
+          $reviewed = @('E0E0CCDA60C1AC2DC144CE01CE65B420457F1B9BDDB85899225762AB9F5B2938', '63A3CFF32138CBA344D8A8CA91347B666AF37DB9FC9825ACB3527400EDCF97C5')
+          if ($hash -cnotin $reviewed) { throw 'Mac Grid scroller probe differs from reviewed bytes.' }
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-grid-scroller 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          $marker = 'mote-native-mac-grid-scroller-ready; native-action=synthetic; physical-input=not-tested; controller-stale-token=not-tested'
+          if ($code -ne 0 -or @($output | Where-Object { $_ -ceq $marker }).Count -ne 1) {
+            throw "AppKit logical Grid scroller diagnostic failed (exit $code)."
+          }
       # Owned AppKit source probe for embedded NUL/literal-marker preservation.
       # It edits only an unsaved in-memory document and touches no user state.
       - name: Diagnose native macOS source NUL preservation (non-gating)

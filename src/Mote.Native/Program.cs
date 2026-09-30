@@ -33,6 +33,12 @@ internal static class Program
             if (result == 0) Console.WriteLine("mote-native-mac-csv-grid-ready");
             return result;
         }
+        // Hidden, in-process AppKit scroller diagnostic; no document or settings load.
+        if (args.Length == 1 && args[0] == "--check-native-mac-grid-scroller")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            return Mac.MacGridScrollerProbe.Run();
+        }
         // This diagnostic is inert by default; actual NSPasteboard mutation is
         // admitted again by the probe's disposable-runner identity gate.
         if (args.Length == 2 && args[0] == "--check-native-mac-grid-clipboard")
