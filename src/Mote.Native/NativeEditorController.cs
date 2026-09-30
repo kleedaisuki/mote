@@ -67,7 +67,19 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     private IDocumentPolicy _policy = DocumentPolicies.ForKind(DocumentKind.PlainText);
     private NativeFormatSessionDriver? _sessionDriver;
     private NativeIdleFullAnalysis? _idleFullAnalysis;
-    private NativeAnalysisView? _visibleSessionAnalysis;
+    /// <summary>One bounded visible presentation and its source facts; never retains a format tree.</summary>
+    private VisibleSessionFrame? _visibleSessionAnalysis;
+
+    /// <summary>Pairs source overlays with the exact viewport and document generation that produced them.</summary>
+    private sealed record VisibleSessionFrame(NativeAnalysisView View,
+        NativeCanvasSemantics Semantics, Mote.Formats.TextSpan Viewport);
+
+    /// <summary>One proved current-version conflict survives page navigation without retaining source or a tree.</summary>
+    private TomlKnownError? _tomlKnownError;
+
+    /// <summary>Identity-bound, bounded witness; replaced documents and every source edit revoke it.</summary>
+    private sealed record TomlKnownError(Diagnostic Diagnostic, NativeDocumentStamp Stamp,
+        Document Document, NativeFormatSessionDriver Driver, IDocumentPolicy Policy);
     /// <summary>The exact analysis currently offered to the native preview.</summary>
     private NativeAnalysisView? _presentedPreview;
     /// <summary>Monotonic identity for same-version viewport, policy and theme maps.</summary>
@@ -203,6 +215,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _idleFullAnalysis?.Dispose();
         _analysisDispatcher?.Dispose();
         _visibleSessionAnalysis = null;
+        _tomlKnownError = null;
         _document.ChangedRange -= DocumentChanged;
         _sessionDriver?.Dispose();
         _findCancellation?.Cancel();
@@ -568,6 +581,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         CancelAnalysis();
         _idleFullAnalysis?.Dispose();
         _visibleSessionAnalysis = null;
+        _tomlKnownError = null;
         _document.ChangedRange -= DocumentChanged;
         _sessionDriver?.Dispose();
         _document.Dispose();
@@ -1653,16 +1667,22 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                     var preview = presentation.Preview;
                     if (presentation.Grid is { } targetGrid && ResolveGridTarget(targetGrid)) return;
                     _gridPending = false;
-                    _visibleSessionAnalysis = new NativeAnalysisView(tokens, diagnostics,
+                    var view = new NativeAnalysisView(tokens, diagnostics,
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
                         new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans,
                         Flow: preview.Flow, Grid: presentation.Grid);
-                    PresentAnalysis(_visibleSessionAnalysis);
-                    if (serial != _analysisSerial || cancellation.IsCancellationRequested) return;
-                    _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
+                    var semantics = new NativeCanvasSemantics(result.Version,
                         result.Completeness, result.Coverage,
                         VisibleSourceTokens(result.Tokens, pageStart, pageLength),
-                        VisibleSourceDiagnostics(result.Diagnostics, pageStart, pageLength)));
+                        VisibleSourceDiagnostics(result.Diagnostics, pageStart, pageLength));
+                    var frame = MergeCachedTomlKnownError(
+                        new VisibleSessionFrame(view, semantics, request.VisibleRange), policy, snapshot);
+                    _visibleSessionAnalysis = frame;
+                    PresentAnalysis(frame.View);
+                    if (serial != _analysisSerial || cancellation.IsCancellationRequested) return;
+                    _canvasShell?.SetCanvasSemantics(frame.Semantics);
+                    if (serial != _analysisSerial || cancellation.IsCancellationRequested ||
+                        !ReferenceEquals(_visibleSessionAnalysis, frame)) return;
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
                         dimensions: Dimensions(snapshot));
                     if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Success);
@@ -1672,7 +1692,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                         var reason = idle == IdleFullOffer.MemoryLimited
                             ? "memory pressure"
                             : "format work limit";
-                        PresentAnalysis(_visibleSessionAnalysis with
+                        PresentAnalysis(frame.View with
                         {
                             Status = $"{policy.DisplayName} · Full pass deferred: {reason}; " +
                                 $"global diagnostics unknown · v{result.Version}"
@@ -1789,6 +1809,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     private void DocumentChanged(object? sender, DocumentChangedRangeEventArgs change)
     {
         ResetGridInterest();
+        _tomlKnownError = null;
         _sessionDriver?.Record(change);
         _navigation.ApplyChange(change.Change, change.After);
         _canvas?.ApplyEdit(change.After, change.Change);
@@ -1834,7 +1855,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                         return;
                     }
                     if (_visibleSessionAnalysis is { } visible)
-                        PresentAnalysis(visible with
+                        PresentAnalysis(visible.View with
                         {
                             Status = $"{policy.DisplayName} · Full pass failed; " +
                                 $"visible diagnostics retained · v{snapshot.Version}"
@@ -1848,7 +1869,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     /// <summary>
     /// Promotes only a certified whole-document result. A policy may correctly
     /// answer a Full request with Provisional coverage, which must not erase the
-    /// more relevant visible-page analysis or claim a global problem count.
+    /// more relevant visible-page analysis or claim a global problem count. The
+    /// narrow TOML ownership witness augments only matching bounded source facts.
     /// </summary>
     private void PublishIdleFullAnalysis(NativeFormatSessionDriver driver, Document document,
         IDocumentPolicy policy, TextSnapshot snapshot, DocumentAnalysis result,
@@ -1867,10 +1889,12 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         {
             if (policy.Kind == DocumentKind.Csv)
                 SetGridIndexNotice($"CSV Full pass {result.Completeness}; file totals remain unknown; Retry indexing explicitly.");
+            RememberTomlKnownError(driver, document, policy, snapshot, result);
+            if (TryMergeTomlKnownError(policy, snapshot)) return;
             // The Full request did run, but the policy could not certify the
             // entire file. Keep visible facts and make the finite result clear.
             if (_visibleSessionAnalysis is { } visible)
-                PresentAnalysis(visible with
+                PresentAnalysis(visible.View with
                 {
                     Status = $"{policy.DisplayName} · Full pass {result.Completeness}; " +
                         $"global diagnostics unknown · v{result.Version}"
@@ -1903,6 +1927,73 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             dimensions: Dimensions(snapshot));
     }
 
+    /// <summary>
+    /// Adds only the first proved TOML ownership conflict to an exact visible frame.
+    /// A partial Full pass supplies no replacement rendering or exact global count.
+    /// </summary>
+    private bool TryMergeTomlKnownError(IDocumentPolicy policy, TextSnapshot snapshot)
+    {
+        if (_visibleSessionAnalysis is not { } frame) return false;
+        var merged = MergeCachedTomlKnownError(frame, policy, snapshot);
+        if (ReferenceEquals(merged, frame)) return false;
+        _visibleSessionAnalysis = merged;
+        PresentAnalysis(merged.View);
+        // Native pane installation can synchronously edit or change the viewport.
+        if (!ReferenceEquals(_visibleSessionAnalysis, merged) || _disposed ||
+            snapshot.Version != _document.Snapshot.Version) return true;
+        _canvasShell?.SetCanvasSemantics(merged.Semantics);
+        MoteTelemetry.Record(TelemetryEvent.AnalysisPublished, dimensions: Dimensions(snapshot));
+        return true;
+    }
+
+    /// <summary>Captures only a proved, identity-guarded Full witness, including one outside the current viewport.</summary>
+    private void RememberTomlKnownError(NativeFormatSessionDriver driver, Document document,
+        IDocumentPolicy policy, TextSnapshot snapshot, DocumentAnalysis result)
+    {
+        if (policy.Kind != DocumentKind.Toml || result.Completeness != AnalysisCompleteness.Provisional ||
+            _visibleSessionAnalysis?.View.Stamp != new NativeDocumentStamp(_canvasGeneration, snapshot.Version)) return;
+        var diagnostic = result.Diagnostics.FirstOrDefault(d => d.Code == "TOML_OWNERSHIP" &&
+            d.Severity == DiagnosticSeverity.Error && d.Span.Start >= 0 && d.Span.Length > 0 &&
+            (long)d.Span.Start + d.Span.Length <= snapshot.Length);
+        if (diagnostic is not null)
+            _tomlKnownError = new TomlKnownError(diagnostic,
+                new NativeDocumentStamp(_canvasGeneration, snapshot.Version), document, driver, policy);
+    }
+
+    /// <summary>Reprojects one exact-version witness into bounded visible facts without replacing rendering.</summary>
+    private VisibleSessionFrame MergeCachedTomlKnownError(VisibleSessionFrame frame,
+        IDocumentPolicy policy, TextSnapshot snapshot)
+    {
+        if (_tomlKnownError is not { } known || policy.Kind != DocumentKind.Toml ||
+            !ReferenceEquals(known.Document, _document) || !ReferenceEquals(known.Driver, _sessionDriver) ||
+            !ReferenceEquals(known.Policy, policy) || !ReferenceEquals(policy, _policy) ||
+            known.Stamp != new NativeDocumentStamp(_canvasGeneration, snapshot.Version) ||
+            frame.View.Stamp != known.Stamp || frame.Semantics.Version != snapshot.Version ||
+            frame.Viewport != new Mote.Formats.TextSpan(_pageStart, _pageLength)) return frame;
+        var witness = known.Diagnostic;
+        if (witness.Span.Start >= frame.Viewport.End || witness.Span.End <= frame.Viewport.Start) return frame;
+        var diagnostics = frame.Semantics.Diagnostics.ToList();
+        if (!diagnostics.Any(d => d.Code == witness.Code && d.Span == witness.Span))
+        {
+            // Preserve existing bounded visible facts rather than evicting one to make room.
+            if (diagnostics.Count == 4096) return frame;
+            diagnostics.Add(witness);
+            diagnostics.Sort(static (left, right) => left.Span.Start.CompareTo(right.Span.Start));
+        }
+        var semantics = frame.Semantics with
+        {
+            Completeness = AnalysisCompleteness.Provisional,
+            Diagnostics = diagnostics
+        };
+        var view = frame.View with
+        {
+            DiagnosticsSummary = $"Provisional in {semantics.Coverage.Start:N0}–" +
+                $"{semantics.Coverage.End:N0}; global diagnostics unknown. {DiagnosticSummary(diagnostics)}",
+            Status = $"{policy.DisplayName} · Full pass Provisional; global diagnostics unknown · v{snapshot.Version}"
+        };
+        return new VisibleSessionFrame(view, semantics, frame.Viewport);
+    }
+
     private void SelectPolicy(IDocumentPolicy policy)
     {
         if (ReferenceEquals(policy, _policy)) return;
@@ -1911,6 +2002,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         CancelAnalysis();
         _idleFullAnalysis?.Dispose();
         _visibleSessionAnalysis = null;
+        _tomlKnownError = null;
         _sessionDriver?.Dispose();
         _policy = policy;
         _sessionDriver = CreateSessionDriver(policy);

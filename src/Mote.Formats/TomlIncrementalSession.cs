@@ -56,8 +56,8 @@ internal sealed class TomlIncrementalSession : IFormatSession
         // change chain cannot make this session publish stale facts. We record only version.
         var result = snapshot.Length <= CompleteLimit
             ? AnalyzeComplete(snapshot, request, cancellationToken)
-            : request.Scope == AnalysisScope.Full && TryAnalyzeLarge(snapshot, request.VisibleRange, cancellationToken) is { } complete
-                ? complete
+            : request.Scope == AnalysisScope.Full
+                ? AnalyzeLarge(snapshot, request.VisibleRange, cancellationToken)
                 : AnalyzeVisible(snapshot, request.VisibleRange, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (_committedVersion is null || snapshot.Version >= _committedVersion)
@@ -122,12 +122,28 @@ internal sealed class TomlIncrementalSession : IFormatSession
             Array.Empty<Diagnostic>(), tokens, null);
     }
 
+    /// <summary>Combines bounded lexical output with either certification or one proved error.</summary>
+    private static DocumentAnalysis AnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
+    {
+        var outcome = TryAnalyzeLarge(snapshot, visible, ct);
+        var lexical = AnalyzeVisible(snapshot, visible, ct);
+        if (!outcome.Complete)
+            return outcome.KnownError is { } error
+                ? new DocumentAnalysis(lexical.Version, lexical.Coverage, lexical.Completeness,
+                    lexical.Root, new[] { error }, lexical.Tokens, null)
+                : lexical;
+        return new DocumentAnalysis(snapshot.Version, new TextSpan(0, snapshot.Length),
+            AnalysisCompleteness.Complete,
+            new SemanticNode("document", new TextSpan(0, snapshot.Length), children: outcome.Nodes!),
+            Array.Empty<Diagnostic>(), lexical.Tokens, 0);
+    }
+
     /// <summary>
     /// Certifies line-delimited TOML with independently valid logical statements and a bounded
     /// ownership trie. Unsupported, malformed, or oversized statements fall back to Provisional.
     /// A 64-line cap bounds repeated continuation scans even for many tiny physical lines.
     /// </summary>
-    private static DocumentAnalysis? TryAnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
+    private static LargeAnalysisResult TryAnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
     {
         using var reader = new SnapshotTextReader(snapshot, 0, snapshot.Length, ct);
         var buffer = ArrayPool<char>.Shared.Rent(8192);
@@ -146,62 +162,80 @@ internal sealed class TomlIncrementalSession : IFormatSession
                     char ch = buffer[i];
                     statement.Append(ch);
                     offset++;
-                    if (statement.Length > MaxStatement) return null;
+                    if (statement.Length > MaxStatement) return default;
                     if (ch != '\n') continue;
-                    if (++statementLines > MaxStatementLines) return null;
+                    if (++statementLines > MaxStatementLines) return default;
                     string source = statement.ToString();
                     if (Continues(source)) continue;
-                    if (++count > MaxStatements || !ProcessStatement(source, statementStart, visible, ownership, nodes)) return null;
+                    if (++count > MaxStatements) return default;
+                    var outcome = ProcessStatement(source, statementStart, visible, ownership, nodes);
+                    if (!outcome.Accepted) return new(false, null, outcome.KnownError);
                     statement.Clear();
                     statementStart = offset;
                     statementLines = 0;
                 }
             }
-            if (statement.Length > 0 &&
-                (++count > MaxStatements || Continues(statement.ToString()) ||
-                 !ProcessStatement(statement.ToString(), statementStart, visible, ownership, nodes))) return null;
-            if (!ownership.IsExhaustive || !ownership.IsCertifiable) return null;
+            if (statement.Length > 0)
+            {
+                var source = statement.ToString();
+                if (++count > MaxStatements || Continues(source)) return default;
+                var outcome = ProcessStatement(source, statementStart, visible, ownership, nodes);
+                if (!outcome.Accepted) return new(false, null, outcome.KnownError);
+            }
+            if (!ownership.IsExhaustive || !ownership.IsCertifiable) return default;
             ct.ThrowIfCancellationRequested();
-            var lexical = AnalyzeVisible(snapshot, visible, ct);
-            return new DocumentAnalysis(snapshot.Version, new TextSpan(0, snapshot.Length),
-                AnalysisCompleteness.Complete,
-                new SemanticNode("document", new TextSpan(0, snapshot.Length), children: nodes),
-                Array.Empty<Diagnostic>(), lexical.Tokens, 0);
+            return new(true, nodes, null);
         }
         finally { ArrayPool<char>.Shared.Return(buffer); }
     }
 
     /// <summary>Validates one standalone statement, then updates global key ownership.</summary>
-    private static bool ProcessStatement(string source, int start, TextSpan visible,
+    private static StatementOutcome ProcessStatement(string source, int start, TextSpan visible,
         TomlOwnershipIndex ownership, List<SemanticNode> nodes)
     {
-        if (string.IsNullOrWhiteSpace(source) || source.TrimStart().StartsWith('#')) return true;
+        if (string.IsNullOrWhiteSpace(source) || source.TrimStart().StartsWith('#')) return new(true, null);
+        if (!ownership.IsExhaustive || !ownership.IsCertifiable) return default;
         var syntax = SyntaxParser.Parse(source, validate: true);
-        if (syntax.Diagnostics.Count != 0) return false;
+        if (syntax.Diagnostics.Count != 0) return default;
         var pairs = syntax.KeyValues.ToArray();
         var tables = syntax.Tables.ToArray();
-        if (pairs.Length + tables.Length != 1) return false;
+        if (pairs.Length + tables.Length != 1) return default;
         if (pairs.Length == 1)
         {
             var pair = pairs[0];
-            if (pair.Key is null || pair.Value is null || ownership.AddAssignment(pair.Key, pair.Value, start) is not null) return false;
-            if (!ownership.IsCertifiable) return false;
+            if (pair.Key is null || pair.Value is null) return default;
+            var outcome = OwnershipOutcome(ownership.AddAssignment(pair.Key, pair.Value, start), ownership);
+            if (!outcome.Accepted) return outcome;
             var span = Shift(pair.Span, start);
             if (Intersects(span, visible))
                 nodes.Add(new SemanticNode("entry", span, pair.Key.ToString().Trim(),
                     children: [new SemanticNode(ValueKind(pair.Value), Shift(pair.Value.Span, start))]));
-            return true;
+            return new(true, null);
         }
         var table = tables[0];
-        if (table.Name is null || table.Items.Any() ||
-            ownership.AddHeader(table.Name, table is TableArraySyntax, start) is not null) return false;
-        if (!ownership.IsCertifiable) return false;
+        if (table.Name is null || table.Items.Any()) return default;
+        var headerOutcome = OwnershipOutcome(ownership.AddHeader(table.Name, table is TableArraySyntax, start), ownership);
+        if (!headerOutcome.Accepted) return headerOutcome;
         var tableSpan = Shift(table.Span, start);
         if (Intersects(tableSpan, visible))
             nodes.Add(new SemanticNode(table is TableArraySyntax ? "array-table" : "table",
                 tableSpan, table.Name.ToString().Trim()));
-        return true;
+        return new(true, null);
     }
+
+    /// <summary>
+    /// A conflict is a counterexample only when this transition preserved the certified prefix.
+    /// Unsupported traversal may discover a conflict in the same call; do not publish that fact.
+    /// </summary>
+    private static StatementOutcome OwnershipOutcome(Diagnostic? error, TomlOwnershipIndex ownership) =>
+        !ownership.IsExhaustive || !ownership.IsCertifiable ? default : new(error is null, error);
+
+    /// <summary>Distinguishes success, uncertainty and a bounded first-error observation.</summary>
+    private readonly record struct LargeAnalysisResult(bool Complete,
+        IReadOnlyList<SemanticNode>? Nodes, Diagnostic? KnownError);
+
+    /// <summary>An accepted statement or a stop with an optional certified ownership error.</summary>
+    private readonly record struct StatementOutcome(bool Accepted, Diagnostic? KnownError);
 
     /// <summary>Finds continuation through arrays, inline tables, and triple-quoted strings.</summary>
     private static bool Continues(string source)
