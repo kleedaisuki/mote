@@ -65,3 +65,17 @@ geometry, notification delivery, performance distributions, or release readiness
 Primary workflow behavior references:
 [GitHub Actions workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
 and [actions/upload-artifact documentation](https://github.com/actions/upload-artifact).
+
+## Targeted diagnostic-source pin update
+
+The follow-up changes only the Swift source pin after the independently reviewed
+content-free first-row/column attribute classifications were committed. The current
+`Probe.swift` SHA-256 is
+`A65E460046E0AA72B88F5E4289CAA0915A4EE15E1C24984B9C40DC6FD1227B8C`,
+verified against both the working tree and Git HEAD blob. The wrapper pin remains
+`0A867687F62795790989B20A347A70EBEB93888923A666157DB45F5F5F816CEA`.
+The workflow diff contains exactly that single pin replacement; YAML parsing,
+the extracted PowerShell AST (zero errors), the exact new literal, absence of the
+old literal in the step, and `git diff --check` all pass. No new integration
+blocker found. This targeted check does not repeat the native/helper review or
+change any previously stated execution and acceptance limits.
