@@ -24,7 +24,19 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     /// <summary>Null retains the historical diagnostic adapter behavior.</summary>
     private readonly EditorPresentationProfile? _productProfile;
     private readonly int _uiThreadId = Environment.CurrentManagedThreadId;
-    private readonly MoteConfiguration _configuration;
+    private MoteConfiguration _configuration;
+    /// <summary>The bounded background lane; source state never enters its closure.</summary>
+    private readonly NativeSettingsReload _settingsReload;
+    /// <summary>Latest complete snapshot waiting for natural native composition settlement.</summary>
+    private MoteConfiguration? _pendingSettings;
+    /// <summary>Diagnostics for current requested values and their OS-base composition.</summary>
+    private string? _settingsNotice;
+    /// <summary>Last rejected reload, retained through unrelated appearance callbacks.</summary>
+    private string? _reloadFailureNotice;
+    /// <summary>Last failed layout installation, retained until a deliberate settings retry.</summary>
+    private string? _previewFailureNotice;
+    /// <summary>Requested paths/writers differ from the running process-lifetime values.</summary>
+    private bool _settingsRestartRequired;
     /// <summary>The palette last committed to both controller and native shell.</summary>
     private IThemePolicy _theme;
     /// <summary>The latest coalesced target while native preedit or a transition is active.</summary>
@@ -77,7 +89,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     /// <summary>Wires platform events to engine transactions and static format policies.</summary>
     public NativeEditorController(INativeEditorShell shell, MoteConfiguration configuration,
         IThemePolicy theme, string? startupPath,
-        EditorPresentationProfile? productProfile = null)
+        EditorPresentationProfile? productProfile = null, Func<MoteConfiguration>? settingsLoader = null)
     {
         _shell = shell;
         _canvasShell = shell is INativeCanvasShell { CanvasEnabled: true } canvas
@@ -94,7 +106,13 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 nameof(productProfile));
         _productProfile = productProfile;
         _configuration = configuration;
-        _theme = theme;
+        var startupComposition = ThemeComposer.Compose(theme, configuration.ThemeOverrides);
+        _theme = ThemeEffectiveValues.Capture(startupComposition.Theme) == ThemeEffectiveValues.Capture(theme)
+            ? theme : startupComposition.Theme;
+        _settingsNotice = SettingsNotice(configuration, startupComposition.Issues);
+        _settingsReload = new NativeSettingsReload(settingsLoader ?? (() => MoteConfigLoader.Load(
+            new MoteConfigLoadOptions { MoteHomeOverride = configuration.HomeDirectory,
+                UseEnvironmentOverride = false })), action => _shell.Post(action), SettingsLoaded);
         _startupPath = startupPath;
         if (_canvasShell is not null)
         {
@@ -115,6 +133,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         shell.UndoRequested += Undo;
         shell.RedoRequested += Redo;
         shell.FormatRequested += Format;
+        shell.ReloadSettingsRequested += RequestSettingsReload;
         shell.PagePreviousRequested += PreviousPage;
         shell.PageNextRequested += NextPage;
         shell.FindRequested += Find;
@@ -146,6 +165,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     {
         if (_disposed) return;
         _disposed = true;
+        _settingsReload.Dispose();
+        _shell.ReloadSettingsRequested -= RequestSettingsReload;
         _shell.AppearanceChanged -= AppearanceChanged;
         _shell.CompositionSettled -= CompositionSettled;
         _shell.PreviewActivated -= PreviewActivated;
@@ -168,7 +189,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         catch (Exception) { ReportThemeFailure(); }
         _shown = true;
         ApplyPendingTheme();
-        if (_themeUnavailable) UpdateThemeNotice();
+        if (_themeUnavailable || _settingsNotice is not null) UpdateThemeNotice();
         ShowDocument();
         if (_canvasShell is not null)
         {
@@ -202,9 +223,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         try
         {
             ++_appearanceSerial;
-            var resolved = ThemePolicies.Resolve(_configuration.ThemeId, _shell.PrefersDark);
-            _pendingTheme = string.Equals(resolved.Id, _theme.Id,
-                StringComparison.OrdinalIgnoreCase) ? null : resolved;
+            ResolveRequestedTheme();
             ApplyPendingTheme();
         }
         catch (Exception)
@@ -226,6 +245,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         }
         try
         {
+            ApplyPendingSettings();
             ApplyPendingTheme();
             UpdateThemeNotice();
         }
@@ -247,8 +267,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         try
         {
             _shell.SetTheme(next);
-            _theme = next;
             if (_presentedPreview is { } presented) PresentAnalysis(presented);
+            _theme = next;
             _themeUnavailable = false;
             UpdateThemeNotice();
         }
@@ -262,20 +282,27 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         {
             // A platform adapter may have applied some paint roles before an
             // OS resource failed. Best-effort rollback leaves source untouched.
-            try { _shell.SetTheme(_theme); }
+            try
+            {
+                _shell.SetTheme(_theme);
+                if (_presentedPreview is { } previousView) PresentAnalysis(previousView);
+            }
             catch (Exception) { /* Keep the canonical model and report a recoverable UI fault. */ }
             ReportThemeFailure();
         }
         finally { _themeApplying = false; }
+        if (_pendingSettings is not null)
+        {
+            try { TryPost(ApplyPendingSettings); }
+            catch (Exception) { /* A composition-settled event can retry the latest settings. */ }
+        }
         if (appearanceSerial != _appearanceSerial)
         {
             // An appearance callback may run inside SetTheme while _theme still
             // denotes the old policy. Resolve again against the committed theme.
             try
             {
-                var resolved = ThemePolicies.Resolve(_configuration.ThemeId, _shell.PrefersDark);
-                _pendingTheme = string.Equals(resolved.Id, _theme.Id,
-                    StringComparison.OrdinalIgnoreCase) ? null : resolved;
+                ResolveRequestedTheme();
             }
             catch (Exception) { ReportThemeFailure(); }
         }
@@ -303,10 +330,110 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         if (_disposed || !_shown || _shell.IsTextComposing) return;
         try
         {
-            _shell.SetStatusNotice(_themeUnavailable
-                ? "Theme update unavailable; editing remains available." : null);
+            var notice = string.Join(" ", new[]
+            {
+                _themeUnavailable ? "Theme update unavailable; editing remains available." : null,
+                _reloadFailureNotice, _previewFailureNotice, _settingsNotice
+            }.Where(item => !string.IsNullOrEmpty(item)));
+            _shell.SetStatusNotice(notice.Length == 0 ? null : notice);
         }
         catch (Exception) { /* A status failure must not disable editing. */ }
+    }
+
+    /// <summary>Explicit reload never commits composition, reads source, or writes a file.</summary>
+    internal void RequestSettingsReload()
+    {
+        if (_disposed) return;
+        _pendingSettings = null;
+        _settingsReload.Request();
+    }
+
+    /// <summary>Publishes only the newest completed read, then defers visual changes until preedit settles.</summary>
+    private void SettingsLoaded(MoteConfiguration? config, Exception? error)
+    {
+        if (_disposed) return;
+        if (error is not null || config is null || config.ReadDisposition == ConfigReadDisposition.Rejected)
+        {
+            _reloadFailureNotice = config is null
+                ? "Settings reload failed; previous settings retained."
+                : "Settings reload rejected; previous settings retained. " + SettingsNotice(config, []);
+            UpdateThemeNotice();
+            return;
+        }
+        _pendingSettings = Program.ValidateThemeId(config, out _);
+        ApplyPendingSettings();
+    }
+
+    /// <summary>Applies independent live groups while keeping writer destinations at their startup lifetime.</summary>
+    private void ApplyPendingSettings()
+    {
+        if (_pendingSettings is null || _shell.IsTextComposing || _themeApplying) return;
+        var requested = _pendingSettings;
+        _pendingSettings = null;
+        var composition = ThemeComposer.Compose(
+            ThemePolicies.Resolve(requested.ThemeId, _shell.PrefersDark), requested.ThemeOverrides);
+        var themeAccepted = requested.ThemeOverridesAccepted && composition.Issues.Count == 0;
+        _settingsRestartRequired = requested.CacheDirectory != _configuration.CacheDirectory ||
+            requested.DataDirectory != _configuration.DataDirectory ||
+            requested.TraceDirectory != _configuration.TraceDirectory ||
+            requested.TraceEnabled != _configuration.TraceEnabled;
+        var previousLayout = _configuration.PreviewLayout;
+        _previewFailureNotice = null;
+        _configuration = requested with
+        {
+            CacheDirectory = _configuration.CacheDirectory,
+            DataDirectory = _configuration.DataDirectory,
+            TraceDirectory = _configuration.TraceDirectory,
+            TraceEnabled = _configuration.TraceEnabled,
+            ThemeId = themeAccepted ? requested.ThemeId : _configuration.ThemeId,
+            ThemeOverrides = themeAccepted ? requested.ThemeOverrides : _configuration.ThemeOverrides
+        };
+        _settingsNotice = SettingsNotice(requested, composition.Issues);
+        _reloadFailureNotice = themeAccepted ? null :
+            "Theme overrides rejected; previous theme retained. " + SettingsNotice(requested, composition.Issues);
+        if (_settingsRestartRequired) _settingsNotice += " Writer/path changes apply on next launch.";
+        if (themeAccepted) ResolveRequestedTheme();
+        ApplyPendingTheme();
+        if (previousLayout != _configuration.PreviewLayout && _presentedPreview is { } view)
+        {
+            try { PresentAnalysis(view); }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                _configuration = _configuration with { PreviewLayout = previousLayout };
+                _previewFailureNotice = "Preview layout update unavailable; previous preference retained.";
+                try { PresentAnalysis(view); }
+                catch (Exception rollback) when (rollback is not OutOfMemoryException)
+                { _previewFailureNotice += " Native preview rollback unavailable."; }
+            }
+        }
+        UpdateThemeNotice();
+    }
+
+    /// <summary>OS transitions always recompose requested data; invalid contrast uses the newly selected base.</summary>
+    private void ResolveRequestedTheme()
+    {
+        var baseTheme = ThemePolicies.Resolve(_configuration.ThemeId, _shell.PrefersDark);
+        var composed = ThemeComposer.Compose(baseTheme, _configuration.ThemeOverrides);
+        var resolved = ThemeEffectiveValues.Capture(composed.Theme) == ThemeEffectiveValues.Capture(baseTheme)
+            ? baseTheme : composed.Theme;
+        _settingsNotice = SettingsNotice(_configuration, composed.Issues);
+        if (_settingsRestartRequired) _settingsNotice += " Writer/path changes apply on next launch.";
+        _pendingTheme = ThemeEffectiveValues.Capture(resolved) == ThemeEffectiveValues.Capture(_theme)
+            ? null : resolved;
+        UpdateThemeNotice();
+    }
+
+    /// <summary>Bounded persistent, nonmodal settings details; no content or palette text enters telemetry.</summary>
+    private static string? SettingsNotice(MoteConfiguration config, IReadOnlyList<ThemeOverrideIssue> issues)
+    {
+        if (config.Diagnostics.Count == 0 && issues.Count == 0) return null;
+        var details = config.Diagnostics.Select(item => item.Code + ": " + item.Message)
+            .Concat(issues.Select(item => item.Code + " " + item.Role + ": " + item.Message +
+                (item.Ratio is { } ratio ? $" ({ratio:F2}:1; requires {item.Minimum:F1}:1)" : "")))
+            .Take(32).Select(item => item.Length > 256 ? item[..256] + "…" : item);
+        var omitted = config.Diagnostics.Count + issues.Count - 32;
+        return $"Settings ({config.ConfigPath}): " + string.Join(" · ", details) +
+            (omitted > 0 ? $" · {omitted} additional settings details omitted." : "");
     }
 
     private void New()

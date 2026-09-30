@@ -861,6 +861,22 @@ jobs:
           $rid = '${{ matrix.rid }}'
           & ./tests/NativeMacFlowRendering.ps1 `
             -Executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+      # In-memory settings only: the probe owns its AppKit window and document.
+      # It does not load user configuration or write files, clipboard, or TCC.
+      - name: Diagnose native macOS theme override reload (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-theme-overrides 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-theme-overrides-ready')) {
+            throw "AppKit theme override diagnostic failed (exit $code)."
+          }
       - name: Upload external macOS workflow report
         if: always() && startsWith(matrix.rid, 'osx-')
         uses: actions/upload-artifact@v4

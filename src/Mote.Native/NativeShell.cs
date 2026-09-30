@@ -133,6 +133,8 @@ internal interface INativeEditorShell
     event Action? RedoRequested;
     /// <summary>Raised by the Format command.</summary>
     event Action? FormatRequested;
+    /// <summary>Raised by the explicit Reload Settings action; never commits native preedit.</summary>
+    event Action? ReloadSettingsRequested { add { } remove { } }
     /// <summary>Raised by previous-page navigation for large documents.</summary>
     event Action? PagePreviousRequested;
     /// <summary>Raised by next-page navigation for large documents.</summary>

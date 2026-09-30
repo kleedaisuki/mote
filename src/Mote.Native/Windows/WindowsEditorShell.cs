@@ -44,6 +44,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private const int FindNextId = 214;
     private const int GoToLineId = 215;
     private const int CutId = 216;
+    private const int ReloadSettingsId = 217;
     private const nuint StyleTimerId = 1;
     private const uint SelectionMessage = Win32.WM_APP + 1;
     private const uint CompositionSettledMessage = Win32.WM_APP + 2;
@@ -56,6 +57,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private static WindowsEditorShell? _creating;
     private static WindowsEditorShell? _active;
     private readonly ConcurrentQueue<Action> _posted = new();
+    private readonly WindowsRichEditUndoScope _editorUndo = new();
     private nint _window;
     private nint _editor;
     private nint _preview;
@@ -198,6 +200,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public event Action? RedoRequested;
     /// <inheritdoc />
     public event Action? FormatRequested;
+    /// <inheritdoc />
+    public event Action? ReloadSettingsRequested;
     /// <inheritdoc />
     public event Action? PagePreviousRequested;
     /// <inheritdoc />
@@ -464,6 +468,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         ArgumentNullException.ThrowIfNull(theme);
         if (IsTextComposing) throw new NativeThemeDeferredException();
         if (_window == 0) { _theme = theme; return; }
+        using var undo = _editorUndo.Suspend(_editor);
         var oldTheme = _theme;
         var updateFonts = _editorFont == 0 || _uiFont == 0 ||
             oldTheme.Typography != theme.Typography || oldTheme.Spacing != theme.Spacing;
@@ -984,6 +989,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         Win32.AppendMenuW(file, Win32.MF_STRING, SaveId, "&Save\tCtrl+S");
         Win32.AppendMenuW(file, Win32.MF_STRING, SaveAsId, "Save &As…\tCtrl+Shift+S");
         Win32.AppendMenuW(file, Win32.MF_SEPARATOR, 0, null);
+        Win32.AppendMenuW(file, Win32.MF_STRING, ReloadSettingsId, "&Reload Settings");
+        Win32.AppendMenuW(file, Win32.MF_SEPARATOR, 0, null);
         Win32.AppendMenuW(file, Win32.MF_STRING, ExitId, "E&xit");
         Win32.AppendMenuW(edit, Win32.MF_STRING, UndoId, "&Undo\tCtrl+Z");
         Win32.AppendMenuW(edit, Win32.MF_STRING, RedoId, "&Redo\tCtrl+Y");
@@ -1035,6 +1042,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             case UndoId: UndoRequested?.Invoke(); break;
             case RedoId: RedoRequested?.Invoke(); break;
             case FormatId: FormatRequested?.Invoke(); break;
+            case ReloadSettingsId: ReloadSettingsRequested?.Invoke(); break;
             case SelectAllId: SelectAllRequested?.Invoke(); break;
             case CopyId: CopyRequested?.Invoke(); break;
             case CutId: CutRequested?.Invoke(); break;
@@ -1239,6 +1247,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private void ApplySemanticColors(NativeAnalysisView view)
     {
         if (_editor == 0) return;
+        using var undo = _editorUndo.Suspend(_editor);
         var saved = GetSelection();
         var firstLine = (int)Win32.SendMessageW(_editor, Win32.EM_GETFIRSTVISIBLELINE, 0, 0);
         var richText = RichEditRtf.Build(_visibleText, view.Tokens, _theme);
@@ -1248,7 +1257,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         {
             // RichEdit reflows on every selection formatting call even with redraw disabled.
             // Importing one escaped RTF page keeps semantic styling proportional to page size.
-            var replacement = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
+            // ST_KEEPUNDO preserves history during a same-text semantic reimport.
+            var replacement = new Win32.SetTextEx { Flags = 1, CodePage = Win32.CP_UNICODE };
             var imported = Win32.SendMessageW(_editor, Win32.EM_SETTEXTEX, ref replacement, richText);
             if (imported == 0 || !string.Equals(ReadEditorText(), _visibleText, StringComparison.Ordinal))
             {
@@ -1431,7 +1441,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     /// <summary>Recolors an unanalysed page without moving the native selection or scroll.</summary>
     private void SetAllEditorColor(ThemeColor color)
-        => SetAllControlColor(_editor, color);
+    {
+        using var undo = _editorUndo.Suspend(_editor);
+        SetAllControlColor(_editor, color);
+    }
 
     /// <summary>Uses SCF_ALL so stale previews and plain pages never move a caret.</summary>
     private static void SetAllControlColor(nint control, ThemeColor color)

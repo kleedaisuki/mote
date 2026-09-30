@@ -26,6 +26,13 @@ internal static class Program
             if (result == 0) Console.WriteLine("mote-native-mac-flow-rendering-ready");
             return result;
         }
+        if (args.Length == 1 && args[0] == "--check-native-mac-theme-overrides")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            var result = Mac.MacThemeOverrideProbe.Run();
+            if (result == 0) Console.WriteLine("mote-native-mac-theme-overrides-ready");
+            return result;
+        }
         if (args.Length == 5 && args[0] == "--check-native-canvas-window")
             return CheckCanvasWindow(args[1], args[2], args[3], args[4]);
         if (args.Length == 3 && args[0] == "--check-native-mac-canvas-clipboard")

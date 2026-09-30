@@ -205,6 +205,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public event Action? FormatRequested;
     /// <inheritdoc />
+    public event Action? ReloadSettingsRequested;
+    /// <inheritdoc />
     public event Action? PagePreviousRequested;
     /// <inheritdoc />
     public event Action? PageNextRequested;
@@ -1207,6 +1209,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         var main = ObjC.New("NSMenu");
         AddMenu(main, "mote", [
             ("About mote", "orderFrontStandardAboutPanel:", ""),
+            ("Reload Settings", "moteReloadSettings:", ""),
             ("Quit mote", "moteQuit:", "q")], true);
         AddMenu(main, "File", [
             ("New", "moteNew:", "n"), ("Open…", "moteOpen:", "o"),
@@ -1695,6 +1698,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         Add(cls, "moteSaveAs:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SaveAs, "v@:@");
         Add(cls, "moteUndo:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Undo, "v@:@");
         Add(cls, "moteRedo:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Redo, "v@:@");
+        Add(cls, "moteReloadSettings:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ReloadSettings, "v@:@");
         Add(cls, "moteFormat:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Format, "v@:@");
         Add(cls, "motePreviousPage:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&PreviousPage, "v@:@");
         Add(cls, "moteNextPage:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&NextPage, "v@:@");
@@ -2042,6 +2046,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Redo(nint self, nint selector, nint sender)
     { var shell = s_current; shell?.NotifyAfterComposition(shell.RedoRequested); }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void ReloadSettings(nint self, nint selector, nint sender)
+    { var shell = s_current; shell?.Notify(shell.ReloadSettingsRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Format(nint self, nint selector, nint sender)
     { var shell = s_current; shell?.NotifyAfterComposition(shell.FormatRequested); }
