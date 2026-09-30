@@ -178,6 +178,51 @@ baseline or evidence about p95. A foreign overlay covering the ROI without
 touching any checked ownership point remains a privacy/measurement risk on
 the explicit local mode; do not automate that mode on a normal user desktop.
 
+### First hosted current-source observation: run `36680070533`
+
+[GitHub Actions run `36680070533`](https://github.com/kleedaisuki/mote/actions/runs/36680070533)
+at commit `3cb05484d79844173c0e907165feb92c91ce5185` completed all six strict
+jobs; the separate **non-gating** win-x64 paint diagnostic and its JSONL upload
+steps also succeeded. The downloaded **paint artifact only** is retained at
+`.cache/ci-run-36680070533/native-paint-latency-win-x64/8fef001b9dea41e5859c024b5c551698/screen-observations.jsonl`.
+Both rows used the **same published Native AOT** executable SHA-256
+`2B7E96214C057419430EA42DC586D7956329C086A729C84B4B6AB58AF9D0C4A7`,
+Windows 10.0.26100, hosted AMD EPYC 7763 with four exposed logical processors
+and approximately 16 GiB RAM, 1024×768 primary display, 96-DPI target, and
+668×659 canvas client. These are one process per size, not repeated latency
+distributions.
+
+| Hosted exact-size fixture | `WM_CHAR` acknowledgement | First source-state-verified changed screen capture | Median copy/readback cost | Largest capture-completion gap |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MiB CRLF lines | 1.187 ms | 30.878 ms | 27.893 ms | 47.081 ms |
+| 100 MiB CRLF lines | 1.113 ms | 30.976 ms | 17.170 ms | 32.143 ms |
+
+In **both** cases, the exact target HWND was foreground at focus and just
+before input, the `WM_NULL` control remained quiet with no unsettled attempt,
+the initial ROI contained 2,196 visible-glyph pixels, and the first changed
+capture had 1,002 changed pixels. The fixture stayed byte-identical before
+Save; full-file hashes established **X Save → original Undo Save → X Redo
+Save**. A stable Undo source shape differed from the candidate at 699 pixels,
+three Redo screen samples matched the candidate with **zero** changed pixels,
+`source_specific_verified=true`, and both case directories were removed after
+completion. No screenshot or document body was uploaded. This is evidence
+that an actual edited source state reached the sampled screen rectangle on
+the hosted published binary—not a `WM_PAINT` timestamp, compositor-present
+event, physical keyboard result, or photon latency.
+
+The near-equal 30.9 ms screen observations do **not** show that 100 MiB edits
+have the same user-perceived latency as 1 MiB edits: each has only one sample,
+and this hosted observer spent **17–28 ms median** in screen copy/readback with
+**32–47 ms maximum** capture-completion gaps. These measurement costs are on
+the same scale as the reported screen interval. Inference: the immediate next
+causal question is whether the gap lies in native draw/composition or in this
+coarse observer; no product rendering bottleneck can be identified from these
+rows alone. The earlier local 16–28 ms pilot used a different, older binary,
+Intel host, display geometry, and weaker visual-change oracle, so it is **not
+a paired before/after comparison** and supports no regression claim. A
+version-tagged native draw-return hook plus DXGI frame metadata or a calibrated
+external observer is needed to resolve the distinction.
+
 ## Instrumentation architecture before optimizing product code
 
 1. Keep the current `EditToPresentation` operation and its privacy-safe
