@@ -213,6 +213,8 @@ $originalKind = $null
 $originalValue = $null
 $registryTouched = $false
 $oldMoteHome = [Environment]::GetEnvironmentVariable('MOTE_HOME')
+$fixture = $null
+$sourceHash = $null
 try {
     $report.stage = 'registry-snapshot'
     $registryParent = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
@@ -274,7 +276,7 @@ try {
         [IntPtr]1, [IntPtr]3) # EM_SETSEL selects two synthetic source characters.
     $sourceText = [MoteThemeProbeNative]::EditorText($editor)
     $selection = [MoteThemeProbeNative]::Selection($editor)
-    if ($selection.Start -ne 1 -or $selection.End -ne 3) { throw 'Synthetic RichEdit selection was not established.' }
+    if ($selection.Item1 -ne 1 -or $selection.Item2 -ne 3) { throw 'Synthetic RichEdit selection was not established.' }
 
     foreach ($case in @(
         @{ Name = 'dark-before'; Value = 0; Background = '#1F2023'; Foreground = '#D8DADF' },
@@ -296,8 +298,8 @@ try {
             return $bgOk -and $script:textPixelCount -ge 5
         } "Native editor did not transition to $($case.Name) palette."
         $currentSelection = [MoteThemeProbeNative]::Selection($editor)
-        if ($currentSelection.Start -ne $selection.Start -or
-            $currentSelection.End -ne $selection.End -or
+        if ($currentSelection.Item1 -ne $selection.Item1 -or
+            $currentSelection.Item2 -ne $selection.Item2 -or
             [MoteThemeProbeNative]::EditorText($editor) -cne $sourceText) {
             throw 'A theme transition changed native text or the source selection.'
         }
@@ -310,7 +312,7 @@ try {
         $report.cases += [ordered]@{
             name = $case.Name; background = $background
             expected_text_foreground = $case.Foreground; text_foreground_pixel_count = $textPixelCount
-            selection_start = $currentSelection.Start; selection_end = $currentSelection.End
+            selection_start = $currentSelection.Item1; selection_end = $currentSelection.Item2
             text_utf16_units = $sourceText.Length; status_notice = $false
             png = [IO.Path]::GetFileName($png)
             png_sha256 = (Get-FileHash -LiteralPath $png -Algorithm SHA256).Hash
@@ -329,6 +331,11 @@ catch {
     $report.error = "$($report.stage): $($_.Exception.GetType().Name): $($_.Exception.Message)"
 }
 finally {
+    if ($null -ne $fixture -and $null -ne $sourceHash -and
+        (Test-Path -LiteralPath $fixture -PathType Leaf)) {
+        $report.source_sha256_unchanged =
+            (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash -ceq $sourceHash
+    }
     if ($null -ne $process) {
         try {
             if (-not $process.HasExited) {
