@@ -45,7 +45,7 @@ $result = [ordered]@{
     source_caret_before = $null; source_caret_after = $null
     source_focused_after = $null; preview_read_only = $null
     save_undo_no_mutation = $false; observations = @(); error = $null
-    scope = 'External AX/Quartz synthetic gesture; no real IME or VoiceOver speech.'
+    scope = 'External AX/Quartz synthetic gesture; AXEditable may be unavailable; no real IME or VoiceOver speech.'
 }
 
 function Invoke-Bounded {
@@ -129,6 +129,7 @@ function Wait-State {
         preview_length = $last.previewLength; preview_offset = $last.previewOffset
         preview_range_length = $last.previewRangeLength
         preview_editable = $last.previewEditable
+        text_areas = $last.textAreas
         bounds = [ordered]@{ x = $last.boundsX; y = $last.boundsY
             width = $last.boundsWidth; height = $last.boundsHeight }
         window_dirty = $last.windowDirty; action_error = $last.actionError
@@ -173,7 +174,9 @@ try {
         x = $ready.boundsX; y = $ready.boundsY
         width = $ready.boundsWidth; height = $ready.boundsHeight
     }
-    $result.preview_read_only = $ready.previewEditable -eq $false
+    $result.preview_read_only = if ($null -eq $ready.previewEditable) {
+        $null
+    } else { -not $ready.previewEditable }
     $result.source_caret_before = $ready.sourceSelectionStart
     $result.observations += [ordered]@{ stage = 'ready'; status = $ready.status
         source_selection = $ready.sourceSelectionStart; source_focused = $ready.sourceFocused }

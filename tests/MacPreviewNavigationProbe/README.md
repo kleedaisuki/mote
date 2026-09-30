@@ -19,7 +19,7 @@ pwsh -NoProfile -File tests/NativeMacPreviewNavigation.ps1 `
 
 Add `-Space` for Space instead of Return; `-Pointer` takes precedence. The
 external Swift process uses AX to find exactly one `Mote editor` and one
-read-only `Mote preview`, searches only the capped preview text for the
+`Mote preview`, searches only the capped preview text for the
 `Destination` UTF-16 range, and obtains its actual glyph bounds through
 `AXBoundsForRange`. It uses a Quartz mouse event at that glyph or attempts to
 set/focus the preview's `AXSelectedTextRange` and send a real Return/Space
@@ -32,6 +32,11 @@ wrong frontmost process, unavailable clean-window observation, or absent source
 focus is a **failed or unavailable diagnostic**, never converted to a product
 pass. The driver retries initial app activation within a bounded readiness
 window rather than assuming the process is already registered at launch.
+On hosted macOS, `AXEditable` may be absent even for a read-only `NSTextView`;
+the report preserves `preview_read_only: null` in that case. A navigation pass
+does **not** establish external AX read-only status; the separate in-process
+AppKit assertion checks `isEditable == false`. A positively observed
+`AXEditable: true` still fails this diagnostic.
 This is synthetic gesture
 coverage, not real Chinese IME, VoiceOver speech, or physical-paint timing.
 Quartz events are global and the frontmost-process guard cannot eliminate a

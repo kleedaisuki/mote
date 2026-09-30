@@ -4,7 +4,7 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// A content-free observation of the source proxy and read-only preview.
+/// A content-free observation of the source editor and native preview.
 private struct Report: Codable {
     let status: String
     let trusted: Bool
@@ -27,11 +27,20 @@ private struct Report: Codable {
     let previewSelectionLength: Int?
     let previewFocused: Bool?
     let previewEditable: Bool?
+    let textAreas: [TextAreaObservation]
     let boundsX: Double?
     let boundsY: Double?
     let boundsWidth: Double?
     let boundsHeight: Double?
     let actionError: String?
+}
+
+/// A bounded, content-free AX text-area inventory for locating legacy NSTextView.
+private struct TextAreaObservation: Codable {
+    let kind: String
+    let pid: Int32
+    let length: Int?
+    let focused: Bool?
 }
 
 /// Reads an AX attribute without requesting complete source text.
@@ -73,12 +82,14 @@ private func rect(_ raw: AnyObject?) -> CGRect? {
     return AXValueGetValue(value, .cgRect, &result) ? result : nil
 }
 
-/// Finds exactly one labeled source and one labeled native preview in a bounded AX tree.
-private func elements(_ app: AXUIElement) -> (source: [AXUIElement], preview: [AXUIElement]) {
+/// Finds one labeled source and preview, recording bounded AX role metadata if absent.
+private func elements(_ app: AXUIElement)
+    -> (source: [AXUIElement], preview: [AXUIElement], inventory: [TextAreaObservation]) {
     var queue: [(AXUIElement, Int)] = [(app, 0)]
     var index = 0
     var sources: [AXUIElement] = []
     var previews: [AXUIElement] = []
+    var inventory: [TextAreaObservation] = []
     while index < queue.count && index < 256 {
         let (element, depth) = queue[index]
         index += 1
@@ -86,14 +97,26 @@ private func elements(_ app: AXUIElement) -> (source: [AXUIElement], preview: [A
         if role == "AXTextArea" {
             let description = attribute(element, "AXDescription").1 as? String
             let title = attribute(element, "AXTitle").1 as? String
-            if description == "Mote editor" || title == "Mote editor" { sources.append(element) }
-            if description == "Mote preview" || title == "Mote preview" { previews.append(element) }
+            let isPreview = description == "Mote preview" || title == "Mote preview"
+            let isSourceLabelled = description == "Mote editor" || title == "Mote editor"
+            if isPreview { previews.append(element) }
+            if isSourceLabelled { sources.append(element) }
+            let count = (attribute(element, "AXNumberOfCharacters").1 as? NSNumber)?.intValue
+            if inventory.count < 8 {
+                var observedPid: pid_t = 0
+                _ = AXUIElementGetPid(element, &observedPid)
+                inventory.append(TextAreaObservation(
+                    kind: isPreview ? "preview-labelled" :
+                          isSourceLabelled ? "source-labelled" : "unlabelled",
+                    pid: observedPid, length: count,
+                    focused: (attribute(element, "AXFocused").1 as? NSNumber)?.boolValue))
+            }
         }
         if depth < 10, let children = attribute(element, "AXChildren").1 as? [AXUIElement] {
             queue.append(contentsOf: children.map { ($0, depth + 1) })
         }
     }
-    return (sources, previews)
+    return (sources, previews, inventory)
 }
 
 /// Reads only the capped 16 Ki-unit preview to identify an exact semantic glyph range.
@@ -209,7 +232,7 @@ private func inspect(pid: pid_t, expectedLength: Int, action: String) -> Report 
     let healthy = AXIsProcessTrusted() && applicationPid == pid &&
         sourcePid == pid && previewPid == pid && found.source.count == 1 &&
         found.preview.count == 1 && length == expectedLength &&
-        marked?.0 != nil && frame != nil && editable == false
+        marked?.0 != nil && frame != nil && editable != true
     return Report(status: !AXIsProcessTrusted() ? "ax-unavailable" :
                   actionError != nil ? "action-failed" : healthy ? "observed" : "incomplete",
                   trusted: AXIsProcessTrusted(), requestedPid: pid,
@@ -226,6 +249,7 @@ private func inspect(pid: pid_t, expectedLength: Int, action: String) -> Report 
                   previewSelectionStart: previewSelected?.location,
                   previewSelectionLength: previewSelected?.length,
                   previewFocused: previewFocused, previewEditable: editable,
+                  textAreas: found.inventory,
                   boundsX: frame.map { Double($0.minX) },
                   boundsY: frame.map { Double($0.minY) },
                   boundsWidth: frame.map { Double($0.width) },
