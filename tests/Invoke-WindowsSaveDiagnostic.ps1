@@ -109,11 +109,11 @@ function Test-RetainedRecoveryText([string] $Text, [string] $Fixture) {
 # Export predicate outcomes, never modal text or a host-derived text digest.
 function Get-ClosePredicates([bool] $OwnedMatch, [string] $Title, [string] $Text,
     [string] $Fixture, [int] $StaticCount, [int[]] $StaticTypes, [bool] $AtTextCap) {
-    return @{ owned_match = $OwnedMatch; title_is_mote = $Title -ceq 'mote';
+    return @{ owned_match = $OwnedMatch; title_is_mote = [string]::Equals($Title, 'mote', [StringComparison]::Ordinal);
         text_length = $Text.Length; static_count = $StaticCount; static_types = @($StaticTypes);
         text_at_cap = $AtTextCap; save_failure_prefix = Test-SaveFailureText $Text;
         retained_warning_match = Test-RetainedRecoveryText $Text $Fixture;
-        discard_match = $Text -ceq 'Discard unsaved changes?' }
+        discard_match = [string]::Equals($Text, 'Discard unsaved changes?', [StringComparison]::Ordinal) }
 }
 
 # Exception wrappers are common in PowerShell; codes identify the actual failing API.
@@ -136,6 +136,44 @@ function Select-DialogButton($Snapshot, [int] $Id) {
     return @{ handle = $button.Handle; mode = $(if ($Snapshot.Direct -eq $button.Handle) { 'direct' } else { 'descendant' }) }
 }
 
+# The observed ID2 layout is only a candidate for an OK-labelled, single-button
+# acknowledgement. It is never a discard/Cancel authorization by its ID alone.
+function Select-SingleAcknowledgementCandidate($Snapshot, [int] $Id, [string] $Purpose) {
+    $missing = @{ handle = [IntPtr]::Zero; mode = 'unsupported-layout' }
+    if ($Id -ne 1 -or $Purpose -notin @('save-failure', 'retained-warning') -or $Snapshot.Overflow -or
+        $Snapshot.Direct -ne [IntPtr]::Zero) { return $missing }
+    $buttons = @($Snapshot.Controls | Where-Object { $_.ClassIsButton })
+    if ($buttons.Count -ne 1) { return $missing }
+    $button = $buttons[0]
+    if ($button.Id -ne 2 -or -not $button.Owned -or -not $button.Descendant -or -not $button.DirectChild -or
+        -not $button.Visible -or -not $button.Enabled) { return $missing }
+    return @{ handle = $button.Handle; mode = 'caption-required' }
+}
+
+# Exact English system labels only; no localization/case/accelerator guessing.
+function Test-AcknowledgementCaption([string] $Caption) {
+    return [string]::Equals($Caption, 'OK', [StringComparison]::Ordinal) -or
+        [string]::Equals($Caption, '&OK', [StringComparison]::Ordinal)
+}
+
+# Preserve the same modal identity and allowed purpose before any button action.
+function Assert-ClosePurpose([IntPtr] $Dialog, [string] $Purpose, [hashtable] $Row) {
+    if ([MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, '#32770', $window) -ne $Dialog) {
+        $Row.close_reason = 'owner-mismatch'; throw 'Modal changed during button readiness.'
+    }
+    if (-not [string]::Equals([MoteSaveDiagnosticWin32]::Text($Dialog), 'mote', [StringComparison]::Ordinal)) {
+        $Row.close_reason = 'title-mismatch'; throw 'Modal title changed during button readiness.'
+    }
+    $body = [MoteSaveDiagnosticWin32]::InspectDialog($Dialog).Text
+    $match = switch ($Purpose) {
+        'save-failure' { Test-SaveFailureText $body }
+        'retained-warning' { Test-RetainedRecoveryText $body $fixture }
+        'discard' { [string]::Equals($body, 'Discard unsaved changes?', [StringComparison]::Ordinal) }
+        default { $false }
+    }
+    if (-not $match) { $Row.close_reason = 'close-purpose-mismatch'; throw 'Modal purpose changed during button readiness.' }
+}
+
 # Revalidate the same modal's purpose on every bounded readiness attempt.
 function Wait-CertifiedButton([IntPtr] $Dialog, [int] $Id,
     [ValidateSet('save-failure', 'retained-warning', 'discard')][string] $Purpose, [hashtable] $Row) {
@@ -144,16 +182,7 @@ function Wait-CertifiedButton([IntPtr] $Dialog, [int] $Id,
     $Row.button_lookup = @{ expected_id = $Id; attempts = 0; mode = 'not-observed'; ready = $false }
     while ($timer.ElapsedMilliseconds -lt 1000 -and $childClock.Elapsed.TotalSeconds -lt 38) {
         $attempts++
-        $same = [MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, '#32770', $window) -eq $Dialog
-        if (-not $same) { $Row.close_reason = 'owner-mismatch'; throw 'Modal changed during button readiness.' }
-        if ([MoteSaveDiagnosticWin32]::Text($Dialog) -cne 'mote') { $Row.close_reason = 'title-mismatch'; throw 'Modal title changed during button readiness.' }
-        $body = [MoteSaveDiagnosticWin32]::InspectDialog($Dialog).Text
-        $purposeMatch = switch ($Purpose) {
-            'save-failure' { Test-SaveFailureText $body }
-            'retained-warning' { Test-RetainedRecoveryText $body $fixture }
-            'discard' { $body -ceq 'Discard unsaved changes?' }
-        }
-        if (-not $purposeMatch) { $Row.close_reason = 'close-purpose-mismatch'; throw 'Modal purpose changed during button readiness.' }
+        Assert-ClosePurpose $Dialog $Purpose $Row
         $snapshot = [MoteSaveDiagnosticWin32]::InspectButtons($Dialog, [uint32]$process.Id, $Id)
         $selected = Select-DialogButton $snapshot $Id
         $Row.button_lookup = @{ expected_id = $Id; attempts = $attempts; mode = $selected.mode;
@@ -165,6 +194,27 @@ function Wait-CertifiedButton([IntPtr] $Dialog, [int] $Id,
             }) }
         if ($selected.mode -in @('overflow', 'ambiguous', 'unsafe', 'direct-invalid')) {
             $Row.close_reason = 'button-uncertifiable'; throw 'Button identity could not be certified.'
+        }
+        if ($selected.mode -eq 'missing' -and $attempts -gt 1 -and $timer.ElapsedMilliseconds -ge 250) {
+            $candidate = Select-SingleAcknowledgementCandidate $snapshot $Id $Purpose
+            if ($candidate.handle -ne [IntPtr]::Zero) {
+                $caption = [MoteSaveDiagnosticWin32]::AcknowledgementCaption($Dialog, $candidate.handle, [uint32]$process.Id)
+                $allowed = Test-AcknowledgementCaption $caption
+                $Row.button_lookup.caption_length = $caption.Length
+                $Row.button_lookup.caption_at_cap = $caption.Length -ge 15
+                $Row.button_lookup.caption_allowed = $allowed
+                $Row.button_lookup.candidate_id = 2
+                if (-not $allowed) { $Row.close_reason = 'button-purpose-mismatch'; throw 'Single acknowledgement caption not allowed.' }
+                # Label proof is not enough if the child set or modal changed.
+                Assert-ClosePurpose $Dialog $Purpose $Row
+                $latest = [MoteSaveDiagnosticWin32]::InspectButtons($Dialog, [uint32]$process.Id, $Id)
+                $confirmed = Select-SingleAcknowledgementCandidate $latest $Id $Purpose
+                if ($confirmed.handle -ne $candidate.handle) { $Row.close_reason = 'button-uncertifiable'; throw 'Acknowledgement identity changed.' }
+                $confirmedCaption = [MoteSaveDiagnosticWin32]::AcknowledgementCaption($Dialog, $confirmed.handle, [uint32]$process.Id)
+                if (-not (Test-AcknowledgementCaption $confirmedCaption)) { $Row.close_reason = 'button-purpose-mismatch'; throw 'Acknowledgement caption changed.' }
+                $selected = @{ handle = $confirmed.handle; mode = 'single-button-ok-caption' }
+                $Row.button_lookup.mode = $selected.mode
+            }
         }
         # Give direct child construction a bounded grace before descendant fallback.
         $ready = $selected.handle -ne [IntPtr]::Zero -and
@@ -225,6 +275,8 @@ if ($SelfTest) {
     $unrecognized = Get-ClosePredicates $false 'other' 'unrecognized synthetic text' $target 1 @(0) $true
     if ($unrecognized.owned_match -or $unrecognized.title_is_mote -or $unrecognized.save_failure_prefix) { throw 'Unknown dialog predicate accepted.' }
     if (($unrecognized | ConvertTo-Json -Depth 3).Contains('unrecognized synthetic text')) { throw 'Raw dialog text leaked into evidence.' }
+    $ignorable = Get-ClosePredicates $true ("mo" + [char]0xAD + 'te') ("Discard unsaved changes?`0") $target 1 @(0) $false
+    if ($ignorable.title_is_mote -or $ignorable.discard_match) { throw 'Culture-ignorable modal guard accepted.' }
     $wrapped = [Exception]::new('private outer text', [IO.IOException]::new('private inner text'))
     $codes = Get-ExceptionCodes $wrapped
     if ($codes.type -cne 'System.IO.IOException' -or ($codes | ConvertTo-Json).Contains('private')) { throw 'Exception code evidence failed.' }
@@ -243,6 +295,13 @@ if ($SelfTest) {
     if ((Select-DialogButton $snapshot 1).mode -ne 'missing') { throw 'Non-Button accepted.' }
     $control.ClassIsButton = $true; $snapshot.Overflow = $true
     if ((Select-DialogButton $snapshot 1).mode -ne 'overflow') { throw 'Overflow snapshot accepted.' }
+    $control.Id = 2; $control.DirectChild = $true; $snapshot.Overflow = $false
+    if ((Select-SingleAcknowledgementCandidate $snapshot 1 'save-failure').handle -ne [IntPtr]101) { throw 'Single acknowledgement candidate rejected.' }
+    if ((Select-SingleAcknowledgementCandidate $snapshot 6 'discard').handle -ne [IntPtr]::Zero) { throw 'Acknowledgement used for discard.' }
+    if (-not (Test-AcknowledgementCaption '&OK') -or (Test-AcknowledgementCaption 'Cancel') -or (Test-AcknowledgementCaption 'OK extra')) { throw 'Caption allowlist failed.' }
+    if ((Test-AcknowledgementCaption "OK`0") -or (Test-AcknowledgementCaption ("O" + [char]0xAD + 'K'))) { throw 'Culture-ignorable caption accepted.' }
+    $snapshot.Controls = @($control, $control)
+    if ((Select-SingleAcknowledgementCandidate $snapshot 1 'save-failure').handle -ne [IntPtr]::Zero) { throw 'Multiple acknowledgement buttons accepted.' }
     Write-Output 'PASS: exact byte oracles and complete/incomplete trace controls; no GUI launch.'
     return
 }
@@ -382,6 +441,15 @@ public static class MoteSaveDiagnosticWin32 {
         },IntPtr.Zero);
         return new MoteSaveButtonSnapshot { Direct=GetDlgItem(dialog,id), Controls=controls.ToArray(), Overflow=overflow };
     }
+    /// <summary>Read a sole-ack candidate's bounded caption only after exact identity checks.</summary>
+    public static string AcknowledgementCaption(IntPtr dialog, IntPtr button, uint expectedPid) {
+        uint pid; GetWindowThreadProcessId(button,out pid);
+        var cls=new StringBuilder(64); GetClassName(button,cls,64);
+        if(dialog==IntPtr.Zero || button==IntPtr.Zero || pid!=expectedPid || cls.ToString()!="Button" ||
+            GetDlgCtrlID(button)!=2 || !IsChild(dialog,button) || GetParent(button)!=dialog ||
+            !IsWindowVisible(button) || !IsWindowEnabled(button)) throw new InvalidOperationException("Unsafe acknowledgement candidate");
+        return Text(button,16);
+    }
     /// <summary>Acknowledge input synchronously with a half-second bound.</summary>
     public static long Send(IntPtr h, uint msg, long w, long l) {
         IntPtr result;
@@ -492,8 +560,8 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
                     if ($current -ne $modal) { $row.close_reason = 'owner-mismatch'; throw 'Unrecognized failure dialog.' }
                     $row.close_error_stage = 'failure-title-read'
                     $title = [MoteSaveDiagnosticWin32]::Text($modal)
-                    $row.close_predicates.title_is_mote = $title -ceq 'mote'
-                    if ($title -cne 'mote') { $row.close_reason = 'title-mismatch'; throw 'Unrecognized failure dialog.' }
+                    $row.close_predicates.title_is_mote = [string]::Equals($title, 'mote', [StringComparison]::Ordinal)
+                    if (-not $row.close_predicates.title_is_mote) { $row.close_reason = 'title-mismatch'; throw 'Unrecognized failure dialog.' }
                     $row.close_error_stage = 'failure-static-read'
                     $observed = [MoteSaveDiagnosticWin32]::InspectDialog($modal)
                     $row.close_predicates = Get-ClosePredicates ($current -eq $modal) $title $observed.Text $fixture $observed.StaticCount $observed.StaticTypes $observed.AtTextCap
@@ -518,8 +586,8 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
                     if ($discard -ne [IntPtr]::Zero) {
                         $row.close_error_stage = 'close-dialog-title-read'
                         $title = [MoteSaveDiagnosticWin32]::Text($discard)
-                        $row.close_predicates = @{ owned_match = $true; title_is_mote = $title -ceq 'mote' }
-                        if ($title -cne 'mote') { $row.close_reason = 'title-mismatch'; throw 'Unrecognized close dialog title.' }
+                        $row.close_predicates = @{ owned_match = $true; title_is_mote = [string]::Equals($title, 'mote', [StringComparison]::Ordinal) }
+                        if (-not $row.close_predicates.title_is_mote) { $row.close_reason = 'title-mismatch'; throw 'Unrecognized close dialog title.' }
                         $row.close_error_stage = 'close-dialog-static-read'
                         $observed = [MoteSaveDiagnosticWin32]::InspectDialog($discard)
                         $text = $observed.Text
@@ -536,7 +604,7 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
                                 $warningAck = $true
                             }
                         }
-                        elseif ($text -ceq 'Discard unsaved changes?') {
+                        elseif ([string]::Equals($text, 'Discard unsaved changes?', [StringComparison]::Ordinal)) {
                             if (-not $discardAck) {
                                 $row.close_error_stage = 'discard-yes-lookup'
                                 $yes = Wait-CertifiedButton $discard 6 'discard' $row

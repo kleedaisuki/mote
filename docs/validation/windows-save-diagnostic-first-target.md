@@ -370,6 +370,156 @@ target-platform checks. The second artifact does not prove the fallback was
 needed: the next hosted inventory must distinguish direct-readiness recovery
 from a genuinely nested candidate or continued refusal.
 
+## Third hosted target delta: unique Button exists, but has child ID2
+
+Run `36778718268`, HEAD `61413809a5c24fecd8c6e74510ee4031f045f428`,
+diagnostic run `2a8ec3ca26fe42f49d5da31f75bb3d2a`, PID 3756, started at
+`2026-09-30T21:21:25.6034591Z`. Its executable pin is SHA-256
+`4ee015871aac458691ced20bde8048a6c8f3b4a7234b2e95eb7d22bc1fe01cf6`,
+7,039,488 bytes. OS/SDK/runtime/filesystem remain 10.0.26100.0 / 10.0.401 /
+win-x64 10.0.12 / NTFS; runner image is **20260922.246.2**, different from the
+first two targets' 20260925.250.1. Do not describe these as identical environments.
+
+The third script is the independently tested candidate above; CRLF expansion
+matches archived input SHA-256
+`b48c829e13034ac9d15fef6d3a6248772997ac6306d4905ebc835193dd844143`.
+At the recorded HEAD, `ShowError` still uses
+`MessageBoxW(_window, message, "mote", MB_OK | MB_ICONERROR)`.
+
+| Exact row field | Observation |
+| --- | --- |
+| `close_error_stage`, `close_reason` | failure-ok-lookup, button-missing |
+| Modal predicates | owner, title and Save prefix true; Static types [3,0], lengths [0,443]; no cap |
+| `button_lookup` | expected_id=1, attempts=28, mode=missing, direct_present=false, ready=false, overflow=false |
+| Inventoried Button | child ID2; same PID, direct child and descendant, visible and enabled |
+| Other children | IDs 20 and 65535; both non-Button, owned/direct/visible/enabled |
+| Timing / termination | 1.4960979 s total; normal_exit=false; exit_code=-1; incomplete-forced-exit |
+| Trace | zero records; no failure HResult or terminal session |
+
+The row retains **the last inventory**, not each poll's inventory. Twenty-eight
+attempts and the loop's guards establish that no certifiable expected-ID button
+was accepted during the readiness period and modal purpose checks did not fail.
+They do not establish that ID2 or every topology field was identical at all 28
+polls. A transient expected-ID candidate could also have been not-ready. This
+distinction matters when interpreting an append-free final row.
+
+Independent full-byte comparison again confirms original target and exact
+X+original recovery; both archived trace copies are empty:
+
+```powershell
+python .temp/windows-save-first-target-audit/audit.py `
+  .cache/ci-36778718268-save `
+  .temp/windows-save-first-target-audit/third-evidence.json
+```
+
+### What this resolves, and what it does not
+
+There is a real visible/enabled direct Button in the final owned dialog. This
+narrows the problem beyond an empty/incomplete button tree or a purely nested
+ID1 fallback. Extending the same ID1 wait alone has no supporting evidence as a
+fix. The current exact-ID discovery safely refused rather than clicking ID2.
+
+Microsoft's documented **MessageBox return values** IDOK=1 and IDCANCEL=2 are
+semantic results of MessageBoxW. The API's MB_OK contract specifies one OK
+button. Neither is a guarantee that GetDlgCtrlID of its displayed child matches
+that semantic return value. Therefore:
+
+- Child ID2 does **not** prove the sole displayed action is Cancel.
+- MB_OK source plus one Button makes an OK action plausible, but the archive
+  has no caption or independently certified action-role observation.
+- ID2 must not be installed as a global OK alias or accepted for arbitrary
+  dialogs. No actual MessageBox return value was recorded in this run.
+
+The existing P/Invoke is not contradicted by finding ID2. The observation instead
+exposes the diagnostic's additional, unestablished assumption that an MB_OK
+action must be discoverable as child ID1 on this hosted platform.
+
+### Smallest fail-closed caption/action certification
+
+For the already validated **Save-failure or retained-recovery-warning** modal
+(both production MB_OK calls), a narrow next probe can inspect the unique Button
+caption **in memory only**, using the existing bounded Unicode WM_GETTEXT helper
+with a small fixed buffer. Require an uncapped inventory containing exactly one
+Button, expected PID/ancestry, visible/enabled state, unchanged owned modal,
+exact title, and exact existing purpose recognition. Do not choose merely the
+first or only button without the semantic predicate.
+
+For the English hosted case, an explicit tiny classifier may accept exact `OK`
+and exact `&OK` (access-key variant). Everything else—including unknown/localized
+labels, empty text, cap-hit text, Cancel/Yes/No, whitespace variants, and additional
+buttons—must refuse until independently specified. Do not use substring,
+case-insensitive, arbitrary ampersand stripping or fuzzy label normalization.
+Record only `caption_matches_ok`, bounded caption length/cap flag and a closed
+selection mode; never raw caption, host-derived hash, HWND, screenshot or
+exception message. A numeric UI-language identifier can contextualize a refusal
+without exposing text.
+
+After discovery, freshly revalidate the same modal and the selected Button's
+ownership/ancestry/visible/enabled state and purpose before posting its existing
+BM_CLICK. A positively certified unique OK action is a safe same-modal
+acknowledgement for these two synthetic MB_OK purposes; it is not an authorization
+for arbitrary close dialogs, overwrite confirmation or dirty-buffer decisions.
+The discard branch should retain its separately specified Yes contract until
+target evidence warrants its own change. Do not bypass certification by sending
+WM_COMMAND(IDOK), clicking child ID2 by convention, global Enter/Escape, or
+another unobserved shortcut.
+
+This classifier is a prospective narrowly scoped contract, not a claim that the
+third Button's label was OK. The next artifact should retain its boolean result
+and lookup mode, then still require observed dismissal, normal exit and complete
+positive-control trace. A successful same-modal click does not itself establish
+Save phase/HResult or ordinary reliability.
+
+## Independent single-OK-caption candidate validation
+
+The next frozen candidate, script SHA-256
+`bdffde0952018a1497e2e76904b8c92ae7f9ad0fbcbdc6677f1c5b657bff4b59`,
+adds `Select-SingleAcknowledgementCandidate` and
+`Test-AcknowledgementCaption`. Independent execution extracted only these pure
+helpers and the existing ID selector through the AST:
+
+```powershell
+pwsh -NoProfile -File .temp/windows-save-first-target-audit/acknowledgements.ps1
+```
+
+**37 checks passed**, with evidence in
+`.temp/windows-save-first-target-audit/acknowledgement-evidence.json`:
+
+- 18 layout/purpose cases cover both permitted MB_OK purposes; discard/unknown
+  purpose; wrong requested ID; existing direct ID1; overflow; multiple Buttons
+  including a hidden second Button; foreign PID; non-descendant/nested;
+  disabled/invisible; wrong child ID; non-Button; empty tree; and the observed
+  ID2 plus non-Button IDs20/65535 layout.
+- 17 caption cases accept only exact `OK` and `&OK`. Cancel, Yes, private unknown
+  text, Chinese localized label, changed case, whitespace, prefix/suffix
+  substrings, alternative ampersands, empty/cap-sized strings, embedded NUL and
+  trailing newline all refuse.
+- Two different fake candidate handles remain distinguishable, supporting the
+  explicit comparison used by the runtime wrapper. The existing direct ID6
+  discard selector still returns its exact certified Yes candidate.
+
+Private/localized caption values do not appear in the harness's serialized
+evidence. Source inspection also confirmed the driver's row assignments contain
+only caption length/cap/allowed predicate, candidate ID and closed mode: neither
+the first nor confirmed raw caption is serialized. Native
+`AcknowledgementCaption` verifies exact Button class, ID2, expected PID,
+ancestry/direct parent and visible/enabled state before bounded Text(button,16).
+
+The wrapper waits for its grace interval before using the caption fallback;
+then rechecks same-modal ownership/title/purpose, takes a fresh complete snapshot,
+requires the same candidate handle, and repeats identity/caption certification.
+An exact expected-ID direct/descendant path remains preferred. Discard cannot
+enter the caption fallback, even with an apparent OK label. The final local and
+child deadlines are checked before returning an actionable handle; the caller
+still checks PostMessage and waits for dismissal.
+
+No material defect was found in this candidate's checked policy/guard path.
+Runtime owner/title/purpose changes, native handle replacement, enumeration
+races and timeout were **source-reviewed, not executed**. The pure replacement
+case establishes comparable identities, not runtime rejection coverage. No GUI,
+native calls or retained executable were run. Successful hosted acknowledgement,
+normal trace drain and ordinary Save remain unverified by these helper tests.
+
 ## Local source references
 
 - [Diagnostic contract](../windows-save-diagnostic-driver.md).

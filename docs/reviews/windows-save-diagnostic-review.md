@@ -6,6 +6,79 @@ telemetry serialization/drain, and dedicated documentation when available.
 This is static and synthetic-oracle review, not GUI, Native AOT execution, or a
 reproduction of error 1175. No production or worker-owned files were modified.
 
+## Sole ID2 acknowledgement-caption follow-up review
+
+**Final verdict: the reported P2 comparison defect is corrected; no remaining
+substantive blocker found in this narrow branch.** Final reviewed driver SHA:
+`13708AAB6152171629A5BE39199D51508BDC6099C1F19E6615EBBD3D60512229`.
+Final dedicated documentation SHA:
+`E26BAEF0532B8C6DD99C8EF45E4741FB823B4BA7B591B38CD92A4CDD6DD94B3C`.
+These supersede the initial candidate fingerprints below.
+
+Initial frozen candidate reviewed after third hosted run `36778718268`:
+driver `BDFFDE0952018A1497E2E76904B8C92AE7F9AD0FBCBDC6677F1C5B657BFF4B59`,
+documentation `29505A214F82D4605D425B2BE715E4834003F25C3FB92B22FDEB7495B430B475`.
+The third archive establishes an observed final sole direct Button ID2, but not
+its caption; this branch is a prospective certification path, not proof the
+old action was OK.
+
+### Initial concrete finding
+
+**P2: culture-sensitive comparison violates the exact-caption allowlist.**
+`Test-AcknowledgementCaption` initially used PowerShell `-ceq`. Although
+case-sensitive, this is not ordinal byte/code-unit equality. An independent
+AST-extracted helper probe demonstrated acceptance of `OK` plus U+0000 and
+`O` + U+00AD SOFT HYPHEN + `K` (both length three). The latter can occur in an
+ordinary Unicode control caption. These are not the two allowed literal labels.
+Worker was asked to use `String.Equals(..., StringComparison.Ordinal)` and add
+negative controls. No native function or script entry point was invoked.
+
+The parent requested inspection of the existing modal title/discard comparisons
+as part of the same safety contract. Independent extraction of
+`Get-ClosePredicates` confirmed `mo` + U+00AD + `te` reported `title_is_mote=true`,
+and both a NUL-suffixed discard prompt and a soft-hyphen-inserted discard prompt
+reported `discard_match=true`. All corresponding title/discard authorization
+and reporting predicates were requested to use ordinal equality consistently.
+The Save-failure prefix already uses ordinal StartsWith; the retained-warning
+case-sensitive regex escapes the complete template and does not use linguistic
+equality. Unrelated fixed-mode/provenance/metadata comparisons were not included
+in this correction. The worker applied ordinal equality to both allowed
+captions, all modal-title authorization/reporting gates, and all discard
+authorization/reporting gates, including the shared fresh-purpose assertion.
+The code inspection confirms no lingering linguistic title/discard safety gate.
+
+Independent targeted regression after the correction: seven unsupported caption
+forms (lowercase, leading/trailing whitespace, NUL suffix, Chinese label,
+mixed-case accelerator variant, soft-hyphen insertion) all refuse; both literal
+allowed captions pass; two culture-ignorable title variants and two discard
+variants refuse. These AST-extracted helper probes did not load native imports.
+Final PowerShell parse returned zero errors; script/documentation/review
+`git diff --check` passed. The previously failed negative controls were rerun
+specifically to verify this repair, not as a repetition of the completed suite.
+
+The rest of the branch's static design meets its narrow intended scope: it is
+available only for requested IDOK and certified Save-failure/retained-warning
+purposes, not discard; requires no direct ID1, an uncapped inventory containing
+exactly one Button including hidden/disabled siblings, direct-child owned
+visible/enabled ID2 with true IsChild ancestry; reads at most a 16-character
+Unicode buffer with a 500 ms call bound; repeats the same modal purpose check,
+captures a fresh unique snapshot and identical handle, then rechecks button
+identity and caption. Final one-second selection / child-second-38 guards still
+apply. Existing ID1 selection and strict ID6 discard paths are unchanged.
+
+Only candidate ID, fixed mode, caption-allowed flag and bounded caption
+length/cap enter rows; caption strings and handles remain in memory. A posted
+acknowledgement still needs observed dismissal, normal zero exit and complete
+terminal trace. No GUI, publish, old executable, or completed validation suite
+was rerun for this review.
+
+The corrected branch can be integrated for a separately authorized current-source
+target experiment. It does not approve arbitrary caption-based automation:
+the sole direct ID2 / exact ordinal OK caption is confined to the two certified
+synthetic MB_OK purposes, and the ordinary discard path remains exact ID6.
+No caption, digest, raw handle or newly inferred OS error message enters output.
+Fresh hosted normal close and complete trace remain unproven at this revision.
+
 ## Certified button readiness / descendant fallback review
 
 Reviewed the uncommitted follow-up to second hosted run `36777561397` from the

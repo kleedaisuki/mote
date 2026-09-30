@@ -214,7 +214,8 @@ forbids returning a late button for posting.
    overflow, ownership/ancestry failures or inconsistent direct-handle identity
    refuse selection immediately. Missing/disabled/hidden controls can become
    ready only within the original finite budget.
-4. Never use a caption, first arbitrary Button, default-button assumption,
+4. At this second-run revision, caption-based discovery was not authorized.
+   Never use a first arbitrary Button, default-button assumption,
    dialog-wide WM_COMMAND, global key press, or a different modal as fallback.
    The original 45-second owned-child watchdog remains unchanged, and readiness
    refuses actions at/after child second 38 to reserve normal-drain time.
@@ -235,3 +236,52 @@ identifies actual child controls. These contracts support bounded reobservation
 and exact identity checks; they do not prove the old failure was an initialization
 race or authorize changing the expected ID. Local fake selection tests and C#
 compilation run without native calls; fresh hosted closing/drain remains unproven.
+
+## Third hosted control: sole acknowledgement caption certification
+
+Run `36778718268`, retained below `.cache/ci-36778718268-save/`, exhausted 28
+readiness observations and again stopped at `failure-ok-lookup`/`button-missing`
+(total child duration 1.4960979 seconds). Same-modal ownership, title and Save
+purpose passed. The retained **last** inventory contains one direct, owned,
+visible/enabled Button with ID2 and two Static children (IDs 20 and 65535), not
+ID1. Earlier per-poll inventories were not retained, so this does not prove
+identical topology throughout all 28 observations. It does show that adding a
+readiness budget did not resolve that run. Exact target/recovery bytes survived;
+forced termination still prevented usable trace. See the updated independent
+[target audit](validation/windows-save-diagnostic-first-target.md).
+
+ID2 alone is **not** authorization to click Cancel. The next bounded branch
+preserves the previous exact-ID1 path and introduces only this narrow proof:
+
+- Requested action is IDOK for an already certified `save-failure` or
+  `retained-warning` modal; never `discard`, another purpose, or an unknown modal.
+- After the existing direct-readiness grace, ID1 is absent, descendant inventory
+  is not capped, and **all** Button-class descendants total exactly one, including
+  hidden/disabled ones when checking uniqueness. That sole candidate is observed
+  ID2, a direct child, same PID, real descendant, visible and enabled.
+- Its caption is read **in memory only** through the existing Unicode bounded
+  WM_GETTEXT path (16-character buffer, 500 ms per call). Only exact English
+  `OK` or `&OK` is accepted. No accelerator stripping, case folding, substring,
+  translation, fallback label, or ID2-to-IDOK alias is used. Unknown/localized
+  labels fail closed.
+- Recheck the same modal's allowed purpose, recapture the unique candidate set,
+  require the same in-memory handle, then recheck exact identity and caption.
+  The unchanged final selection deadline and child-second-38 guard must still
+  pass before returning a handle for the existing checked BM_CLICK post.
+
+Only mode `single-button-ok-caption`, candidate ID, caption-allowed boolean,
+caption length/cap and existing control identity metadata are reported. No
+caption, caption digest or raw handle enters evidence. This allows a genuine
+single-button acknowledgement to be certified by its observed semantics instead
+of guessing from its ID. It does not establish the third runner's actual caption:
+that caption was not collected by the old driver. Fake candidate/label tests and
+native-code compilation are not a hosted normal-close or trace-drain result.
+Independent fake review exposed that PowerShell `-ceq` uses culture-sensitive
+comparison and can ignore a NUL or soft hyphen in synthetic captions. The
+caption allowlist now explicitly uses `StringComparison.Ordinal`, with negative
+cases for both characters; exact means code-unit equality, not linguistic
+equivalence. No native call was required to discover or verify this defect.
+The same minimal hardening applies to the modal `mote` title and exact discard
+body in both predicate evidence and operational guards. Save-prefix recognition
+already uses ordinal StartsWith; the retained-warning regex remains an exact
+case-sensitive template. This narrows invalid lookalikes, not legitimate UI.
