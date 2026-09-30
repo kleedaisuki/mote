@@ -200,9 +200,14 @@ Raw JSONL is retained as `reference-{1,2,3}.jsonl`, `reference-live.jsonl`,
 
 ## Remaining boundaries
 
-Four-RID hosted Native AOT integration, accepted-corpus live memory on each RID,
-real first paint/input/render tail latency and general CommonMark are not
-established by this work. Source-backed generation and finite presence checking
+The exact integrated change at `24bf145` passed all nine strict jobs in
+[CI run 36758358616](https://github.com/kleedaisuki/mote/actions/runs/36758358616):
+Windows/macOS solution tests, strict one-binary Native AOT on win-x64,
+win-arm64, osx-x64 and osx-arm64, and the three dedicated native clipboard
+jobs. This establishes cross-platform build/test compatibility, **not** a
+100 MiB reference corpus running through each native GUI. Accepted-corpus live
+memory on each RID, real first paint/input/render tail latency and general
+CommonMark remain unestablished. Source-backed generation and finite presence checking
 are used instead of introducing a generic dependency graph: this follows the
 production lesson of local-fact extraction before resolution and the sound
 incremental name-resolution literature discussed in the linked investigation.

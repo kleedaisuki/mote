@@ -123,10 +123,15 @@ durations, **not editor latency benchmarks**.
   cancellation timing or concurrently invoked sessions is claimed.
 - Zero-budget cases establish fail-closed classifications, not a measured
   memory ceiling, heap bound or performance percentile. No large unique-key
-  workload benchmark, startup improvement or macOS/Native AOT result is claimed.
+  workload benchmark, startup improvement or target-GUI result is claimed.
 - History gap Undo/Redo may rebuild rather than incrementally reuse; this
   report checks correctness, not reuse efficiency.
 
-The useful next independent target is hosted cross-platform/Native AOT CI on
-this exact integrated change, followed separately by measured cold admission
-and warm edit allocation on file-backed repeated and unique-owner corpora.
+The exact integrated change at `24bf145` later passed all nine strict jobs in
+[CI run 36758358616](https://github.com/kleedaisuki/mote/actions/runs/36758358616),
+including Windows/macOS solution tests and four strict single-binary Native AOT
+publishes. This is compatibility evidence, not the large-reference corpus
+running in the native GUI on four RIDs. The file-backed repeated/unique-owner
+cold and warm managed measurements are recorded in the implementation document;
+target GUI first-paint/input/render tails and RID-specific live memory remain
+the next independent measurements.
