@@ -128,6 +128,9 @@ function Wait-State {
         preview_candidates = $last.previewCandidates; preview_pid = $last.previewPid
         preview_length = $last.previewLength; preview_offset = $last.previewOffset
         preview_range_length = $last.previewRangeLength
+        preview_selection_start = $last.previewSelectionStart
+        preview_selection_length = $last.previewSelectionLength
+        preview_focused = $last.previewFocused
         preview_editable = $last.previewEditable
         text_areas = $last.textAreas
         bounds = [ordered]@{ x = $last.boundsX; y = $last.boundsY
@@ -190,6 +193,32 @@ try {
             $selected.sourceSelectionStart -ne 0 -or $selected.sourceSelectionLength -ne 0 -or
             $selected.sourceFocused -ne $false) {
             throw 'AX setup did not focus the exact preview caret without navigating source.'
+        }
+        $stage = 'keyboard-delivery-control'
+        $rightAction = Read-Probe 'right'
+        if ($rightAction.actionError) {
+            throw "Right-arrow delivery control failed: $($rightAction.actionError)"
+        }
+        $right = Wait-State {
+            param($state)
+            $state.status -eq 'observed' -and $state.frontmostPid -eq $editor.Id -and
+                $state.previewSelectionStart -eq ($ready.previewOffset + 1) -and
+                $state.previewSelectionLength -eq 0 -and $state.previewFocused -eq $true -and
+                $state.sourceSelectionStart -eq 0 -and $state.sourceSelectionLength -eq 0 -and
+                $state.windowDirty -eq $false
+        } 'Right-arrow preview caret delivery control'
+        $result.observations += [ordered]@{
+            stage = $stage; status = $right.status
+            preview_selection = $right.previewSelectionStart
+            preview_focused = $right.previewFocused
+            source_selection = $right.sourceSelectionStart
+        }
+        $reset = Read-Probe 'select'
+        if ($reset.status -ne 'observed' -or $reset.actionError -or
+            $reset.previewSelectionStart -ne $ready.previewOffset -or
+            $reset.previewSelectionLength -ne 0 -or $reset.previewFocused -ne $true -or
+            $reset.sourceSelectionStart -ne 0 -or $reset.sourceSelectionLength -ne 0) {
+            throw 'Could not reset preview caret after keyboard delivery control.'
         }
     }
 

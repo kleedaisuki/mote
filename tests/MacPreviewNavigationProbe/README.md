@@ -22,8 +22,10 @@ external Swift process uses AX to find exactly one `Mote editor` and one
 `Mote preview`, searches only the capped preview text for the
 `Destination` UTF-16 range, and obtains its actual glyph bounds through
 `AXBoundsForRange`. It uses a Quartz mouse event at that glyph or attempts to
-set/focus the preview's `AXSelectedTextRange` and send a real Return/Space
-event. It then demands source proxy caret 9, collapsed selection, source
+set/focus the preview's `AXSelectedTextRange`. Before Return/Space, a harmless
+Right Arrow must visibly advance the preview AX caret by one; the driver then
+resets it to the target. This separates a keyboard-delivery failure from a
+navigation failure. It then demands source proxy caret 9, collapsed selection, source
 focus, exact unchanged disk SHA-256, and no mutation after Save and Undo.
 
 The report contains offsets, dimensions, role counts, status, and hashes but

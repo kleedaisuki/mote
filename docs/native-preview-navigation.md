@@ -111,7 +111,29 @@ the shortcuts alone do not prove their handlers ran. A **later** real marked-tex
 require no preview navigation or composition loss. Set hard per-stage timeouts
 and upload only content-free offsets/status; do not claim success merely from
 green `continue-on-error` jobs. A Mac real IME gate remains independent of
-this synthetic preview gesture probe. The script's PowerShell syntax was
-checked locally, but its Swift compilation and AppKit/AX gesture behavior
-**have not yet run on a Mac**; an unsupported preview AX range setter or
-hosted input permission must be reported as failed/unavailable evidence.
+this synthetic preview gesture probe.
+
+In [run 36707470968](https://github.com/kleedaisuki/mote/actions/runs/36707470968),
+Swift type checking exposed four `CGFloat?` → `Double?` report-field errors;
+they were fixed without changing product code. In
+[run 36708119143](https://github.com/kleedaisuki/mote/actions/runs/36708119143),
+the Swift probe compiled, but `AXEditable` was absent on the standard macOS
+preview and LegacyPage lacked an externally identifiable source label. The
+navigation diagnostic now preserves `preview_read_only: null` rather than
+calling it false or true; a separate in-process AppKit check establishes
+`isEditable == false`. LegacyPage's source `NSTextView` gained the fixed
+`Mote editor` accessibility label. Neither change asserts VoiceOver speech.
+
+The published one-Mach-O binaries on both `osx-x64` and `osx-arm64` in
+[run 36710621980](https://github.com/kleedaisuki/mote/actions/runs/36710621980)
+passed the **pointer** case in ordinary Continuous and LegacyPage (four
+cases): the source caret moved from 0 to UTF-16 offset 9 and focus returned;
+file bytes remained unchanged. The **keyboard** cases (Continuous Return and
+LegacyPage Space, two per RID) failed after AX focus: source caret stayed at 0.
+These are non-gating failures despite six green strict jobs. A Right-arrow
+delivery control is now required before attributing the failure to product
+`keyDown:` rather than global-input routing. The exact observations,
+ambiguities, and next discriminators are in
+[the macOS keyboard diagnostic](mac-preview-keyboard-diagnostics.md). This
+probe does not measure viewport, document version, real IME, VoiceOver speech,
+or paint latency.

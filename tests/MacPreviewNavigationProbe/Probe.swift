@@ -167,10 +167,11 @@ private func act(_ action: String, _ pid: pid_t, _ preview: AXUIElement,
         }
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
-    case "enter", "space", "save", "undo":
+    case "enter", "space", "right", "save", "undo":
         let key: CGKeyCode = switch action {
         case "enter": 36
         case "space": 49
+        case "right": 124
         case "save": 1
         default: 6
         }
