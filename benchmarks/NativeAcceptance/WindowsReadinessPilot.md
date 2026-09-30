@@ -1,6 +1,6 @@
 # Windows ordinary-file external JSON readiness pilot
 
-## Implemented adapter; hosted target run pending
+## Implemented adapter and non-gating CI pilot; hosted target run pending
 
 The existing reviewed
 [`Measure-WindowsOrdinary.ps1`](../NativeStartup/Measure-WindowsOrdinary.ps1)
@@ -32,8 +32,8 @@ oracle/fixture contract, not an accidental broad “JSON ready” pass.
 
 ## Safe hosted command and expected evidence
 
-Run only after the root owner publishes the **fresh exact-checkout** Windows
-Native AOT binary and verifies its strict one-file inventory/provenance. Python
+The `win-x64` Native AOT CI job runs this only after publishing the **fresh
+exact-checkout** binary and asserting its strict one-file inventory. Python
 3.11+ is used only for corpus preparation, outside the launch timer.
 
 ```powershell
@@ -47,15 +47,16 @@ if ($manifest.cases.Count -ne 1 -or $manifest.cases[0].case -cne 'json-long-1') 
 }
 $case = $manifest.cases[0]
 & ./benchmarks/NativeStartup/Measure-WindowsOrdinary.ps1 `
-    -ExecutablePath .cache/FRESH_STRICT_PUBLISH/mote.exe `
+    -ExecutablePath src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe `
     -FixturePath (Join-Path (Get-Location) $case.fixture) `
     -FixtureSha256 $case.sha256 -SizeMiB 1 -Runs 1 -ReadinessOnly
 ```
 
-`FRESH_STRICT_PUBLISH` is a wiring placeholder, **not** a verified local binary.
-The root owner should substitute that hosted job's actual publish path and
-preserve publish flags, source commit/clean-checkout and binary hash evidence.
-Do not substitute an old binary simply because it can launch successfully.
+The CI step additionally checks the manifest against the independently pinned
+SHA-256 above, requires exactly one fresh JSONL row, and compares the recorded
+binary hash and Git commit to the current publish/checkout. Its result remains
+non-gating until the target report is inspected; do not substitute an old local
+binary simply because it can launch successfully.
 
 The existing driver appends to
 `.cache/native-startup/ordinary-windows.jsonl`; a clean hosted checkout should
