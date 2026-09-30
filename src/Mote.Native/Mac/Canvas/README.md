@@ -230,6 +230,25 @@ the diagnostic override uses Apple's named
 [`NSAppearanceNameDarkAqua`](https://developer.apple.com/documentation/appkit/nsappearance/name-swift.struct/darkaqua?language=objc)
 and Aqua appearances on one window only.
 
+The same PNG series exposed a measurement pitfall in the bottom status strip.
+The earlier black-looking cached pixels were actually **alpha 0**: they did
+not prove that the external compositor displayed a black strip. Setting only
+`NSWindow.backgroundColor` changed window backing but did not make the
+content-view cache self-contained. A decorative, accessibility-hidden 30-DIP
+`NSView` now fills the exposed strip with `Palette.WindowBackground` behind
+the transparent status `NSTextField`; it does not own input or source text.
+An intermediate probe incorrectly converted `NSBitmapImageRep.colorAtX:y:`
+through sRGB and reported dark `#2B2C30` even though the retained PNG stored
+opaque `#202124`. The final probe uses Apple's raw
+[`getPixel:atX:y:`](https://developer.apple.com/documentation/appkit/nsbitmapimagerep/getpixel%28_%3Aatx%3Ay%3A%29?language=objc)
+samples with explicit 8-bit RGB/alpha format checks. In
+[run 36676668596](https://github.com/kleedaisuki/mote/actions/runs/36676668596),
+both Mac RIDs and both editor modes returned exact opaque status samples
+`#202124 → #F1F2F4 → #202124`, while source/selection/Undo and the original
+theme checks remained green. The light-mode cached AppKit view image has a
+readable status strip. This validates the **content-view raster** and its
+native draw callback, not the physical display compositor or global OS theme.
+
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release
   gates. Do not infer product parity from an in-process AppKit selector or PNG

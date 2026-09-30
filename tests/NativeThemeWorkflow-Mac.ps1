@@ -126,6 +126,10 @@ foreach ($mode in @('default', 'canvas')) {
                 throw 'Native heading foreground was not represented for the active editor mode.'
             }
             Assert-NearThemeRgb $state.StatusBackgroundRgb $expectedStatusBackgrounds[$index]
+            if ($null -eq $state.StatusBackgroundAlpha -or
+                [Math]::Abs([double]$state.StatusBackgroundAlpha - 1.0) -gt 0.001) {
+                throw 'Native status background is not fully opaque.'
+            }
             $expectedImage = "theme-$mode-$($expectedSteps[$index]).png"
             if ($state.Image -cne $expectedImage) { throw 'Theme PNG filename escaped the fixed contract.' }
             $image = Join-Path $output $state.Image
@@ -154,6 +158,7 @@ foreach ($mode in @('default', 'canvas')) {
                 preview_heading_rgb = $state.PreviewHeadingRgb
                 editor_heading_rgb = $state.EditorHeadingRgb
                 status_background_rgb = $state.StatusBackgroundRgb
+                status_background_alpha = $state.StatusBackgroundAlpha
                 image = $state.Image; image_sha256 = $hash
             }
         }
