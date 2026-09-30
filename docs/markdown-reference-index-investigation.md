@@ -252,15 +252,207 @@ Each owner has two atoms, four keys, and a different ten-digit plain-text
 suffix; the admission cache has zero hits. Its two-window p50 at 10 MiB was
 0.035 ms and rebind p50 0.0144 ms, but the cold 549 MB allocation is material.
 No 100 MiB unique-owner result was collected; do not multiply the 10 MiB timing
-into a claimed 100 MiB measurement. A next discriminating approach is to certify
+into a claimed 100 MiB measurement **in the first iteration**. The proposed next
+discriminating approach was to certify
 a source-mapped **inline skeleton** that removes inert alphanumeric ballast
 while preserving all bracket atoms/separators and exact mapped link spans. That
 requires a separate parser-state simulation proof, including surviving failed
-delimiters; it is a hypothesis, not current authorization. A simpler initial
+delimiters; at that point it was a hypothesis, not authorization. The second
+iteration below establishes a narrower version and records actual 100 MiB
+measurements. A simpler initial
 production safety gate is a total admission-work budget (mask count/parsed units)
 that refuses Complete on exhaustion without poisoning the intrinsic bad-line
 cache. No results here establish startup time, Native AOT throughput,
 frame presentation, actual typing latency or GUI responsiveness.
+
+## Second iteration: source-mapped inert-run skeleton
+
+Completed 2026-10-01. The dominant first-iteration negative had two independent
+causes: every distinct owner repeated all 16 environment parses, and those parses
+repeatedly materialized a long inert alphanumeric suffix. A source-mapped skeleton
+removes both mechanisms without inventing an atom-independence rule.
+
+### New admission lemma and actual implementation
+
+The adopted transform is deliberately narrower than arbitrary outside-run
+replacement:
+
+```text
+outside maximal ASCII alphanumeric run -> one literal X
+outside ASCII space                    -> the same space, byte-for-byte
+ATX marker prefix                      -> unchanged
+raw [text][label] atom                  -> unchanged, byte-for-byte
+empty outside run                      -> still empty
+```
+
+`SourceMappedSkeleton.Describe` first validates the **original** 4,096-unit,
+32-atom, four-key lexical domain. It never materializes the full original owner
+string: it reads the ephemeral bounded line span, creates only the skeleton and
+bounded label/key facts, and stores original atom offsets. Exact raw atoms and
+all spaces remain intact. Thus a touching-atom original cannot acquire a
+synthetic separating space. Four-space indentation also remains four spaces;
+the existing typed exact-owner parser check rejects its code block rather than
+upgrading it to a paragraph. The prototype's exact `Span.Start == 0` check also
+rejects indented paragraphs, a safe narrower boundary rather than a claim of
+general indentation support.
+
+The independent theorist's [new lemma and implementation inspection](reviews/markdown-presence-certificate-review.md)
+relate original and skeleton parser states at corresponding bracket events.
+Inert alphanumeric collection changes only literal payload/length; the next
+opening character, contiguous-node coalescing, saved labels, delimiter ancestry
+and active flags correspond. Failed reference openers remain in this relation;
+the proof does not reset them at spaces. All environment reads come from the
+same intact raw bracket labels. Successful link events have the same key/winner
+and corresponding full-atom intervals. The previous presence-mask theorem can
+therefore transfer from a checked skeleton to every allowed original owner
+that maps to it.
+
+`Bind` verifies the template's atom count, skeleton start, unchanged atom length,
+text key and target key, then installs **original** atom ranges. This is an
+atom-local translation, not a bijective map of virtual `X` or full owner ranges.
+The cache compares the exact skeleton text after hash lookup, within one build
+and one fixed pipeline. Neither hash collisions nor a short skeleton allow
+original bounds to be bypassed. The current shared arrays/dictionaries are
+treated as immutable by the prototype, but production should enforce this in
+its types rather than rely on convention.
+
+**Only link event shape/count/key/winner provenance transfer.** Entire AST/IR,
+literal/display text, owner ranges and headings' displayed content do not.
+Requested output still reads and parses the original Engine snapshot against
+real current definitions. The skeleton never supplies render text, diagnostics'
+final coordinates, or navigation targets. The independent review found no
+blocking deviation in this implementation; it did not validate general session
+transitions or rerun the experiments.
+
+### Discriminating semantics and mixed-edit evidence
+
+`SkeletonProbe.cs` tests 3,279 original owners and **22,272 actual presence
+environments** against original and skeleton Markdig parses. There were zero
+link shape/key/value/source-map differences. Patterns include one-to-three
+mixed/repeated atoms; paragraph and multiple ATX levels; long and varying inert
+prefix/suffix runs; gaps with inert words; a 3,000-unit prefix whose original
+atom coordinates differ sharply from skeleton coordinates; direct `Alpha[a]`
+prefix; and trailing spaces. Seven explicit refusals include the adjacent
+counterexample, five-plus keys, four-space indentation, emphasis, collapsed
+syntax, tab separators and non-ASCII labels. Cache hits require a newly checked
+original descriptor; they do not simply reuse the first owner's source offsets.
+
+A separate 80-owner document checked 14 stages across Engine versions 0–13:
+varying original prefix length, inert tail growth, longer safe-to-safe URL,
+entity-decoded unsafe winner, nonwinner change, winner deletion/promotion,
+rename to missing, earlier definition insertion, Undo/Redo, adjacent-atom refusal
+and repair, then a new skeleton/key pattern. All successful stages compared
+every original consumer/declaration window and combined small output to fresh
+whole-parser node/token/diagnostic provenance and exact global counts. Final
+warning count was 161. Adjacent version 11 refused publication, preserving the
+prior committed state; repair version 12 succeeded. Cancellation at
+presence-mask, environment and before-commit left the committed state intact;
+retry succeeded. These checks validate the tested staged rebuild behavior,
+not an optimized arbitrary-length declaration edit path.
+
+### Fair cold-work comparison and actual 100 MiB probe
+
+For a new comparison, run baseline and skeleton modes alternately in three
+fresh-process pairs on exactly the same 10 MiB file-backed four-key corpus,
+with the same pinned parser, Release binary, Engine open path and original
+source. Each owner has unique inert digit text, so baseline exact-owner cache
+hits remain zero; all skeletons share the same syntax facts. Cold build excludes
+file creation and Engine opening. `paired-{baseline,skeleton}-10-{1,2,3}.jsonl`
+preserves all observations:
+
+| Route | Cold ms, three processes | Cold allocated bytes, three processes | Mask calls | Charged mask context units |
+| --- | --- | --- | ---: | ---: |
+| Complete original owner | 888.35 / 887.14 / 938.11 | 548,845,888 / 548,626,816 / 548,488,512 | 41,696 | Not instrumented in baseline |
+| Mapped skeleton | 122.01 / 123.12 / 114.94 | 4,534,080 / 4,540,272 / 4,540,272 | 16 | 1,488 |
+
+The measured cold medians are 888.35 versus 122.01 ms, and allocation medians
+548,626,816 versus 4,540,272 B. This supports a strong corpus-specific mechanism
+improvement, not a universal Markdown speedup or a statistically powered claim.
+The original texts remain unique: sharing is justified by the new parser-state
+lemma, not hash equality or accidental source equality.
+
+The final **budget-enabled actual 100 MiB unique-owner run** in
+`skeleton-budgeted-scale-100-unique.jsonl` contained 104,855,523 UTF-16 units and
+26,064 consumers:
+
+| Metric | Observation |
+| --- | ---: |
+| Cold build, one process | 455.27 ms |
+| Cold cumulative allocation | 43,845,504 B |
+| Mask parses / charged context units | 16 / 1,488 |
+| Exact original-owner source copies retained | 0 |
+| Index live delta after full GC | 7,948,024 B |
+| Equal-size definition rebind p50 / p95 | 0.0229 / 0.0853 ms |
+| Rebind median allocation / consumer grammar parses | 6,304 B / 0 |
+| Original head+tail projection p50 / p95 | 0.1665 / 0.2784 ms |
+| Two-window median allocation | 110,896 B |
+
+The larger retained delta compared with the repeated-owner first iteration
+comes from per-owner bound atom/map/key metadata, not copied owner text. This
+still needs key interning/compact immutable range storage and a real index-byte
+budget before production. Do not compare the warm values above as if they were
+end-to-end editing, keyboard or frame latency. No 100 MiB baseline four-key
+full-mask run was performed, so no measured 100 MiB speedup ratio is claimed.
+
+### Explicit work budget and hostile-shape refusal
+
+`AdmissionWorkBudget` limits each skeleton build to **1,024 mask parser calls**
+and **1,048,576 UTF-16 context units**. Charge occurs before `Markdown.Parse`.
+An exhausted attempt aborts its private stage, records the separate
+`admission-work-budget` reason and leaves both committed `Current` and successful
+`Last` metrics unchanged. Resource exhaustion is not cached as an intrinsic bad
+source line. Context strings/suffixes are already constructed when charged, each
+under the original bounded owner/key limits; this is **not** a pre-allocation
+total-memory budget. Source scanning, descriptor construction, real definition
+admission and requested projection are outside this mask budget.
+
+A hostile 388,270-unit document varied raw spaces inside labels while keeping
+the same four normalized keys, forcing distinct legal skeletons. The final
+probe refused after exactly **1,024 calls / 94,208 charged units**, in 13.29 ms
+with 4,885,648 B cumulative allocation. Attempt version 1 did not replace
+committed version 0. Undo repair published version 2 and matched the whole
+oracle. A separate 50-unit context budget refused after 1 call / 17 units;
+the same source passed with the normal budget. This distinguishes bounded
+resource failure from semantic invalidity and demonstrates that many individually
+valid owners cannot create unbounded cold mask work.
+
+### Material residual negative: spaces and descriptor work
+
+The lemma preserves every outside space, so it does not magically bound
+construction of long cached skeleton strings. A negative-control 10 MiB corpus
+with 2,629 unique owners containing 3,950 outside spaces each still shared only
+16 parses, but cold allocated **48,045,232 B**. Its cold time was 90.04 ms and
+index live delta 508,528 B in the observed process. This is substantially more
+allocation than the alphanumeric-ballast case despite a small mask count.
+
+The bounded line buffer prevents whole-file source copies and the mask budget
+prevents exponential parser work; neither is a total descriptor-allocation
+budget. A production integration must either cap total descriptor/materialized
+skeleton work, construct/compare skeletons without one long string per cache
+hit, or prove a separate whitespace-run contraction rule. **Do not silently
+apply the broader arbitrary-run-to-` X ` transform:** the adopted proof and
+independent implementation review do not authorize it. This is an actionable
+remaining gate, not a reason to discard the demonstrated alphanumeric-sharing
+result. Definition payload storage, ordered combined-output budgets and general
+incremental shifts also remain from the first iteration.
+
+### Second-iteration reproduction
+
+```powershell
+dotnet build .temp/MarkdownPresenceCertificateProbe -c Release -warnaserror
+dotnet run --project .temp/MarkdownPresenceCertificateProbe -c Release --no-build -- skeleton > .temp/MarkdownPresenceCertificateProbe/skeleton-results.jsonl
+dotnet run --project .temp/MarkdownPresenceCertificateProbe -c Release --no-build -- scale 100 unique skeleton > .temp/MarkdownPresenceCertificateProbe/skeleton-budgeted-scale-100-unique.jsonl
+foreach ($trial in 1,2,3) {
+    dotnet run --project .temp/MarkdownPresenceCertificateProbe -c Release --no-build -- scale 10 unique > ".temp/MarkdownPresenceCertificateProbe/paired-baseline-10-$trial.jsonl"
+    dotnet run --project .temp/MarkdownPresenceCertificateProbe -c Release --no-build -- scale 10 unique skeleton > ".temp/MarkdownPresenceCertificateProbe/paired-skeleton-10-$trial.jsonl"
+}
+```
+
+`skeleton-results.jsonl` includes semantic transfer, mixed versions, budget
+refusal/repair and the space-ballast negative. `skeleton-build.log` records the
+isolated Release `-warnaserror` build: zero warnings/errors. Production remains
+unchanged and gated; this iteration establishes a sound sharing lemma and a
+bounded parser-work mechanism, not complete native product acceptance.
 
 ## Production path and remaining gates
 

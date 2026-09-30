@@ -252,3 +252,221 @@ without publishing a certificate, rather than catch-and-treat the failed mask
 as an empty successful result. The bounded constructed suffix makes its source
 length cap automatic here; arbitrary real payload admission/materialization
 remains outside this inspected file.
+
+## Second iteration: inert-alphanumeric skeleton lemma
+
+Reviewed 2026-10-01 as a source-level lemma, without running experiments or
+inspecting a new implementation. The adopted transform is **narrower** than
+replacing an arbitrary outside run by ` X `:
+
+1. Independently admit the original physical block boundary, block-start kind,
+   and original owner/resource limits. In particular four-space code indentation
+   is still rejected; a skeleton cannot make an unsupported source admissible.
+2. Preserve the ATX marker/prefix and level. Preserve every outside ASCII space
+   byte-for-byte. Preserve every entire raw full atom `[text][label]`
+   byte-for-byte, including its internal spaces/case. Keep atom order, empty
+   intervals and the prohibition on touching atoms.
+3. Replace each maximal outside ASCII alphanumeric run by exactly one `X`.
+   No other character, newline, punctuation or label is transformed.
+4. Record each atom's original start `o_i`, skeleton start `v_i`, and unchanged
+   length `n_i`. Cache only an immutable successful admission summary under
+   exact skeleton text and fixed pipeline/parser/options identity. Every cache
+   hit still requires original lexical/boundary/resource admission and its own
+   atom map. Do not reuse cached source coordinates or sentinel AST objects.
+
+### Statement
+
+Let `s` satisfy the closed original domain and let `v = T(s)` be this skeleton.
+For any fixed allowed reference environment, parsing the original and skeleton
+with pinned Markdig's default HTML-disabled, precise-location, non-trivia
+pipeline produces the same ordered reference-link events: same originating
+opening/closing bracket identities, normalized resolution key, full/shortcut
+and image flags, winning-definition provenance, and reference payload.
+Endpoints inside atom `i` transfer by
+
+```text
+sourceOffset = o_i + (skeletonOffset - v_i),
+for v_i <= skeletonOffset <= v_i + n_i.
+```
+
+Consequently, if every presence mask on `v` passes the earlier exact full-atom
+sentinel certificate, every mask on `s` passes its link-shape/count/provenance
+property with atom spans translated by this map. Whole atoms retain length;
+the per-target multiplicities and warning formula transfer unchanged.
+
+This is **not** an equality of complete AST/IR, literal values, paragraph or
+heading display text, or owner source ranges. Only atom-local coordinates have
+the stated translation. A virtual `X` does not represent navigable original
+text, and no bijective character map for contracted alphanumeric runs is claimed.
+Real projected owners must continue to be parsed from original source.
+
+### Why the simulation is sound
+
+Use bracket-parser events as synchronization points, allowing literal
+collection between them to be a variable-length inert step. Relate the states
+by corresponding bracket/delimiter nodes, identical delimiter parents/activity,
+saved labels and reference keys, and corresponding source cursor locations;
+erase outside literal values and contract their coordinate intervals.
+Corresponding definition provenance means the same logical environment winner,
+not object identity across two independent ASTs; the exact `ReferenceEquals`
+sentinel check remains an intra-parse check.
+
+**Literal collection.** Outside alphanumeric characters and spaces are not
+opening characters of any default inline parser. The literal collector advances
+to the same next active character and cannot manufacture brackets. Every
+nonempty alphanumeric run stays nonempty, every space stays where it was in the
+token order, and contiguous-versus-separated source intervals remain contiguous
+versus separated. Thus literal creation/coalescing can change content and numeric
+length but not the open-container ancestor used by the next bracket. Merging a
+literal with the preceding literal depends on source-buffer identity and
+contiguity, both preserved within each parse's corresponding source sequence;
+it does not inspect the literal's letters. The default collector's optional
+`PostMatch` hook must remain absent. See
+[LiteralInlineParser](https://github.com/xoofx/markdig/blob/1.3.2/src/Markdig/Parsers/Inlines/LiteralInlineParser.cs).
+
+**Opening brackets and labels.** All atom bytes are unchanged, so the label
+helpers inspect the same bracket-local string, return the same normalized key,
+and receive the same presence answer. Their reads do not extend through an
+outside run. The saved opener label and its activity therefore agree.
+
+**Closing-bracket lookahead.** Immediately after an internal `]`, the next `[` of
+the explicit label is unchanged. Immediately after an atom, the next character
+is an unchanged space or end-of-inline-slice; even if a relaxed lexical domain
+allowed an alphanumeric boundary, it would remain in the same inert class.
+Hence the `(` inline-link branch, `[` full/collapsed branch, saved-label shortcut
+branch and failed-reference `]`/`[` boundary checks make identical decisions.
+There is no unproved whitespace-skipping assumption: these tests inspect the
+current character, while label-helper reads stay inside the untouched atom.
+The checks are in
+[LinkInlineParser](https://github.com/xoofx/markdig/blob/1.3.2/src/Markdig/Parsers/Inlines/LinkInlineParser.cs).
+
+**Surviving failed delimiters.** The relation retains them rather than treating
+a space or `X` as a stack reset. After a missing full-reference attempt, the
+same opener can survive across the inert segment in both parses. The subsequent
+literal is attached under the corresponding still-open container. At the next
+bracket, nearest-parent selection and any later `MarkParentAsInactive` walk
+therefore see the same delimiter ancestry. Successful default links move the
+same children and finish in the same state modulo literal payload/coordinates.
+This is why the lemma covers the interaction that defeated isolated-atom tests.
+The processor's attachment/ancestor behavior is exposed in
+[InlineProcessor](https://github.com/xoofx/markdig/blob/1.3.2/src/Markdig/Parsers/InlineProcessor.cs).
+
+**Block trims and finalization.** Original indentation and heading markers are
+unchanged, so the source-independent lexical checks must establish the same
+paragraph/ATX block kind before transfer. Leading/trailing space trimming removes
+the same spaces at the same relative token boundaries; it cannot consume an
+atom or turn an interior nonempty gap into adjacency. No closing-heading `#`,
+setext marker or definition colon exists in the transformed inline alphabet.
+The transformations of heading/paragraph display content are intentional and
+outside the lemma. See
+[ParagraphBlockParser](https://github.com/xoofx/markdig/blob/1.3.2/src/Markdig/Parsers/ParagraphBlockParser.cs)
+and [HeadingBlockParser](https://github.com/xoofx/markdig/blob/1.3.2/src/Markdig/Parsers/HeadingBlockParser.cs).
+
+Induction over these synchronized events proves the statement; the earlier
+presence-mask/payload-erasure argument then transfers exhaustive admission.
+No new compositional-independence assumption about neighboring atoms is needed.
+
+### Boundaries and non-adopted broader transform
+
+The lemma relies on the fixed default parser inventory with no global inline
+parser, callback, trivia processor, literal hook or extension sensitive to text
+values/columns. Adding such a parser invalidates the cache identity/lemma.
+Do not expand the alphanumeric class using Unicode `IsLetterOrDigit`, reduce
+label content, or insert a gap where the original had none. The touching-atoms
+counterexample demonstrates why adjacency cannot be repaired by the skeleton.
+The original 4,096-unit, 32-atom and four-key limits must be checked **before** a
+cache hit; arbitrarily long original text can otherwise share a short skeleton.
+
+The originally suggested ` abc123 ` to ` X ` replacement also appears compatible
+with the limited link-event abstraction once block/trimming cases are handled,
+but it can create/remove outside literal nodes at whitespace-only prefix/suffix
+positions. A stronger proof would need an explicitly weaker literal-state
+relation. It is **not adopted or approved by this lemma**. Preserving every
+space and shortening only nonempty alphanumeric runs avoids that additional
+obligation and is the recommended construction.
+
+Independent implementation tests remain necessary for the transform and atom
+map, including original 0/1/2/3/4-space indentation, all-missing masks followed by
+resolved atoms, text/target collisions, space-only gaps/suffixes, mixed long
+alphanumeric ballast, headings and original-limit cache-hit rejection. They
+should compare original link events and counts against an independent fresh
+parse, not compare full IR/display values to the intentionally altered skeleton.
+
+## Second-iteration implementation inspection
+
+Inspected `SourceMappedSkeleton.cs`, the skeleton construction/cache/binding
+branch of `Session.Build`, the original-source materialization choice in
+`Session.Project`, and `AdmissionWorkBudget.cs` / its `Certificate.Admit` call
+site under `.temp/MarkdownPresenceCertificateProbe/`, on 2026-10-01. No
+experiments were rerun. General session edit validity, performance, projection
+budgets and winner-state behavior are not approved by this inspection.
+
+**No blocking skeleton/cache-coordinate or mask-budget bypass was found.**
+
+- `Describe` checks original nonempty length at most 4,096 before construction;
+  its scanner caps atoms at 32 and checks original nonempty/raw-64-unit ASCII
+  text/target labels, separated complete atom structure and at most four keys
+  before returning. `Session.Build` always calls this scanner before `Find`,
+  including a cache hit. A long or lexically unsupported original cannot borrow
+  a short accepted skeleton.
+- Every outside space is appended unchanged, each outside maximal ASCII
+  alphanumeric run emits one `X`, the heading prefix is appended verbatim, and
+  each full atom is copied as its original complete slice. Recorded atom starts
+  are `output.Length` immediately before that copy, while original starts are
+  the original cursor. This implements the narrower transform, not the broader
+  arbitrary-run-to-` X ` proposal.
+- `Describe` does not itself reject four-space indentation in a separate
+  conditional. This is not a bypass: all initial spaces survive, so original
+  code indentation remains code indentation in the skeleton; `Admit` requires a
+  paragraph/heading with the expected source range. The cache contains only
+  successful `Admit` outputs under exact skeleton text. A hit therefore cannot
+  turn a preserved four-space prefix into an accepted paragraph. Indented ATX
+  headings are conservatively rejected by the scanner rather than approximated.
+- The cache hash only selects a bucket; `SequenceEqual` resolves identity
+  exactly. Skeleton-mode builds do not seed it from old original-owner
+  certificates. It is local to one build and uses the fixed static pipeline, so
+  the absence of an explicit pipeline tag in the key does not introduce
+  cross-pipeline reuse here. A persistent/configurable future cache must include
+  the pipeline/transform identity explicitly. Its source-text retention cap is
+  a separate 2 Mi-unit bound, not an AST or total managed-memory bound.
+- `Bind` checks atom count and, for each atom, the stored skeleton start,
+  unchanged length and normalized text/target keys before constructing a
+  certificate with **original** atom offsets. Exact skeleton cache identity plus
+  the scanner's raw copying establishes raw-atom identity as well. `Bind` alone
+  does not authenticate an arbitrary externally supplied certificate's origin;
+  its inspected caller provides that guarantee through exact-text cache lookup
+  or fresh successful admission.
+- Shared template keys/multiplicity dictionaries are only read by this inspected
+  path; new owner atom arrays contain original coordinates. The record types
+  are not deeply immutable, so future code must not mutate these shared arrays
+  or dictionaries. `Project` obtains owner text from `state.Snapshot`, not the
+  skeleton. It neither renders virtual `X` nor shifts skeleton IR into original
+  text. This supports the intended separation between count certification and
+  real materialization without claiming complete-IR equivalence.
+
+### Per-build admission-work budget
+
+The skeleton build creates one private `AdmissionWorkBudget`, defaulting to
+1,024 mask calls and 1,048,576 total context UTF-16 units. Each fresh mask calls
+`Charge(context.Length)` **before** `Markdown.Parse`. Under the actual positive
+bounded lengths, `Parses >= maxParses` and `units > maxSourceUnits - SourceUnits`
+reject the next call without counter overflow; admitted charges cannot exceed
+either configured bound. Cached successful templates incur no mask call and
+therefore correctly incur no mask-source charge.
+
+Exhaustion throws the dedicated exception. `Build` catches it around the private
+scan/admission stage, records `admission-work-budget` in the separate attempted-
+work evidence, and returns false before state publication. Cache and staged
+owners are local and discarded; `Current` and the last committed `Last` metrics
+are not assigned on that path. No intrinsic grammar-failure entry is installed.
+This verifies the resource-failure distinction for that path, not cancellation
+or every general session failure route.
+
+Two scope limits matter. The context string is constructed **before** charging,
+so this is a pre-parser work budget, not a pre-allocation memory limit; individual
+construction is independently bounded by the source/key/sentinel caps. Also,
+real definition parses, original source scans/skeleton construction, requested
+materialization and other session work do not consume this counter. Do not
+advertise the mask budget as a bound on all parser calls, all scanned units or
+whole-process memory. Those broader controls remain independent implementation
+and measurement obligations.
