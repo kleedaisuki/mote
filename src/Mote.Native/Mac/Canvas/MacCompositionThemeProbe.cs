@@ -413,9 +413,13 @@ internal static class MacCompositionThemeProbe
             if (marked.Location == nuint.MaxValue ||
                 marked.Length != (nuint)CancelCandidate.Length)
                 throw new InvalidOperationException("Synthetic cancellation range is invalid.");
+            // In this direct NSTextView selector probe, target AppKit replaced
+            // document offset zero for replacementRange=(0, marked.Length).
+            // Use the actual client-reported marked range; this does not
+            // generalize the protocol's documented range convention.
             ObjC.Send(editor, ObjC.Sel("setMarkedText:selectedRange:replacementRange:"),
                 ObjC.String(string.Empty), new ObjC.Range(0, 0),
-                new ObjC.Range(0, marked.Length));
+                marked);
             if (_shell.ProbeHasMarkedText)
                 throw new InvalidOperationException("AppKit did not clear synthetic marked text.");
             var context = ObjC.Send(editor, ObjC.Sel("inputContext"));

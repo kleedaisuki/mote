@@ -317,9 +317,22 @@ The native host length returned to its pre-cancellation length (39 in default,
 21 in canvas) but its contents did not match. Default native selection also
 missed its expected caret; canvas global selection remained correct. This
 supports neither a successful cancellation nor a claim of engine data loss.
-The next diagnostic records mismatch positions and native range coordinates
+The next diagnostic recorded mismatch positions and native range coordinates
 without logging characters or paths, to distinguish a direct-selector range
 interpretation error before changing the test sequence.
+
+[Run 36685502550](https://github.com/kleedaisuki/mote/actions/runs/36685502550)
+found the same result in both architectures and modes: after the synthetic
+clear request, the host was exactly `hostBefore[1..] + cancelCandidate`, with
+its first mismatch at offset zero. The direct `NSTextView` selector call with
+`replacementRange=(0,1)` therefore replaced document offset zero in this
+probe, while the canonical source/version/file remained unchanged. Apple's
+[`NSTextInputClient` specification](https://developer.apple.com/documentation/appkit/nstextinputclient/setmarkedtext%28_%3Aselectedrange%3Areplacementrange%3A%29)
+describes the replacement range relative to marked text; this observation is
+about this direct programmatic `NSTextView` call, **not** a claim that the
+protocol generally uses absolute ranges. The next probe passes the native
+`markedRange()` returned by that same text view and retains every source,
+host, selection, callback, theme, and Undo/Redo assertion.
 
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release
