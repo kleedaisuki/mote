@@ -244,3 +244,10 @@ synthetic command equality counts. They never retain arbitrary AX strings,
 source text, desktop identity or foreign-process metadata. Existing schema-1
 fields and acceptance predicates remain unchanged. Query/lifetime/tree limits
 are not raised; menu AXTitle is diagnostic only, not a relaxed selection oracle.
+
+The instrumented helper was natively typechecked and exercised on both targets
+in CI 36792454502 / `0b85a0e`. It preserved the first external menu failure while
+localizing the ARM budget pressure to 13 bounded menu-search traversals. Neither
+Table nor application exposed a returned shown-menu element. Exact results,
+error-code interpretation and unexercised paths are recorded in
+[the proxy target audit](mac-grid-table-proxy.md#shown-menu-forwarding-target-ci-36792454502).

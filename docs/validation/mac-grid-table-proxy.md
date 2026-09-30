@@ -213,3 +213,58 @@ It preserves all semantic predicates, 12,000 admissions, 55-second
 lifetime, 256-node tree, array bounds, exact PID isolation and cleanup. Native
 Swift typecheck of this instrumentation remains pending the next Mac execution;
 portable fixture preflight alone is not native evidence.
+
+## Shown-menu forwarding target: CI 36792454502
+
+[Run 36792454502](https://github.com/kleedaisuki/mote/actions/runs/36792454502)
+at `0b85a0e` freshly builds the informational shown-menu forwarding and the
+unchanged-budget, instrumented external helper. Both Mac jobs again produce the
+actual selector-success and enclosing readiness markers, with no combined-step
+error (ARM job 110148263182; x64 job 110148263198). Swift instrumentation typechecks
+on both real Mac targets. The in-process marker relation exercise therefore runs,
+but it is not actual contextual menu tracking.
+
+| External fact | osx-x64, macOS 15.7.9 | osx-arm64, macOS 26.6.2 |
+| --- | --- | --- |
+| Binary bytes | 16,750,456 | 16,398,040 |
+| Actual external status / Swift exit | failed / 1 | failed / 1 |
+| Last passed assertion | context-menu-accessible (26 passed) | context-menu-accessible (26 passed) |
+| First failure | unique-coordinate-menu-item false | admission budget exhausted during menu search |
+| AXShownMenuUIElement Table / app | absent, -25204 / -25204 | absent, -25205 / -25205 |
+| Total admissions / client elapsed | 5,956 / 6.768s | 12,000 / 4.487s |
+| Logical-navigation admissions | 4,322 | 9,585 |
+| Logical-navigation polls / traversals | 7 / 7 | 13 / 13 |
+| Maximum app-tree nodes | 94 | 113 |
+| Last tree AXMenu / AXMenuItem counts | 7 / 50 | 8 / 50 |
+| Last exact coordinate label / title matches | 0 / 0 | 0 / 0 |
+
+Both relation queries occur immediately after the successful AXShowMenu action,
+before the polling search. Neither candidate relation produced an AX element,
+so no returned-menu PID/role/child fields were available. Error -25204 on x64 is
+a transport completion failure: it must **not** be reported as proof that the
+product getter returned nil. ARM -25205 reports no value, but does not establish
+whether the native menu never opened, closed before the query, or lacked the
+shown-menu relationship. Label-versus-title diagnostics both finding zero gives
+no evidence for simply relaxing the established label oracle.
+
+The ARM limit is demonstrably repeated bounded traversal pressure, not the
+55-second lifetime limit: 9,585 admissions in 13 menu-search traversals consumed
+most of 12,000 total in 4.487s. Neither tree exceeded its 256-node bound. x64
+reaches a real failed menu predicate without hitting the admission limit.
+Per-check timings show AXShowMenu returned at 1.600s x64 and 1.137s ARM; they
+are client-relative synthetic timestamps, not edit/startup performance measures.
+The 3-second readiness bound does not cancel a callback's already admitted
+bounded AX calls, so total client duration can exceed that readiness interval.
+
+Both original files remain byte-identical; both require forced editor cleanup.
+Navigation, stale-node retirement and normal close remain unexercised. The
+containing green non-gating steps conceal real exit-1 reports, confirmed by raw
+job logs. Artifacts/logs are under `.cache/ci-36792454502-mac-menu/`.
+Binary SHA-256: x64
+`AFD933789E8A8AFB0E894B68F57D60721BC68F6BC52C0A401B525BB2419D9F67`;
+ARM `C0ECC093152D9EA432D8C2F0D45FB96DDBC8E8201270FC36FB9C81586EAA1828`.
+
+**Verdict:** the explicit getter bridge passes its in-process marker contract,
+but is insufficient for actual external coordinate-menu acceptance. The next
+informative discriminator is content-free native open/close/show lifecycle
+accounting, not another speculative budget increase or weakened menu predicate.

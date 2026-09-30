@@ -162,3 +162,14 @@ was introduced.
 Independent static review found no substantive defect in this bounded bridge;
 its exact scope and target limitations are preserved in
 [the shown-menu review](../reviews/mac-grid-shown-menu-bridge-review.md).
+
+### First forwarding native/external execution
+
+CI 36792454502 / `0b85a0e` actually runs the selector and enclosing native probe
+on both Mac RIDs; both success markers occur without a step error. Thus the
+marker-property/off-main/clear/detached forwarding assertions execute on AppKit,
+not just Windows managed compilation. Actual external menu discovery still fails
+on both targets. The shown-menu relation is absent with -25204 transport error
+on x64 and -25205 no-value on ARM; getter correctness alone does not establish
+native menu lifecycle or external accessibility transport. See
+[full target accounting](mac-grid-table-proxy.md#shown-menu-forwarding-target-ci-36792454502).
