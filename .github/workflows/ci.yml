@@ -693,3 +693,39 @@ jobs:
             .temp/ci-smoke/canvas-*.txt
             .temp/gui-workflow/**
           if-no-files-found: ignore
+
+  # TIS mutation is isolated on disposable hosted runners. A killed helper may
+  # not run its restoration finally block; no GUI/editor tests run afterward.
+  mac-ime-activation:
+    name: Disposable macOS Pinyin activation feasibility / ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # This probes enable/select/restore feasibility only: no keyboard,
+      # candidate window, document, or real Chinese IME acceptance claim.
+      - name: Diagnose reversible Apple Pinyin source activation (non-gating)
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/MacRealImeActivationProbe/Run.ps1 `
+            -RuntimeIdentifier $rid `
+            -ReportPath ".cache/ci-inventory/$rid/mac-real-ime-activation.json"
+      - name: Upload disposable macOS activation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-real-ime-activation-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-real-ime-activation.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
