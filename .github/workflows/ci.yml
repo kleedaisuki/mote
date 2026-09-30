@@ -1109,6 +1109,49 @@ jobs:
             .temp/gui-workflow/**
           if-no-files-found: ignore
 
+  # Capture replacement-phase evidence on a disposable runner. Its positive
+  # held-share control and ordinary samples touch synthetic files only; a
+  # failure is diagnostic, not permission to weaken the strict release gates.
+  windows-save-diagnostic:
+    name: Windows Save replacement diagnostic / disposable x64
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Validate synthetic Save diagnostic contracts
+        shell: pwsh
+        timeout-minutes: 2
+        run: '& ./tests/Invoke-WindowsSaveDiagnostic.ps1 -SelfTest'
+      - name: Publish exact-source AOT and diagnose ordinary Save
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifestPath = (& ./tests/New-WindowsSaveDiagnosticPublish.ps1 | Select-Object -Last 1)
+          if ([string]::IsNullOrWhiteSpace($manifestPath)) {
+            throw 'Exact-source Save diagnostic publish produced no manifest.'
+          }
+          & ./tests/Invoke-WindowsSaveDiagnostic.ps1 `
+            -PublishManifest $manifestPath.Trim() -OrdinaryRuns 4
+      - name: Upload synthetic Save diagnostic evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-save-diagnostic-x64
+          path: |
+            .cache/windows-save-diagnostic/**
+            .cache/windows-save-diagnostic-publish/*/publish-manifest.json
+            .cache/windows-save-diagnostic-publish/*/publish.log
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7
+
   # The Windows Grid clipboard check is isolated from the ordinary suite and
   # runs on a fresh disposable GitHub-hosted runner with its own approval gate.
   native-grid-clipboard:

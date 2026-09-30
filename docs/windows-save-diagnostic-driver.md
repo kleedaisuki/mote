@@ -3,9 +3,10 @@
 ## Scope and authorization
 
 `tests/Invoke-WindowsSaveDiagnostic.ps1` implements the bounded hosted diagnostic
-contract in [the investigation](windows-atomic-save-investigation.md). It is **not
-CI integration**, a benchmark, a retry fix, a user-document tool, or a filesystem
-causality collector. No GUI experiment has been performed during implementation.
+contract in [the investigation](windows-atomic-save-investigation.md). The
+separate non-gating CI diagnostic is now wired but has not yet run; this is
+**not** a benchmark, a retry fix, a user-document tool, or a filesystem
+causality collector. No GUI experiment was performed during implementation.
 Run only in an explicitly available interactive Windows desktop, not alongside
 another GUI test. Do not disable protection, indexing, or sync.
 
@@ -85,8 +86,12 @@ dirty state, responsiveness acknowledgement, exact disk classification, normal
 exit/code, trace status, allowlisted failure operation/HResult, and bounded error
 types (not exception messages or arbitrary exception data). The manifest reports
 OS build, optional runner image version, filesystem type, and fixed executable
-provenance. Raw traces and synthetic recovery artifacts are private diagnostics;
-do not upload indiscriminately. No collector is downloaded or invoked here.
+provenance. The CI artifact contains only this job's synthetic fixtures, traces,
+publish manifest and log; it contains no user document or clipboard content.
+Artifact access follows the repository's GitHub permissions, **not** a step
+name or a promise of confidentiality. Never adapt this upload to real user
+documents or arbitrary raw filesystem traces. No collector is downloaded or
+invoked here.
 
 The control must show original bytes, dirty state, normal complete drain and
 exactly one `save.failure.replace` with signed HRESULT -2147024864 (0x80070020).
@@ -116,7 +121,9 @@ The local validation summary is `.cache/windows-save-diagnostic-validation/evide
 
 Current-source GUI, positive held-handle Save, actual orderly shutdown/drain,
 and hosted runner capability are **not yet exercised**. They must not be claimed
-from fake traces. The publish producer has not been run because concurrent source
-edits make its deliberately strict clean-source precondition fail. Independent
-review was requested before parent integration; no existing driver, Engine,
-Native, or CI files were changed by this assignment.
+from fake traces. The publish producer has not run locally because concurrent
+source edits make its deliberately strict clean-source precondition fail. The
+new CI job uses a fresh checkout and disposable Windows runner, with a bounded
+positive control before ordinary samples, 15-minute job budget, seven-day
+synthetic artifact retention, and job-level non-gating status. Its first target
+report must be inspected even if the strict workflow remains green.
