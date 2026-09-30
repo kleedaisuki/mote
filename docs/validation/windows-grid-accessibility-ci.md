@@ -212,3 +212,104 @@ actual client exit and timeout, classification, Errors/Inconclusive arrays,
 owned-focus facts, and blocked external-cell-focus status. Any observed ARM
 failure needs its own bounded diagnosis; do not infer cross-RID success from the
 existing x64 evidence or enable accessibility registration by default.
+
+## Independent comparative hosted result: 2026-10-01, run 36785565685
+
+Commit `04b5a8ef93ae739fec1c81d2cebf8ce21b316efd` supplies two separate
+successful one-run diagnostic subsets, for win-x64 and win-arm64. This extends
+actual external Grid execution evidence to ARM64; it does not establish broad
+cross-RID parity, reliability or accessibility release acceptance. Artifacts
+are under `.cache/ci-36785565685-grid-win-x64/` and
+`.cache/ci-36785565685-grid-win-arm64/`; separately downloaded per-RID
+`native-inventory` artifacts are in each directory's `publish-inventory/`.
+
+### Exact attribution and outcome
+
+Both inventories identify run 36785565685 and the above full commit. Both use
+Program.cs SHA256
+`5D6E7D538B53685C3C592D1174A00C49F2DF116F13A28E58E47183768233B0ED`
+and project CRLF SHA256
+`6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4`.
+Independent local source hashing matches the source pin; deterministic LF to
+CRLF project conversion reproduces the project pin. The new source retains the
+same tested operations and replaces its old untested-win-arm64 remainder with
+`cross-RID parity beyond this one run`; no coverage weakening was found in
+that source change.
+
+| Fact | win-x64 | win-arm64 |
+| --- | --- | --- |
+| Binary SHA256, inventory and report equal | `5451367148E6F035DB43222CC2EE003F4D41B36AD663E5140CB7C3356497C2BA` | `879305BD9AC43333C64D7768B80CBEA87B351E4C9710AA88B7C588012B18CE9A` |
+| Reported process architecture | X64 | Arm64 |
+| OS | Windows NT 10.0.26100.0 | Windows NT 10.0.26200.0 |
+| Target PID | 5384 | 10308 |
+| Actual exit / timeout / classification | 0 / false / pass | 0 / false / pass |
+| Errors / Inconclusive | empty / empty | empty / empty |
+| Publish payload | one mote.exe, 7,068,672 bytes | one mote.exe, 7,207,424 bytes |
+| Build | 0 warnings, 0 errors | 0 warnings, 0 errors |
+
+The publish inventories list no companion payload, bundled native library or
+unexpected static import, but again contain **no binary hash**. Attribution is
+the workflow's exact per-RID published executable plus its matching driver/client
+hashes, not an independent rehash of downloaded executables. Architecture is the
+client's reported process architecture; it does not inspect a downloaded editor
+PE header. The two binary hashes differ as expected for separate RIDs and must
+not be interchanged.
+
+Independent Python assertions checked commit/run/RID, source/project hashes,
+matching per-RID binary hashes, Architecture, exit/timeout/classification,
+Errors/Inconclusive, view counts, navigation/read-only facts and ownership-aware
+focus serialization. `gh run download 36785565685 -n native-inventory-win-x64
+-D .cache/ci-36785565685-grid-win-x64/publish-inventory` and the corresponding
+win-arm64 command supplied the additional publication inventories. These
+checks passed without executing a new editor or rerunning hosted tests.
+
+### Common bounded observations and important focus difference
+
+Both reports use fixture SHA256
+`86796C9AF5EADC2DB5A0B8FBE3F14245DF7AB2F0456E6EE5189ED6987819E0B4`
+and initially report a 64-by-16 Grid, first cell `R1C1`, and exactly 1104
+children in each Raw/Control/Content view with empty UnexpectedChildren arrays.
+The same executed selection-count/illegal-union and retained-node retirement
+checks pass on both RIDs. Their limits remain as described in the previous
+result: no child-ID uniqueness or returned selection-coordinate assertions.
+
+On both RIDs, Go to readback is `1001:17`, the new first cell identifies absolute
+Row 1001/Column 17/value `R1001C17`, and the executed GridItem check requires
+local indices (0,0). Row and column range origins are 1000 and 16. All four
+initial/after RangeValue snapshots are read-only. Range bounds match between
+these particular hosts, but that is a snapshot observation rather than a
+universal geometry contract. The five owned synthetic F6 expected and observed
+HWNDs match exactly on each RID, and both native row/column focus assertions
+pass.
+
+- **x64:** all five global semantic focus samples are target-owned and report
+  semantic HasKeyboardFocus true. Table HWND-derived focus remains false while
+  the selected DataItem `Row 1, Column 2; presentation value: R1C2` has semantic
+  focus true, preserving the earlier distinction.
+- **ARM64:** all five global semantic samples belong outside the target PID.
+  Classification is explicitly `blocked: foreground focus not owned by exact
+  target process; no foreign semantic metadata inspected`. Every semantic name
+  and semantic HasKeyboardFocus is null; the type is only the fixed blocked
+  placeholder. Inspection of the pinned source confirms ownership is checked
+  before conditionally reading semantic type, name or focus. Owned-thread HWND
+  transitions and native scroller focus remain tested; **global foreground
+  semantic-focus acceptance does not pass on ARM64**. The aggregate subset pass
+  intentionally does not claim otherwise. ARM button/source HWND focus flags
+  are false in these snapshots and must not be reported as all panes focused.
+
+Off-owner distant cell SetFocus is still refused safely on both RIDs and
+serialized as blocked. Neither run demonstrates successful external cell focus
+or RangeValue writes. No foreign input, clipboard, screen reader or physical IME
+was exercised.
+
+The x64 1000-query sequence is 158.8999 ms (maximum query 0.2469 ms), versus
+257.9308 ms (maximum 0.4162 ms) on ARM64. Overall elapsed values are 13,931.0722
+and 15,444.4914 ms. Different OS builds, runner hardware and UIA overhead make
+these isolated observations **unsuitable for an architecture performance ratio,
+regression or percentile claim**.
+
+No product failure is demonstrated within the declared bounded subset.
+ARM64 execution is no longer entirely untested, but foreground/reader behavior,
+physical IME, successful off-owner focus, RangeValue writes, repeated cross-RID
+reliability, 100 MiB memory teardown and multi-monitor scaling remain open.
+Default enablement and release acceptance are not justified by these two passes.
