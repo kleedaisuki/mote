@@ -577,9 +577,9 @@ jobs:
           try {
             # Accept only the exact reviewed LF/CRLF source and project encodings, not arbitrary normalization.
             if ((-not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
-                '4347749886467393FC82BC95A97EE8EBB4E9F2DA600DCF784EC6A88EE4E10E95') -and
+                'A1B87971E4975786D67909209E1B2133432C6894710D623F2CD24ECD948940D4') -and
                 -not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
-                '5D6E7D538B53685C3C592D1174A00C49F2DF116F13A28E58E47183768233B0ED')) -or
+                'C6894B4EDCF931BAA322B878AF8965759AC7E44EFC10291200737A18C1AD5509')) -or
                 (-not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
                 '5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2') -and
                 -not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
@@ -1108,7 +1108,7 @@ jobs:
         run: |
           $rid = '${{ matrix.rid }}'
           $source = 'src/Mote.Native/Mac/MacCsvGridAccessibilityProbe.cs'
-          $reviewed = '0E2CD0B186477128ABBCA4741AA85B0835DE72E8B08AE470301C9A401CCA198A'
+          $reviewed = 'F2BB23D9388486510F18BE8C4F06F2B34DE041E703AC5EFC851A70E04448FBD1'
           if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -cne $reviewed) {
             throw 'Mac Grid AX selector probe differs from reviewed bytes.'
           }

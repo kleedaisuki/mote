@@ -52,3 +52,13 @@ Scope: incremental diff of `.github/workflows/ci.yml`, `tests/WindowsGridExterna
 - Inspected existing `.cache/grid-arm-ci-validation/build.log`: local client build succeeded with zero warnings/errors. This is only compile evidence. Per-RID extracted PowerShell scripts exist in that directory; worker parser/negative-case checks are documented, not counted as live ARM acceptance by this reviewer.
 
 No sources/workflow were changed, staged or committed by this reviewer. Retain each new hosted RID's report/inventory and independently check actual architecture, exact binary/source hashes, exit/timeout/classification and Errors/Inconclusive before reporting any hosted subset pass. Foreign global focus or refused off-owner cell SetFocus must retain their existing blocked status.
+
+## Strengthened-client final pin update review (2026-10-01)
+
+Verdict: no substantive issue found in this targeted CI pin update. Workflow diff changes only the two Program.cs pin literals; independently reviewed selected-set/child-identity implementation is outside this review's scope.
+
+Independently hashed actual worktree source bytes and deterministic LF/CRLF representations: LF `A1B87971E4975786D67909209E1B2133432C6894710D623F2CD24ECD948940D4`; CRLF `C6894B4EDCF931BAA322B878AF8965759AC7E44EFC10291200737A18C1AD5509`. Git's clean-filter object ID for the worktree matches the raw LF object's ID `cd73f455540e9b3f71c0492de3896e0db3c42343`, verifying the bytes Git will record without staging or writing an object. The first attempted `cat-file` lookup correctly found that this unstaged object was not yet stored; subsequent comparison uses non-writing hash-object checks, not nonexistent blob evidence.
+
+Parsed current workflow YAML and extracted the exact diagnostic run block; PowerShell AST is clean (`.cache/grid-arm-ci-validation/review-final-pins.ps1`). Evaluated the unchanged ordinal source rejection predicate: the new LF and CRLF pins are accepted; the superseded LF pin and changed-byte sentinel are rejected. Project pins, per-RID paths, provenance/exit/classification checks and all execution boundaries are unchanged. No normalization or additional allowed hashes were introduced. Reviewed workflow SHA256: `FD9C20E79365830A886325A2CDBA7D6CCEBBA03938FDD9C3752FCC3E8BDFACEA`.
+
+No build, live UIA, broad validation or hosted result was repeated or inferred. Only this review document was updated; no source/workflow edits, staging, commit or push.
