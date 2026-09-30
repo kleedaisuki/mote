@@ -71,13 +71,23 @@ contract. Those are scoped target/control results, not user-palette pixel,
 physical IME or screen-reader acceptance
 ([theme result](native-theme-overrides.md),
 [file-backed workflow](validation/native-theme-file-workflow.md)). A bounded,
-source-backed CSV Grid **format projection** has also landed
-([format evidence](csv-grid-format-implementation.md)); the native virtual table
-surface and its Copy/edit/AX/UIA workflows are not yet implemented. The CSV
-format commit `9034fbe` subsequently passed all six strict jobs in
+source-backed CSV Grid **format projection** also landed
+([format evidence](csv-grid-format-implementation.md)). Its format-only
+commit `9034fbe` passed all six strict jobs in
 [CI 36734783210](https://github.com/kleedaisuki/mote/actions/runs/36734783210);
-this proves cross-platform compilation/tests and four Native AOT publishes,
-not a native Grid workflow or large-file GUI latency.
+that run alone did not establish a native table. The later native Grid commit
+`526cc9b` installed Windows owner-data ListView and AppKit NSTableView with
+bounded coordinate windows and versioned source-backed commands.
+[CI 36746843707](https://github.com/kleedaisuki/mote/actions/runs/36746843707)
+passed six strict jobs and both separately non-gating in-memory Mac Grid and
+source-NUL probes on x64/ARM64. This is not actual clipboard publication,
+external AX/UIA reader acceptance, full logical-file scrolling, physical IME,
+or native large-file latency ([Grid scope](native-csv-grid.md)). A separately
+reviewed Windows NUL data-loss fix `c2a7613` also passed six strict jobs in
+[CI 36745185336](https://github.com/kleedaisuki/mote/actions/runs/36745185336):
+RichEdit-backed NUL intervals are explicitly read-only instead of silently
+deleting their canonical suffix. This preserves data, not full binary-text
+editing capability.
 
 | Priority | Code/evidence and impact | Owner + decisive experiment | Exit condition |
 | --- | --- | --- | --- |

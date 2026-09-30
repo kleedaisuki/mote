@@ -1,7 +1,7 @@
 # Native CSV Grid implementation
 
-Status: bounded native implementation and focused local evidence;
-**not macOS runtime/accessibility or release acceptance**.
+Status: bounded native implementation and focused local plus synthetic hosted
+AppKit evidence; **not external accessibility or release acceptance**.
 The reviewed [Grid architecture](csv-grid-architecture.md) and shipped Formats
 contract (`9034fbe`) remain the semantic source of truth.
 
@@ -63,7 +63,7 @@ do not modify Engine state.
 | Windows focused command after lazy Grid creation | 1/1; ordinary source/Flow startup does not create an unused table |
 | Windows visibility reentrancy correction | Original unchanged failing Flow test 1/1 after fix; affected Flow/Grid suite 18/18, including a new actual HWND Grid counterpart |
 | Native / Formats Release warnings-as-errors | 0 warnings / 0 errors in the relevant owner runs |
-| macOS target probe | Not run locally; compiled on Windows, safety-reviewed in-process route awaits both Mac CI RIDs |
+| macOS target probes | Published-binary in-memory Grid and source-NUL checks passed on both Mac RIDs in CI 36746843707; see hosted result below |
 
 Independent review exposed and corrected hidden-source Cut routing, selection
 loss on same-version refresh and modal context-menu identity rebinding. Independent
@@ -87,7 +87,24 @@ The target route `--check-native-mac-csv-grid` owns only small in-memory data an
 native views. It never publishes a clipboard value, opens source files, changes
 input sources/TCC settings or injects external events. Its synthetic direct native
 events and delegate calls do not prove physical keyboard/menu/IME or AT behavior.
-Root-owned CI wiring requires final source-hash safety approval before dispatch.
+Root-owned CI wiring was dispatched only after final source-hash safety approval.
+
+### Hosted target checkpoint (2026-10-01)
+
+[CI run 36746843707](https://github.com/kleedaisuki/mote/actions/runs/36746843707)
+at `526cc9b` passed all six strict jobs: Windows/macOS solution tests and
+single-binary Native AOT on win-x64, win-arm64, osx-x64 and osx-arm64. The
+separate non-gating, published-binary in-memory Grid and source-NUL diagnostics
+both exited zero with their exact success markers on
+[osx-arm64](https://github.com/kleedaisuki/mote/actions/runs/36746843707/job/109995069624)
+and [osx-x64](https://github.com/kleedaisuki/mote/actions/runs/36746843707/job/109995069743).
+The Grid probe exercises a real `NSTableView`, bounded ready-cell/selection
+readback, keyboard intents and identity transitions without publishing clipboard
+data or editing a file. The separate NUL probe checks an owned `NSTextView`,
+native insertion/notification and unsaved Engine Apply/Undo/Redo. These results
+do **not** prove a full controller Save/reopen on Mac, actual clipboard
+publication, physical keyboard/IME, external AX/VoiceOver, complete logical
+scrollbar behavior, large-file responsiveness or pixel presentation.
 
 ### Remaining release gates / deliberate truthful limits
 
@@ -122,7 +139,9 @@ Root-owned CI wiring requires final source-hash safety approval before dispatch.
   literal-marker transitions and failed-import guards. Root separately validated
   the extracted HEAD worktree with 22/22 source-host, 6/6 clipboard and 104/104
   broader controller tests, then committed the independent fix as `c2a7613`.
-  Its four-RID CI was dispatched separately; completion is not inferred here.
+  Its separate [six-job CI run 36745185336](https://github.com/kleedaisuki/mote/actions/runs/36745185336)
+  completed successfully; this verifies cross-platform tests/AOT inventory,
+  not editable NUL content or a physical keyboard workflow.
   NUL interval editing remains
   explicitly unavailable on these RichEdit-backed hosts; no general binary-text
   editing capability is claimed.
