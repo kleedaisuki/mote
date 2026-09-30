@@ -251,3 +251,34 @@ localizing the ARM budget pressure to 13 bounded menu-search traversals. Neither
 Table nor application exposed a returned shown-menu element. Exact results,
 error-code interpretation and unexercised paths are recorded in
 [the proxy target audit](mac-grid-table-proxy.md#shown-menu-forwarding-target-ci-36792454502).
+
+## Bounded native menu lifecycle capture
+
+The external wrapper additionally enables the process-local
+`MOTE_NATIVE_GRID_MENU_DIAGNOSTIC=1` discriminator alongside Grid AX, without
+changing ordinary product defaults. `MenuTraceCapture.cs` asynchronously drains
+the owned editor stdout and stderr. Only exact fixed-token `mote-grid-menu-v1`
+rows with known phases, bounded counters, item count (-1 or 0..16), boolean
+facts and phase-consistent result values survive; at most 16 rows are retained
+in `native_menu_trace`. Lines longer than 384 characters are discarded while
+reading 1024-character blocks, rather than materializing arbitrary output.
+No raw editor output is written to disk. All other stdout and **all stderr**
+are discarded; absent stderr in this report is not evidence of no native error.
+Editor exit, client status, watchdogs, integrity checks and all external semantic
+assertions remain unchanged. Pipe-drain failure is a separate probe-error.
+
+Portable validation on Windows/PowerShell 7 independently rejects private text,
+invalid phase/result/counter combinations, injected prefixes/suffixes, repeated
+CR and a 100,000-character line; it retains only exact valid rows, enforces the
+16-row bound, and checks discard-only behavior. A real owned PowerShell child
+writes 1,000,000-character stdout and stderr lines concurrently, then one valid
+row. Both asynchronous drains complete without pipe deadlock or raw output
+persistence; only that valid row remains. Commands:
+
+```powershell
+pwsh -NoProfile -File tests/MacGridAxExternalProbe/Test-MenuTraceCapture.ps1
+pwsh -NoProfile -File tests/MacGridAxExternalProbe/Test-Fixture.ps1
+```
+
+Both passed locally. Actual AppKit lifecycle facts require a fresh Mac target
+run; synthetic capture success does not establish menu presentation.

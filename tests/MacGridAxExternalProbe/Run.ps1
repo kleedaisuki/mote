@@ -21,6 +21,8 @@ New-Item -ItemType Directory -Force $scratch, (Split-Path $report) | Out-Null
 $utf8 = [Text.UTF8Encoding]::new($false, $true)
 $editor = $null
 $probe = $null
+$editorStdoutTask = $null
+$editorStderrTask = $null
 $fixture = Join-Path $scratch 'grid-fixture.csv'
 $result = [ordered]@{
     schema = 1
@@ -44,6 +46,8 @@ $result = [ordered]@{
     swift_typecheck_passed = $false
     swift_exit_code = $null
     swift_report = $null
+    native_menu_trace = @()
+    editor_output_policy = 'bounded fixed menu whitelist; all other stdout/stderr discarded, not absence-of-errors evidence'
     editor_normal_exit = $null
     editor_cleanup_forced = $false
     cleanup_error = ''
@@ -100,16 +104,24 @@ try {
         $client = Join-Path $scratch 'grid-ax-client'
         $compileLog = & /usr/bin/xcrun swiftc -O $swift -o $client 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Swift compile failed: $($compileLog -join [Environment]::NewLine)" }
+        if (-not ('Mote.Testing.MacGridMenuTraceCapture' -as [type])) {
+            Add-Type -Path (Join-Path $PSScriptRoot 'MenuTraceCapture.cs')
+        }
         $start = [Diagnostics.ProcessStartInfo]::new($exe)
         $start.WorkingDirectory = $root
         $start.UseShellExecute = $false
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
         $start.Environment['MOTE_HOME'] = Join-Path $scratch 'home'
         $start.Environment['MOTE_NATIVE_GRID_ACCESSIBILITY'] = '1'
+        $start.Environment['MOTE_NATIVE_GRID_MENU_DIAGNOSTIC'] = '1'
         $start.Environment['MOTE_TRACE'] = '0'
         $start.Environment['MOTE_NATIVE_MAC_STAGE_TRACE'] = '0'
         # Ordinary source route. Only Grid AX registration is opt-in.
         [void]$start.ArgumentList.Add($fixture)
         $editor = [Diagnostics.Process]::Start($start)
+        $editorStdoutTask = [Mote.Testing.MacGridMenuTraceCapture]::ReadAsync($editor.StandardOutput, $true)
+        $editorStderrTask = [Mote.Testing.MacGridMenuTraceCapture]::ReadAsync($editor.StandardError, $false)
         $result.editor_pid = $editor.Id
         $clientStart = [Diagnostics.ProcessStartInfo]::new($client)
         $clientStart.UseShellExecute = $false
@@ -162,7 +174,21 @@ finally {
             $result.cleanup_error = $_.Exception.GetType().Name
             $result.status = 'probe-error'
         }
-        finally { $child.Dispose() }
+        finally {
+            if ($child -eq $editor -and $null -ne $editorStdoutTask) {
+                try {
+                    if (-not $editorStdoutTask.Wait(5000) -or -not $editorStderrTask.Wait(5000)) {
+                        throw 'Owned editor pipe drain timed out.'
+                    }
+                    $result.native_menu_trace = @($editorStdoutTask.GetAwaiter().GetResult())
+                    [void]$editorStderrTask.GetAwaiter().GetResult()
+                } catch {
+                    $result.cleanup_error = 'EditorPipeDrainUnavailable'
+                    $result.status = 'probe-error'
+                }
+            }
+            $child.Dispose()
+        }
     }
     try {
         if ($result.fixture_sha256) {
