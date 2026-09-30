@@ -23,6 +23,13 @@ Read-only presentation values exist only for Complete/Clipped and are not exact
 clipboard data. Pending navigation drops retained ready projection authority.
 Geometry and actual UI-thread/native focus readback remain platform-specific.
 
+Mac representation has since evolved in response to actual two-RID external
+row-bridge failures: a stable non-view Table root now replaces the native
+NSTableView semantic subtree, while preserving native rendering/input and the
+same epoch-bound frame/children. The AXRows-only legacy experiment was rejected.
+See [the proxy candidate and pending target gates](validation/mac-grid-table-proxy.md);
+earlier hosted in-process evidence does not certify this changed representation.
+
 `NativeGridAccessibility.Mutate` admits singleton add/remove only when the exact
 result remains a rectangle: adding cannot select the entire bounding hull when
 that would add extra cells; removing cannot create a hole or split. Whole-row

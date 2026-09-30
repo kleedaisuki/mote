@@ -58,7 +58,7 @@ internal static class MacCsvGridProbe
         Require(table != 0 && shell.ProbeGrid.Identity == view.Identity,"real table and exact identity");
         Require(ObjC.Send(table,ObjC.Sel("numberOfRows")) == 2,"bounded native row count");
         Require(ObjC.Send(table,ObjC.Sel("numberOfColumns")) == 3,"actual columns including Missing delivery");
-        Require(ObjC.ManagedString(ObjC.Send(table,ObjC.Sel("accessibilityLabel"))) ==
+        Require(ObjC.ManagedString(ObjC.Send(shell.ProbeGridAccessibilityTable,ObjC.Sel("accessibilityLabel"))) ==
             (Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1" ? "CSV grid window" : "Mote CSV grid"),"native table AX label");
         var cell = SendCell(table,ObjC.Sel("viewAtColumn:row:makeIfNecessary:"),1,0,1);
         Require(cell != 0 && ObjC.ManagedString(ObjC.Send(cell,ObjC.Sel("stringValue"))) == "b","ready cell readback");

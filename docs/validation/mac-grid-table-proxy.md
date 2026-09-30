@@ -1,0 +1,153 @@
+# macOS bounded semantic Table proxy candidate
+
+Date: 2026-10-01. Status: **implemented opt-in candidate, managed compilation
+and independent static review only; fresh Mac native/external execution pending**.
+The established default and native physical input implementation are unchanged.
+
+## Why this representation changed
+
+The native-first modern Table selectors passed in-process diagnostics, but the
+unchanged external AX client observed default unlabeled rows on both Mac RIDs
+in CI 36787947202 / 5977250. The `AXRows`-only legacy discriminator also failed
+both external targets in CI 36789139005 / 3aae8d5. See the preserved
+[experiment and falsification](mac-grid-rows-bridge-experiment.md).
+
+These are real cross-process contract failures, not a label-extractor problem:
+both Description and Title were absent for rows, while our column labels,
+identifiers and help transported correctly. The exact private framework path
+is still not identified. Further legacy attribute patches were rejected under
+the experiment's stopping rule. No oracle or external helper was weakened.
+
+## One semantic graph, one physical input implementation
+
+```text
+Existing source AXTextArea (unchanged sibling)
+Existing Grid View / AXGroup
+  stable NSAccessibilityElement / AXTable  "CSV grid window"
+    current epoch column ordinal headers
+    current epoch AXRows
+      row ordinal header
+      current epoch AXCells
+  actual logical row scroller
+  actual logical column scroller
+  actual selected-cell detail
+
+Rendering, native first responder, keyboard and context menu: NSTableView
+```
+
+`_accessibilityTable` is stable for one adapter attachment. It uses the existing
+main-thread `Instances` lookup, not a child window identity. Child rows,
+columns, headers and lazily created cells retain their existing never-reused
+window serial. No row/column/cell wrappers or values are derived from recycled
+NSTableRowView/NSTextField objects.
+
+| Relationship | Authoritative object |
+| --- | --- |
+| Group children | Exactly proxy Table, real logical row/column scrollers, detail; native scroll subtree excluded |
+| Proxy parent | Existing Grid View |
+| Row/column/column-header parent | Stable proxy |
+| Cell/row-header parent | Its exact current semantic row |
+| Row children | Its ordinal header and the same current cells used by local lookup/selection |
+| Table local counts | Current admitted bounded frame only; no whole-file/prefix total masquerading as Table size |
+| Native Table parent/focus/hit | Projects proxy/current cell; it is not a semantic Table in the exposed child graph |
+
+Physical NSTableView is explicitly not an accessibility element and has empty
+accessible children. The containing Group's explicit child array is the
+important subtree replacement: ignored-element flags alone could promote
+native implementation rows. Native scroll rendering and its view hierarchy
+are not removed or hidden. No native parent/child property stores a proxy/View
+retaining cycle; relationships are read from the live owner lookup.
+
+## Preserved behavior and guarded bridges
+
+- Native `makeFirstResponder:` and its readback still target NSTableView.
+  Current semantic focus is a cell, or the stable proxy for explicit Table-only
+  focus/Pending focus. Source/scroller focus returns no Grid focus.
+- Proxy and physical Table focus queries use the same adapter facts. Existing
+  composition refusal, Pending focus refusal, focus/selection independence and
+  native arrow/Shift routing remain in place.
+- Proxy selection setters use the existing current-epoch full-rectangle
+  validation and sole selection owner. No default native row-selection policy
+  is reported as semantic cell selection.
+- Proxy `accessibilityPerformShowMenu` forwards only to the established native
+  Table menu. That menu freezes its existing identity/coordinates; controller
+  admission, source action refusal and command acknowledgment limits are not
+  changed. No AX press/Copy/Replace/editable-value source action was added.
+- Proxy/physical/group point queries use one bounded hit lookup. Actual native
+  cell and header bounds determine hits; blank viewport space returns proxy,
+  not an invented cell. Outside the real scroll viewport, the Group directly
+  dispatches to its real scrollers/detail when their clipped bounds contain
+  the point. Blank Group space returns the Group, outside space nil; no
+  superclass traversal can re-enter the hidden native scroll subtree.
+- The Table footprint uses the real visible NSScrollView viewport including
+  native headers, excluding separate logical scrollers. Both root and children
+  use actual view-to-window-to-screen conversion and architecture-correct
+  CGRect ABI; row headers without a painted gutter still have empty geometry.
+- Layout/selected-cell notifications target proxy; focus notifications target
+  the current semantic focus node. Metadata is published before notification,
+  and superseded frames stop outer event delivery.
+
+Retiring an installation removes all child lookup entries before native
+releases, clears the old frame, and preserves only the stable attachment root.
+Detaching zeroes that handle and removes its owner entry before releasing it;
+an externally retained root cannot reach the adapter, parent, rows or document.
+Callbacks reject off-main access before mutable owner lookup and never decode
+source, await workers or allocate children in proportion to the whole file.
+
+## Internal API and delivery scope
+
+Production changes are confined to Mac Grid accessibility registration and
+lifetime seams. `AccessibilityTable` is an internal semantic-root getter;
+`MacEditorShell.ProbeGridAccessibilityTable` is diagnostic readback only. The
+existing `ProbeGrid` tuple still exposes the physical Table and identity.
+There is no Engine/Formats/public API, source provider, source input island,
+helper/oracle/workflow change, extra native library or new product payload.
+The legacy `accessibilityAttributeValue:` experiment has been removed.
+
+The opt-in native probe now addresses semantic selectors on the proxy, but
+dispatches synthetic keys/native selected-row mutations to the actual Table.
+It checks group/root/row/cell parent identities, empty physical children,
+off-main refusal, native focus readback, proxy/physical/group point agreement,
+root stability across child retirement, and a retained root after disposal.
+The existing Missing frozen-menu/native keyboard regression remains intact.
+These are new target checks to run, not claimed native results.
+
+## Validation and next acceptance
+
+On Windows/.NET SDK 10.0.400, the Mac accessibility focused filter compiles the
+candidate and passes **10/10** managed cases. These tests cover pure fixture,
+geometry, ABI layout and native-intent policy; they do not load AppKit. Evidence:
+`.cache/mac-grid-table-proxy/table-proxy.trx`. Independent review:
+[`mac-grid-table-proxy-review.md`](../reviews/mac-grid-table-proxy-review.md).
+
+Next, freshly publish both `osx-x64` and `osx-arm64` under the strict single-file
+Native AOT inventory. Root must update the in-process probe source pin to the
+frozen bytes before running it. Run both existing base/opt-in native diagnostics
+and the unchanged external harness, recording the entire child exit and report.
+
+The external tree must have exactly one Table, our absolute Row 1 identity,
+matching local cell ranges/parent/selection, full independent source, guarded
+rebase/retirement and normal close. Point/global-focus entry paths must not
+resurrect native rows. A Table-local focus getter alone does not establish the
+application/window global AX focus query. Neither a partial row success nor
+green containing non-gating CI jobs establish acceptance. VoiceOver, real IME,
+multi-monitor geometry and performance remain separately unclaimed release gates.
+
+## Primary-source rationale
+
+Apple's [custom-controls guide](https://developer.apple.com/library/archive/documentation/Accessibility/Conceptual/AccessibilityMacOSX/ImplementingAccessibilityforCustomControls.html)
+supports custom NSAccessibilityElement representations with explicit
+role/label/parent/children and notifications. Its
+[standard-controls guide](https://developer.apple.com/library/archive/documentation/Accessibility/Conceptual/AccessibilityMacOSX/EnhancingtheAccessibilityofStandardAppKitControls.html)
+explains that excluding an element promotes its children; this is why the
+Group's authoritative child graph is required. The
+[modern NSAccessibility API](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol)
+separates informational getters from setters/actions. The
+[retired key-based guide](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Accessibility/cocoaAXManipulateHierarchy/cocoaAXManipulateHier.html)
+discourages the legacy API, strengthening the maintenance case against an
+expanding attribute workaround.
+
+The repository's [bounded contract](../csv-grid-accessibility-contract.md)
+continues to supply the semantic and source-ownership invariants. Its cached
+frame/reader-task rationale remains valid; native platform representation is
+the engineering variable changed in response to actual external evidence.

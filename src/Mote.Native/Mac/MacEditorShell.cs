@@ -926,6 +926,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <summary>Actual AppKit table and identity for opt-in disposable target acceptance.</summary>
     internal (nint Table, NativePresentationId? Identity) ProbeGrid => (_csvGrid?.Table ?? 0, _csvGrid?.Identity);
+    /// <summary>Target-only semantic Table root; distinct from the native keyboard responder under Grid opt-in.</summary>
+    internal nint ProbeGridAccessibilityTable => _csvGrid?.AccessibilityTable ?? 0;
     /// <summary>Target-only semantic frame readback; does not confer source action authority.</summary>
     internal GridAccessibilityFrame? ProbeGridAccessibilityFrame => _csvGrid?.AccessibilityFrame;
     /// <summary>Target-only menu opening readback, including its frozen presentation identity.</summary>

@@ -1,7 +1,10 @@
 # macOS bounded Grid AXRows bridge experiment
 
-Date: 2026-10-01. **Opt-in discriminating experiment, not an adopted release
-architecture or external acceptance.** Production defaults remain unchanged.
+Date: 2026-10-01. **Rejected opt-in experiment.** The two-RID external
+falsification below triggered its stopping rule; the legacy override was removed
+and replaced with the [coherent Table proxy candidate](mac-grid-table-proxy.md).
+The earlier design and local evidence are preserved as history, not current code.
+Production defaults remain unchanged.
 
 ## Evidence and the next question
 
@@ -111,6 +114,27 @@ bounded-contract research and cached-frame rationale remain in
 no new academic claim can substitute for the observed cross-process failure.
 
 ## Validation ledger
+
+### External falsification: 36789139005 / 3aae8d5
+
+Fresh hosted [CI run 36789139005](https://github.com/kleedaisuki/mote/actions/runs/36789139005)
+executed the unchanged external Swift client on both published Mac RIDs.
+Both reports remain `failed`, with eight prior checks passed and
+`first-record-is-data` failing at origin-window. Typecheck/trust passed, Swift
+exit was 1, cleanup was forced, and fixture bytes remained unchanged. The
+helper source hash remained `A65E460046E0AA72B88F5E4289CAA0915A4EE15E1C24984B9C40DC6FD1227B8C`.
+This falsifies route A as a fix for the external contract.
+
+Preserved reports:
+`.cache/ci-36789139005-mac-grid-ax/{x64,arm}-artifact/mac-grid-ax-external.json`.
+Raw report SHA-256: x64
+`7BD182F1C110161B58919BEC5359B73FAFB562AB7C8BB67168CB0A778AF8C618`;
+ARM `1B846F3694E6949DDE22ECEE7F9BA6A1BEA71C5B4245D99048F2B25F4BB1115E`.
+All nine strict CI jobs were green, but that summary cannot override the
+non-gating diagnostic's failed report. The in-process selector source pin was
+stale and its diagnostic did not execute; no native selector result is inferred.
+
+### Historical local compilation
 
 Windows/.NET SDK 10.0.400: `dotnet test tests/Mote.Tests/Mote.Tests.csproj --filter
 'FullyQualifiedName~MacGridAccessibility' --verbosity minimal` passed **10/10**.

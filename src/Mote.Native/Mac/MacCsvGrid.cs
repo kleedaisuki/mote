@@ -771,6 +771,7 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
         if (cls != 0)
         {
             Add(cls, "resizeSubviewsWithOldSize:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Size, void>)&ContainerResized, "v@:{CGSize=dd}");
+            RegisterContainerAccessibility(cls);
             ObjC.RegisterClassPair(cls);
         }
         cls = ObjC.AllocateClassPair(ObjC.Class("NSScroller"), ScrollerClass, 0);
@@ -1044,6 +1045,7 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
     {
         SetNavigation(null);
         RetireAccessibility();
+        DetachAccessibilityTable();
         _identity = null;
         foreach (var scroller in new[] { _rowScroller, _columnScroller })
         { ObjC.Send(scroller, ObjC.Sel("setTarget:"), 0); Instances.Remove(scroller); ObjC.Send(scroller, ObjC.Sel("release")); }

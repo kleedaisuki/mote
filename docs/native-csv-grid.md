@@ -180,6 +180,10 @@ is inferred from portable arithmetic or hidden-control tests.
   [Mac scope](validation/mac-grid-accessibility.md)). Native pattern indices stay
   local and absolute CSV ordinals remain in labels/headers; no whole-file Table
   is advertised. Mac registration is opt-in pending external target acceptance.
+  Its [stable semantic Table proxy candidate](validation/mac-grid-table-proxy.md)
+  now replaces the native accessibility subtree after two-RID external row
+  bridge failures; NSTableView rendering/input and source accessibility remain
+  unchanged. Earlier native probe passes do not certify the changed candidate.
   An initial real Windows AOT/MTA probe established readable Table/header/value
   facts but exposed wrong-thread selection refusal. The corrected bounded
   selection dispatcher, three-view tree, read-only range facts, synthetic

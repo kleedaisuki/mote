@@ -5,7 +5,7 @@ using Mote.Native.Mac.Canvas;
 
 namespace Mote.Native.Mac;
 
-/// <summary>Native-first bounded table selectors; no source actions or editable values.</summary>
+/// <summary>Bounded semantic Table over native rendering/input; no source actions or editable values.</summary>
 /// <remarks>Opt-in until cross-process AX, both native ABIs and VoiceOver pass their gates.</remarks>
 internal sealed unsafe partial class MacCsvGrid
 {
@@ -14,6 +14,12 @@ internal sealed unsafe partial class MacCsvGrid
         Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1";
     /// <summary>One statically registered Objective-C metadata class for all bounded windows.</summary>
     private const string AccessibilityNodeClass = "MoteCsvGridAccessibilityNode";
+    /// <summary>Stable attachment root avoids NSTableView's externally synthesized row objects.</summary>
+    private const string AccessibilityTableClass = "MoteCsvGridAccessibilityTable";
+    /// <summary>One owned root per attachment; child epochs retire independently of this handle.</summary>
+    private nint _accessibilityTable;
+    /// <summary>Diagnostic semantic root; physical input continues to use Table.</summary>
+    internal nint AccessibilityTable => AccessibilityEnabled ? _accessibilityTable : _table;
     /// <summary>Only current nodes have managed entries; retirement cannot retain a projection.</summary>
     private static readonly Dictionary<nint, AccessibilityNode> AccessibilityNodes = [];
     /// <summary>Each handle owns one native retain; retirement drops all managed lookups before releasing it.</summary>
@@ -57,9 +63,9 @@ internal sealed unsafe partial class MacCsvGrid
     private static extern void NSAccessibilityPostNotification(nint element, nint notification);
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSendSuper")]
     private static extern byte AccessibilitySuperResponder(ref MacOnScreenCanvasNative.Super receiver, nint selector);
-    /// <summary>Legacy object-return dispatch is an experimental bridge discriminator, not a second attribute model.</summary>
-    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSendSuper")]
-    private static extern nint AccessibilitySuperAttribute(ref MacOnScreenCanvasNative.Super receiver, nint selector, nint attribute);
+    /// <summary>Real logical controls retain their native object-return point hit-test behavior.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern nint AccessibilityControlHit(nint receiver, nint selector, ObjC.Point point);
 
     /// <summary>Publishes the Grid group without touching source hierarchy or input views.</summary>
     private void InitializeAccessibility()
@@ -68,8 +74,22 @@ internal sealed unsafe partial class MacCsvGrid
         ObjC.Send(View, ObjC.Sel("setAccessibilityElement:"), 1);
         ObjC.Send(View, ObjC.Sel("setAccessibilityRole:"), ObjC.String("AXGroup"));
         ObjC.Send(View, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("Mote CSV grid navigation"));
-        ObjC.Send(_table, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("CSV grid window"));
+        _accessibilityTable = ObjC.New(AccessibilityTableClass);
+        Instances.Add(_accessibilityTable, this);
+        // The group supplies an authoritative child graph; ignored native views must not promote implementation rows.
+        ObjC.Send(_table, ObjC.Sel("setAccessibilityElement:"), 0);
+        ObjC.Send(_scroll, ObjC.Sel("setAccessibilityElement:"), 0);
         PublishAccessibility();
+    }
+
+    /// <summary>Detach stable owner lookup before release; retained external roots cannot retain or reach this adapter.</summary>
+    private void DetachAccessibilityTable()
+    {
+        if (_accessibilityTable == 0) return;
+        var root = _accessibilityTable;
+        _accessibilityTable = 0;
+        Instances.Remove(root);
+        ObjC.Send(root, ObjC.Sel("release"));
     }
 
     /// <summary>Retires lookup entries before releasing owned nodes; externally retained nodes read unavailable.</summary>
@@ -111,9 +131,9 @@ internal sealed unsafe partial class MacCsvGrid
         _accessibilityFrame = frame;
         ObjC.Send(View, ObjC.Sel("setAccessibilityHelp:"), ObjC.String(frame.Status));
         if (_accessibilityFrame != frame) return;
-        if (newTree) NSAccessibilityPostNotification(_table, ObjC.String("AXLayoutChanged"));
+        if (newTree) NSAccessibilityPostNotification(_accessibilityTable, ObjC.String("AXLayoutChanged"));
         else if (previous!.Selection != frame.Selection)
-            NSAccessibilityPostNotification(_table, ObjC.String("AXSelectedCellsChanged"));
+            NSAccessibilityPostNotification(_accessibilityTable, ObjC.String("AXSelectedCellsChanged"));
         if (_accessibilityFrame != frame) return;
         if (frame.HasTableFocus && (previous?.HasTableFocus != true || previous.FocusedCell != frame.FocusedCell))
             NSAccessibilityPostNotification(AccessibilityFocusedElement(), ObjC.String("AXFocusedUIElementChanged"));
@@ -158,18 +178,43 @@ internal sealed unsafe partial class MacCsvGrid
         return node;
     }
 
-    /// <summary>Registers native table selectors only under the explicit Grid gate.</summary>
+    /// <summary>The native group replaces its implementation subtree with one semantic root and real controls.</summary>
+    private static void RegisterContainerAccessibility(nint cls)
+    {
+        if (!AccessibilityEnabled) return;
+        Add(cls, "accessibilityChildren",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint>)&AccessibilityContainerChildren, "@@:");
+        Add(cls, "accessibilityHitTest:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Point, nint>)&AccessibilityContainerHit, "@@:{CGPoint=dd}");
+    }
+
+    /// <summary>Physical Table projects native focus/hits, but never exposes default row children.</summary>
     private static void RegisterTableAccessibility(nint cls)
     {
         if (!AccessibilityEnabled) return;
-        // Discriminate NSTableView's legacy AXRows path without changing any other inherited attribute.
-        Add(cls, "accessibilityAttributeValue:",
-            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, nint>)&AccessibilityLegacyAttribute, "@@:@");
+        foreach (var selector in new[] { "accessibilityChildren", "accessibilityFocusedUIElement", "accessibilityParent" })
+            Add(cls, selector, (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint>)&AccessibilityNativeRead, "@@:");
+        Add(cls, "isAccessibilityElement", (nint)(delegate* unmanaged[Cdecl]<nint, nint, byte>)&AccessibilityNativeElement, "B@:");
+        Add(cls, "accessibilityHitTest:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Point, nint>)&AccessibilityHitTest, "@@:{CGPoint=dd}");
+        foreach (var selector in new[] { "becomeFirstResponder", "resignFirstResponder" })
+            Add(cls, selector, (nint)(delegate* unmanaged[Cdecl]<nint, nint, byte>)&AccessibilityResponderChanged, "B@:");
+        RegisterAccessibilityTableRoot();
+        RegisterAccessibilityNodes();
+    }
+
+    /// <summary>The stable non-view Table has no NSTableView row bridge or independent selection state.</summary>
+    private static void RegisterAccessibilityTableRoot()
+    {
+        var cls = ObjC.AllocateClassPair(ObjC.Class("NSAccessibilityElement"), AccessibilityTableClass, 0);
+        if (cls == 0) return;
         foreach (var selector in new[] { "accessibilityChildren", "accessibilityRows", "accessibilityColumns",
             "accessibilityRowHeaderUIElements", "accessibilityColumnHeaderUIElements", "accessibilityVisibleRows",
             "accessibilityVisibleColumns", "accessibilityVisibleCells", "accessibilitySelectedCells",
             "accessibilitySelectedRows", "accessibilitySelectedColumns", "accessibilityHelp", "accessibilityRole",
-            "accessibilityRowCount", "accessibilityColumnCount", "accessibilityFocusedUIElement" })
+            "accessibilityRowCount", "accessibilityColumnCount", "accessibilityFocusedUIElement",
+            "accessibilityLabel", "accessibilityParent", "accessibilityWindow", "accessibilityTopLevelUIElement",
+            "accessibilityIdentifier" })
             Add(cls, selector, (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint>)&AccessibilityTableRead,
                 selector.EndsWith("Count", StringComparison.Ordinal) ? "q@:" : "@@:");
         Add(cls, "accessibilityCellForColumn:row:",
@@ -183,12 +228,20 @@ internal sealed unsafe partial class MacCsvGrid
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&AccessibilityRejectRows, "v@:@");
         Add(cls, "accessibilityHitTest:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Point, nint>)&AccessibilityHitTest, "@@:{CGPoint=dd}");
-        foreach (var selector in new[] { "accessibilityOrderedByRow", "isAccessibilityFocused" })
+        foreach (var selector in new[] { "accessibilityOrderedByRow", "isAccessibilityFocused", "isAccessibilityElement",
+            "accessibilityEnabled" })
             Add(cls, selector, (nint)(delegate* unmanaged[Cdecl]<nint, nint, byte>)&AccessibilityTableBool, "B@:");
         Add(cls, "setAccessibilityFocused:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, byte, void>)&AccessibilitySetFocused, "v@:B");
-        foreach (var selector in new[] { "becomeFirstResponder", "resignFirstResponder" })
-            Add(cls, selector, (nint)(delegate* unmanaged[Cdecl]<nint, nint, byte>)&AccessibilityResponderChanged, "B@:");
+        Add(cls, "accessibilityFrame", (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Rect>)&AccessibilityTableFrame,
+            "{CGRect={CGPoint=dd}{CGSize=dd}}@:");
+        Add(cls, "accessibilityPerformShowMenu", (nint)(delegate* unmanaged[Cdecl]<nint, nint, byte>)&AccessibilityShowMenu, "B@:");
+        ObjC.RegisterClassPair(cls);
+    }
+
+    /// <summary>Each non-view child carries one immutable epoch and absolute ordinal, never a recycled row view.</summary>
+    private static void RegisterAccessibilityNodes()
+    {
         var node = ObjC.AllocateClassPair(ObjC.Class("NSAccessibilityElement"), AccessibilityNodeClass, 0);
         if (node == 0) return;
         foreach (var selector in new[] { "accessibilityRole", "accessibilityLabel", "accessibilityHelp",
@@ -225,19 +278,33 @@ internal sealed unsafe partial class MacCsvGrid
     private static AccessibilityNode? CurrentAccessibilityNode(nint self) =>
         AccessibilityNodes.TryGetValue(self, out var node) && node.Owner._accessibilityFrame?.Id == node.Id ? node : null;
 
-    /// <summary>Experimental AXRows bridge override; only live main-thread requests may inspect the installed tree.</summary>
-    /// <remarks>Other attributes retain NSTableView behavior. Do not extend this into parallel legacy provider machinery.</remarks>
+    /// <summary>No native scroll/table subtree participates in the group's semantic child graph.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static nint AccessibilityLegacyAttribute(nint self, nint selector, nint attribute)
+    private static nint AccessibilityContainerChildren(nint self, nint selector)
     {
         try
         {
             if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var grid)) return 0;
-            if (ObjC.Send(attribute, ObjC.Sel("isEqualToString:"), ObjC.String("AXRows")) != 0)
-                return !grid._installing && grid._accessibilityFrame is not null
-                    ? AccessibilityArray(grid._accessibilityRows) : 0;
-            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTableView"));
-            return AccessibilitySuperAttribute(ref superclass, selector, attribute);
+            return AccessibilityArray(new[] { grid._accessibilityTable, grid._rowScroller, grid._columnScroller, grid._detail }
+                .Where(handle => handle != 0));
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>Ignored physical implementation views must not promote their native rows into the accessible tree.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static byte AccessibilityNativeElement(nint self, nint selector) => 0;
+
+    /// <summary>Physical first-responder queries forward semantic focus; implementation children remain empty.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static nint AccessibilityNativeRead(nint self, nint selector)
+    {
+        try
+        {
+            if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var grid)) return 0;
+            if (AccessibilitySelector(selector, "accessibilityParent")) return grid._accessibilityTable;
+            return AccessibilitySelector(selector, "accessibilityFocusedUIElement")
+                ? grid.AccessibilityFocusedElement() : AccessibilityArray([]);
         }
         catch { return 0; }
     }
@@ -263,13 +330,19 @@ internal sealed unsafe partial class MacCsvGrid
         try
         {
             if (!AccessibilityMainThread) return 0;
-            if (!Instances.TryGetValue(self, out var g) || g._accessibilityFrame is not { } f) return 0;
+            if (!Instances.TryGetValue(self, out var g)) return 0;
             if (AccessibilitySelector(selector, "accessibilityRole")) return ObjC.String("AXTable");
-            if (AccessibilitySelector(selector, "accessibilityHelp")) return ObjC.String(f.Status);
-            if (AccessibilitySelector(selector, "accessibilityRowCount")) return f.Rows.Count;
-            if (AccessibilitySelector(selector, "accessibilityColumnCount")) return f.Columns.Count;
+            if (AccessibilitySelector(selector, "accessibilityLabel")) return ObjC.String("CSV grid window");
+            if (AccessibilitySelector(selector, "accessibilityParent")) return g.View;
+            if (AccessibilitySelector(selector, "accessibilityWindow") || AccessibilitySelector(selector, "accessibilityTopLevelUIElement"))
+                return ObjC.Send(g._table, ObjC.Sel("window"));
+            if (AccessibilitySelector(selector, "accessibilityIdentifier")) return ObjC.String("mote.csv.table");
             if (AccessibilitySelector(selector, "accessibilityFocusedUIElement"))
                 return g.AccessibilityFocusedElement();
+            if (AccessibilitySelector(selector, "accessibilityHelp")) return ObjC.String(g._accessibilityFrame?.Status ?? "No installed CSV window");
+            if (AccessibilitySelector(selector, "accessibilityRowCount")) return g._accessibilityFrame?.Rows.Count ?? 0;
+            if (AccessibilitySelector(selector, "accessibilityColumnCount")) return g._accessibilityFrame?.Columns.Count ?? 0;
+            if (g._accessibilityFrame is not { } f) return AccessibilityArray([]);
             if (AccessibilitySelector(selector, "accessibilityRows")) return AccessibilityArray(g._accessibilityRows);
             if (AccessibilitySelector(selector, "accessibilityColumns")) return AccessibilityArray(g._accessibilityColumns);
             if (AccessibilitySelector(selector, "accessibilityChildren"))
@@ -293,7 +366,7 @@ internal sealed unsafe partial class MacCsvGrid
     {
         var window = ObjC.Send(_table, ObjC.Sel("window"));
         if (window == 0 || ObjC.Send(window, ObjC.Sel("firstResponder")) != _table) return 0;
-        if (_accessibilityFrame is not { } f || f.FocusedCell is not { } active || !f.Contains(active)) return _table;
+        if (_accessibilityFrame is not { } f || f.FocusedCell is not { } active || !f.Contains(active)) return _accessibilityTable;
         return AccessibilityCell(active.Row - f.Rows.Start, active.Column - f.Columns.Start);
     }
 
@@ -304,7 +377,8 @@ internal sealed unsafe partial class MacCsvGrid
         try
         {
             if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g)) return 0;
-            if (AccessibilitySelector(selector, "accessibilityOrderedByRow")) return 1;
+            if (AccessibilitySelector(selector, "accessibilityOrderedByRow") || AccessibilitySelector(selector, "isAccessibilityElement")) return 1;
+            if (AccessibilitySelector(selector, "accessibilityEnabled")) return !g._installing ? (byte)1 : (byte)0;
             return g.AccessibilityFocusedElement() == self ? (byte)1 : (byte)0;
         }
         catch { return 0; }
@@ -332,7 +406,7 @@ internal sealed unsafe partial class MacCsvGrid
             if (AccessibilitySelector(selector, "accessibilityIndex")) return n.Row >= 0 ? n.Row : n.Column;
             if (AccessibilitySelector(selector, "accessibilityWindow") || AccessibilitySelector(selector, "accessibilityTopLevelUIElement"))
                 return ObjC.Send(g._table, ObjC.Sel("window"));
-            if (AccessibilitySelector(selector, "accessibilityParent")) return n.Kind is "cell" or "rowHeader" ? g._accessibilityRows[n.Row] : g._table;
+            if (AccessibilitySelector(selector, "accessibilityParent")) return n.Kind is "cell" or "rowHeader" ? g._accessibilityRows[n.Row] : g._accessibilityTable;
             if (AccessibilitySelector(selector, "accessibilityRowHeaderUIElements"))
                 return AccessibilityArray(n.Row >= 0 ? [g._accessibilityRowHeaders[n.Row]] : []);
             if (AccessibilitySelector(selector, "accessibilityColumnHeaderUIElements"))
@@ -427,10 +501,16 @@ internal sealed unsafe partial class MacCsvGrid
     private ObjC.Rect AccessibilityScreenRect(AccessibilityNode n)
     {
         var rect = AccessibilityLocalRect(n);
-        if (rect.Size.Width <= 0 || rect.Size.Height <= 0) return default;
-        var window = ObjC.Send(_table, ObjC.Sel("window"));
-        if (window == 0) return default;
         var receiver = n.Kind == "columnHeader" ? ObjC.Send(_table, ObjC.Sel("headerView")) : _table;
+        return AccessibilityScreenRect(receiver, rect);
+    }
+
+    /// <summary>Shared view-to-screen conversion keeps proxy and rendered child geometry in one coordinate system.</summary>
+    private static ObjC.Rect AccessibilityScreenRect(nint receiver, ObjC.Rect rect)
+    {
+        if (rect.Size.Width <= 0 || rect.Size.Height <= 0) return default;
+        var window = ObjC.Send(receiver, ObjC.Sel("window"));
+        if (window == 0) return default;
         if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
         {
             AccessibilityConvertStret(out var inWindow, receiver, ObjC.Sel("convertRect:toView:"), rect, 0);
@@ -439,6 +519,30 @@ internal sealed unsafe partial class MacCsvGrid
         }
         var local = AccessibilityConvertDirect(receiver, ObjC.Sel("convertRect:toView:"), rect, 0);
         return AccessibilityConvertDirect(window, ObjC.Sel("convertRectToScreen:"), local, 0);
+    }
+
+    /// <summary>The Table occupies the real scroll viewport including native ordinal headers, not navigation controls.</summary>
+    private ObjC.Rect AccessibilityTableScreenRect() => AccessibilityScreenRect(_scroll,
+        MacOnScreenCanvasNative.GetRect(_scroll, ObjC.Sel("visibleRect")));
+
+    /// <summary>A detached root or off-main geometry request has no frame.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static ObjC.Rect AccessibilityTableFrame(nint self, nint selector)
+    {
+        try { return AccessibilityMainThread && Instances.TryGetValue(self, out var g) ? g.AccessibilityTableScreenRect() : default; }
+        catch { return default; }
+    }
+
+    /// <summary>Only opens the existing native menu; its frozen commands still pass through established controller guards.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static byte AccessibilityShowMenu(nint self, nint selector)
+    {
+        try
+        {
+            if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g) || g._installing || g._accessibilityFrame is null) return 0;
+            return ObjC.Send(g._table, ObjC.Sel("accessibilityPerformShowMenu")) != 0 ? (byte)1 : (byte)0;
+        }
+        catch { return 0; }
     }
 
     /// <summary>Visibility is measured from current clipped native layout, not ready-value existence.</summary>
@@ -466,28 +570,56 @@ internal sealed unsafe partial class MacCsvGrid
         try
         {
             if (!AccessibilityMainThread) return 0;
-            if (!Instances.TryGetValue(self, out var g) || g._accessibilityFrame is not { } frame) return 0;
-            var window = ObjC.Send(self, ObjC.Sel("window"));
-            if (window == 0) return 0;
-            var inWindow = MacOnScreenCanvasNative.SendPoint(window, ObjC.Sel("convertPointFromScreen:"), point, 0);
-            var local = MacOnScreenCanvasNative.SendPoint(self, ObjC.Sel("convertPoint:fromView:"), inWindow, 0);
-            var row = ObjC.Send(self, ObjC.Sel("rowAtPoint:"), local);
-            var column = ObjC.Send(self, ObjC.Sel("columnAtPoint:"), local);
-            if (row >= 0 && row < frame.Rows.Count && column >= 0 && column < frame.Columns.Count)
-            {
-                var handle = g.AccessibilityCell((int)row, (int)column);
-                if (CurrentAccessibilityNode(handle) is { } cell && AccessibilityContainsPoint(g.AccessibilityScreenRect(cell), point))
-                    return handle;
-            }
-            // Header lookup is bounded by the admitted column cap, never the file width.
-            foreach (var handle in g._accessibilityColumnHeaders)
-            {
-                if (CurrentAccessibilityNode(handle) is not { } n) continue;
-                if (AccessibilityContainsPoint(g.AccessibilityScreenRect(n), point)) return handle;
-            }
-            return 0;
+            if (!Instances.TryGetValue(self, out var g)) return 0;
+            return g.AccessibilityHitPoint(point);
         }
         catch { return 0; }
+    }
+
+    /// <summary>Hit dispatch follows the exact semantic child graph, never traversing the hidden scroll implementation.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static nint AccessibilityContainerHit(nint self, nint selector, ObjC.Point point)
+    {
+        try
+        {
+            if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g)) return 0;
+            if (AccessibilityContainsPoint(g.AccessibilityTableScreenRect(), point)) return g.AccessibilityHitPoint(point);
+            foreach (var control in new[] { g._rowScroller, g._columnScroller, g._detail })
+            {
+                if (control != 0 && AccessibilityContainsPoint(AccessibilityScreenRect(control,
+                    MacOnScreenCanvasNative.GetRect(control, ObjC.Sel("visibleRect"))), point))
+                    return AccessibilityControlHit(control, selector, point);
+            }
+            return AccessibilityContainsPoint(AccessibilityScreenRect(g.View,
+                MacOnScreenCanvasNative.GetRect(g.View, ObjC.Sel("visibleRect"))), point) ? self : 0;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>Both proxy and physical input paths resolve the same current bounded cells and ordinal headers.</summary>
+    private nint AccessibilityHitPoint(ObjC.Point point)
+    {
+        if (!AccessibilityContainsPoint(AccessibilityTableScreenRect(), point)) return 0;
+        if (_accessibilityFrame is not { } frame) return _accessibilityTable;
+        var window = ObjC.Send(_table, ObjC.Sel("window"));
+        if (window == 0) return 0;
+        var inWindow = MacOnScreenCanvasNative.SendPoint(window, ObjC.Sel("convertPointFromScreen:"), point, 0);
+        var local = MacOnScreenCanvasNative.SendPoint(_table, ObjC.Sel("convertPoint:fromView:"), inWindow, 0);
+        var row = ObjC.Send(_table, ObjC.Sel("rowAtPoint:"), local);
+        var column = ObjC.Send(_table, ObjC.Sel("columnAtPoint:"), local);
+        if (row >= 0 && row < frame.Rows.Count && column >= 0 && column < frame.Columns.Count)
+        {
+            var handle = AccessibilityCell((int)row, (int)column);
+            if (CurrentAccessibilityNode(handle) is { } cell && AccessibilityContainsPoint(AccessibilityScreenRect(cell), point))
+                return handle;
+        }
+        // Header lookup is bounded by the admitted column cap, never the file width.
+        foreach (var handle in _accessibilityColumnHeaders)
+        {
+            if (CurrentAccessibilityNode(handle) is not { } n) continue;
+            if (AccessibilityContainsPoint(AccessibilityScreenRect(n), point)) return handle;
+        }
+        return _accessibilityTable;
     }
 
     /// <summary>Uses half-open clipped geometry; an empty rectangle is never a hit.</summary>

@@ -10,13 +10,15 @@ Grid-specific selectors. The environment gate is process-wide and evaluated
 before Objective-C class registration. Without it, the established native Table
 and source provider retain their previous behavior.
 
-The native-first implementation preserves `NSTableView` rendering, native focus,
-keyboard and context-menu vocabulary. Its narrow selectors return a bounded
-window-specific set of `NSAccessibilityElement` rows, columns, ordinal headers
-and cells. These are accessibility metadata wrappers, not replacement rendering
-views or source text proxies. This is the first candidate to test externally;
-there is **no external negative result proving a replacement proxy Table is
-necessary**, and no claim that native/default AX merging has passed.
+The implementation preserves `NSTableView` rendering, native focus, keyboard
+and context-menu vocabulary, but now exposes one stable `NSAccessibilityElement`
+Table root and bounded epoch rows, columns, ordinal headers and cells. The
+native-first Table representation failed external row transport on both Mac
+RIDs; its legacy AXRows experiment was also falsified. The
+[coherent proxy candidate](mac-grid-table-proxy.md) replaces only the Grid
+semantic tree, not rendering/input or source accessibility. Fresh native and
+external acceptance of this representation is pending; earlier selector passes
+below describe the preceding implementation, not the changed proxy binary.
 
 Files:
 
@@ -41,7 +43,7 @@ and menu commands remain available and carry established ready identities.
 
 | Surface | Implemented behavior |
 | --- | --- |
-| Table | Native `AXTable`; bounded local row/column counts; exact local cell lookup and out-of-range nil. Exact-empty is zero rows/columns; unknown extent is not treated as empty. |
+| Table | Stable non-view `AXTable` proxy; bounded local row/column counts; exact local cell lookup and out-of-range nil. Exact-empty is zero rows/columns; unknown extent is not treated as empty. Physical NSTableView remains the input/rendering owner. |
 | Nodes | Window-specific rows/columns/cells and absolute one-based CSV labels. Cell ranges are pointer-sized `{local,1}`, not absolute file ordinals. |
 | Values | Shared immutable frame supplies Complete/empty, Missing, Pending, Clipped, Oversized, syntax-error and sanitized-display facts. Only bounded Complete/Clipped presentation has a value. No parser, worker wait or source decoding in a callback. |
 | Sparse delivery | Missing ready row retains its requested Pending slot; later rows do not move earlier in the Table. |
@@ -216,8 +218,9 @@ not alter this conclusion.
 2. Cross-process AX client: verify exactly one native semantic Table, parent,
    rows/columns/headers, selected cells/setters, focused element and point lookup.
    Confirm no recycled `NSTextField` or default native row-selection tree is
-   duplicated alongside the bounded semantics. A duplicate/merge failure is the
-   evidence needed to choose a replacement bounded Table proxy; do not infer it.
+   duplicated alongside the bounded semantics. Actual external row bridge
+   failures and rejected legacy discriminator now justify the implemented
+   proxy candidate; rerun these checks on that candidate before acceptance.
 3. Actual resize/Retina/multi-monitor/scroll clipping and native header point
    lookup, including absence of false hits outside the Table. Portable rectangle
    arithmetic alone does not close this gate.

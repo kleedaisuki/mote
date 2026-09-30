@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using System.Runtime.InteropServices;
 using Mote.Formats;
+using Mote.Native.Mac.Canvas;
 
 namespace Mote.Native.Mac;
 
@@ -7,6 +9,9 @@ namespace Mote.Native.Mac;
 [SupportedOSPlatform("macos")]
 internal static class MacCsvGridAccessibilityProbe
 {
+    /// <summary>Calls the object-return point ABI directly; this is not a CGRect aggregate return.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern nint HitTest(nint receiver, nint selector, ObjC.Point point);
     /// <summary>Runs under the existing Mac CSV probe only when experimental Grid AX registration is requested.</summary>
     internal static void Check(MacEditorShell shell)
     {
@@ -24,6 +29,8 @@ internal static class MacCsvGridAccessibilityProbe
             new(1000, 3), new(16, 2), 1, false, "Probe exact window");
         grid.Install(projection, identity, navigation);
         CheckInstalled(shell, grid, navigation, () => composing = false, commands);
+        CheckDetachedRoot();
+        Console.WriteLine("Mac CSV Grid AX selector probe passed; external AX/VoiceOver/geometry gates remain untested.");
     }
 
     /// <summary>Pure constructor-valid synthetic descriptor fixture; does not parse or claim a real source file.</summary>
@@ -48,22 +55,30 @@ internal static class MacCsvGridAccessibilityProbe
         var currentId = grid.AccessibilityFrame!.Id;
         Require(grid.Focus(currentId, new(1000, 16)) == GridAccessibilityResult.CompositionBlocked,
             "active physical source composition blocks focus transfer");
-        var table = grid.Table;
+        var table = grid.AccessibilityTable;
+        var physicalTable = grid.Table;
+        Require(table != 0 && table != physicalTable &&
+            ObjC.Send(physicalTable, ObjC.Sel("isAccessibilityElement")) == 0 &&
+            Count(ObjC.Send(physicalTable, ObjC.Sel("accessibilityChildren"))) == 0,
+            "one distinct semantic Table and no promoted native implementation rows");
+        var groupChildren = ObjC.Send(grid.View, ObjC.Sel("accessibilityChildren"));
+        Require(Count(groupChildren) == 4 && ObjC.Send(groupChildren, ObjC.Sel("objectAtIndex:"), 0) == table,
+            "group exposes semantic Table and real navigation/detail, not native scroll subtree");
+        Require(ObjC.Send(table, ObjC.Sel("accessibilityParent")) == grid.View,
+            "stable Table parents to the existing Grid group");
         Require(ObjC.Send(table, ObjC.Sel("accessibilityRowCount")) == 3, "local row count, not file count");
         Require(ObjC.Send(table, ObjC.Sel("accessibilityColumnCount")) == 2, "local column count");
         var rows = ObjC.Send(table, ObjC.Sel("accessibilityRows"));
-        var legacyRows = ObjC.Send(table, ObjC.Sel("accessibilityAttributeValue:"), ObjC.String("AXRows"));
-        Require(Count(legacyRows) == Count(rows) &&
-            ObjC.Send(legacyRows, ObjC.Sel("objectAtIndex:"), 0) == ObjC.Send(rows, ObjC.Sel("objectAtIndex:"), 0),
-            "legacy AXRows and modern rows return the identical bounded wrapper");
-        var firstRow = ObjC.Send(legacyRows, ObjC.Sel("objectAtIndex:"), 0);
+        var firstRow = ObjC.Send(rows, ObjC.Sel("objectAtIndex:"), 0);
         Require(Label(firstRow) == "Row 1001" &&
             ObjC.ManagedString(ObjC.Send(firstRow, ObjC.Sel("accessibilityIdentifier"))) ==
-                $"mote.csv.window.{currentId.WindowSerial}.row.0.-1", "legacy row keeps exact absolute ordinal and window identity");
-        Require(Task.Run(() => ObjC.Send(table, ObjC.Sel("accessibilityAttributeValue:"), ObjC.String("AXRows")))
-            .GetAwaiter().GetResult() == 0, "legacy AXRows refuses off-main dispatch without reading owner state");
+                $"mote.csv.window.{currentId.WindowSerial}.row.0.-1", "proxy row keeps exact absolute ordinal and window identity");
+        Require(ObjC.Send(firstRow, ObjC.Sel("accessibilityParent")) == table, "row parents to stable semantic Table");
+        Require(Task.Run(() => ObjC.Send(table, ObjC.Sel("accessibilityRows")))
+            .GetAwaiter().GetResult() == 0, "semantic Table refuses off-main dispatch without reading owner state");
         var first = Cell(table, 0, 0);
         Require(first != 0 && Label(first).Contains("Row 1001, Column 17", StringComparison.Ordinal), "absolute coordinate label");
+        Require(ObjC.Send(first, ObjC.Sel("accessibilityParent")) == firstRow, "cell parents to the exact semantic row");
         Require(ObjC.SendRange(first, ObjC.Sel("accessibilityRowIndexRange")) == new ObjC.Range(0, 1), "local NSRange row ABI");
         Require(ObjC.SendRange(first, ObjC.Sel("accessibilityColumnIndexRange")) == new ObjC.Range(0, 1), "local NSRange column ABI");
         Require(Cell(table, 2, 0) == 0 && Cell(table, 0, 3) == 0 && Cell(table, -1, 0) == 0, "out-of-window lookup refused");
@@ -93,22 +108,33 @@ internal static class MacCsvGridAccessibilityProbe
         try
         {
             endComposition();
+            var cellBounds = MacOnScreenCanvasNative.GetRect(first, ObjC.Sel("accessibilityFrame"));
+            Require(cellBounds.Size.Width > 0 && cellBounds.Size.Height > 0, "first admitted cell has actual clipped native bounds");
+            var point = new ObjC.Point(cellBounds.Origin.X + cellBounds.Size.Width / 2,
+                cellBounds.Origin.Y + cellBounds.Size.Height / 2);
+            Require(HitTest(table, ObjC.Sel("accessibilityHitTest:"), point) == first &&
+                HitTest(physicalTable, ObjC.Sel("accessibilityHitTest:"), point) == first &&
+                HitTest(grid.View, ObjC.Sel("accessibilityHitTest:"), point) == first,
+                "proxy, physical and group hit paths resolve the same semantic cell, not native rows");
             ObjC.Send(table, ObjC.Sel("setAccessibilitySelectedCells:"), Array(Cell(table, 0, 2)));
             Require(grid.Focus(currentId, new(1000, 16)) == GridAccessibilityResult.Applied, "admitted cell focus readback");
             Require(ObjC.Send(table, ObjC.Sel("accessibilityFocusedUIElement")) == first, "semantic focused cell");
+            Require(ObjC.Send(shell.ProbeWindow, ObjC.Sel("firstResponder")) == physicalTable &&
+                ObjC.Send(physicalTable, ObjC.Sel("accessibilityFocusedUIElement")) == first,
+                "physical first responder projects current semantic cell without replacement input");
             Require(grid.AccessibilityFrame!.Selection?.Active == new GridCoordinate(1002, 16), "focus does not replace rectangle");
-            MacCsvGridProbe.Key(table, "\r");
-            MacCsvGridProbe.Key(table, "\r", 1u << 20);
+            MacCsvGridProbe.Key(physicalTable, "\r");
+            MacCsvGridProbe.Key(physicalTable, "\r", 1u << 20);
             Require(commands.Count == 2 && commands[0].Kind == NativeGridIntentKind.Reveal &&
                 commands[1].Kind == NativeGridIntentKind.Replace && commands.All(c => c.Row == 1000 && c.Column == 16),
                 "Return and Command-Return act on focused cell, not unrelated rectangle endpoint");
-            MacCsvGridProbe.Key(table, "\uf703");
+            MacCsvGridProbe.Key(physicalTable, "\uf703");
             Require(grid.AccessibilityFrame!.Selection?.Active == new GridCoordinate(1000, 17), "arrow originates at focused cell");
             Require(grid.Focus(currentId, null) == GridAccessibilityResult.Applied &&
                 ObjC.Send(table, ObjC.Sel("accessibilityFocusedUIElement")) == table, "explicit table focus is not retained selection");
             ObjC.Send(table, ObjC.Sel("setAccessibilitySelectedCells:"), Array(first));
             Require(grid.Focus(currentId, new(1000, 16)) == GridAccessibilityResult.Applied, "refocus first cell");
-            ObjC.Send(table, ObjC.Sel("selectRowIndexes:byExtendingSelection:"),
+            ObjC.Send(physicalTable, ObjC.Sel("selectRowIndexes:byExtendingSelection:"),
                 ObjC.Send(ObjC.Class("NSIndexSet"), ObjC.Sel("indexSetWithIndex:"), 2), (byte)0);
             Require(ObjC.Send(table, ObjC.Sel("accessibilityFocusedUIElement")) == Cell(table, 0, 2),
                 "physical native selection clears prior AX focus override");
@@ -119,6 +145,7 @@ internal static class MacCsvGridAccessibilityProbe
         try
         {
             grid.SetNavigation(navigation with { Pending = true, Ready = null, RequestSerial = 2 });
+            Require(grid.AccessibilityTable == table, "stable Table survives child epoch replacement");
             Require(ObjC.Send(first, ObjC.Sel("accessibilityLabel")) == 0 &&
                 ObjC.SendRange(first, ObjC.Sel("accessibilityRowIndexRange")).Length == 0, "retained node unavailable after retirement");
             var current = Cell(table, 0, 0);
@@ -128,7 +155,24 @@ internal static class MacCsvGridAccessibilityProbe
             Require(commands.Count == 2, "pending reads and selection never dispatch source commands");
         }
         finally { ObjC.Send(first, ObjC.Sel("release")); }
-        Console.WriteLine("Mac CSV Grid AX selector probe passed; external AX/VoiceOver/geometry gates remain untested.");
+    }
+
+    /// <summary>Retaining a native root after disposal must not preserve a managed owner, parent or bounded children.</summary>
+    private static void CheckDetachedRoot()
+    {
+        var retiring = new MacCsvGrid(_ => { }, _ => { });
+        var root = retiring.AccessibilityTable;
+        ObjC.Send(root, ObjC.Sel("retain"));
+        try
+        {
+            retiring.Dispose();
+            Require(ObjC.Send(root, ObjC.Sel("isAccessibilityElement")) == 0 &&
+                ObjC.Send(root, ObjC.Sel("accessibilityRole")) == 0 &&
+                ObjC.Send(root, ObjC.Sel("accessibilityParent")) == 0 &&
+                ObjC.Send(root, ObjC.Sel("accessibilityRows")) == 0,
+                "retained detached proxy has no owner, parent, role or rows");
+        }
+        finally { ObjC.Send(root, ObjC.Sel("release")); }
     }
 
     private static nint Cell(nint table, int column, int row) => ObjC.Send(table, ObjC.Sel("accessibilityCellForColumn:row:"), column, row);
