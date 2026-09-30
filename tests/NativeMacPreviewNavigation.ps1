@@ -66,7 +66,10 @@ function Invoke-Bounded {
         $stderr = $stderrTask.GetAwaiter().GetResult()
         if ($timedOut) { throw "$Name exceeded $TimeoutMs ms." }
         if ($child.ExitCode -ne 0) {
-            throw "$Name exited $($child.ExitCode): $($stderr.Substring(0, [Math]::Min(1024, $stderr.Length)))"
+            # Swift may emit deprecation warnings before the actual compiler
+            # error. Keep the diagnostic tail bounded without hiding it.
+            $tail = $stderr.Substring([Math]::Max(0, $stderr.Length - 16 * 1024))
+            throw "$Name exited $($child.ExitCode): $tail"
         }
         return $stdout.Trim()
     }
