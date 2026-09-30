@@ -4,6 +4,12 @@ Status: implemented and locally measured, 2026-10-01; [independent source review
 
 Frozen source SHA-256 is `E71D8FAB61976A25114FAE2596E383BFE878C43A194B3F675A001A8CC9B07A56`; its only difference from the measured/reviewed hash is an XML ownership-comment clarification. Executable source is unchanged, so no additional benchmark/test run is claimed or required for that comment.
 
+The integrated [CI run 36749281937](https://github.com/kleedaisuki/mote/actions/runs/36749281937)
+at `2498285` subsequently passed all six strict jobs: Windows/macOS solution
+tests and single-binary Native AOT builds on win-x64, win-arm64, osx-x64 and
+osx-arm64. This verifies cross-platform compatibility of the change, **not**
+the managed benchmark timings on macOS/ARM or native GUI/RSS performance.
+
 ## Causal diagnosis
 
 The existing oversized-record certificate makes warm source/Grid windows bounded, but authoritative cold or post-edit `Full` must still validate all source. Its `SnapshotCursor` fetched each 8 Ki UTF-16 reader window through `TextSnapshot.GetText`. `RopeNode.Slice` allocates both a `StringBuilder` backing buffer and a final string. Thus reading 104,857,600 source units allocates about four bytes per unit even though no decoded giant cell or whole-file string is retained.
