@@ -43,8 +43,15 @@ public sealed class NativeIdleAnalysisTests
         document.ChangedRange += (_, change) => driver.Record(change);
         var delay = new ControlledDelay();
         var versions = new List<long>();
+        var published = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var idle = new NativeIdleFullAnalysis(driver, policy.Kind,
-            (_, result, _) => { lock (versions) versions.Add(result.Version); }, delay: delay.WaitAsync);
+            (_, result, _) =>
+            {
+                lock (versions) versions.Add(result.Version);
+                published.TrySetResult(result.Version);
+            },
+            onError: (_, error) => faulted.TrySetResult(error), delay: delay.WaitAsync);
         var old = document.Snapshot;
         Assert.Equal(IdleFullOffer.Scheduled, idle.Offer(old, Visible(old), new TextSpan(0, old.Length)));
         idle.Cancel();
@@ -53,7 +60,13 @@ public sealed class NativeIdleAnalysisTests
         Assert.Equal(IdleFullOffer.Scheduled, idle.Offer(next, Visible(next), new TextSpan(0, next.Length)));
         // The original scheduler owns the second offer; complete only its second timer.
         delay.Complete(1);
-        await SpinUntilAsync(() => { lock (versions) return versions.Contains(next.Version); });
+        var winner = await Task.WhenAny(published.Task, faulted.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        if (winner == faulted.Task)
+            throw new Xunit.Sdk.XunitException($"Idle Full worker failed: {await faulted.Task}");
+        Assert.True(winner == published.Task,
+            $"Expected one idle Full callback; full calls={policy.FullCalls}, " +
+            $"old timer={delay.Requests[0].Task.Status}, new timer={delay.Requests[1].Task.Status}.");
+        Assert.Equal(next.Version, await published.Task);
         lock (versions) Assert.Equal(new[] { next.Version }, versions);
         Assert.Equal(1, policy.FullCalls);
     }
@@ -140,14 +153,6 @@ public sealed class NativeIdleAnalysisTests
     private static DocumentAnalysis Visible(TextSnapshot snapshot) => new(snapshot.Version,
         new TextSpan(0, snapshot.Length), AnalysisCompleteness.Provisional,
         new SemanticNode("document", new TextSpan(0, snapshot.Length)), [], [], null);
-
-    /// <summary>Waits for a callback transition without a fixed parser/timer sleep.</summary>
-    private static async Task SpinUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
-        Assert.True(condition(), "Expected one idle Full callback.");
-    }
 
     /// <summary>Captures requested delays and completes them only when the test chooses.</summary>
     private sealed class ControlledDelay
