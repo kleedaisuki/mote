@@ -12,7 +12,7 @@ namespace Mote.Formats;
 /// Lists, references and malformed intermediates never inherit stale
 /// semantics from an unrelated block.
 /// </summary>
-internal sealed class MarkdownIncrementalSession : IFormatSession
+internal sealed class MarkdownIncrementalSession : IRenderFormatSession
 {
     private const int VisibleContext = 4096;
     private const int MaxVisibleParse = 512 * 1024;
@@ -32,6 +32,9 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
     private bool _flatComplete;
     private TextSpan? _uncertifiedLine;
     private bool _disposed;
+    // A local parse retains at most 64 Ki UTF-16 source units. Rebuild after
+    // sixteen reused edits so superseded syntax arenas cannot accumulate forever.
+    private int _syntaxReuseEdits;
 
     /// <inheritdoc />
     public DocumentAnalysis Analyze(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> changesSinceCommittedState,
@@ -54,11 +57,14 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         }
 
         List<Run> next;
+        var reusedSyntax = false;
+        var rebuiltSyntax = false;
         if (_complete && _version == snapshot.Version && changesSinceCommittedState.Count == 0)
             next = _runs;
-        else if (_complete && changesSinceCommittedState.Count == 1 &&
+        else if (_complete && _syntaxReuseEdits < 16 && changesSinceCommittedState.Count == 1 &&
             TryIncremental(snapshot, changesSinceCommittedState[0], cancellationToken, out next))
         {
+            reusedSyntax = true;
             // A local edit cannot affect reference definitions: the old and new
             // block are delimiter-free, isolated, and keep the same block kind.
         }
@@ -92,7 +98,10 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
             return partial;
         }
         else
+        {
             next = ParseAll(snapshot, cancellationToken);
+            rebuiltSyntax = true;
+        }
 
         var result = Project(snapshot.Version, snapshot.Length, next, request, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
@@ -103,7 +112,68 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         _complete = true;
         _flatComplete = false;
         _uncertifiedLine = null;
+        if (reusedSyntax) _syntaxReuseEdits++;
+        else if (rebuiltSyntax) _syntaxReuseEdits = 0;
         return result;
+    }
+
+    /// <inheritdoc />
+    public FlowRenderProjection Render(TextSnapshot snapshot, DocumentAnalysis analysis, AnalysisRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(analysis);
+        Validate(snapshot, request);
+        if (analysis.Version != snapshot.Version || _version != snapshot.Version)
+            throw new ArgumentException("Rendering requires the currently analyzed snapshot.", nameof(analysis));
+        cancellationToken.ThrowIfCancellationRequested();
+        var builder = new MarkdownRenderProjection(snapshot, analysis, cancellationToken);
+        var omitted = false;
+        if (_complete)
+        {
+            foreach (var run in _runs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var first = run.First;
+                var end = run.First + run.Count;
+                while (first < end)
+                {
+                    var middle = first + (end - first) / 2;
+                    if (run.Blocks[middle].End + run.Shift < request.VisibleRange.Start) first = middle + 1;
+                    else end = middle;
+                }
+                for (var i = first; i < run.First + run.Count; i++)
+                {
+                    var block = run.Blocks[i];
+                    if (block.Start + run.Shift > request.VisibleRange.End) break;
+                    if (builder.Full) { omitted = true; break; }
+                    builder.Add(block.Syntax, run.Shift);
+                }
+                if (omitted) break;
+            }
+        }
+        else
+        {
+            // Certified flat blocks have no cross-block reference dependencies.
+            // Provisional blocks are explicitly labeled and are not promoted to Complete.
+            foreach (var node in analysis.Root.Children)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (node.Span.End < request.VisibleRange.Start || node.Span.Start > request.VisibleRange.End) continue;
+                if (builder.Full) { omitted = true; break; }
+                if (node.Span.Length > MaxExactLineLength)
+                {
+                    builder.Excerpt(node.Span);
+                    continue;
+                }
+                var source = snapshot.GetText(node.Span.Start, node.Span.Length);
+                var parsed = Markdown.Parse(source, MarkdownPolicy.Pipeline);
+                foreach (var block in parsed) builder.Add(block, node.Span.Start);
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return builder.Finish(omitted);
     }
 
     /// <inheritdoc />
@@ -116,6 +186,7 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         _flatComplete = false;
         _uncertifiedLine = null;
         _disposed = true;
+        _syntaxReuseEdits = 0;
     }
 
     /// <summary>
@@ -521,7 +592,7 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         var node = MarkdownPolicy.Project(parsed[0], replacement, tokens, diagnostics, ct);
         if (node.Kind != block.Kind || node.Span.Start != 0 || node.Span.End != newLength)
             return false;
-        var updated = new Block(0, newLength, node.Kind, node, diagnostics.ToArray(), tokens.ToArray(), replacement);
+        var updated = new Block(0, newLength, node.Kind, node, diagnostics.ToArray(), tokens.ToArray(), replacement, parsed[0]);
         var delta = change.InsertText.Length - change.DeleteLength;
         for (var i = 0; i < _runs.Count; i++)
         {
@@ -570,7 +641,8 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
     {
         // Markdig's reference resolution and block parsing require a whole document.
         // The resulting source string is discarded immediately; the session retains
-        // only compact semantic blocks and their bounded simple-text fast-path keys.
+        // semantic blocks and private syntax. Syntax may reference the source arena;
+        // render projections copy only bounded text and retain neither AST nor arena.
         var text = snapshot.GetText();
         var document = Markdown.Parse(text, MarkdownPolicy.Pipeline);
         var blocks = new Block[document.Count];
@@ -587,7 +659,7 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
                 ? source : null;
             blocks[i] = new Block(start, start + length, node.Kind, ShiftNode(node, -start),
                 diagnostics.Select(d => d with { Span = ShiftSpan(d.Span, -start) }).ToArray(),
-                tokens.Select(t => t with { Span = ShiftSpan(t.Span, -start) }).ToArray(), simple);
+                tokens.Select(t => t with { Span = ShiftSpan(t.Span, -start) }).ToArray(), simple, document[i]);
         }
         return blocks.Length == 0 ? [] : [new Run(blocks, 0, blocks.Length, 0)];
     }
@@ -738,7 +810,7 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
 
     /// <summary>A source-spanned top-level block stored in base coordinates.</summary>
     private sealed record Block(int Start, int End, string Kind, SemanticNode Node,
-        Diagnostic[] Diagnostics, SemanticToken[] Tokens, string? SimpleText);
+        Diagnostic[] Diagnostics, SemanticToken[] Tokens, string? SimpleText, Markdig.Syntax.Block Syntax);
 
     /// <summary>A slice of immutable blocks sharing one lazy UTF-16 displacement.</summary>
     private sealed record Run(Block[] Blocks, int First, int Count, int Shift);

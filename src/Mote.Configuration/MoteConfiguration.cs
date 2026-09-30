@@ -1,5 +1,16 @@
 namespace Mote.Configuration;
 
+/// <summary>User preference applied after a document policy's presentation convention.</summary>
+public enum PreviewLayoutPreference
+{
+    /// <summary>Use the document policy's default layout.</summary>
+    Auto,
+    /// <summary>Show source at full width without a preview pane.</summary>
+    SourceOnly,
+    /// <summary>Show source and preview side by side, including for plain text.</summary>
+    Split
+}
+
 /// <summary>An issue in a local configuration file or its path resolution.</summary>
 public sealed record ConfigDiagnostic(string Code, string Message);
 
@@ -29,6 +40,9 @@ public sealed record MoteConfiguration
 
     /// <summary>Whether local tracing is enabled by the configuration file.</summary>
     public required bool TraceEnabled { get; init; }
+
+    /// <summary>Preview layout override; Auto preserves policy-driven conventions.</summary>
+    public PreviewLayoutPreference PreviewLayout { get; init; } = PreviewLayoutPreference.Auto;
 
     /// <summary>Non-fatal configuration errors and unknown or invalid options.</summary>
     public required IReadOnlyList<ConfigDiagnostic> Diagnostics { get; init; }

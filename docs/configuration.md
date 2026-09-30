@@ -51,11 +51,36 @@ composition root, is an explicit environment opt-in to tracing and should not
 silently override the selected trace directory. There is no runtime plugin
 loading or reflection-based config binding.
 
+## Preview layout
+
+The `[editor]` table accepts `preview = "auto"`, `"source"`, or `"split"`.
+The default is `"auto"`: the document policy supplies the layout convention,
+then an explicit preference overrides it. Ordinary plain text defaults to
+full-width source; Markdown, TOML, JSON, YAML, and CSV default to source plus
+preview. Plain text still supports a preview when `"split"` is selected.
+The legacy Page profile preserves its existing split layout under `"auto"`.
+`"source"` suppresses the preview for every format without changing parsing,
+diagnostics, source editing, or Save semantics. A policy default does not assert
+that analysis or rendering is already complete.
+
+```toml
+[editor]
+preview = "auto"                 # policy convention; "source" or "split" overrides it
+```
+
+Strings are case-sensitive. Invalid values or scalar types report `CONFIG_VALUE`
+and retain `"auto"`; a malformed or duplicate-key file retains all defaults as
+described below. The immutable `MoteConfiguration.PreviewLayout` property is
+additive and defaults to `PreviewLayoutPreference.Auto` for existing callers.
+`DocumentPresentation.ForPolicy` centralizes built-in presentation conventions
+in Formats, without UI dependencies, parsing, runtime discovery, or changes to
+the existing `IDocumentPolicy` contract.
+
 ## Failure behavior and implementation contract
 
 `MoteConfigLoader.Load()` returns an immutable `MoteConfiguration` containing
 absolute `HomeDirectory`, `ConfigPath`, `CacheDirectory`, `DataDirectory`, and
-`TraceDirectory` paths, `ThemeId`, `TraceEnabled`, and non-fatal `Diagnostics`.
+`TraceDirectory` paths, `ThemeId`, `TraceEnabled`, `PreviewLayout`, and non-fatal `Diagnostics`.
 Callers can supply `MoteConfigLoadOptions` for a portable user home or selected
 root; `UseEnvironmentOverride = false` is useful for deterministic tests.
 

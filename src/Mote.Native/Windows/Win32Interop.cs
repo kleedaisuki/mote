@@ -64,6 +64,7 @@ internal static class Win32
     internal const int WM_SETFONT = 0x0030;
     internal const int EM_GETFIRSTVISIBLELINE = 0x00CE;
     internal const int EM_LINESCROLL = 0x00B6;
+    internal const int EM_SETREADONLY = 0x00CF;
     internal const int WM_USER = 0x0400;
     internal const int WM_APP = 0x8000;
     internal const int EM_SETBKGNDCOLOR = WM_USER + 67;
@@ -74,6 +75,9 @@ internal static class Win32
     internal const int EM_EXSETSEL = WM_USER + 55;
     internal const int EM_GETTEXTEX = WM_USER + 94;
     internal const int EM_SETTEXTEX = WM_USER + 97;
+    internal const int EM_AUTOURLDETECT = WM_USER + 91;
+    internal const int EM_GETSCROLLPOS = WM_USER + 221;
+    internal const int EM_SETSCROLLPOS = WM_USER + 222;
     internal const int EM_SETEVENTMASK = WM_USER + 69;
     internal const int EM_GETEVENTMASK = WM_USER + 59;
     internal const int EN_CHANGE = 0x0300;
@@ -127,6 +131,14 @@ internal static class Win32
         internal int X;
         internal int Y;
         internal uint Private;
+    }
+
+    /// <summary>RichEdit pixel-space scroll position, retained across layout replacements.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Point
+    {
+        internal int X;
+        internal int Y;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -297,6 +309,9 @@ internal static class Win32
     internal static extern nint SendMessageW(nint window, int message, nuint wParam, nint lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern nint SendMessageW(nint window, int message, nuint wParam, string lParam);
+    /// <summary>Preserves exact RichEdit pixel scroll across same-text presentation replacement.</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern nint SendMessageW(nint window, int message, nuint wParam, ref Point lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern nint SendMessageW(nint window, int message, nuint wParam, ref CharacterRange lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

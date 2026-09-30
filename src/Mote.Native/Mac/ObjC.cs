@@ -96,11 +96,23 @@ internal static class ObjC
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, double value1, double value2);
 
+    /// <summary>Sends a CGFloat position followed by an NSInteger divider index.</summary>
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint Send(nint receiver, nint selector, double position, nint index);
+
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, double a, double b, double c, double d);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, nint arg, Range range);
+
+    /// <summary>Sends an attributed-string mutation with two objects and a UTF-16 range.</summary>
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint Send(nint receiver, nint selector, nint key, nint value, Range range);
+
+    /// <summary>Sends a clip-view scroll position using the CGFloat aggregate ABI.</summary>
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    internal static extern nint Send(nint receiver, nint selector, Point point);
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     internal static extern nint Send(nint receiver, nint selector, nint arg, Range range1, Range range2);

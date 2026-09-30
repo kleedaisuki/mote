@@ -40,6 +40,12 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private nint _window;
     private nint _editor;
     private nint _preview;
+    private nint _split;
+    private nint _editorScroll;
+    private nint _previewScroll;
+    private bool _previewShown = true;
+    private bool _installingPreview;
+    private double _splitFraction = 730d / 1120d;
     private nint _status;
     private nint _statusBackground;
     private int _statusBackgroundPaintCount;
@@ -83,7 +89,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private bool _probeCaptureCanvasErrors;
     private string? _probeCanvasError;
     private string? _previewText;
-    private NativeDocumentStamp? _appliedPreviewStamp;
+    private NativePresentationId? _appliedPreviewIdentity;
     private bool? _lastAppearanceDark;
     private bool _appearanceNotificationsReady;
 
@@ -334,11 +340,15 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         if (!AnalysisMatchesCurrentDocument(view)) return;
         _pendingAnalysis = view;
-        if (!_experimentalCanvas && IsTextComposing)
+        if (IsTextComposing)
         {
             _deferredAnalysisText = _visibleText;
+            _compositionObserved = true;
+            ScheduleCompositionCheck();
             return;
         }
+        if (_installingPreview) return;
+        _deferredAnalysisText = null;
         ApplyAnalysis(view, updateFonts: true);
     }
 
@@ -374,6 +384,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         if (_experimentalCanvas)
         {
             SetPreview(view, updateFonts);
+            if (!ReferenceEquals(_pendingAnalysis, view)) return;
             SetStatus(string.IsNullOrEmpty(view.DiagnosticsSummary)
                 ? view.Status : $"{view.Status}  ·  {view.DiagnosticsSummary}");
             return;
@@ -403,6 +414,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 new ObjC.Range((nuint)start, (nuint)spanLength));
         }
         SetPreview(view, updateFonts);
+        if (!ReferenceEquals(_pendingAnalysis, view)) return;
         SetStatus(string.IsNullOrEmpty(view.DiagnosticsSummary)
             ? view.Status : $"{view.Status}  ·  {view.DiagnosticsSummary}");
     }
@@ -429,6 +441,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             ScheduleCompositionCheck();
             throw;
         }
+        var previewSelection = ObjC.SendRange(_preview, ObjC.Sel("selectedRange"));
+        var previewClip = ObjC.Send(_previewScroll, ObjC.Sel("contentView"));
+        var previewOrigin = MacOnScreenCanvasNative.GetRect(previewClip, ObjC.Sel("bounds")).Origin;
         _theme = theme;
         ApplyTheme(theme, updateFonts);
         // Cached source-mapped analysis is recolored, never recomputed.
@@ -436,6 +451,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             ApplyAnalysis(analysis, updateFonts);
         else
             RestyleBaseText();
+        ObjC.Send(_preview, ObjC.Sel("setSelectedRange:"), previewSelection);
+        ObjC.Send(previewClip, ObjC.Sel("scrollToPoint:"), previewOrigin);
+        ObjC.Send(_previewScroll, ObjC.Sel("reflectScrolledClipView:"), previewClip);
     }
 
     /// <inheritdoc />
@@ -668,6 +686,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         if (!_compositionObserved) return;
         _compositionObserved = false;
         CompositionSettled?.Invoke();
+        ReplayDeferredAnalysis();
     }
 
     private static string? PromptText(string title, string explanation, string initialValue)
@@ -836,6 +855,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <summary>Native read-only preview view handle; only the diagnostic reads it.</summary>
     internal nint ProbePreviewView => _preview;
+
+    /// <summary>Installed, readback-verified preview identity for target rendering acceptance.</summary>
+    internal NativePresentationId? ProbePreviewIdentity => _appliedPreviewIdentity;
+
+    /// <summary>Native split/source/preview handles, read only by the bounded target probe.</summary>
+    internal (nint Split, nint Source, nint Preview) ProbeLayoutViews =>
+        (_split, _editorScroll, _previewScroll);
 
     /// <summary>Decorative bottom surface for the target-host pixel probe.</summary>
     internal nint ProbeStatusBackgroundView => _statusBackground;
@@ -1119,6 +1145,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             ObjC.Send(_editor, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("Mote editor"));
         }
         var previewScroll = CreateScrollView(new ObjC.Rect(730, 0, 390, 730), false, out _preview);
+        _split = split;
+        _editorScroll = editorScroll;
+        _previewScroll = previewScroll;
         // A constant label distinguishes rendered output from the source AX
         // editor without exposing document contents or changing focus/input.
         ObjC.Send(_preview, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("Mote preview"));
@@ -1251,7 +1280,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private void ClearAnalysisPreview()
     {
         _pendingAnalysis = null;
-        _appliedPreviewStamp = null;
+        _appliedPreviewIdentity = null;
         _deferredAnalysisText = null;
         _previewText = string.Empty;
         if (_preview != 0)
@@ -1260,26 +1289,66 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     private void SetPreview(NativeAnalysisView view, bool updateFonts = true)
     {
+        if (_installingPreview) return;
+        _installingPreview = true;
+        try { ApplyPreviewCore(view, updateFonts); }
+        finally
+        {
+            _installingPreview = false;
+            if (_pendingAnalysis is { } newest && !ReferenceEquals(newest, view))
+                Post(() =>
+                {
+                    if (ReferenceEquals(_pendingAnalysis, newest) &&
+                        AnalysisMatchesCurrentDocument(newest)) SetAnalysis(newest);
+                });
+        }
+    }
+
+    /// <summary>Installs one model, abandoning it if layout publishes a newer request.</summary>
+    private void ApplyPreviewCore(NativeAnalysisView view, bool updateFonts)
+    {
         // The event must identify exactly the analysis painted on screen, not
         // a newer pending analysis that may be deferred during source preedit.
-        _appliedPreviewStamp = null;
+        _appliedPreviewIdentity = null;
+        SetPreviewVisibility(view.ShowPreview);
+        // Split geometry can synchronously publish a new canvas viewport and
+        // reenter SetAnalysis. The newest request, including its map, wins.
+        if (!ReferenceEquals(_pendingAnalysis, view) ||
+            !AnalysisMatchesCurrentDocument(view)) return;
+        if (view.Flow is { } flow)
+        {
+            SetFlowPreview(view, flow);
+            return;
+        }
         var textChanged = !string.Equals(_previewText, view.PreviewText,
             StringComparison.Ordinal);
+        var selection = ObjC.SendRange(_preview, ObjC.Sel("selectedRange"));
+        var clip = ObjC.Send(_previewScroll, ObjC.Sel("contentView"));
+        var origin = MacOnScreenCanvasNative.GetRect(clip, ObjC.Sel("bounds")).Origin;
         if (textChanged)
         {
             ObjC.Send(_preview, ObjC.Sel("setString:"), ObjC.String(view.PreviewText));
             _previewText = view.PreviewText;
         }
-        updateFonts |= textChanged;
+        // A Flow-null compatibility view must not inherit typed underline or
+        // paragraph attributes even when its characters happen to match.
+        updateFonts = true;
         var length = view.PreviewText.Length;
         if (length == 0)
         {
-            _appliedPreviewStamp = view.Stamp;
+            InstallPreviewIdentity(view);
             return;
         }
         var palette = _theme?.Palette;
         var foreground = Color(palette?.PreviewForeground ?? new ThemeColor(225, 227, 231));
         var whole = new ObjC.Range(0, (nuint)length);
+        var defaults = ObjC.New("NSMutableDictionary");
+        try
+        {
+            ObjC.Send(ObjC.Send(_preview, ObjC.Sel("textStorage")),
+                ObjC.Sel("setAttributes:range:"), defaults, whole);
+        }
+        finally { ObjC.Send(defaults, ObjC.Sel("release")); }
         ObjC.Send(_preview, ObjC.Sel("setTextColor:range:"), foreground, whole);
         if (updateFonts)
         {
@@ -1319,7 +1388,68 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                         _theme?.Typography.UiFontSize ?? 12d));
             if (font != 0) ObjC.Send(_preview, ObjC.Sel("setFont:range:"), font, range);
         }
-        _appliedPreviewStamp = view.Stamp;
+        InstallPreviewIdentity(view);
+        if (!textChanged)
+        {
+            ObjC.Send(_preview, ObjC.Sel("setSelectedRange:"), selection);
+            ObjC.Send(clip, ObjC.Sel("scrollToPoint:"), origin);
+            ObjC.Send(_previewScroll, ObjC.Sel("reflectScrolledClipView:"), clip);
+        }
+    }
+
+    /// <summary>Installs typed attributes without replacing unchanged selectable characters.</summary>
+    private void SetFlowPreview(NativeAnalysisView view, Mote.Formats.FlowRenderProjection flow)
+    {
+        if (flow.Version != view.Stamp.Version ||
+            !string.Equals(flow.Text, view.PreviewText, StringComparison.Ordinal)) return;
+        var changed = !string.Equals(_previewText, flow.Text, StringComparison.Ordinal);
+        var selection = ObjC.SendRange(_preview, ObjC.Sel("selectedRange"));
+        var clip = ObjC.Send(_previewScroll, ObjC.Sel("contentView"));
+        var origin = MacOnScreenCanvasNative.GetRect(clip, ObjC.Sel("bounds")).Origin;
+        if (changed) ObjC.Send(_preview, ObjC.Sel("setString:"), ObjC.String(flow.Text));
+        MacFlowAttributes.Apply(ObjC.Send(_preview, ObjC.Sel("textStorage")), flow, _theme);
+        _previewText = flow.Text;
+        if (!changed)
+        {
+            ObjC.Send(_preview, ObjC.Sel("setSelectedRange:"), selection);
+            ObjC.Send(clip, ObjC.Sel("scrollToPoint:"), origin);
+            ObjC.Send(_previewScroll, ObjC.Sel("reflectScrolledClipView:"), clip);
+        }
+        InstallPreviewIdentity(view);
+    }
+
+    /// <summary>Publishes identity only after native character readback matches the installed map.</summary>
+    private void InstallPreviewIdentity(NativeAnalysisView view)
+    {
+        var readback = ObjC.ManagedString(ObjC.Send(_preview, ObjC.Sel("string")));
+        if (string.Equals(readback, view.PreviewText, StringComparison.Ordinal))
+            _appliedPreviewIdentity = view.Identity;
+    }
+
+    /// <summary>Removes the redundant pane while retaining its control and user split proportion.</summary>
+    private void SetPreviewVisibility(bool show)
+    {
+        if (_split == 0 || show == _previewShown) return;
+        if (!show)
+        {
+            var width = MacOnScreenCanvasNative.GetRect(_split, ObjC.Sel("bounds")).Size.Width;
+            var sourceWidth = MacOnScreenCanvasNative.GetRect(_editorScroll, ObjC.Sel("frame")).Size.Width;
+            if (width > 0) _splitFraction = Math.Clamp(sourceWidth / width, 0.1, 0.9);
+            _previewShown = false;
+            FocusSource();
+            ObjC.Send(_previewScroll, ObjC.Sel("removeFromSuperview"));
+        }
+        else
+        {
+            _previewShown = true;
+            ObjC.Send(_split, ObjC.Sel("addSubview:"), _previewScroll);
+        }
+        ObjC.Send(_split, ObjC.Sel("adjustSubviews"));
+        if (show && _previewShown)
+        {
+            var width = MacOnScreenCanvasNative.GetRect(_split, ObjC.Sel("bounds")).Size.Width;
+            ObjC.Send(_split, ObjC.Sel("setPosition:ofDividerAtIndex:"), width * _splitFraction, (nint)0);
+        }
     }
 
     private ThemeColor PreviewColor(string kind)
@@ -1370,11 +1500,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     private void ReplayDeferredAnalysis()
     {
-        if (_deferredAnalysisText is null || _editor == 0 ||
-            ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0) return;
+        if (_deferredAnalysisText is null || _editor == 0 || IsTextComposing) return;
         if (string.Equals(_deferredAnalysisText, _visibleText, StringComparison.Ordinal) &&
-            _pendingAnalysis is { } analysis)
+            _pendingAnalysis is { } analysis && AnalysisMatchesCurrentDocument(analysis))
+        {
+            _deferredAnalysisText = null;
             SetAnalysis(analysis);
+        }
         else
             _deferredAnalysisText = null;
     }
@@ -1468,18 +1600,19 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         return PreviewNavigationClass;
     }
 
-    /// <summary>Emits a displayed UTF-16 preview position with its painted stamp.</summary>
+    /// <summary>Emits a displayed UTF-16 preview position with its installed identity.</summary>
     private void ActivatePreview(nint view)
     {
-        if (view != _preview || _appliedPreviewStamp is not { } stamp ||
+        if (view != _preview || !_previewShown || _appliedPreviewIdentity is not { } identity ||
             _previewText is not { Length: > 0 } text ||
-            _pendingAnalysis?.Stamp != stamp ||
+            _pendingAnalysis?.Identity != identity ||
             !AnalysisMatchesCurrentDocument(_pendingAnalysis)) return;
         var selection = ObjC.SendRange(view, ObjC.Sel("selectedRange"));
         // NSTextView's mouseDown: tracks a drag before returning. A selected
         // preview range is copy/selection, not an activation gesture.
         if (selection.Length != 0 || selection.Location >= (nuint)text.Length) return;
-        PreviewActivated?.Invoke(new NativePreviewActivation(stamp, (int)selection.Location));
+        PreviewActivated?.Invoke(new NativePreviewActivation(identity.Document,
+            (int)selection.Location, identity.Sequence));
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

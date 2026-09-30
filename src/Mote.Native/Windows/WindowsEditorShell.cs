@@ -73,7 +73,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private NativeTextProjection _previewProjection = new("", NativeLineEndingMode.CrLf);
     private NativeDocumentView? _document;
     private NativeAnalysisView? _analysis;
-    private NativeDocumentStamp? _previewStamp;
+    private NativePresentationId? _previewIdentity;
+    private bool _showPreview = true;
     private (int X, int Y)? _previewPress;
     private bool _analysisPresentationDeferred;
     private NativeDocumentStamp? _canvasStamp;
@@ -307,7 +308,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         }
         if (_canvasIsland is null) _pendingCanvasBinding = binding;
         else _canvasIsland.Bind(binding);
-        if (_canvasStamp != stamp) _analysis = null;
+        if (_canvasStamp != stamp) { _analysis = null; _previewIdentity = null; }
         if (_canvasStamp != stamp) _analysisPresentationDeferred = false;
         _canvasStamp = stamp;
     }
@@ -327,6 +328,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is not enabled.");
         _canvasIsland?.SetInputUnavailable(snapshot, frame, reason);
         _canvasStamp = null;
+        _previewIdentity = null;
         _analysis = null;
         _analysisPresentationDeferred = false;
         UpdateStatus(reason);
@@ -442,22 +444,16 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         _analysisPresentationDeferred = false;
         if (_window == 0) return;
         if (!_experimentalCanvas) ScheduleStyle();
-        _settingText = true;
-        _previewStamp = null;
-        try
+        if (_showPreview != view.ShowPreview)
         {
-            _previewProjection = new NativeTextProjection(view.PreviewText, NativeLineEndingMode.CrLf);
-            _previewOffsets = new RichEditOffsetMap(_previewProjection.Display);
-            var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
-            Win32.SendMessageW(_preview, Win32.EM_SETTEXTEX, ref text, _previewProjection.Display);
+            _showPreview = view.ShowPreview;
+            Win32.ShowWindow(_preview, _showPreview ? 5 : 0);
+            ResizeControls();
         }
-        finally
-        {
-            _settingText = false;
-        }
-        ApplyPreviewColors(view);
-        // This stamp describes bytes already installed in RichEdit, not a queued analysis.
-        _previewStamp = view.Stamp;
+        // Layout may synchronously publish a newer analysis through Canvas resize.
+        // Never overwrite that nested install with this superseded presentation.
+        if (!ReferenceEquals(_analysis, view)) return;
+        InstallPreview(view);
         UpdateStatus(view.Status.Length == 0 ? view.DiagnosticsSummary :
             view.Status + "  " + view.DiagnosticsSummary);
     }
@@ -523,7 +519,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             var activeStamp = _experimentalCanvas ? _canvasStamp : _document?.Stamp;
             if (!_analysisPresentationDeferred && _analysis is not null &&
                 activeStamp == _analysis.Stamp)
-                ApplyPreviewColors(_analysis);
+                InstallPreview(_analysis);
             else SetAllControlColor(_preview, theme.Palette.PreviewForeground);
         }
         catch
@@ -920,6 +916,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             0, 0, 100, 24, _window, (nint)StatusId, instance, 0);
         if (_editor == 0 || _preview == 0 || _status == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create native editor controls.");
+        // Native URL detection must never introduce actions absent from the policy map.
+        Win32.SendMessageW(_preview, Win32.EM_AUTOURLDETECT, 0, 0);
         _previewAccessibleName = WindowsPreviewAccessibleName.TryCreate(_preview);
         if (_experimentalCanvas)
         {
@@ -968,7 +966,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         var height = Math.Max(0, rect.Bottom - rect.Top);
         const int statusHeight = 25;
         var bodyHeight = Math.Max(0, height - statusHeight);
-        var editorWidth = Math.Max(0, width * 2 / 3);
+        var editorWidth = _showPreview ? Math.Max(0, width * 2 / 3) : width;
         if (_experimentalCanvas) _canvasIsland?.Resize(editorWidth, bodyHeight);
         else Win32.MoveWindow(_editor, 0, 0, editorWidth, bodyHeight, true);
         Win32.MoveWindow(_preview, editorWidth, 0, width - editorWidth, bodyHeight, true);
@@ -1166,12 +1164,12 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <summary>Publishes a preview-relative UTF-16 offset only for the installed version.</summary>
     private void ActivatePreview()
     {
-        if (_preview == 0 || _previewStamp is not { } stamp ||
+        if (!_showPreview || _preview == 0 || _previewIdentity is not { } identity ||
             _previewProjection.Source.Length == 0) return;
         var selection = GetSelection(_preview);
         if (selection.Min != selection.Max) return;
         var offset = _previewProjection.ToSourceBoundary(selection.Min);
-        try { PreviewActivated?.Invoke(new NativePreviewActivation(stamp, offset)); }
+        try { PreviewActivated?.Invoke(new NativePreviewActivation(identity.Document, offset, identity.Sequence)); }
         catch (Exception ex) { ReportCallbackFailure("Preview navigation", ex); }
     }
 
@@ -1211,11 +1209,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_window != 0) Win32.KillTimer(_window, StyleTimerId);
     }
 
-    private string ReadEditorText()
+    private string ReadEditorText() => ReadControlText(_editor);
+
+    /// <summary>Reads RichEdit UTF-16 text with the same CRLF contract used by origin maps.</summary>
+    private static string ReadControlText(nint control)
     {
         // WM_GETTEXTLENGTH may count internal paragraph delimiters as one code unit.
         // Doubled capacity safely accommodates their CRLF projection.
-        var internalLength = (int)Win32.SendMessageW(_editor, Win32.WM_GETTEXTLENGTH, 0, 0);
+        var internalLength = (int)Win32.SendMessageW(control, Win32.WM_GETTEXTLENGTH, 0, 0);
         var capacity = checked((internalLength + 1) * 2 + 16);
         var buffer = Marshal.AllocHGlobal(checked(capacity * sizeof(char)));
         try
@@ -1226,7 +1227,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 Flags = Win32.GT_USECRLF,
                 CodePage = Win32.CP_UNICODE
             };
-            var count = (int)Win32.SendMessageW(_editor, Win32.EM_GETTEXTEX, ref request, buffer);
+            var count = (int)Win32.SendMessageW(control, Win32.EM_GETTEXTEX, ref request, buffer);
             return Marshal.PtrToStringUni(buffer, count) ?? "";
         }
         finally
@@ -1268,6 +1269,60 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             Win32.SendMessageW(_editor, Win32.WM_SETREDRAW, 1, 0);
             Win32.InvalidateRect(_editor, 0, false);
         }
+    }
+
+    /// <summary>Installs text, layout and origin identity atomically after exact native readback.</summary>
+    private void InstallPreview(NativeAnalysisView view)
+    {
+        _previewIdentity = null;
+        if (_preview == 0) return;
+        var flow = view.Flow;
+        if (flow is not null && (flow.Version != view.Stamp.Version || !WindowsFlowRtf.IsValid(flow)))
+            return;
+        var projection = new NativeTextProjection(flow?.Text ?? view.PreviewText, NativeLineEndingMode.CrLf);
+        var unchanged = projection.Display == _previewProjection.Display;
+        var saved = unchanged ? GetSelection(_preview) : default;
+        var scroll = new Win32.Point();
+        if (unchanged) Win32.SendMessageW(_preview, Win32.EM_GETSCROLLPOS, 0, ref scroll);
+        _settingText = true;
+        Win32.SendMessageW(_preview, Win32.WM_SETREDRAW, 0, 0);
+        try
+        {
+            _previewProjection = projection;
+            _previewOffsets = new RichEditOffsetMap(projection.Display);
+            var payload = flow is null ? projection.Display : WindowsFlowRtf.Build(flow, _theme);
+            ImportPreviewPayload(payload, generatedRtf: flow is not null);
+            if (!string.Equals(ReadControlText(_preview), projection.Display, StringComparison.Ordinal))
+                return; // Native import failure never authorizes an old or guessed origin map.
+            if (flow is null) ApplyPreviewColors(view);
+            if (unchanged)
+            {
+                SetSelection(_preview, saved.Min, saved.Max);
+                Win32.SendMessageW(_preview, Win32.EM_SETSCROLLPOS, 0, ref scroll);
+            }
+            _previewIdentity = view.Identity;
+        }
+        finally
+        {
+            _settingText = false;
+            Win32.SendMessageW(_preview, Win32.WM_SETREDRAW, 1, 0);
+            Win32.InvalidateRect(_preview, 0, false);
+        }
+    }
+
+    /// <summary>Temporarily allows programmatic import without yielding user-input dispatch.</summary>
+    private void ImportPreviewPayload(string payload, bool generatedRtf = false)
+    {
+        // RichEdit rejects Unicode EM_SETTEXTEX on ES_READONLY controls. This
+        // synchronous import never pumps input; restore read-only even on failure.
+        var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
+        Win32.SendMessageW(_preview, Win32.EM_SETREADONLY, 0, 0);
+        try
+        {
+            if (generatedRtf) Win32.SendMessageW(_preview, Win32.EM_SETTEXTEX, ref text, payload);
+            else Win32.SetWindowTextW(_preview, payload); // Literal text, even a leading RTF header.
+        }
+        finally { Win32.SendMessageW(_preview, Win32.EM_SETREADONLY, 1, 0); }
     }
 
     private void ApplyPreviewColors(NativeAnalysisView view)
@@ -1315,7 +1370,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <summary>Removes the previous page's preview without touching editor text or focus.</summary>
     private void ClearPreview()
     {
-        _previewStamp = null;
+        _previewIdentity = null;
         _previewPress = null;
         _previewProjection = new NativeTextProjection("", NativeLineEndingMode.CrLf);
         _previewOffsets = new RichEditOffsetMap("");
@@ -1323,8 +1378,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         _settingText = true;
         try
         {
-            var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
-            Win32.SendMessageW(_preview, Win32.EM_SETTEXTEX, ref text, "");
+            ImportPreviewPayload("");
         }
         finally { _settingText = false; }
     }

@@ -18,6 +18,12 @@ internal enum NativeLineEndingMode
 /// </summary>
 internal readonly record struct NativeDocumentStamp(long Generation, long Version);
 
+/// <summary>
+/// Identifies the exact installed presentation, including same-version viewport,
+/// policy and theme changes. A document stamp alone cannot identify a render map.
+/// </summary>
+internal readonly record struct NativePresentationId(NativeDocumentStamp Document, long Sequence);
+
 /// <summary>One bounded, editable projection of the canonical engine document.</summary>
 internal sealed record NativeDocumentView(
     string Title,
@@ -44,7 +50,11 @@ internal sealed record NativePreviewSpan(
 /// controller resolves it only against the exact presented analysis stamp.
 /// </summary>
 internal readonly record struct NativePreviewActivation(
-    NativeDocumentStamp Stamp, int PreviewOffset);
+    NativeDocumentStamp Stamp, int PreviewOffset, long PresentationSequence = 0)
+{
+    /// <summary>Identity retained by the native control after a successful install.</summary>
+    public NativePresentationId Identity => new(Stamp, PresentationSequence);
+}
 
 /// <summary>Version-matched semantic presentation for the current native text page.</summary>
 internal sealed record NativeAnalysisView(
@@ -53,7 +63,14 @@ internal sealed record NativeAnalysisView(
     string PreviewText,
     string Status,
     NativeDocumentStamp Stamp,
-    IReadOnlyList<NativePreviewSpan>? PreviewSpans = null);
+    IReadOnlyList<NativePreviewSpan>? PreviewSpans = null,
+    long PresentationSequence = 0,
+    FlowRenderProjection? Flow = null,
+    bool ShowPreview = true)
+{
+    /// <summary>Identity of this immutable text, style and source-map bundle.</summary>
+    public NativePresentationId Identity => new(Stamp, PresentationSequence);
+}
 
 /// <summary>Cancelable native window close notification.</summary>
 internal sealed class NativeClosingEventArgs : EventArgs

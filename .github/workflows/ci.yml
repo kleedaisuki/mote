@@ -849,6 +849,18 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+      # This isolated AppKit probe installs a real attributed Flow view without
+      # changing input sources, user files, configuration, clipboard, or TCC.
+      # Keep it diagnostic until both published Mach-O architectures are observed.
+      - name: Diagnose native macOS Flow rendering (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacFlowRendering.ps1 `
+            -Executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
       - name: Upload external macOS workflow report
         if: always() && startsWith(matrix.rid, 'osx-')
         uses: actions/upload-artifact@v4

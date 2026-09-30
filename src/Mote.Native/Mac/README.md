@@ -144,3 +144,11 @@ interactive runner/manual test.
 - [Range fonts](https://developer.apple.com/documentation/appkit/nstext/setfont%28_%3Arange%3A%29)
 - [Plain-text paste](https://developer.apple.com/documentation/appkit/nstextview/pasteasplaintext%28_%3A%29)
 - [Putting an NSTextView in an NSScrollView](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/TextUILayer/Tasks/TextInScrollView.html)
+
+## Typed Flow preview
+
+The native read-only preview now consumes bounded format-owned Flow runs and
+paragraphs using NSTextStorage attributes, with installed presentation identity
+and policy-driven source-only/split layout. See [AppKit Flow rendering](../../../docs/mac-flow-rendering.md)
+for contracts, limits and the published target probe. Host compilation is not
+macOS rendering, Copy, VoiceOver or IME acceptance.

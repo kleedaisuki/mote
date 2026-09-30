@@ -58,6 +58,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     private NativeAnalysisView? _visibleSessionAnalysis;
     /// <summary>The exact analysis currently offered to the native preview.</summary>
     private NativeAnalysisView? _presentedPreview;
+    /// <summary>Monotonic identity for same-version viewport, policy and theme maps.</summary>
+    private long _presentationSequence;
     private NativeTextProjection? _projection;
     private CanvasFrame? _lastCanvasFrame;
     private CancellationTokenSource? _analysisCancellation;
@@ -246,6 +248,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         {
             _shell.SetTheme(next);
             _theme = next;
+            if (_presentedPreview is { } presented) PresentAnalysis(presented);
             _themeUnavailable = false;
             UpdateThemeNotice();
         }
@@ -839,7 +842,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         var snapshot = _document.Snapshot;
         var stamp = new NativeDocumentStamp(_canvasGeneration, snapshot.Version);
         if (activation.Stamp != stamp || _presentedPreview is not { } presented ||
-            presented.Stamp != stamp) return;
+            presented.Stamp != stamp || activation.Identity != presented.Identity ||
+            !presented.ShowPreview) return;
         var source = NativePreviewNavigation.SourceStart(presented,
             activation.PreviewOffset, snapshot.Length);
         if (source is not { } offset ||
@@ -1293,6 +1297,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     private void ScheduleAnalysis(TelemetryMark editMark = default)
     {
+        var hadPreview = _presentedPreview is not null;
         CancelAnalysis();
         _idleFullAnalysis?.Cancel();
         _visibleSessionAnalysis = null;
@@ -1304,6 +1309,15 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         var policy = _policy;
         var pageStart = _pageStart;
         var pageLength = _pageLength;
+        if (!hadPreview)
+        {
+            PresentAnalysis(new NativeAnalysisView([], "Analysis pending; global diagnostics unknown.",
+                "Preparing preview…", $"{policy.DisplayName} · analyzing",
+                new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
+            // Pane layout can synchronously resize the source canvas and enqueue
+            // a more accurate viewport request. Do not launch this superseded one.
+            if (serial != _analysisSerial || cancellation.IsCancellationRequested) return;
+        }
         if (_sessionDriver is { } driver)
         {
             ScheduleSessionAnalysis(driver, document, snapshot, policy,
@@ -1393,8 +1407,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 await Task.Delay(delay, cancellation.Token).ConfigureAwait(false);
                 using var parse = MoteTelemetry.Start(TelemetryOperation.AnalysisParse,
                     Dimensions(snapshot));
-                var result = await driver.AnalyzeAsync(snapshot, request,
+                var presentation = await driver.AnalyzePresentationAsync(snapshot, request,
                     cancellation.Token).ConfigureAwait(false);
+                var result = presentation.Analysis;
                 cancellation.Token.ThrowIfCancellationRequested();
                 Post(() =>
                 {
@@ -1411,11 +1426,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     var tokens = ProjectTokens(result.Tokens, pageStart, pageLength,
                         _projection!);
                     var diagnostics = SessionDiagnosticSummary(result, pageStart, pageLength);
-                    var preview = NativePreviewBuilder.Build(result, policy.Kind, snapshot,
-                        pageStart, pageLength);
+                    var preview = presentation.Preview;
                     _visibleSessionAnalysis = new NativeAnalysisView(tokens, diagnostics,
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
-                        new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans);
+                        new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans,
+                        Flow: preview.Flow);
                     PresentAnalysis(_visibleSessionAnalysis);
                     _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
                         result.Completeness, result.Coverage,
@@ -1507,9 +1522,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     {
         if (driver is null) return null;
         return new NativeIdleFullAnalysis(driver, policy.Kind,
-            (snapshot, result, visibleRange) => Post(() =>
-                PublishIdleFullAnalysis(driver, document, policy, snapshot, result,
-                    visibleRange)),
+            (_, _, _) => { },
             (snapshot, error) => Post(() =>
             {
                 if (!_disposed && ReferenceEquals(driver, _sessionDriver) &&
@@ -1525,7 +1538,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                                 $"visible diagnostics retained · v{snapshot.Version}"
                         });
                 }
-            }));
+            }), publishPresentation: (snapshot, presentation, visibleRange) => Post(() =>
+                PublishIdleFullAnalysis(driver, document, policy, snapshot,
+                    presentation.Analysis, visibleRange, presentation.Preview)));
     }
 
     /// <summary>
@@ -1535,7 +1550,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     /// </summary>
     private void PublishIdleFullAnalysis(NativeFormatSessionDriver driver, Document document,
         IDocumentPolicy policy, TextSnapshot snapshot, DocumentAnalysis result,
-        Mote.Formats.TextSpan visibleRange)
+        Mote.Formats.TextSpan visibleRange, NativePreview preview)
     {
         if (_disposed || !ReferenceEquals(driver, _sessionDriver) ||
             !ReferenceEquals(document, _document) || !ReferenceEquals(policy, _policy) ||
@@ -1561,12 +1576,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         using var present = MoteTelemetry.Start(TelemetryOperation.AnalysisToPresentation,
             Dimensions(snapshot));
         var tokens = ProjectTokens(result.Tokens, _pageStart, _pageLength, _projection!);
-        var preview = NativePreviewBuilder.Build(result, policy.Kind, snapshot,
-            _pageStart, _pageLength);
         PresentAnalysis(new NativeAnalysisView(tokens,
             SessionDiagnosticSummary(result, _pageStart, _pageLength),
             preview.Text, $"{policy.DisplayName} · Complete · v{result.Version}",
-            new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans));
+            new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans,
+            Flow: preview.Flow));
         _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
             result.Completeness, result.Coverage,
             VisibleSourceTokens(result.Tokens, _pageStart, _pageLength),
@@ -1675,9 +1689,29 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     /// <summary>Publishes one analysis and retains its exact navigation map.</summary>
     private void PresentAnalysis(NativeAnalysisView view)
     {
-        _shell.SetAnalysis(view);
+        view = view with { PresentationSequence = checked(++_presentationSequence),
+            ShowPreview = PreviewVisible() };
+        var previous = _presentedPreview;
         _presentedPreview = view;
+        try { _shell.SetAnalysis(view); }
+        catch
+        {
+            // Reentrant layout callbacks may already have published another map.
+            if (ReferenceEquals(_presentedPreview, view)) _presentedPreview = previous;
+            throw;
+        }
     }
+
+    /// <summary>Applies policy convention after preserving explicit and legacy layout choices.</summary>
+    private bool PreviewVisible() => _configuration.PreviewLayout switch
+    {
+        PreviewLayoutPreference.Split => true,
+        PreviewLayoutPreference.SourceOnly => false,
+        PreviewLayoutPreference.Auto when _productProfile != EditorPresentationProfile.Continuous => true,
+        PreviewLayoutPreference.Auto => DocumentPresentation.ForPolicy(_policy) ==
+            DocumentPresentationDefault.SourceAndPreview,
+        _ => throw new InvalidOperationException("Unknown preview layout preference.")
+    };
 
     private void InvalidateFind()
     {

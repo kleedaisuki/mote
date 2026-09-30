@@ -33,6 +33,7 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
     private readonly NativeFormatSessionDriver _driver;
     private readonly DocumentKind _kind;
     private readonly Action<TextSnapshot, DocumentAnalysis, TextSpan> _publish;
+    private readonly Action<TextSnapshot, NativeFormatPresentation, TextSpan>? _publishPresentation;
     private readonly Action<TextSnapshot, Exception>? _onError;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private Pending? _pending;
@@ -48,13 +49,15 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
     public NativeIdleFullAnalysis(NativeFormatSessionDriver driver, DocumentKind kind,
         Action<TextSnapshot, DocumentAnalysis, TextSpan> publish,
         Action<TextSnapshot, Exception>? onError = null,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        Action<TextSnapshot, NativeFormatPresentation, TextSpan>? publishPresentation = null)
     {
         _driver = driver ?? throw new ArgumentNullException(nameof(driver));
         if (driver.Kind != kind)
             throw new ArgumentException("The idle lane and format driver must use the same policy.", nameof(kind));
         _kind = kind;
         _publish = publish ?? throw new ArgumentNullException(nameof(publish));
+        _publishPresentation = publishPresentation;
         _onError = onError;
         _delay = delay ?? Task.Delay;
     }
@@ -199,14 +202,20 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
                 _attemptedVersion = pending.Snapshot.Version;
             }
             var request = new AnalysisRequest(visibleRange, AnalysisScope.Full);
-            var result = await _driver.AnalyzeAsync(pending.Snapshot, request,
-                pending.Cancellation.Token).ConfigureAwait(false);
+            var presentation = _publishPresentation is null ? null :
+                await _driver.AnalyzePresentationAsync(pending.Snapshot, request,
+                    pending.Cancellation.Token).ConfigureAwait(false);
+            var result = presentation?.Analysis ??
+                await _driver.AnalyzeAsync(pending.Snapshot, request,
+                    pending.Cancellation.Token).ConfigureAwait(false);
             pending.Cancellation.Token.ThrowIfCancellationRequested();
             lock (_gate)
             {
                 if (_disposed || !ReferenceEquals(_pending, pending)) return;
             }
-            _publish(pending.Snapshot, result, visibleRange);
+            if (presentation is not null)
+                _publishPresentation!(pending.Snapshot, presentation, visibleRange);
+            else _publish(pending.Snapshot, result, visibleRange);
         }
         catch (OperationCanceledException) when (pending.Cancellation.IsCancellationRequested) { }
         catch (ObjectDisposedException) when (pending.Cancellation.IsCancellationRequested) { }

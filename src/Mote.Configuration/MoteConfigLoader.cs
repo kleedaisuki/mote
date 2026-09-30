@@ -43,6 +43,7 @@ public static class MoteConfigLoader
         var traces = Path.Combine(home, "traces");
         var theme = "mote-dark";
         var traceEnabled = false;
+        var previewLayout = PreviewLayoutPreference.Auto;
 
         string? content = ReadConfig(configPath, diagnostics);
         if (content is not null)
@@ -59,6 +60,9 @@ public static class MoteConfigLoader
                 {
                     switch (entry.Section, entry.Key)
                     {
+                        case ("editor", "preview"):
+                            previewLayout = ResolvePreviewLayout(entry.Value, diagnostics);
+                            break;
                         case ("paths", "cache"):
                             cache = ResolveConfiguredDirectory(entry.Value, home, userHome, cache,
                                 "paths.cache", diagnostics);
@@ -100,8 +104,26 @@ public static class MoteConfigLoader
             TraceDirectory = traces,
             ThemeId = theme,
             TraceEnabled = traceEnabled,
+            PreviewLayout = previewLayout,
             Diagnostics = diagnostics.AsReadOnly()
         };
+    }
+
+    /// <summary>Accepts only documented layout strings; invalid values retain Auto.</summary>
+    private static PreviewLayoutPreference ResolvePreviewLayout(ValueSyntax? value,
+        List<ConfigDiagnostic> diagnostics)
+    {
+        if (value is StringValueSyntax text)
+        {
+            switch (text.Value)
+            {
+                case "auto": return PreviewLayoutPreference.Auto;
+                case "source": return PreviewLayoutPreference.SourceOnly;
+                case "split": return PreviewLayoutPreference.Split;
+            }
+        }
+        diagnostics.Add(new("CONFIG_VALUE", "editor.preview must be 'auto', 'source', or 'split'."));
+        return PreviewLayoutPreference.Auto;
     }
 
     private static string ResolveUserHome(string? explicitHome)

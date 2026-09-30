@@ -3,6 +3,9 @@ using Mote.Formats;
 
 namespace Mote.Native;
 
+/// <summary>Semantic truth and its bounded presentation from one serialized policy turn.</summary>
+internal sealed record NativeFormatPresentation(DocumentAnalysis Analysis, NativePreview Preview);
+
 /// <summary>
 /// Owns one format session and transports ordered document edits from the UI thread
 /// to serialized background analyses. A missing edit chain rebuilds parser state
@@ -89,8 +92,21 @@ internal sealed class NativeFormatSessionDriver : IDisposable
     /// call is not published by this driver; cancellation and close are advisory to
     /// the format session, which cooperatively observes the supplied token.
     /// </summary>
-    public Task<DocumentAnalysis> AnalyzeAsync(TextSnapshot snapshot, AnalysisRequest request,
-        CancellationToken cancellationToken)
+    public async Task<DocumentAnalysis> AnalyzeAsync(TextSnapshot snapshot, AnalysisRequest request,
+        CancellationToken cancellationToken) =>
+        (await QueueAnalysis(snapshot, request, cancellationToken, render: false)
+            .ConfigureAwait(false)).Analysis;
+
+    /// <summary>
+    /// Produces semantic and rendering data without allowing another version's
+    /// analysis to interleave between them. Native installation remains UI-owned.
+    /// </summary>
+    public Task<NativeFormatPresentation> AnalyzePresentationAsync(TextSnapshot snapshot,
+        AnalysisRequest request, CancellationToken cancellationToken) =>
+        QueueAnalysis(snapshot, request, cancellationToken, render: true);
+
+    private Task<NativeFormatPresentation> QueueAnalysis(TextSnapshot snapshot, AnalysisRequest request,
+        CancellationToken cancellationToken, bool render)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         lock (_gate)
@@ -98,11 +114,11 @@ internal sealed class NativeFormatSessionDriver : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             ++_pendingAnalyses;
         }
-        return Task.Run(() => AnalyzeCoreAsync(snapshot, request, cancellationToken));
+        return Task.Run(() => AnalyzeCoreAsync(snapshot, request, cancellationToken, render));
     }
 
-    private async Task<DocumentAnalysis> AnalyzeCoreAsync(TextSnapshot snapshot,
-        AnalysisRequest request, CancellationToken cancellationToken)
+    private async Task<NativeFormatPresentation> AnalyzeCoreAsync(TextSnapshot snapshot,
+        AnalysisRequest request, CancellationToken cancellationToken, bool render)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
             _lifetime.Token);
@@ -149,7 +165,20 @@ internal sealed class NativeFormatSessionDriver : IDisposable
                 _committedVersion = snapshot.Version;
                 DropCommittedEdits(snapshot.Version);
             }
-            return result;
+            NativePreview preview;
+            if (!render) preview = new NativePreview("", []);
+            else if (_session is IRenderFormatSession renderer)
+            {
+                var flow = renderer.Render(snapshot, result, request, linked.Token);
+                linked.Token.ThrowIfCancellationRequested();
+                if (flow.Version != result.Version)
+                    throw new InvalidOperationException("The render projection returned a different snapshot version.");
+                preview = NativePreviewBuilder.FromFlow(flow);
+            }
+            else
+                preview = NativePreviewBuilder.BuildFlow(result, _policy.Kind, snapshot,
+                    request.VisibleRange.Start, request.VisibleRange.Length);
+            return new NativeFormatPresentation(result, preview);
         }
         finally
         {

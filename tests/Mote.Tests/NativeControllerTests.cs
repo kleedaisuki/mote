@@ -1586,7 +1586,14 @@ public sealed partial class NativeControllerTests
             return true;
         }
         /// <inheritdoc />
-        public void SetAnalysis(NativeAnalysisView view) { Analysis = view; Analyses.Add(view); }
+        public void SetAnalysis(NativeAnalysisView view)
+        {
+            Analysis = view;
+            Analyses.Add(view);
+            DuringAnalysisApply?.Invoke(view);
+        }
+        /// <summary>Models a UI-thread source resize reentrant inside a pane installation.</summary>
+        public Action<NativeAnalysisView>? DuringAnalysisApply { get; set; }
         /// <inheritdoc />
         public void SetTheme(IThemePolicy theme)
         {
@@ -1690,8 +1697,10 @@ public sealed partial class NativeControllerTests
             SelectionChanged?.Invoke(anchor, active);
         }
         /// <summary>Raises a native preview gesture with an explicit displayed-analysis stamp.</summary>
-        public void ActivatePreview(int offset, NativeDocumentStamp? stamp = null) =>
-            PreviewActivated?.Invoke(new NativePreviewActivation(stamp ?? Analysis!.Stamp, offset));
+        public void ActivatePreview(int offset, NativeDocumentStamp? stamp = null,
+            long? sequence = null) =>
+            PreviewActivated?.Invoke(new NativePreviewActivation(stamp ?? Analysis!.Stamp, offset,
+                sequence ?? Analysis!.PresentationSequence));
         /// <summary>Raises a new global search.</summary>
         public void RequestFind() => FindRequested?.Invoke();
         /// <summary>Repeats the last global search.</summary>

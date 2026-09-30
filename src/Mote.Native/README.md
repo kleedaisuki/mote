@@ -114,16 +114,25 @@ Preview labeling, reader speech and focus behavior remain separate gates.
   a parity claim. Read-only DirectWrite and
   CoreText geometry probes remain available through
   `--check-native-windows-canvas` and `--check-native-mac-canvas`.
-- Native preview is a bounded, source-mapped semantic rendering: Markdown
-  headings, paragraphs, lists, quotes and code; CSV rows and columns; and
-  structured JSON/TOML/YAML trees. It is not yet a full CommonMark or
-  HTML-equivalent preview. Pointer or Enter/Space activation of a mapped item
-  now navigates to its global source start without editing; stale maps and
-  active IME composition are inert. This has focused controller tests and
-  local Windows real-HWND evidence, but not published Mac x64/ARM acceptance
-  ([navigation contract](../../docs/native-preview-navigation.md)). Link and
-  image actions remain unsupported. Platform adapters apply theme-provided
-  colors and font styles to preview runs without a WebView dependency.
+- Native Flow preview receives immutable bounded ordered text/style/origin data
+  from the serialized format session. Markdown uses its private parsed syntax
+  for nested inline styles, reference-link labels, heading levels, list ordinals,
+  quotes and code; existing structured trees remain source-backed. Windows
+  imports only mote-generated escaped RTF; AppKit builds attributed text directly.
+  Both retain native selection/Copy and install text/maps with a presentation
+  sequence, rejecting stale actions even at the same document version. Heading
+  activation retains its established marker target while literal provenance is
+  independently exact. See [Flow integration](../../docs/native-flow-implementation-contract.md)
+  and [navigation](../../docs/native-preview-navigation.md).
+  CSV still uses the compatibility text surface, not the final virtual Grid;
+  image resources and external-link actions remain separate unfinished phases.
+  Host tests and hidden Windows HWND evidence do not establish four-RID AOT,
+  physical Copy, accessibility or real IME acceptance. The isolated Mac probe
+  is `--check-native-mac-flow-rendering` and requires target execution.
+- Ordinary Continuous plain text defaults to full-width source by the format
+  presentation convention; `[editor] preview = "split"` explicitly retains its
+  bounded preview, while `"source"` hides it for any format. `"auto"` is the
+  default and preserves historical split behavior under `--legacy-page`.
 - Configuration follows convention first, then `~/.mote/config.toml`
   overrides cache/data/trace destinations, theme, and trace opt-in. The
   `system` theme queries OS app appearance. Trace setup failure never blocks
