@@ -1,7 +1,7 @@
 # Published Native AOT macOS logical Grid scroller probe
 
-Date: 2026-10-01. Status: implementation compiled on Windows; portable mapping
-suite passed. Published macOS x64/ARM64 execution is **not yet performed**.
+Date: 2026-10-01. Status: published Native AOT macOS x64/ARM64 target probe
+passed in CI 36764576285, with the scoped limitations below.
 Owner: `src/Mote.Native/Mac/MacGridScrollerProbe.cs`; route and CI integration
 belong to the integrating agent, after independent safety review.
 
@@ -104,5 +104,24 @@ Frozen source SHA-256 (UTF-8 without BOM):
 - LF: `E0E0CCDA60C1AC2DC144CE01CE65B420457F1B9BDDB85899225762AB9F5B2938`
 - CRLF: `63A3CFF32138CBA344D8A8CA91347B666AF37DB9FC9825ACB3527400EDCF97C5`
 
-Current working-tree source uses LF. These supersede the earlier frozen hash;
-the safety reviewer must approve this delta before route/CI target dispatch.
+Current reviewed source uses LF. These supersede the earlier frozen hash;
+independent safety re-review approved the whitespace-only final byte delta
+before target dispatch.
+
+## Hosted target result
+
+[CI run 36764576285](https://github.com/kleedaisuki/mote/actions/runs/36764576285)
+at `b7ab02a` passed all nine strict jobs, including single-binary Native AOT
+for both Mac RIDs. The separately **non-gating** logical Grid scroller steps
+on [osx-arm64](https://github.com/kleedaisuki/mote/actions/runs/36764576285/job/110055440310)
+and [osx-x64](https://github.com/kleedaisuki/mote/actions/runs/36764576285/job/110055440529)
+each exited zero and emitted exactly the reviewed complete success marker;
+root checked both target job logs beneath repository
+`.cache/ci-36764576285-logs/`. Neither printed the fixed failure identifier,
+and each proceeded to the following source-NUL diagnostic. The source-hash
+gate in each step admitted only the independently reviewed LF/CRLF bytes.
+
+This confirms in-process native AppKit control geometry/readback and synthetic
+target/action dispatch in both published Mach-O architectures. It does **not**
+prove physical dragging, macOS overlay hit testing, controller stale-token
+admission, external AX/VoiceOver, pixels or 100 MiB interaction latency.

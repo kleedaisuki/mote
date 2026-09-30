@@ -107,8 +107,16 @@ and 100 samples: p50 **0.2501 ms**, p95 **1.0284 ms**, Windows 10.0.26200 x64,
 latency percentile or proof of the <=1 ms callback target. No request-to-ready,
 physical-paint, cancellation-tail or startup claim is made.
 
-Remaining target gates: published macOS AOT AppKit behavior on both RIDs,
-standalone overlay visibility/hit area, external UIA/AX values/focus, real
+The safe published Native AOT AppKit diagnostic subsequently passed on both
+macOS RIDs in [CI 36764576285](https://github.com/kleedaisuki/mote/actions/runs/36764576285):
+each non-gating step exited zero with the exact reviewed logical-scroller
+marker after a fixed-source-hash gate. The probe observes real hidden
+NSScroller/NSTableView properties and synthetic target/action dispatch, not
+physical user dragging or a controller stale-token workflow
+([target evidence](validation/native-mac-grid-scroller-probe.md)).
+
+Remaining target gates: standalone overlay visibility/hit area,
+external UIA/AX values/focus, real
 mouse/trackpad/IME and source typing under Full load, callback/install/warm
 request-to-install/cancellation percentiles on adversarial large CSV shapes.
 Portable arithmetic and hidden HWND dispatch do not establish physical-input,

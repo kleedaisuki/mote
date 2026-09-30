@@ -164,8 +164,9 @@ The local affected Release warnings-as-errors run passed **184/184**, including
 **16/16 Windows real hidden-HWND** cases and **11/11 portable Mac interop**
 cases ([Windows evidence](validation/windows-grid-logical-scrollbars.md),
 [Mac portable scope](validation/mac-grid-logical-scroller.md)). Commit `b7ab02a`
-wires the separately reviewed native AppKit scroller probe, but its published
-macOS x64/ARM64 target results remain **pending**
+wires the separately reviewed native AppKit scroller probe; both published
+macOS x64/ARM64 processes then exited zero with exact reviewed markers in
+[CI 36764576285](https://github.com/kleedaisuki/mote/actions/runs/36764576285)
 ([probe acceptance boundary](validation/native-mac-grid-scroller-probe.md)).
 This supersedes the bounded-native-scrollbar-only implementation limit, not
 external UIA/AX range/focus, desktop thumb/trackpad behavior, overlay pixel/hit-area
@@ -175,8 +176,8 @@ is inferred from portable arithmetic or hidden-control tests.
 ### Remaining release gates / deliberate truthful limits
 
 - Logical row/column scroll controls are now implemented at the checkpoint
-  above; retained native rows remain bounded. Published Mac AppKit scroller
-  runtime acceptance is pending, and external UIA/AX values/focus, real desktop
+  above; retained native rows remain bounded. In-process Mac AppKit synthetic
+  scroller acceptance is established, but external UIA/AX values/focus, real desktop
   dragging/trackpad behavior and visible overlay hit-area remain unverified.
   Implementation is not a full accessible logical-navigation release pass.
 - Cross-window/offscreen rectangular Copy is refused until its exact selected
