@@ -1141,7 +1141,8 @@ jobs:
           $rid = '${{ matrix.rid }}'
           $pins = @(
             @{ path = 'tests/MacGridAxExternalProbe/Probe.swift'; hash = '4C06C3994346B6E822294B4182BC770A7A3EAE11A22CCC75518E0B40A6D45996' },
-            @{ path = 'tests/MacGridAxExternalProbe/Run.ps1'; hash = '0A867687F62795790989B20A347A70EBEB93888923A666157DB45F5F5F816CEA' }
+            @{ path = 'tests/MacGridAxExternalProbe/Run.ps1'; hash = 'A8CE1FD27A4E33745EC526A739D609260E51893B41A5E1BD5B305C6A48CDC505' },
+            @{ path = 'tests/MacGridAxExternalProbe/MenuTraceCapture.cs'; hash = 'DEB59FBD23B2E47196334F8F86F3BA66C532CB8B266F4C6654E66D55FFCEEE0E' }
           )
           foreach ($pin in $pins) {
             $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
