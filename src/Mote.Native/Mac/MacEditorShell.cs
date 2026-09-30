@@ -38,6 +38,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private nint _preview;
     private nint _status;
     private nint _statusBackground;
+    private int _statusBackgroundPaintCount;
+    private bool _statusBackgroundPaintFault;
     private MacTextInputIsland? _canvas;
     private MacAccessibilityElementPrototype? _accessibility;
     private int _uiThreadId;
@@ -820,6 +822,15 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <summary>Native read-only preview view handle; only the diagnostic reads it.</summary>
     internal nint ProbePreviewView => _preview;
 
+    /// <summary>Decorative bottom surface for the target-host pixel probe.</summary>
+    internal nint ProbeStatusBackgroundView => _statusBackground;
+
+    /// <summary>Completed status-surface paints, without user content.</summary>
+    internal int ProbeStatusBackgroundPaintCount => _statusBackgroundPaintCount;
+
+    /// <summary>Whether the AppKit draw callback failed without unwinding.</summary>
+    internal bool ProbeStatusBackgroundPaintFault => _statusBackgroundPaintFault;
+
     /// <summary>Overrides only this process's window appearance; never changes system preferences.</summary>
     internal void ProbeSetWindowAppearance(bool dark)
     {
@@ -1490,8 +1501,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             var policy = s_current?._theme ?? ThemePolicies.Get(ThemePolicies.DefaultId);
             ObjC.Send(Color(policy.Palette.WindowBackground), ObjC.Sel("setFill"));
             ObjC.Send(ObjC.Class("NSBezierPath"), ObjC.Sel("fillRect:"), dirty);
+            if (s_current is { } shell) shell._statusBackgroundPaintCount++;
         }
-        catch { /* Drawing failures must not unwind an AppKit IMP. */ }
+        catch
+        {
+            if (s_current is { } shell) shell._statusBackgroundPaintFault = true;
+            // Drawing failures must not unwind an AppKit IMP.
+        }
     }
 
     private void Notify(Action? callback)

@@ -336,11 +336,33 @@ internal static class MacCanvasThemeProbe
             if (width < 16 || height < 32)
                 throw new InvalidOperationException("Theme raster is too small for status sampling.");
             // NSBitmapImageRep pixel coordinates start at the bitmap's top;
-            // center X / penultimate bottom row avoids the status text and borders.
-            var nativePixel = ObjC.Send(bitmap, ObjC.Sel("colorAtX:y:"),
+            // center X / penultimate bottom row avoids the status glyphs.
+            var rootPixel = ObjC.Send(bitmap, ObjC.Sel("colorAtX:y:"),
                 (nint)(width / 2), (nint)(height - 3));
-            var statusBackground = Rgb(nativePixel);
-            RequireColor(statusBackground, policy.Palette.WindowBackground, _check);
+            var statusBackground = Rgb(rootPixel);
+            var rootOutsideField = Rgb(ObjC.Send(bitmap,
+                ObjC.Sel("colorAtX:y:"), (nint)(width / 2), (nint)(height - 29)));
+            var surface = _shell.ProbeStatusBackgroundView;
+            if (surface == 0)
+                throw new InvalidOperationException("Status surface is unavailable.");
+            var surfaceRect = MacOnScreenCanvasNative.GetRect(surface, ObjC.Sel("bounds"));
+            var surfaceBitmap = ObjC.Send(surface,
+                ObjC.Sel("bitmapImageRepForCachingDisplayInRect:"), surfaceRect);
+            if (surfaceBitmap == 0)
+                throw new IOException("AppKit did not allocate a status-surface bitmap.");
+            MacOnScreenCanvasNative.Send(surface,
+                ObjC.Sel("cacheDisplayInRect:toBitmapImageRep:"),
+                surfaceRect, surfaceBitmap);
+            var surfaceWidth = checked((int)ObjC.Send(surfaceBitmap, ObjC.Sel("pixelsWide")));
+            var surfaceHeight = checked((int)ObjC.Send(surfaceBitmap, ObjC.Sel("pixelsHigh")));
+            if (surfaceWidth < 2 || surfaceHeight < 2)
+                throw new InvalidOperationException("Status surface is too small for sampling.");
+            var surfacePixel = ObjC.Send(surfaceBitmap, ObjC.Sel("colorAtX:y:"),
+                (nint)(surfaceWidth / 2), (nint)(surfaceHeight / 2));
+            var surfaceColor = Rgb(surfacePixel);
+            var windowPixel = ObjC.Send(_shell.ProbeWindow,
+                ObjC.Sel("backgroundColor"));
+            var windowColor = Rgb(windowPixel);
             _check = $"{step}-raster-encode";
             var png = ObjC.Send(bitmap, ObjC.Sel("representationUsingType:properties:"),
                 4, ObjC.Send(ObjC.Class("NSDictionary"), ObjC.Sel("dictionary")));
@@ -352,10 +374,19 @@ internal static class MacCanvasThemeProbe
             if (bytes.Length < 8 || !bytes.AsSpan(0, 8).SequenceEqual(
                 new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
                 throw new IOException("Theme raster is not PNG.");
+            _check = $"{step}-status-background-pixel";
+            if (!ColorsMatch(statusBackground, policy.Palette.WindowBackground))
+                Console.Error.WriteLine($"Mac status surface: root={statusBackground.ToHex()}/" +
+                    $"a{Alpha(rootPixel):F3};outside={rootOutsideField.ToHex()};" +
+                    $"own={surfaceColor.ToHex()}/a{Alpha(surfacePixel):F3};" +
+                    $"window={windowColor.ToHex()}/a{Alpha(windowPixel):F3};" +
+                    $"paints={_shell.ProbeStatusBackgroundPaintCount};" +
+                    $"fault={_shell.ProbeStatusBackgroundPaintFault};");
+            RequireColor(statusBackground, policy.Palette.WindowBackground, _check);
             _states.Add(new ThemeState(step, expectedId, _callbackCount,
                 CurrentStamp().Generation, CurrentVersion(), _selection.Anchor,
                 _selection.Active, preview.ToHex(), editor?.ToHex(), marker?.ToHex(),
-                statusBackground.ToHex(), imageName,
+                statusBackground.ToHex(), Alpha(rootPixel), imageName,
                 Convert.ToHexString(SHA256.HashData(bytes))));
         }
 
@@ -389,6 +420,9 @@ internal static class MacCanvasThemeProbe
         private static byte Channel(nint color, string selector) => checked((byte)Math.Clamp(
             (int)Math.Round(MacOnScreenCanvasNative.SendDouble(color, ObjC.Sel(selector)) * 255),
             0, 255));
+
+        private static double Alpha(nint color) =>
+            MacOnScreenCanvasNative.SendDouble(color, ObjC.Sel("alphaComponent"));
 
         private static void RequireColor(ThemeColor actual, ThemeColor expected,
             string check)
@@ -479,6 +513,7 @@ internal static class MacCanvasThemeProbe
                     writer.WriteNull("EditorMarkerRgb");
                 else writer.WriteString("EditorMarkerRgb", state.EditorMarkerRgb);
                 writer.WriteString("StatusBackgroundRgb", state.StatusBackgroundRgb);
+                writer.WriteNumber("StatusBackgroundAlpha", state.StatusBackgroundAlpha);
                 writer.WriteString("Image", state.Image);
                 writer.WriteString("ImageSha256", state.ImageSha256);
                 writer.WriteEndObject();
@@ -492,7 +527,7 @@ internal static class MacCanvasThemeProbe
     private sealed record ThemeState(string Step, string ThemeId, int CallbackCount,
         long Generation, long Version, int SelectionAnchor, int SelectionActive,
         string PreviewHeadingRgb, string? EditorHeadingRgb, string? EditorMarkerRgb,
-        string StatusBackgroundRgb, string Image,
+        string StatusBackgroundRgb, double StatusBackgroundAlpha, string Image,
         string ImageSha256);
 
     /// <summary>Bounded JSON result for the two-RID published-binary harness.</summary>
