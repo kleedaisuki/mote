@@ -249,6 +249,35 @@ theme checks remained green. The light-mode cached AppKit view image has a
 readable status strip. This validates the **content-view raster** and its
 native draw callback, not the physical display compositor or global OS theme.
 
+### Synthetic marked-text appearance diagnostic (target run pending)
+
+`--check-native-mac-composition-theme` is a separate, non-gating published-binary
+diagnostic for a process-local window appearance change **during** marked text.
+It creates a small synthetic Markdown fixture under repository `.temp` and
+stores JSON and three AppKit view rasters under an empty `.cache` child. The
+default and experimental canvas modes run in separate processes. The probe
+calls `NSTextView`'s `setMarkedText:selectedRange:replacementRange:` with a
+synthetic candidate, switches only its window from dark to light, and requires
+the OS effective appearance to change while the applied policy, canonical
+source/version, and input-file hash remain unchanged. It then uses
+`unmarkText`, for which [Apple explicitly says the text view should accept
+the marked text](https://developer.apple.com/documentation/appkit/nstextinputclient/unmarktext%28%29?language=objc),
+and requires one exact source insertion, final light palette, a settled
+composition callback, and functional Undo/Redo. Per-phase JSON records
+versioned source hashes and selection coordinates, not document text.
+The retained images are for visual inspection: because the synthetic
+candidate appears and disappears, different PNG hashes alone cannot prove
+that themed pixels changed correctly. The automated color oracle reads the
+native preview heading's attributed foreground, not the compositor.
+
+Apple cautions that [`NSTextInputClient` methods](https://developer.apple.com/documentation/appkit/nstextinputclient?language=objc)
+are primarily for the text-input system and generally unsuitable for unrelated
+programmatic editing. This diagnostic is explicitly synthetic: a passing run
+would not validate a physical keyboard, a real Chinese input method, candidate
+window geometry, or cancellation. A cancellation path will be added only if a
+separate AppKit sequence can prove an unmarked native host, original source,
+and **no extra engine version**; `unmarkText` is not a cancellation mechanism.
+
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release
   gates. Do not infer product parity from an in-process AppKit selector or PNG

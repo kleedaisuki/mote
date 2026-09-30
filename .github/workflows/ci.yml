@@ -595,6 +595,32 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+      # Synthetic NSTextView marked text is committed with unmarkText while a
+      # window-local appearance switch is deferred; not a real CJK IME or cancel.
+      - name: Diagnose macOS marked-text theme transition (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeCompositionThemeWorkflow-Mac.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS marked-text theme diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-composition-theme-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-composition-theme-mac.json
+            .cache/ci-inventory/${{ matrix.rid }}/native-composition-theme-*-stdout.txt
+            .cache/ci-inventory/${{ matrix.rid }}/native-composition-theme-*-stderr.txt
+            .cache/native-composition-theme-${{ matrix.rid }}-*/*.json
+            .cache/native-composition-theme-${{ matrix.rid }}-*/*.png
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       # Initial external keyboard/edit/save capability probe for the opt-in
       # canvas. AX range movement is not a physical-paint or host-size oracle.
       - name: Diagnose external macOS ARM canvas GUI workflow (non-gating)
