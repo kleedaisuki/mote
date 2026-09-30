@@ -244,3 +244,78 @@ No later selection, logical navigation, retained-element retirement or normal-cl
 checks executed. VoiceOver, IME, geometry, event delivery and performance remain
 unverified. This second audit changed only this document; no production/helper
 editing, staging, commit or push was performed.
+
+### Third hosted target: Route A falsification (2026-10-01)
+
+[Run 36789139005](https://github.com/kleedaisuki/mote/actions/runs/36789139005),
+checkout `3aae8d57eeaf9033d3539fd9a05e383afba8c83f`, tests the opt-in Route A
+legacy `accessibilityAttributeValue:` override for `AXRows`. Static comparison to
+`5977250` shows this route returns the current custom row array for that attribute
+and delegates other attributes to `NSTableView`; this source intent is not evidence
+that external AppKit actually invoked the new route.
+
+Raw evidence is under `.cache/ci-36789139005-mac-grid-ax/`:
+`{arm,x64}-artifact/mac-grid-ax-external.json` and `{osx-arm64,osx-x64}.log`.
+Logs were downloaded using `gh run view 36789139005 --job 110137600228 --log`
+(ARM) and job `110137600215` (x64), preserving project-local evidence. They show
+exact checkout, fresh matching-RID AOT publish, external helper pins and raw exit.
+Python raw `git show` bytes independently verify unchanged helper SHA
+`A65E460046E0AA72B88F5E4289CAA0915A4EE15E1C24984B9C40DC6FD1227B8C`
+and driver SHA
+`0A867687F62795790989B20A347A70EBEB93888923A666157DB45F5F5F816CEA`.
+The tested Route A source `MacCsvGrid.Accessibility.cs` SHA is
+`8B0BECCB3A7C1471BF8F20F00C763492E6D5BEFB03F6D51BDDD2010E9F919E8B`.
+Binary attribution remains the hosted fresh-publish/report chain, not a local
+binary download or native rerun.
+
+| Fact | osx-arm64 | osx-x64 |
+| --- | --- | --- |
+| Report SHA-256 | `1B846F3694E6949DDE22ECEE7F9BA6A1BEA71C5B4245D99048F2B25F4BB1115E` | `7BD182F1C110161B58919BEC5359B73FAFB562AB7C8BB67168CB0A778AF8C618` |
+| AOT SHA-256 | `A97EDEB1DA577B4ABB3ABC064207543DC015322506ABDFAE08B4F0E4C668F130` | `A7EAD04CB11E6899E40F1943DFEAA04460F93757607B51842581087099A1A385` |
+| Binary bytes | 16390696 | 16734984 |
+| Editor / client PID | 5972 / 5973 | 23924 / 23925 |
+| Swift typecheck / trust | true / true | true / true |
+| Prior checks / first failure | same 8 / first-record-is-data | same 8 / first-record-is-data |
+| Client exit / phase | 1 / origin-window | 1 / origin-window |
+| Admission count | 2302 | 1501 |
+| Close attempt / normal exit / forced cleanup | false / null / true | false / null / true |
+| Fixture unchanged / cleanup error | true / empty | true / empty |
+
+OS/architecture and expected fixture hash/counts remain unchanged. JSON comparison
+finds every one of the **16 observation records identical to the second target**
+for each RID, and identical across RIDs: first row is AXRow/index 0 without
+Description, Title, Identifier or Help; first column has Column 1 description,
+expected custom-wrapper identifier and Help. No later semantic gate executed.
+
+**Direct experimental conclusion:** the Route A change did not restore the
+required externally enumerated Row 1 identity on either hosted target. Thus the
+hypothesis that this particular legacy AXRows override is sufficient is falsified
+for this workflow. This is not a TCC/Swift setup failure: the external client was
+trusted, typechecked, ran, and reached the same contract failure on the exact
+changed binaries.
+
+**Remaining internal inference:** native-row substitution or row-specific bridge
+bypass remains strongly supported by the row/column asymmetry, but this report does
+not prove callback invocation or internal object identity. The negative result
+cannot distinguish the legacy override never being used from AppKit transforming
+its result later. It does not prove every possible native-Table adaptation is
+impossible or justify claiming a replacement proxy already works. Preserve the
+unchanged absolute-ordinal oracle and investigate a genuinely discriminating route
+rather than broaden legacy machinery blindly.
+
+**Separate in-process selector step was not exercised.** The workflow still
+required old `MacCsvGridAccessibilityProbe.cs` SHA
+`0E2CD0B186477128ABBCA4741AA85B0835DE72E8B08AE470301C9A401CCA198A`, while raw
+`git show 3aae8d5:src/Mote.Native/Mac/MacCsvGridAccessibilityProbe.cs` hashes to
+`A2B604B335E94931CC89E8D41D8C123A125C956A758E7F7C947ED0BA0DE0B348`.
+Both logs record `Mac Grid AX selector probe differs from reviewed bytes.` at the
+preflight guard before that step invokes the executable. This is a stale CI pin /
+harness setup failure, **not an in-process product probe failure or pass**. It does
+not invalidate the separate external step, whose own helper pins matched and whose
+reports demonstrate native execution.
+
+Strict CI remains green while these diagnostics are non-gating; that does not
+convert either external failure or preflight-blocked selector check into acceptance.
+Selection, navigation, retirement and normal close remain untested, as do real
+VoiceOver/IME, geometry and performance. This audit only updates this document;
+no production, helper or workflow edit, staging, commit or push was performed.
