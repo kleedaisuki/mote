@@ -128,6 +128,11 @@ internal static class MacNativeWorkflowProbe
                 {
                     case 0 when _shell.ProbeTitle.Contains(Path.GetFileName(_input),
                         StringComparison.Ordinal) && _shell.ProbeNativeText == _original:
+                        // Query AppKit's actual legacy source view without changing
+                        // its value, selection, first responder, or input state.
+                        if (ObjC.ManagedString(ObjC.Send(_shell.ProbeEditorView,
+                            ObjC.Sel("accessibilityLabel"))) != "Mote editor")
+                            throw new InvalidOperationException("Legacy source AX label is missing.");
                         _shell.ProbeInsertAtEnd(InsertedText);
                         _stage = 1;
                         break;

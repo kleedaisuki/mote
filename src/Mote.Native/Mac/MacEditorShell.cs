@@ -1111,7 +1111,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             editorScroll = _canvas.CreateView(new ObjC.Rect(0, 0, 730, 730));
             _editor = _canvas.Editor;
         }
-        else editorScroll = CreateScrollView(new ObjC.Rect(0, 0, 730, 730), true, out _editor);
+        else
+        {
+            editorScroll = CreateScrollView(new ObjC.Rect(0, 0, 730, 730), true, out _editor);
+            // Legacy source text uses the same non-content AX identity as the
+            // canvas proxy; leave the canvas's private input host unchanged.
+            ObjC.Send(_editor, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("Mote editor"));
+        }
         var previewScroll = CreateScrollView(new ObjC.Rect(730, 0, 390, 730), false, out _preview);
         // A constant label distinguishes rendered output from the source AX
         // editor without exposing document contents or changing focus/input.

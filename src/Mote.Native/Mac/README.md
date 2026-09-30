@@ -47,6 +47,11 @@ or application bundle is needed for this adapter.
   then calls `FocusSource`, which returns first responder to the existing source
   view without rewriting text or selection. Command/Option/Control shortcuts
   continue through AppKit. A stale or cleared preview cannot navigate.
+- The legacy editable `NSTextView` has the stable accessibility label
+  `Mote editor`, matching the Continuous Canvas source proxy; the read-only
+  preview is labeled `Mote preview`. These identities contain no document
+  contents. Only the legacy source view is labeled here: the Continuous Canvas
+  input host, first responder, native selection, and IME state are unchanged.
 - `TextChanged` copies the entire *bounded page*, not the entire document. The
   controller must keep the page size bounded and reconcile page replacement
   against its immutable document snapshot.
@@ -102,6 +107,8 @@ and a smoke-run exit. Manual VoiceOver validation remains necessary; a standard
 in-process AppKit workflow probe**. It requires a small input, a nonexistent
 output directly inside the repository's real `.temp/` directory, and leaves
 the input untouched. After the real native window has opened the input, it
+asserts the legacy source view's native `accessibilityLabel` is `Mote editor`,
+without changing its value or focus, then
 inserts through `NSTextInputClient.insertText:replacementRange:`, invokes the
 real `NSTextInputClient.setMarkedText:selectedRange:replacementRange:` to
 stage a Unicode candidate, asserts that preedit is visible but *not* in the
