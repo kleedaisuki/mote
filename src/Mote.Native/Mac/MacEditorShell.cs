@@ -22,6 +22,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private const nuint WindowStyle = 1 | 2 | 4 | 8;
     private const nuint ResizeWidthAndHeight = 2 | 16;
     private const string EditorAppearanceClass = "MoteDefaultEditorAppearanceView";
+    private const string StatusBackgroundClass = "MoteStatusBackgroundView";
     private const string ObjcRuntime = "/usr/lib/libobjc.A.dylib";
     private static MacEditorShell? s_current;
 
@@ -36,6 +37,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private nint _editor;
     private nint _preview;
     private nint _status;
+    private nint _statusBackground;
     private MacTextInputIsland? _canvas;
     private MacAccessibilityElementPrototype? _accessibility;
     private int _uiThreadId;
@@ -1048,6 +1050,12 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(_window, ObjC.Sel("setDelegate:"), _delegate);
         ObjC.Send(_window, ObjC.Sel("setTitle:"), ObjC.String("mote"));
         var root = ObjC.Send(_window, ObjC.Sel("contentView"));
+        _statusBackground = ObjC.Send(ObjC.Send(ObjC.Class(
+            RegisterStatusBackgroundClass()), ObjC.Sel("alloc")),
+            ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 0, 1120, 30));
+        ObjC.Send(_statusBackground, ObjC.Sel("setAutoresizingMask:"), (nint)2);
+        ObjC.Send(_statusBackground, ObjC.Sel("setAccessibilityElement:"), 0);
+        ObjC.Send(root, ObjC.Sel("addSubview:"), _statusBackground);
         var split = ObjC.Send(ObjC.Send(ObjC.Class("NSSplitView"), ObjC.Sel("alloc")),
             ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 30, 1120, 730));
         ObjC.Send(split, ObjC.Sel("setVertical:"), 1);
@@ -1189,6 +1197,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(_preview, ObjC.Sel("setBackgroundColor:"), Color(palette.PreviewBackground));
         ObjC.Send(_preview, ObjC.Sel("setTextColor:"), Color(palette.PreviewForeground));
         ObjC.Send(_status, ObjC.Sel("setTextColor:"), Color(palette.MutedForeground));
+        ObjC.Send(_statusBackground, ObjC.Sel("setNeedsDisplay:"), 1);
         if (updateFonts)
         {
             var editorFont = ObjC.Send(ObjC.Class("NSFont"),
@@ -1397,6 +1406,18 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         return EditorAppearanceClass;
     }
 
+    private static string RegisterStatusBackgroundClass()
+    {
+        var cls = ObjC.AllocateClassPair(ObjC.Class("NSView"), StatusBackgroundClass, 0);
+        if (cls == 0) return StatusBackgroundClass;
+        Add(cls, "drawRect:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Rect, void>)
+                &DrawStatusBackground,
+            "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+        ObjC.RegisterClassPair(cls);
+        return StatusBackgroundClass;
+    }
+
     private static string RegisterDelegateClass()
     {
         const string className = "MoteNativeEditorDelegate";
@@ -1459,6 +1480,18 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             s_current?.ObserveAppearanceChanged();
         }
         catch { /* An AppKit IMP must never unwind a managed exception. */ }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void DrawStatusBackground(nint self, nint selector, ObjC.Rect dirty)
+    {
+        try
+        {
+            var policy = s_current?._theme ?? ThemePolicies.Get(ThemePolicies.DefaultId);
+            ObjC.Send(Color(policy.Palette.WindowBackground), ObjC.Sel("setFill"));
+            ObjC.Send(ObjC.Class("NSBezierPath"), ObjC.Sel("fillRect:"), dirty);
+        }
+        catch { /* Drawing failures must not unwind an AppKit IMP. */ }
     }
 
     private void Notify(Action? callback)
