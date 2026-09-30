@@ -1,11 +1,14 @@
 # Theme policy and accessibility decision
 
-Status: static policy module, nonfatal unknown-ID warning, and a **new,
-uncommitted native live-`system` implementation**. Controller/fake-shell tests
-and local managed build pass; a published Windows EXE or macOS Mach-O has **not**
-yet been observed through a real OS light/dark transition or real IME session.
-Full native chrome/selection application remains a separate visual question.
-The Avalonia prototype is not the strict-single-binary product shell.
+Status: static policy module, nonfatal unknown-ID warning, and a committed
+native live-`system` implementation under target-host validation. Local Release
+build and 409 managed tests pass. Published Win x64 completed a three-state
+synthetic OS-preference transition; published Mac x64/ARM64 completed a
+three-state **window-local** AppKit transition in both default and Canvas
+editor modes. Neither an actual OS-wide light/dark transition nor a theme
+switch during a real IME
+session has been certified. The Avalonia prototype is not the strict-single-
+binary product shell. See [the exact CI artifacts and boundaries](../tests/VALIDATION.md).
 
 ## Why a theme policy
 
@@ -114,8 +117,8 @@ latest requested policy.
 
 | Boundary | Implemented source behavior | Evidence and remaining acceptance |
 | --- | --- | --- |
-| Windows preference | `WindowsEditorShell.PrefersDark` reads per-user `AppsUseLightTheme`, documented by [Microsoft's settings reference](https://learn.microsoft.com/en-us/windows/apps/develop/settings/settings-common). The window procedure handles `WM_SETTINGCHANGE`, `WM_SYSCOLORCHANGE`, and `WM_THEMECHANGED`, then re-queries the preference and emits `AppearanceChanged` only when its effective Boolean changes. This avoids assuming a particular `lParam` string: [Microsoft's message contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-settingchange) permits a null/broad value; [`WM_SYSCOLORCHANGE`](https://learn.microsoft.com/en-us/windows/win32/gdi/wm-syscolorchange) covers system-color changes. | Source and fake-shell tests cover event/coalescing logic; a published Win32 EXE has not been driven through an actual Windows Settings light→dark→light switch in this change. Capture screenshots and verify each effective palette, selection, status, open text and undo history on a target host. |
-| macOS preference | `MacEditorShell.PrefersDark` reads the visible editor's [`effectiveAppearance`](https://developer.apple.com/documentation/appkit/nsapplication/effectiveappearance) and uses [`bestMatchFromAppearancesWithNames:`](https://developer.apple.com/documentation/AppKit/NSAppearance?language=objc) for Aqua/DarkAqua classification. The default editor subclasses `NSTextView` to receive Apple's [`viewDidChangeEffectiveAppearance`](https://developer.apple.com/documentation/appkit/nsview/viewdidchangeeffectiveappearance%28%29?language=objc); the canvas view forwards its effective-appearance callback. The shell emits only changed preferences after startup. | Source inspection confirms callback wiring, not that a published Mach-O receives the expected callbacks under macOS's actual Auto/Light/Dark transitions. Test both editor modes on arm64 and x64 target hosts, including appearance changes while the window is active and inactive. |
+| Windows preference | `WindowsEditorShell.PrefersDark` reads per-user `AppsUseLightTheme`, documented by [Microsoft's settings reference](https://learn.microsoft.com/en-us/windows/apps/develop/settings/settings-common). The window procedure handles `WM_SETTINGCHANGE`, `WM_SYSCOLORCHANGE`, and `WM_THEMECHANGED`, then re-queries the preference and emits `AppearanceChanged` only when its effective Boolean changes. This avoids assuming a particular `lParam` string: [Microsoft's message contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-settingchange) permits a null/broad value; [`WM_SYSCOLORCHANGE`](https://learn.microsoft.com/en-us/windows/win32/gdi/wm-syscolorchange) covers system-color changes. | The published win-x64 HWND passed synthetic hosted HKCU dark→light→dark with exact editor background, matching glyph-pixel counts, stable selection/text and three PNGs; the original HKCU value/kind were restored. This is not a user operating Windows Settings, win-arm64 theme evidence, or an IME-in-progress test. |
+| macOS preference | `MacEditorShell.PrefersDark` reads the visible editor's [`effectiveAppearance`](https://developer.apple.com/documentation/appkit/nsapplication/effectiveappearance) and uses [`bestMatchFromAppearancesWithNames:`](https://developer.apple.com/documentation/AppKit/NSAppearance?language=objc) for Aqua/DarkAqua classification. The default editor subclasses `NSTextView` to receive Apple's [`viewDidChangeEffectiveAppearance`](https://developer.apple.com/documentation/appkit/nsview/viewdidchangeeffectiveappearance%28%29?language=objc); Canvas samples its source-rendering `NSView` and also observes its input child callback, deduplicating both after startup. | Both published Mach-O RIDs passed process-local window DarkAqua→Aqua→DarkAqua in both editor modes with three callbacks, exact preview/default-editor heading RGB, stable G/V and selection, Undo/Redo and changed/returned PNG hashes. Actual macOS system Auto/Light/Dark changes, background-window changes and real IME remain separate acceptance work. |
 | IME and palette transaction | `SetTheme` preflights `IsTextComposing`; a late native preedit can throw the typed `NativeThemeDeferredException` **before mutation**. Controller retains only the latest policy and retries on `CompositionSettled`. Windows updates its canvas island, surfaces and cached semantic colors with rollback attempts on failure. Mac applies the canvas island first, then the editor/preview theme and cached analysis. A failed update retains the canonical source and exposes a persistent, nonmodal “Theme update unavailable” status notice; successful retry clears it. | Fake-shell tests cover commit/cancel coalescing, late preedit, nested callbacks, rollback notice and source/selection/undo invariants. They cannot establish the real RichEdit/NSTextView/IME ordering, candidate position, or all-or-nothing paint on a target OS. Exercise Chinese and Japanese IME with an OS appearance change during marked text; verify one final palette, no preedit leak or extra edit, stable candidate/selection and no modal warning. |
 | Typed document/analysis identity | `NativeDocumentStamp(Generation, Version)` accompanies bounded document and analysis views. The generation distinguishes a replaced document that reuses a numeric text version. Both shells reject analyses whose stamp does not match their current document/canvas binding. A theme change recolors only cached *matching* analysis; otherwise it paints base text rather than showing an old token palette. `SelectPolicy` explicitly clears `_visibleSessionAnalysis` and publishes an empty “Format analysis pending; global diagnostics unknown” projection before Save As to a different format, because format policy can change without changing G/V. | Fake-shell tests cover same-version Save As JSON→Markdown in default and canvas modes and a same-format Save As. They demonstrate stale semantic/cache clearance at the controller boundary; they do not prove visual absence of a stale frame in a published OS binary. |
 | Selection, chrome and contrast mode | Windows/macOS canvas painters explicitly use `SelectionBackground` and `SelectionForeground`. Default Win32 RichEdit and AppKit `NSTextView` still rely on native selection presentation, not necessarily the policy pair. Native Win32 applies editor/preview surfaces and fonts but not every `Control*`/panel color. AppKit [`selectedTextAttributes`](https://developer.apple.com/documentation/appkit/nstextview/selectedtextattributes) can control selected text/background if exact palette matching is required. Explicit `mote-high-contrast-dark` is static; `system` still resolves only dark/light. | Inspect selected semantic text, focused/unfocused controls, menu, preview and status in all three palettes. Static contrast tests do not certify native controls. A Windows user-customized contrast theme requires a separate decision: Microsoft recommends [`SPI_GETHIGHCONTRAST`](https://learn.microsoft.com/en-us/windows/win32/winauto/high-contrast-parameter) and the user's actual system colors, not merely a bundled preset. |
@@ -127,9 +130,33 @@ analysis publication count, and undo/redo. The latest local verification
 reported by the root engineer is a Native Release warnings-as-errors build
 with **0 warnings / 0 errors** and a full managed solution test run of
 **Mote.Tests 386/386, Mote.Themes.Tests 14/14, Mote.Configuration.Tests 9/9**.
-Those are managed source-level tests (including fake-shell theme tests) and
-policy tests, **not** published Win32 or Mach-O GUI appearance-transition
-tests. The unknown-ID `CONFIG_THEME` warning
+Those managed source-level tests (including fake-shell theme tests) and policy
+tests alone could **not** prove published Win32 or Mach-O GUI appearance
+transitions. In [CI run 36607770262](https://github.com/kleedaisuki/mote/actions/runs/36607770262),
+all six strict build/test jobs passed, but the separate non-gating theme
+reports failed. Follow-up [CI run 36671152190](https://github.com/kleedaisuki/mote/actions/runs/36671152190)
+showed that the default Mac probe had sampled the leading Markdown marker:
+both architectures read `#9CC6E8` on the heading's interior and final glyphs,
+while its first marker remained base `#D8DADF`. Canvas reported a dark editor
+appearance but an unchanged light policy, consistent with the canvas ancestor
+callback preceding child-view appearance propagation. The Windows harness had
+first hit a PowerShell `$HOME` name collision and then a runtime ValueTuple
+`.Start` property error after launching mote; both hosted reports record exact
+HKCU restoration but no color case. In [CI run 36671876359](https://github.com/kleedaisuki/mote/actions/runs/36671876359),
+the Win x64 published HWND then passed dark→light→dark background/glyph-pixel,
+selection, text, PNG and registry-restoration checks. The default Mac editor
+passed the corresponding window-local three-state native-color, callback,
+source/selection, Undo/Redo and raster checks on both RIDs. Mac Canvas initially
+reached the native edit, but its probe incorrectly expected a character
+appended to the *one-line input host* to appear at the end of a multiline file.
+With an exact source-offset oracle, [CI run 36672506098](https://github.com/kleedaisuki/mote/actions/runs/36672506098)
+then passed **both default and Canvas modes on both Mac RIDs**: each recorded
+three appearance callbacks, exact preview accent transitions, unchanged G/V
+and selection across palettes, exact Undo/Redo/source SHA and distinct light
+versus dark PNG hashes. The Canvas probe does not read source-glyph pixels from
+the Core Text raster, and none of these tests changes global macOS appearance,
+drives a physical keyboard/IME or observes compositor presentation. The unknown-ID
+`CONFIG_THEME` warning
 has focused tests; its real native modal has not been visually exercised on
 both OSes. A release claim for live `system` and IME safety still requires the
 target-host workflow in the table, ideally with before/after screenshots and

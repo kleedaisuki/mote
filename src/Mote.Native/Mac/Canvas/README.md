@@ -190,6 +190,46 @@ input. This is API-level accessibility, not VoiceOver acceptance.
   includes pre-change allow (`T1`) and synchronous controller commit
   (`F2`/`F3`), rather than the old `T2` veto/AX dialog. This does **not**
   establish external long-line behavior on `osx-x64` or other input methods.
+
+### Process-local live appearance evidence
+
+[Run 36672506098](https://github.com/kleedaisuki/mote/actions/runs/36672506098)
+passed the non-gating `--check-native-mac-theme` workflow using the **published
+single Mach-O** on both `osx-x64` and `osx-arm64`. Each mode ran in a fresh
+process with a synthetic Markdown fixture and an explicit repository `.temp`
+configuration home; no user `~/.mote` configuration or global macOS appearance
+setting was read or changed. The probe changed only its `NSWindow` appearance
+DarkAqua → Aqua → DarkAqua. Both default `NSTextView` and opt-in canvas modes
+observed three effective-appearance callbacks and resolved
+`mote-dark → mote-light → mote-dark`. The native preview heading's foreground
+was `#8DB9ED → #215FAD → #8DB9ED`; the default editor's **interior heading
+glyph** was `#9CC6E8 → #245E9B → #9CC6E8`. The Markdown `#` marker was
+observed separately and was not used as the semantic-heading oracle.
+
+On both architectures, document generation/version and selection stayed
+unchanged through the three appearance transitions. Undo restored the source
+before the probe's one native edit, Redo restored the exact edited source, and
+the fixture SHA-256 remained unchanged. Three AppKit view-raster PNGs per mode
+changed dark→light and returned to the original dark hash. A canvas PNG hash
+change establishes a **physical raster difference**, not correct individual
+semantic pixels. An earlier hosted attempt exposed a callback/policy mismatch
+consistent with parent-before-child appearance propagation: the child input
+view reported dark while the resolved policy remained light. The shell now
+classifies the canvas renderer's own effective appearance, the same view that
+emits the notification. The input view also provides a post-propagation backup
+signal, with deduplication.
+
+This evidence covers process-local AppKit callbacks, palette application,
+native attributed preview/editor colors, source/selection/Undo stability, and
+bounded PNG capture. It does **not** establish response to an actual global
+macOS light/dark preference change, appearance switching during real CJK IME
+composition, VoiceOver behavior, or complete canvas semantic-pixel correctness.
+The callback is Apple's
+[`viewDidChangeEffectiveAppearance`](https://developer.apple.com/documentation/appkit/nsview/viewdidchangeeffectiveappearance%28%29?language=objc);
+the diagnostic override uses Apple's named
+[`NSAppearanceNameDarkAqua`](https://developer.apple.com/documentation/appkit/nsappearance/name-swift.struct/darkaqua?language=objc)
+and Aqua appearances on one window only.
+
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release
   gates. Do not infer product parity from an in-process AppKit selector or PNG
