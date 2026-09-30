@@ -165,6 +165,14 @@ internal static class MacCanvasAccessibilityProbe
         private int _lastHashedLength = -1;
         private bool _lastHashEquality;
         private string? _lastFaultState;
+        /// <summary>Caps changed polling records without dropping forced request/deadline evidence.</summary>
+        private const int MaxFaultPollRecords = 32;
+        /// <summary>Number of changed-state polls retained across stages 3 and 5.</summary>
+        private int _faultPollRecords;
+        /// <summary>Binding identity immediately before the second New request, after editing N.</summary>
+        private NativeDocumentStamp? _beforeNewStamp;
+        /// <summary>True after the second menu request returns, not proof that New completed.</summary>
+        private bool _newRequestReturned;
 
         internal Workflow(MacEditorShell shell, string path, TextSnapshot source, int markerAt)
         {
@@ -194,7 +202,7 @@ internal static class MacCanvasAccessibilityProbe
             {
                 try
                 {
-                    if (_stage == 3) RecordFaultState("deadline", force: true);
+                    if (_stage is 3 or 5) RecordFaultState("deadline", force: true);
                 }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
@@ -258,9 +266,12 @@ internal static class MacCanvasAccessibilityProbe
                         break;
                     case 4 when _shell.ProbeCanvasSnapshot?.GetText() == "N" &&
                         StatusMatches():
+                        _beforeNewStamp = _shell.ProbeCanvasStamp;
                         _shell.ProbeApproveDiscardOnce();
                         _shell.ProbeInvokeMenu("moteNew:");
+                        _newRequestReturned = true;
                         _stage = 5;
+                        RecordFaultState("new-request-returned", force: true);
                         break;
                     case 5 when _shell.ProbeCanvasSnapshot?.Length == 0 &&
                         StatusMatches():
@@ -275,7 +286,7 @@ internal static class MacCanvasAccessibilityProbe
                         Finish(true);
                         return;
                 }
-                if (_stage == 3) RecordFaultState("poll");
+                if (_stage is 3 or 5) RecordFaultState("poll");
                 if (_stage != before) Record($"stage-{before}-to-{_stage}");
             }
             catch (Exception error) when (error is not OutOfMemoryException)
@@ -303,6 +314,8 @@ internal static class MacCanvasAccessibilityProbe
         /// <summary>
         /// Records only source identity, status-token presence, provider state and input
         /// liveness. Request return is not evidence that AppKit ran the detach selector.
+        /// Equality fields use the pre-fault stamp; before-New fields separately identify
+        /// replacement after editing N. Changed polls are capped; deadlines are retained.
         /// </summary>
         private void RecordFaultState(string point, bool force = false)
         {
@@ -327,13 +340,21 @@ internal static class MacCanvasAccessibilityProbe
                 }
                 hashEquality = _lastHashEquality;
             }
-            var state = $"fault_request_returned={_faultRequestReturned} " +
+            var state = $"stage={_stage} fault_request_returned={_faultRequestReturned} " +
+                $"new_request_returned={_newRequestReturned} " +
                 $"provider_attached={_shell.ProbeCanvasAccessibilityAttached} " +
                 $"status_match={StatusMatches()} " +
                 $"status_exact_suffix={_shell.ProbeCanvasStatus.EndsWith(" · " + UnavailableStatus, StringComparison.Ordinal)} " +
                 $"source_stamp_present={stamp.HasValue} " +
+                $"source_snapshot_present={snapshot is not null} " +
+                $"source_empty={snapshot is { Length: 0 }} " +
                 $"source_generation={stamp?.Generation ?? -1} " +
                 $"source_version={stamp?.Version ?? -1} " +
+                $"snapshot_version={snapshot?.Version ?? -1} " +
+                $"snapshot_version_matches_stamp={snapshot is not null && stamp.HasValue && snapshot.Version == stamp.Value.Version} " +
+                $"before_new_stamp_present={_beforeNewStamp.HasValue} " +
+                $"before_new_generation_equal={stamp.HasValue && _beforeNewStamp.HasValue && stamp.Value.Generation == _beforeNewStamp.Value.Generation} " +
+                $"before_new_version_equal={stamp.HasValue && _beforeNewStamp.HasValue && stamp.Value.Version == _beforeNewStamp.Value.Version} " +
                 $"source_length={snapshot?.Length ?? -1} " +
                 $"source_generation_equal={generationMatches} " +
                 $"source_version_equal={versionMatches} " +
@@ -342,8 +363,11 @@ internal static class MacCanvasAccessibilityProbe
                 $"input_editable={_shell.ProbeCanvasInputEditable} " +
                 $"input_focused={_shell.ProbeCanvasInputFocused}";
             if (!force && state == _lastFaultState) return;
+            if (!force && _faultPollRecords >= MaxFaultPollRecords) return;
+            if (!force) ++_faultPollRecords;
             _lastFaultState = state;
-            _metrics.Add($"ax-fault-{point} elapsed_ms={_clock.ElapsedMilliseconds} {state}");
+            _metrics.Add($"ax-fault-{point} elapsed_ms={_clock.ElapsedMilliseconds} " +
+                $"poll_records={_faultPollRecords} poll_limit={MaxFaultPollRecords} {state}");
         }
 
         private void CheckSourceSelectors()

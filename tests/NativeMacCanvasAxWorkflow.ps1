@@ -20,14 +20,19 @@ $metrics = Join-Path $inventory 'mac-canvas-ax-metrics.txt'
 $stdoutPath = Join-Path $inventory 'mac-canvas-ax-stdout.txt'
 $stderrPath = Join-Path $inventory 'mac-canvas-ax-stderr.txt'
 $utf8 = [Text.UTF8Encoding]::new($false, $true)
+$before = $null
+$metricsPrepared = $false
 $result = [ordered]@{
     status = 'unverified'
     rid = $RuntimeIdentifier
     marker = ''
     fixture_utf16_units = $null
     marker_utf16_offset = $null
-    input_sha256_unchanged = $false
-    metrics_lines = 0
+    # Null means unmeasured, not a failed comparison or an observed empty file.
+    input_sha256_unchanged = $null
+    metrics_present = $null
+    metrics_lines = $null
+    evidence_error = ''
     error = ''
     scope = 'in-process-AppKit-canvas-AX-selector-lifecycle-not-external-AXUIElement-or-VoiceOver'
 }
@@ -46,6 +51,10 @@ try {
     $before = (Get-FileHash -LiteralPath $input -Algorithm SHA256).Hash
     $result.fixture_utf16_units = $source.Length
     $result.marker_utf16_offset = $offset
+
+    # Never attribute an earlier run's native metrics to this failed invocation.
+    if (Test-Path -LiteralPath $metrics) { Remove-Item -LiteralPath $metrics -Force }
+    $metricsPrepared = $true
 
     $start = [Diagnostics.ProcessStartInfo]::new($exe)
     $start.WorkingDirectory = $root
@@ -83,6 +92,18 @@ try {
 }
 catch { $result.error = $_.Exception.Message }
 finally {
+    # Failure evidence is independent of the success marker. Preserve the original
+    # failure while measuring input integrity and fresh native metrics when possible.
+    try {
+        if ($null -ne $before) {
+            $result.input_sha256_unchanged = (Get-FileHash -LiteralPath $input -Algorithm SHA256).Hash -ceq $before
+        }
+        if ($metricsPrepared) {
+            $result.metrics_present = Test-Path -LiteralPath $metrics -PathType Leaf
+            if ($result.metrics_present) { $result.metrics_lines = [IO.File]::ReadAllLines($metrics).Length }
+        }
+    }
+    catch { $result.evidence_error = $_.Exception.GetType().Name }
     $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $report -Encoding utf8NoBOM
     Write-Host ($result | ConvertTo-Json -Depth 5 -Compress)
 }
