@@ -57,10 +57,10 @@ clipboard and does not claim to restore prior formats. No process-wide clipboard
 input injection, registry write, user-profile write or settings mutation occurs.
 
 Actual invocation is permitted only after independent safety review and root approval,
-on a dedicated GitHub-hosted Windows job, with an external job timeout (recommended
-`timeout-minutes: 5`). Do not expose the opt-in environment on the normal whole-suite step.
-The invocation is materialized in `tests/Invoke-NativeCsvGridClipboardWorkflow.ps1`.
-Root must wire it only after independent script/hash delta approval:
+on a dedicated GitHub-hosted Windows job with `timeout-minutes: 5`. Do not expose
+the opt-in environment on the normal whole-suite step. The independently reviewed
+script/hash and dedicated job are now wired; any later source change needs a new
+review before the job can execute a changed harness:
 
 ```powershell
 # Dedicated GitHub-hosted Windows job, with timeout-minutes: 5.
@@ -125,4 +125,22 @@ clipboard; its ordinary xUnit pass is not native acceptance evidence. Initial ov
 failure was a harness race: starting before idle Full installation retired presentation
 authority. Waiting for exact certified row extent resolves the harness defect without
 changing production freshness checks. No production changes were made to pass validation.
-Actual CF_UNICODETEXT publication remains unexecuted pending reviewed disposable-runner CI.
+The fake path does not itself establish actual CF_UNICODETEXT behavior.
+
+## Disposable hosted result (2026-10-01)
+
+[CI run 36752189587](https://github.com/kleedaisuki/mote/actions/runs/36752189587),
+commit `8671c062cb9dc1c790220a1d3028acad737f7bd6`, passed the separate
+`Native CSV Grid clipboard / disposable Windows` job. Its uploaded fresh
+`report.json` has `status=passed`, `nativeClipboard=true`, the exact run key,
+reviewed CRLF source hash
+`FE4609F6CBCACF6C02AA40B538695B886E268F4BA3E1A4A7934D26C3DC9B4299`,
+and all six case identifiers; `clipboard.trx` was also uploaded. The artifact
+was downloaded only under repository `.cache/ci-36752189587-clipboard/` for
+verification. The complete parent CI run also finished with all seven strict
+jobs green (Windows/macOS solution tests, four Native AOT RID jobs, and this
+dedicated clipboard job). The new macOS draw-trace steps in that same run were
+**non-gating and failed on at least one target**; their status must not be
+inferred from the parent result. This is actual hidden-HWND production publisher
+and independent Win32 clipboard readback evidence, not a desktop context-menu, native AOT,
+macOS, contention/recovery or physical input result.
