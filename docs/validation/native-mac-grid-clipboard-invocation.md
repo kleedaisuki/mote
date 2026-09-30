@@ -1,7 +1,8 @@
 # Native macOS Grid clipboard invocation integration
 
 Date: 2026-10-01. Independent integration review approved the exact invocation
-bytes and detached pins below. Target execution remains pending.
+bytes and detached pins below. The subsequent x64/ARM64 target result is recorded
+at the end of this document.
 Do not execute locally, spoof GitHub identity, or add inherited clipboard opt-in.
 
 ## Detached approval manifest
@@ -99,3 +100,16 @@ IME, AX readers, compositor paint, clipboard contention recovery or latency.
 General pasteboard publication destroys disposable runner contents; no rollback,
 old-content save/restore or Universal Clipboard suppression is claimed. See the
 probe validation and independent safety report for the platform evidence.
+
+## Hosted invocation result
+
+Both dedicated Mac jobs in
+[CI run 36756839425](https://github.com/kleedaisuki/mote/actions/runs/36756839425)
+passed on their native architectures. Root inspected both uploaded
+`report.json`, `stdout.txt`, `stderr.txt` and `exit-code.txt` artifacts beneath
+repository `.cache/ci-36756839425-mac-grid-{arm,x64}/`. Each independently
+built published binary exited zero, printed one exact actual-mode marker,
+reported `nativeClipboard=true`, matched the current run key and fixed LF
+source hash, and listed exactly six cases; stderr was empty. This validates
+the reviewed invocation on two disposable hosted runners, not safe direct
+execution on a personal Mac or the desktop interactions excluded above.

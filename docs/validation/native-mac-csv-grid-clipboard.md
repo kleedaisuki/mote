@@ -168,12 +168,28 @@ Windows host, .NET 10, 2026-10-01:
 
 `dotnet build src/Mote.Native/Mote.Native.csproj -c Release -p:TreatWarningsAsErrors=true --no-restore`
 
-Successful build, zero warnings/errors, including enabled AOT/trim analyzers. No actual Mac
-execution, NSPasteboard read/write, source-input injection, safety-approved invocation or
-target clipboard acceptance has been performed. The early Program route and
-dedicated hosted invocation are now integrated in the working tree and statically
-reviewed; they are not target evidence. Both x64/ARM64 Native AOT actual hosted-target
-execution and fresh invocation reports remain required.
+Successful build, zero warnings/errors, including enabled AOT/trim analyzers.
+This local build alone did not run AppKit or touch NSPasteboard. The later
+published-binary hosted result below is the separate target evidence.
+
+## Disposable hosted target result (2026-10-01)
+
+[CI run 36756839425](https://github.com/kleedaisuki/mote/actions/runs/36756839425)
+at `7420d0b` passed all nine strict jobs, including separate gating
+`Native CSV Grid clipboard / disposable osx-arm64` and `osx-x64` jobs. Root
+downloaded each job's report, stdout, stderr and exit-code artifact only under
+repository `.cache/ci-36756839425-mac-grid-{arm,x64}/`. Each exact report has
+`status=passed`, `nativeClipboard=true`, its current run key, reviewed LF
+source hash `EF9BFB12E55B0EDFC9ED5FC74A1BC0BE4793055AEAAFBCD05CC066263DD11867`,
+and all six case IDs. Both binaries exited zero and emitted exactly the
+actual-mode marker; stderr was empty. Thus the reviewed published Native AOT
+hidden-table/controller/production NSPasteboard workflow was actually executed
+on both hosted Mac architectures. The fixed-hash invocation, not a direct
+ungated binary command, performed each mutation.
+
+This is still not desktop menu/pointer/shortcut, source NSTextView editing,
+real IME, external AX/VoiceOver, physical drawing, contention recovery,
+Universal Clipboard behavior on a personal Mac, or latency acceptance.
 
 ## Platform contracts consulted
 
