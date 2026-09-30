@@ -506,6 +506,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             _shell.ShowError("Wait for the current save to finish before replacing this document.");
             return false;
         }
+        WarnRetainedRecovery();
         return !_document.IsModified || _shell.ConfirmDiscard();
     }
 
@@ -522,6 +523,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         {
             Document? opened = null;
             Exception? error = null;
+            string? failureMessage = null;
             try
             {
                 using var io = MoteTelemetry.StartChild(TelemetryOperation.DocumentOpen, openMark);
@@ -529,7 +531,11 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 opened = await Document.OpenAsync(path).ConfigureAwait(false);
                 io?.SetStatus(TelemetryStatus.Success);
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException) { error = ex; }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                error = ex;
+                failureMessage = OpenFailureMessage(path, ex);
+            }
             Post(() =>
             {
                 if (_disposed || request != _openSerial)
@@ -541,7 +547,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 if (error is not null)
                 {
                     FinishOpen(request, TelemetryStatus.Failure);
-                    _shell.ShowError($"Cannot open file: {error.Message}");
+                    _shell.ShowError(failureMessage!);
                     return;
                 }
                 if (opened is null) return;
@@ -571,6 +577,25 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 FinishOpen(request, TelemetryStatus.Success, Dimensions(opened.Snapshot));
             });
         });
+    }
+
+    /// <summary>Discovers a restart sidecar only on Open failure; never adopts, reads or removes its bytes.</summary>
+    private static string OpenFailureMessage(string path, Exception error)
+    {
+        var message = $"Cannot open file: {error.Message}";
+        try
+        {
+            var recovery = Document.GetSaveRecoveryPath(path);
+            if (File.Exists(recovery))
+                message += $"\nAn unowned, unverified recovery sidecar was found for this path:\n{recovery}\n" +
+                    "Inspect or copy it manually. It has not been opened, adopted, or deleted by mote.";
+        }
+        catch (Exception hintError) when (hintError is IOException or UnauthorizedAccessException or
+            ArgumentException or NotSupportedException)
+        {
+            // Optional discovery cannot replace the actual Open failure.
+        }
+        return message;
     }
 
     private void ReplaceDocument(Document replacement, TelemetryMark drawMark = default, int openRequest = 0)
@@ -622,6 +647,11 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     {
         if (!_shell.CommitPendingText()) return;
         if (_saving) return;
+        if (_document.PendingSaveRecovery is { } recovery)
+        {
+            StartRecoveryExport(_document, recovery);
+            return;
+        }
         var pickerWasUsed = saveAs || _document.FilePath is null;
         var path = pickerWasUsed
             ? _shell.PickSaveFile(_document.FilePath)
@@ -660,7 +690,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 if (_disposed) return;
                 if (error is not null)
                 {
-                    _shell.ShowError($"Save failed; the original file was retained. {error.Message}");
+                    _shell.ShowError(SaveFailureMessage(error));
                     return;
                 }
                 if (cancelled) return;
@@ -679,6 +709,75 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 ShowDocument();
             });
         });
+    }
+
+    /// <summary>Reports observed bytes without treating dirty state or an error code as preservation proof.</summary>
+    private static string SaveFailureMessage(Exception error)
+    {
+        var info = SaveFailureInfo.FromException(error);
+        if (info is null) return $"Save failed. Disk outcome was not verified. {error.Message}";
+        var outcome = info.TargetOutcome switch
+        {
+            SaveFileOutcome.OriginalSnapshot => "The target matched the original snapshot when checked.",
+            SaveFileOutcome.SavedSnapshot => "The target matched the attempted saved snapshot when checked; Save bookkeeping did not complete.",
+            SaveFileOutcome.Missing => "The target was missing when checked.",
+            SaveFileOutcome.OtherContent => "The target contained different bytes when checked; it was not overwritten again.",
+            _ => "The target outcome could not be verified."
+        };
+        var stage = info.RecoveryOutcome == SaveFileOutcome.Missing
+            ? "No recovery sidecar was found."
+            : $"Inspect the recovery sidecar: {info.RecoveryPath}\n" +
+                "Its bytes may belong to an earlier attempt; they are not automatically overwritten or deleted.";
+        return $"Save failed. {outcome}\n{stage}\n{error.Message}";
+    }
+
+    /// <summary>Uses an explicit new-path export; exporting an old staged version does not save later edits.</summary>
+    private void StartRecoveryExport(Document document, SaveRecovery recovery)
+    {
+        if (!recovery.IsCompleteSnapshot)
+        {
+            _shell.ShowError($"Incomplete Save recovery remains at:\n{recovery.Path}\n" +
+                "These bytes are not a verified complete snapshot. Inspect or copy the sidecar manually. " +
+                "Close and reopen after explicitly resolving the sidecar; your current buffer is still not saved.");
+            return;
+        }
+        _shell.ShowError($"Save recovery is pending at:\n{recovery.Path}\n" +
+            $"It contains attempted snapshot v{recovery.SnapshotVersion}; later edits are not included. " +
+            "Choose a NEW path to export it, then Save again to save the current buffer. " +
+            "Cancel keeps recovery; existing files will not be overwritten.");
+        var path = _shell.PickSaveFile(null);
+        if (path is null) return;
+        _saving = true;
+        _ = Task.Run(async () =>
+        {
+            Exception? error = null;
+            try { await document.ExportSaveRecoveryAsync(path).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { error = ex; }
+            Post(() =>
+            {
+                _saving = false;
+                if (_disposed) return;
+                if (error is not null)
+                {
+                    _shell.ShowError($"Recovery export failed; inspect the pending sidecar at {recovery.Path}. " +
+                        $"Current buffer was not saved. {error.Message}");
+                    return;
+                }
+                _operationStatus = "Recovery exported. Current buffer is not saved; Save again when ready.";
+                ShowDocument();
+            });
+        });
+    }
+
+    /// <summary>Closing/replacing may discard the buffer, but never silently discards staged recovery.</summary>
+    private void WarnRetainedRecovery()
+    {
+        if (_document.PendingSaveRecovery is { } recovery)
+            _shell.ShowError($"The retained Save recovery will remain after closing this document:\n{recovery.Path}\n" +
+                (recovery.IsCompleteSnapshot
+                    ? $"It is attempted snapshot v{recovery.SnapshotVersion}, not necessarily your latest edits. "
+                    : "It is incomplete or unverified staged data, not a guaranteed full snapshot. ") +
+                "Inspect, copy, or remove it explicitly before saving this target again.");
     }
 
     private Task<bool> ConfirmOverwriteAsync(string path)
@@ -2181,6 +2280,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     {
         if (!_shell.CommitPendingText()) { e.Cancel = true; return; }
         if (_saving) { e.Cancel = true; return; }
+        WarnRetainedRecovery();
         if (_document.IsModified && !_shell.ConfirmDiscard()) e.Cancel = true;
     }
 

@@ -178,7 +178,12 @@ public static class MoteTelemetry
         var sink = Volatile.Read(ref _sink);
         if (sink is null || sink.IsFaulted || error is not (IOException or UnauthorizedAccessException))
             return;
-        var phase = error.Data["Mote.Engine.SavePhase"] as string;
+        string? phase = null;
+        try { phase = error.Data["Mote.Engine.SavePhase"] as string; }
+        catch (Exception evidenceError) when (evidenceError is not OutOfMemoryException)
+        {
+            // Optional provider evidence is unavailable; record the primary code as unknown phase.
+        }
         var parent = Activity.Current;
         sink.TryRecord(new TraceRecord(
             DateTimeOffset.UtcNow, parent?.TraceId ?? sink.SessionTraceId,

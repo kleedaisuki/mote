@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security;
+using System.Collections;
 using Mote.Telemetry;
 
 namespace Mote.Tests;
@@ -111,6 +113,29 @@ public sealed class TelemetryTests
             Assert.DoesNotContain(records, record => record.RootElement.GetProperty("operation").GetString() == "save.failure.SECRET-injected-phase");
         }
         finally { foreach (var record in records) record.Dispose(); }
+    }
+
+    /// <summary>An exception with unavailable Data still records its primary code safely, without leaking diagnostic errors.</summary>
+    [Fact]
+    public async Task Save_failure_trace_rejecting_data_records_unknown_primary_code()
+    {
+        using var temp = new RepoTemp();
+        var output = temp.File("trace");
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = output });
+        try { MoteTelemetry.RecordSaveFailure(new RejectingSaveDataException()); }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var lines = await ReadLinesAsync(output);
+        var json = string.Join("\n", lines);
+        Assert.DoesNotContain("SECRET", json, StringComparison.Ordinal);
+        using var record = JsonDocument.Parse(lines.Single(
+            line => line.Contains("\"operation\":\"save.failure.unknown\"", StringComparison.Ordinal)));
+        Assert.Equal(unchecked((int)0x80070498), record.RootElement.GetProperty("attributes").GetProperty("hresult").GetInt32());
+    }
+
+    /// <summary>Models provider diagnostics that refuse reads, without altering the original filesystem code.</summary>
+    private sealed class RejectingSaveDataException() : IOException("SECRET-save-path", unchecked((int)0x80070498))
+    {
+        public override IDictionary Data => throw new SecurityException("SECRET-data-access");
     }
 
     /// <summary>Concurrent producers do not block indefinitely; queue loss is accounted for.</summary>

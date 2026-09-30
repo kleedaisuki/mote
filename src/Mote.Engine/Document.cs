@@ -15,7 +15,7 @@ namespace Mote.Engine;
 /// own UI thread when necessary. A disposed document rejects mutation and I/O, but
 /// previously obtained snapshots remain valid.
 /// </remarks>
-public sealed class Document : IDisposable
+public sealed partial class Document : IDisposable
 {
     private const string SavePhaseDataKey = "Mote.Engine.SavePhase";
     private enum SavePhase { TargetCheck, TempWriteAndHash, FinalTargetCheck, Move, Replace, Cleanup, SavedStamp }
@@ -295,6 +295,8 @@ public sealed class Document : IDisposable
         lock (_gate)
         {
             ThrowIfDisposed();
+            if (_pendingSaveRecovery is not null)
+                throw new IOException($"Resolve the retained Save recovery before saving again: {_pendingSaveRecovery.Path}");
             path ??= _filePath;
             if (path is null) throw new InvalidOperationException("An unsaved document needs a target path.");
             snapshot = _snapshot;
@@ -335,14 +337,16 @@ public sealed class Document : IDisposable
             AnnotateSaveFailure(exception, SavePhase.TargetCheck);
             throw;
         }
-        var directory = Path.GetDirectoryName(path)!;
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-        byte[] savedHash;
+        var tempPath = GetSaveRecoveryPath(path);
+        byte[]? savedHash = null;
+        var owned = false;
+        var commitAttempted = false;
         try
         {
             try
             {
-                savedHash = await WriteTempAsync(snapshot, tempPath, encoding, hasBom, cancellationToken)
+                savedHash = await WriteTempAsync(snapshot, tempPath, encoding, hasBom, cancellationToken,
+                    () => owned = true)
                     .ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -350,29 +354,38 @@ public sealed class Document : IDisposable
                 AnnotateSaveFailure(exception, SavePhase.TempWriteAndHash);
                 throw;
             }
-            await CommitTempAsync(tempPath, path, expectedStamp, expectedHash, cancellationToken)
+            await CommitTempAsync(tempPath, path, expectedStamp, expectedHash, cancellationToken,
+                () => commitAttempted = true)
                 .ConfigureAwait(false);
         }
-        finally
+        catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            try
+            int? cleanupError = null;
+            if (owned && !commitAttempted)
             {
-                if (File.Exists(tempPath)) File.Delete(tempPath);
+                try { SaveOperations.Delete(tempPath); }
+                catch (Exception cleanup) when (cleanup is not OutOfMemoryException)
+                {
+                    cleanupError = cleanup.HResult;
+                    TrySetSaveFailureData(failure, "Mote.Engine.SaveCleanupHResult", cleanup.HResult);
+                }
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                AnnotateSaveFailure(exception, SavePhase.Cleanup);
-                throw;
-            }
+            await RecordSaveOutcomeAsync(failure, path, tempPath, snapshot.Version,
+                expectedHash, savedHash, commitReturned: false,
+                retainOwned: owned && (commitAttempted || cleanupError is not null), cleanupError)
+                .ConfigureAwait(false);
+            throw;
         }
         FileStamp savedStamp;
         try
         {
-            savedStamp = FileStamp.Read(path);
+            savedStamp = SaveOperations.ReadSavedStamp(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             AnnotateSaveFailure(exception, SavePhase.SavedStamp);
+            await RecordSaveOutcomeAsync(exception, path, tempPath, snapshot.Version,
+                expectedHash, savedHash, commitReturned: true, retainOwned: false, null).ConfigureAwait(false);
             throw;
         }
         lock (_gate)
@@ -387,11 +400,12 @@ public sealed class Document : IDisposable
 
     /// <summary>Encodes a snapshot before replacement, then fingerprints the exact bytes written.</summary>
     private static async Task<byte[]> WriteTempAsync(TextSnapshot snapshot, string tempPath, Encoding encoding,
-        bool hasBom, CancellationToken cancellationToken)
+        bool hasBom, CancellationToken cancellationToken, Action created)
     {
         await using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
             FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
         {
+            created();
             using (var writer = new StreamWriter(stream, ForWrite(encoding, hasBom), 64 * 1024, leaveOpen: true))
             {
                 foreach (var chunk in snapshot.GetChunks())
@@ -406,15 +420,16 @@ public sealed class Document : IDisposable
     }
 
     /// <summary>Rechecks overwrite identity just before replacement; new-file moves never overwrite.</summary>
-    private static async Task CommitTempAsync(string tempPath, string path, FileStamp? expectedStamp,
-        byte[]? expectedHash, CancellationToken cancellationToken)
+    private async Task CommitTempAsync(string tempPath, string path, FileStamp? expectedStamp,
+        byte[]? expectedHash, CancellationToken cancellationToken, Action committing)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (expectedStamp is null)
         {
             try
             {
-                File.Move(tempPath, path);
+                committing();
+                SaveOperations.Move(tempPath, path);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -436,7 +451,8 @@ public sealed class Document : IDisposable
         }
         try
         {
-            File.Replace(tempPath, path, null, ignoreMetadataErrors: false);
+            committing();
+            SaveOperations.Replace(tempPath, path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -447,7 +463,17 @@ public sealed class Document : IDisposable
 
     /// <summary>Attaches a bounded, content-free stage to the original filesystem exception.</summary>
     private static void AnnotateSaveFailure(Exception exception, SavePhase phase) =>
-        exception.Data[SavePhaseDataKey] = phase.ToString();
+        TrySetSaveFailureData(exception, SavePhaseDataKey, phase.ToString());
+
+    /// <summary>Optional diagnostics must not mask a primary exception whose Data collection rejects writes.</summary>
+    private static void TrySetSaveFailureData(Exception exception, string key, object value)
+    {
+        try { exception.Data[key] = value; }
+        catch (Exception annotationError) when (annotationError is not OutOfMemoryException)
+        {
+            // The caller rethrows the original error even when its evidence is unavailable.
+        }
+    }
 
     /// <summary>Ends the document lifetime. Snapshots already handed out remain readable.</summary>
     public void Dispose()

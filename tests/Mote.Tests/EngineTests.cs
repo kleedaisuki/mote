@@ -295,7 +295,12 @@ public sealed class EngineTests
             Assert.True(document.IsModified);
         }
 
-        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, ".held-target.txt.*.tmp"));
+        var recovery = Assert.IsType<SaveRecovery>(document.PendingSaveRecovery);
+        Assert.Equal(original + " changed", await File.ReadAllTextAsync(recovery.Path));
+        await document.DiscardSaveRecoveryAsync();
+        await document.SaveAsync();
+        Assert.Equal(original + " changed", await File.ReadAllTextAsync(path));
+        Assert.False(document.IsModified);
     }
 
     /// <summary>Save As cannot silently overwrite a different existing file.</summary>
