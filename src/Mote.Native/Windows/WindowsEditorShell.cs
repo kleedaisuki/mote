@@ -75,6 +75,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private uint? _statusBrushColor;
     private bool _systemHighContrast;
     private string _visibleText = "";
+    /// <summary>Native NUL projection is display-only; no complete-string edit inverse is claimed.</summary>
+    private bool _sourceInputReadOnly;
+    private bool _sourceMapInstalled = true;
+    private string? _sourceHostNotice;
     private RichEditOffsetMap _editorOffsets = new("");
     private RichEditOffsetMap _previewOffsets = new("");
     private NativeTextProjection _previewProjection = new("", NativeLineEndingMode.CrLf);
@@ -420,8 +424,13 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
         Win32.SetWindowTextW(_window, view.Title);
         UpdateStatus(view.Status);
-        if (string.Equals(_visibleText, view.Text, StringComparison.Ordinal))
+        var nativeText = WindowsNativeSourceSafety.ReadOnlyDisplay(view.Text);
+        _sourceInputReadOnly = view.Text.Contains('\0');
+        _sourceHostNotice = _sourceInputReadOnly ? "This source page contains NUL; native input is read-only (␀ is display-only). Engine text and Save remain exact." : null;
+        RenderStatus();
+        if (_sourceMapInstalled && string.Equals(_visibleText, nativeText, StringComparison.Ordinal))
         {
+            Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, _sourceInputReadOnly ? 1u : 0u, 0);
             if (stampChanged) SetAllEditorColor(_theme.Palette.EditorForeground);
             if (view.FocusDisplayOffset is int focus)
                 SetSelection(Math.Clamp(focus, 0, _visibleText.Length),
@@ -435,9 +444,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         {
             // RichEdit's UTF-16 entry point retains one bounded page, not the entire document.
             var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
-            Win32.SendMessageW(_editor, Win32.EM_SETTEXTEX, ref text, view.Text);
-            _visibleText = view.Text;
-            _editorOffsets = new RichEditOffsetMap(view.Text);
+            _sourceMapInstalled = false;
+            Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, 0, 0);
+            Win32.SendMessageW(_editor, Win32.EM_SETTEXTEX, ref text, nativeText);
+            if (!string.Equals(ReadEditorText(), nativeText, StringComparison.Ordinal))
+                throw new InvalidOperationException("Native source import did not preserve its complete bounded text.");
+            _visibleText = nativeText;
+            _editorOffsets = new RichEditOffsetMap(nativeText);
+            _sourceMapInstalled = true;
             SetSelection(0, view.Text.Length);
             SetSelectionColor(_theme.Palette.EditorForeground);
             if (view.FocusDisplayOffset is int focus)
@@ -449,6 +463,13 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         }
         finally
         {
+            if (!_sourceMapInstalled)
+            {
+                _sourceInputReadOnly = true;
+                _sourceHostNotice = "Native source input is unavailable: exact import/readback failed. Engine text and Save remain authoritative.";
+                RenderStatus();
+            }
+            Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, _sourceInputReadOnly ? 1u : 0u, 0);
             _settingText = false;
         }
     }
@@ -969,6 +990,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 ShowError(message);
             };
             _canvasIsland.AccessibilityFaulted += () => CanvasAccessibilityFailed?.Invoke();
+            _canvasIsland.SourceInputNoticeChanged += notice => { _sourceHostNotice = notice; RenderStatus(); };
             _canvasIsland.CompositionFinished += NotifyCompositionSettled;
             if (_pendingCanvasBinding is not null) _canvasIsland.Bind(_pendingCanvasBinding);
             if (_pendingCanvasFrame is not null) _canvasIsland.SetFrame(_pendingCanvasFrame);
@@ -1058,6 +1080,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     private void HandleCommand(int id)
     {
+        if (id == CutId && (_sourceInputReadOnly || !_sourceMapInstalled || _canvasIsland?.IsInputReadOnly == true)) return;
         if (id is CopyId or CutId or FindId or FindNextId or GoToLineId)
             FlushSelection();
         switch (id)
@@ -1084,7 +1107,24 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     private void OnTextChanged()
     {
-        var text = ReadEditorText();
+        if (_sourceInputReadOnly)
+        {
+            // Only a previously certified read-only display can be restored.
+            // A failed new import must not reauthorize the preceding page cache.
+            if (_sourceMapInstalled) RestoreReadOnlySource();
+            return;
+        }
+        if (!_sourceMapInstalled) return;
+        string text;
+        try { text = ReadEditorText(); }
+        catch
+        {
+            _sourceInputReadOnly = true; _sourceMapInstalled = false;
+            _sourceHostNotice = "Native source readback failed; editing was disabled without changing Engine text.";
+            Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, 1, 0);
+            RenderStatus();
+            return;
+        }
         if (string.Equals(text, _visibleText, StringComparison.Ordinal)) return;
         CancelPendingStyle();
         var previousText = _visibleText;
@@ -1097,6 +1137,29 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             _visibleText = previousText;
             _editorOffsets = previousOffsets;
             throw;
+        }
+    }
+
+    /// <summary>Programmatic native mutations of a read-only display never become Engine edits or offset authority.</summary>
+    private void RestoreReadOnlySource()
+    {
+        var unchanged = false;
+        try { unchanged = string.Equals(ReadEditorText(), _visibleText, StringComparison.Ordinal); }
+        catch { /* A failed native buffer is never authoritative. Restore from the ready safe display. */ }
+        if (unchanged) return;
+        _settingText = true;
+        _sourceMapInstalled = false;
+        try
+        {
+            Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, 0, 0);
+            var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
+            Win32.SendMessageW(_editor, Win32.EM_SETTEXTEX, ref text, _visibleText);
+            _sourceMapInstalled = string.Equals(ReadEditorText(), _visibleText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, 1, 0);
+            _settingText = false; _pendingSelection = false;
         }
     }
 
@@ -1126,6 +1189,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     {
         var shell = _active ?? _creating;
         if (shell is null) return Win32.DefSubclassProc(window, message, wParam, lParam);
+        if ((shell._sourceInputReadOnly || !shell._sourceMapInstalled) &&
+            (message is Win32.WM_CHAR or Win32.WM_CUT or Win32.WM_PASTE or Win32.WM_CLEAR or Win32.WM_IME_STARTCOMPOSITION ||
+             message == Win32.WM_KEYDOWN && wParam is 0x08 or 0x2E)) return 0;
         if (message == Win32.WM_COPY)
         {
             shell.FlushSelection();
@@ -1134,6 +1200,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         }
         if (message == Win32.WM_CUT)
         {
+            if (shell._sourceInputReadOnly || !shell._sourceMapInstalled) return 0;
             shell.FlushSelection();
             shell.CutRequested?.Invoke();
             return 0;
@@ -1228,6 +1295,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     private void FlushSelection()
     {
+        if (!_sourceMapInstalled) { _pendingSelection = false; return; }
         if (!_pendingSelection) return;
         _pendingSelection = false;
         var range = GetSelection();
@@ -1255,33 +1323,11 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private string ReadEditorText() => ReadControlText(_editor);
 
     /// <summary>Reads RichEdit UTF-16 text with the same CRLF contract used by origin maps.</summary>
-    private static string ReadControlText(nint control)
-    {
-        // WM_GETTEXTLENGTH may count internal paragraph delimiters as one code unit.
-        // Doubled capacity safely accommodates their CRLF projection.
-        var internalLength = (int)Win32.SendMessageW(control, Win32.WM_GETTEXTLENGTH, 0, 0);
-        var capacity = checked((internalLength + 1) * 2 + 16);
-        var buffer = Marshal.AllocHGlobal(checked(capacity * sizeof(char)));
-        try
-        {
-            var request = new Win32.GetTextEx
-            {
-                ByteCapacity = (uint)(capacity * sizeof(char)),
-                Flags = Win32.GT_USECRLF,
-                CodePage = Win32.CP_UNICODE
-            };
-            var count = (int)Win32.SendMessageW(control, Win32.EM_GETTEXTEX, ref request, buffer);
-            return Marshal.PtrToStringUni(buffer, count) ?? "";
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buffer);
-        }
-    }
+    private static string ReadControlText(nint control) => WindowsNativeSourceSafety.Read(control);
 
     private void ApplySemanticColors(NativeAnalysisView view)
     {
-        if (_editor == 0) return;
+        if (_editor == 0 || _sourceInputReadOnly || !_sourceMapInstalled) return;
         using var undo = _editorUndo.Suspend(_editor);
         var saved = GetSelection();
         var firstLine = (int)Win32.SendMessageW(_editor, Win32.EM_GETFIRSTVISIBLELINE, 0, 0);
@@ -1526,6 +1572,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         var value = _statusNotice is null ? _statusBase :
             string.IsNullOrEmpty(_statusBase) ? _statusNotice :
             _statusBase + "  ·  " + _statusNotice;
+        if (_sourceHostNotice is not null) value += "  ·  " + _sourceHostNotice;
         Win32.SetWindowTextW(_status, value);
     }
 

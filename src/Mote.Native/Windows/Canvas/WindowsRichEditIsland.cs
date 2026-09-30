@@ -75,6 +75,13 @@ internal sealed class WindowsRichEditIsland : IDisposable
     private NativeTextProjection _projection = new("", NativeLineEndingMode.CrLf);
     private RichEditOffsetMap _offsets = new("");
     private bool _settingText;
+    /// <summary>NUL-bearing native intervals are display-only; complete-string inversion would be ambiguous.</summary>
+    private bool _inputReadOnly;
+    private string _nativeInputText = "";
+    /// <summary>Whether the current bounded source host refuses native mutation while retaining Engine authority.</summary>
+    internal bool IsInputReadOnly => _inputReadOnly || _faulted;
+    /// <summary>A nonmodal source-input capability notice; null clears it on a later safe binding.</summary>
+    internal event Action<string?>? SourceInputNoticeChanged;
     private bool _settingSelection;
     private bool _composition;
     private bool _compositionObserved;
@@ -280,6 +287,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
         _compositionAttempted = false;
         _frame = binding.Frame;
         _projection = new NativeTextProjection(binding.InputSourceText, NativeLineEndingMode.CrLf);
+        _inputReadOnly = binding.InputSourceText.Contains('\0');
+        _nativeInputText = WindowsNativeSourceSafety.ReadOnlyDisplay(_projection.Display);
         _offsets = new RichEditOffsetMap(_projection.Display);
         if (_input != 0) Win32.ShowWindow(_input, 5);
         if (_input != 0)
@@ -288,12 +297,33 @@ internal sealed class WindowsRichEditIsland : IDisposable
             try
             {
                 var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
-                Win32.SendMessageW(_input, Win32.EM_SETTEXTEX, ref text, _projection.Display);
+                Win32.SendMessageW(_input, Win32.EM_SETREADONLY, 0, 0);
+                Win32.SendMessageW(_input, Win32.EM_SETTEXTEX, ref text, _nativeInputText);
+                if (!string.Equals(ReadInputText(), _nativeInputText, StringComparison.Ordinal))
+                {
+                    _inputReadOnly = true;
+                    _binding = null;
+                    throw new InvalidOperationException("Native source host import did not retain its complete text.");
+                }
                 ApplyInputTextColor();
                 SetNativeSelection(binding.Anchor, binding.Active);
             }
-            finally { _settingText = false; }
+            catch
+            {
+                // A thrown readback is as unsafe as an unequal readback: no new
+                // binding or unlocked input may escape before import certification.
+                _binding = null;
+                _inputReadOnly = true;
+                SourceInputNoticeChanged?.Invoke("Native source input is unavailable: exact import/readback failed. Engine text and Save remain authoritative.");
+                throw;
+            }
+            finally
+            {
+                Win32.SendMessageW(_input, Win32.EM_SETREADONLY, _inputReadOnly ? 1u : 0u, 0);
+                _settingText = false;
+            }
         }
+        SourceInputNoticeChanged?.Invoke(_inputReadOnly ? "This source interval contains NUL; native input is read-only (␀ is display-only). Engine text and Save remain exact." : null);
         PlaceInput();
         UpdateScrollbar();
         Invalidate();
@@ -627,6 +657,9 @@ internal sealed class WindowsRichEditIsland : IDisposable
         uint message, nuint wParam, nint lParam, nuint subclassId)
     {
         if (island._faulted && message != Win32.WM_NCDESTROY) return 0;
+        if (island._inputReadOnly && (message is Win32.WM_CHAR or Win32.WM_CUT or Win32.WM_PASTE or
+            Win32.WM_CLEAR or Win32.WM_IME_STARTCOMPOSITION ||
+            message == Win32.WM_KEYDOWN && wParam is 0x08 or 0x2E)) return 0;
         if (message == Win32.WM_IME_STARTCOMPOSITION)
             island.BeginComposition();
         var confirmedImeResult = message == WmImeComposition &&
@@ -779,6 +812,19 @@ internal sealed class WindowsRichEditIsland : IDisposable
 
     private void CommitFinalText()
     {
+        if (_faulted) return;
+        if (_inputReadOnly)
+        {
+            _pendingEditSelection = null;
+            if (_binding is { } safe)
+            {
+                var unchanged = false;
+                try { unchanged = string.Equals(ReadInputText(), _nativeInputText, StringComparison.Ordinal); }
+                catch { /* Invalid native buffers are restored from the binding, never committed. */ }
+                if (!unchanged) Bind(safe);
+            }
+            return;
+        }
         var binding = _binding;
         if (binding is null || _input == 0) return;
         var display = ReadInputText();
@@ -837,6 +883,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
 
     private bool EmitGlobalSelectionDelete()
     {
+        if (_inputReadOnly || _faulted) return false;
         if (_binding is null || _frame is null || _frame.SelectionLength == 0) return false;
         if (!FlushPendingText()) return false;
         var binding = _binding;
@@ -877,9 +924,11 @@ internal sealed class WindowsRichEditIsland : IDisposable
     {
         var binding = _binding;
         if (binding is null || _input == 0) return;
+        if (_inputReadOnly && !string.Equals(ReadInputText(), _nativeInputText, StringComparison.Ordinal))
+        { Bind(binding); return; }
         // If native text differs, selection collapse belongs to the edit and is not allowed
         // to erase a document-global selection before the controller receives the edit.
-        if (_projection.Difference(ReadInputText()) is not null)
+        if (!_inputReadOnly && _projection.Difference(ReadInputText()) is not null)
         {
             QueueCommit();
             return;
@@ -894,24 +943,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
         SelectionRequested?.Invoke(a, b);
     }
 
-    private string ReadInputText()
-    {
-        var length = (int)Win32.SendMessageW(_input, Win32.WM_GETTEXTLENGTH, 0, 0);
-        var capacity = checked((length + 1) * 2 + 16);
-        var buffer = Marshal.AllocHGlobal(checked(capacity * sizeof(char)));
-        try
-        {
-            var request = new Win32.GetTextEx
-            {
-                ByteCapacity = (uint)(capacity * sizeof(char)),
-                Flags = Win32.GT_USECRLF,
-                CodePage = Win32.CP_UNICODE
-            };
-            var count = (int)Win32.SendMessageW(_input, Win32.EM_GETTEXTEX, ref request, buffer);
-            return Marshal.PtrToStringUni(buffer, count) ?? "";
-        }
-        finally { Marshal.FreeHGlobal(buffer); }
-    }
+    private string ReadInputText() => WindowsNativeSourceSafety.Read(_input);
 
     private void SetNativeSelection(int anchor, int active)
     {
@@ -980,6 +1012,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
     /// </summary>
     private void PastePlainText()
     {
+        if (_inputReadOnly || _faulted) return;
         if (_composition || _binding is null || !TryReadClipboardText(out var text))
         {
             Win32.MessageBoxW(_parent, "Plain Unicode clipboard text could not be pasted safely.",

@@ -1523,6 +1523,8 @@ public sealed partial class NativeControllerTests
         public NativeProjectedSelection? DisplaySelection { get; private set; }
         /// <summary>Last exact string sent to the fake clipboard.</summary>
         public string? ClipboardText { get; private set; }
+        /// <summary>Counts attempted clipboard publication, including rejected attempts.</summary>
+        public int ClipboardSetCalls { get; private set; }
         /// <summary>Simulates an OS clipboard service refusing a write.</summary>
         public bool RejectClipboard { get; set; }
         /// <summary>Native IME text not yet represented in the engine snapshot.</summary>
@@ -1627,6 +1629,7 @@ public sealed partial class NativeControllerTests
         /// <inheritdoc />
         public void SetClipboardText(string text)
         {
+            ClipboardSetCalls++;
             if (RejectClipboard) throw new InvalidOperationException("Clipboard unavailable.");
             ClipboardText = text;
         }

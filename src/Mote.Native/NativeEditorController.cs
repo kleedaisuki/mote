@@ -1226,6 +1226,12 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     ShowDocument();
                     return;
                 }
+                if (selected.Contains('\0'))
+                {
+                    _shell.ShowError("Copy refused: the selection contains U+0000; the clipboard and document were not changed.");
+                    ShowDocument();
+                    return;
+                }
                 try { _shell.SetClipboardText(selected); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
