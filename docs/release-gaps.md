@@ -51,6 +51,34 @@ The **osx-x64 in-process Canvas AX selector/lifecycle** report is a distinct unr
 
 ## Active gates
 
+**Newer checkpoint (2026-09-30; read with the historical rows below):**
+[CI 36727036440](https://github.com/kleedaisuki/mote/actions/runs/36727036440)
+passed all six strict jobs after the bounded typed Markdown Flow subgraph landed;
+both published Mac RIDs also emitted the exact non-gating AppKit Flow marker.
+Flow now retains precise ordered inline text and source origins, Windows imports
+generated RTF separately from literal fallback text, and Mac installs attributed
+text directly. Plain text defaults to source-only while an explicit preview
+preference can override policy convention. This closes neither CSV's native Grid,
+safe local images, physical Copy/IME/reader acceptance nor GUI latency
+([implementation and evidence](native-flow-implementation-contract.md)).
+
+[CI 36732329913](https://github.com/kleedaisuki/mote/actions/runs/36732329913)
+then passed all six strict jobs with data-only theme overrides and explicit
+Reload Settings; both published Mac RIDs passed the separate in-memory AppKit
+reload marker. An independent real-file Windows hidden-HWND test passed the
+same-ID color change, half-write/read-failure retention, recovery and Undo
+contract. Those are scoped target/control results, not user-palette pixel,
+physical IME or screen-reader acceptance
+([theme result](native-theme-overrides.md),
+[file-backed workflow](validation/native-theme-file-workflow.md)). A bounded,
+source-backed CSV Grid **format projection** has also landed
+([format evidence](csv-grid-format-implementation.md)); the native virtual table
+surface and its Copy/edit/AX/UIA workflows are not yet implemented. The CSV
+format commit `9034fbe` subsequently passed all six strict jobs in
+[CI 36734783210](https://github.com/kleedaisuki/mote/actions/runs/36734783210);
+this proves cross-platform compilation/tests and four Native AOT publishes,
+not a native Grid workflow or large-file GUI latency.
+
 | Priority | Code/evidence and impact | Owner + decisive experiment | Exit condition |
 | --- | --- | --- | --- |
 | **P0 — full semantic editing on large files is not yet delivered** | All six policies have versioned `IFormatSession` semantics, but `Complete` has format- and grammar-specific limits. CSV cold `Visible` now scans a bounded prefix, preserves honest `CoveredRegion`/`Provisional`, and a cancellable idle `Full` is admitted by the Native scheduler; the prior 2.2 MiB offscreen `CSV004` controller regression now reaches exact `Complete`. A comma-run fast path cuts one 100 MiB giant empty-field row’s Release median Full scan from 1,900.5 to 96.4 ms without changing exact counts; mixed-file timing ranges overlap, so no general speedup follows ([CSV evidence](csv-cold-analysis.md)). Markdown certifies a restricted grammar of blank-separated headings/paragraphs/closed fences plus safe adjacent ATX-heading seams; a local block-kind change recertifies rather than reusing stale boundaries. Cold 100 MiB `Visible` is provisional, while later `Full` can complete on certified corpora; cross-block references remain nonlocal and provisional ([block certificate](markdown-block-certification.md)). The 100 MiB JSON unique-key corpus reaches `Complete`. TOML now certifies dotted traversal of an implicit header parent (`ImplicitHeader → Dotted`), including `[a.x.y]` → `[a]` → `x.z=3`; explicit-header/array-element traversal and parent AoT re-entry after a nested header remain provisional ([ownership decision](toml-large-semantics.md)). YAML now retains `yaml.undefined-alias` and downgrades to `Provisional` with unknown global count when an undefined alias makes a mapping key or anchored node noncanonical, including direct/nested cases and an offscreen key beyond 2 MiB; it does not invent duplicate-key errors. Density/recovery limits and the measured 100 MiB full-edit re-stream cost remain open ([alias-key recovery](yaml-alias-key-recovery.md)). | **Formats + Native desktop.** Compare versioned offscreen errors/dependencies, cancellation/retry and exact oracle results on adversarial >2 MiB files, including real AOT UI responsiveness while CSV/Markdown Full runs; measure CPU/RSS and status honesty. | Every supported format reaches whole-file semantics for its **claimed** domain without blocking edits; unsupported grammar and resource limits are visible as `Provisional`, never invented zero diagnostics. |
