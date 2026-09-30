@@ -183,6 +183,20 @@ extra gains.
   assembly name; both harness-only defects were corrected without production
   changes. Full-solution/AOT/native UX validation is not claimed by this run.
 
+### Target build/test compatibility checkpoint
+
+The integrated change `cac8179` is included in HEAD
+`5977250330fd47a633b95692b5a3ed8e1c988495` of
+[CI run 36787947202](https://github.com/kleedaisuki/mote/actions/runs/36787947202).
+All nine strict jobs completed successfully: Windows/macOS solution tests,
+strict single-binary Native AOT for win-x64, win-arm64, osx-x64 and osx-arm64,
+and the three dedicated native CSV Grid clipboard jobs. This establishes
+cross-platform build/test compatibility of the integrated optimization. It does
+**not** establish 100 MiB Markdown native GUI acceptance, native allocation/RSS,
+startup/first paint, input latency or render-tail performance. The managed
+measurements and their scope above remain unchanged; no local validation was
+repeated for this checkpoint.
+
 ## Provenance and reproduction
 
 An initial round built both folders from unchanged probe/Engine source, but
