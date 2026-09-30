@@ -267,6 +267,53 @@ capture-to-capture gap stays large, investigate scheduler/virtual-display
 cadence. If both are small while first changed pixels arrive late, add a
 version-tagged native draw-return hook before touching renderer architecture.
 
+#### Hosted phase-split observation: run `36684299172`
+
+The separately uploaded [win-x64 paint artifact from CI `36684299172`](https://github.com/kleedaisuki/mote/actions/runs/36684299172)
+at commit `0a90986a840fe00129a3fc027f34ffb0f93e5ce5` is retained under
+`.cache/ci-run-36684299172/native-paint-latency-win-x64/acc61f85a05048468c57ff561b9adb66/screen-observations.jsonl`.
+The non-gating diagnostic and artifact-upload steps both completed
+successfully, and the win-x64 Native AOT job succeeded. The **overall CI run
+later completed with failure in the separate `Test / windows-latest` job**;
+these paint rows are not evidence that all six jobs were green.
+Both cases used the same published Native AOT executable SHA-256
+`07BD3A1CF8FFE41B0EC3A6CA8E4A2D8F7AF79CB0BB865952585F07AEF2E9E036`
+on a hosted Windows 10.0.26100 AMD EPYC 7763 runner with four exposed
+logical processors, a 1024×768 primary display, 96-DPI target and 668×659
+canvas. Each size has **one** process/sample, not a distribution.
+
+| Synthetic fixture | Input ack | First source-verified screen capture | First-change `BitBlt` / total copy | Timed-phase median owner / `BitBlt` / readback | Post-oracle ABBA full / small median |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 MiB CRLF lines | 1.280 ms | 30.841 ms | 30.512 / 30.841 ms | 0.195 / 30.512 / 0.014 ms | 16.652 / 15.843 ms |
+| 100 MiB CRLF lines | 1.231 ms | 30.618 ms | 30.309 / 30.621 ms | 0.051 / 17.558 / 0.009 ms | 15.939 / 15.827 ms |
+
+Both rows passed exact target foreground, quiet `WM_NULL`, full X/original/X
+Save hashes, visible distinct Undo source geometry, three exact Redo screen
+matches and fixture cleanup. The first changed frame had the same 1,002
+changed pixels as the earlier hosted probe. Critically, **the first changed
+capture spent nearly its entire observed interval inside `BitBlt` itself**;
+five ownership checks and managed readback were comparatively negligible.
+For 100 MiB, the timed-phase *median* `BitBlt` was only 17.558 ms while the
+specific first-changed call took 30.309 ms; those are different statistics,
+not a contradiction. Post-oracle same-process 64×16 area reduction saved
+**0.810 ms** in the 1 MiB control and **0.112 ms** in the 100 MiB control;
+the full/small `BitBlt` medians were 16.585/15.814 and 15.902/15.793 ms.
+This supports an observer cost dominated by a mostly area-insensitive screen
+copy/synchronization call on this hosted virtual display. It does **not** prove
+that mote drew in <1 ms: the updated frame could become available *during*
+the blocking `BitBlt`, and no versioned native draw-return mark exists.
+
+The prior hosted run's first changed captures were 30.878/30.976 ms for
+1/100 MiB, numerically close to these 30.841/30.618 ms observations, but
+the binary SHA, VM instance and added instrumentation differ, and each cell
+has just one process. No p95, cross-run regression or equality-of-size claim
+follows. A smaller DIB alone is not a worthwhile new edit observer yet;
+the next discriminating measurement is a version-tagged native draw-return
+timestamp correlated with a frame-level external capture source such as DXGI
+Desktop Duplication, with capture overhead and permission boundary stated
+separately. Optimizing the document engine or Canvas painter from these
+software-screen numbers would be premature.
+
 ## Instrumentation architecture before optimizing product code
 
 1. Keep the current `EditToPresentation` operation and its privacy-safe
