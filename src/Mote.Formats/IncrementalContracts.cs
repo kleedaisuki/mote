@@ -95,3 +95,103 @@ public interface IFormatSession : IDisposable
     DocumentAnalysis Analyze(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> changesSinceCommittedState,
         AnalysisRequest request, CancellationToken cancellationToken = default);
 }
+
+/// <summary>Optional sparse projection of one snapshot through one format session.</summary>
+/// <remarks>Windows are absolute UTF-16 source ranges, not independently parsed documents.</remarks>
+public interface IWindowedFormatSession : IFormatSession
+{
+    /// <summary>
+    /// Updates the session once, then projects at most eight windows from that version.
+    /// Callers serialize requests and must discard results for obsolete versions.
+    /// </summary>
+    WindowedAnalysis AnalyzeWindows(TextSnapshot snapshot,
+        IReadOnlyList<VersionedEdit> changesSinceCommittedState, IReadOnlyList<TextSpan> windows,
+        AnalysisScope scope, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Delivery state of one normalized requested source window.</summary>
+/// <param name="SourceRange">Requested half-open absolute UTF-16 interval after overlap merging.</param>
+/// <param name="ProjectedRowCount">Logical rows represented in the shared projection.</param>
+/// <param name="SourceIndexed">Whether the session reached this entire interval at this version.</param>
+/// <param name="Truncated">True if rows or bounded payload were omitted, or source is not indexed.</param>
+public readonly record struct WindowProjection(TextSpan SourceRange, int ProjectedRowCount,
+    bool SourceIndexed, bool Truncated);
+
+/// <summary>Versioned sparse projection with explicit, non-convex certified coverage.</summary>
+/// <remarks>
+/// Complete means whole-file semantic checks and an exact total, not that all source rows
+/// were projected. CoveredRegion certifies only the listed intervals; gaps are not covered.
+/// The projection retains no source snapshot or format-session cache.
+/// </remarks>
+public sealed class WindowedAnalysis
+{
+    /// <summary>Constructs an immutable presentation result from policy-owned facts.</summary>
+    public WindowedAnalysis(long version, AnalysisCompleteness completeness,
+        IReadOnlyList<TextSpan> certifiedCoverage, int? totalDiagnosticCount,
+        SemanticNode root, IReadOnlyList<Diagnostic> diagnostics, IReadOnlyList<SemanticToken> tokens,
+        IReadOnlyList<WindowProjection> windows)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(version);
+        ArgumentNullException.ThrowIfNull(certifiedCoverage);
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        ArgumentNullException.ThrowIfNull(tokens);
+        ArgumentNullException.ThrowIfNull(windows);
+        if (completeness is not (AnalysisCompleteness.Provisional or
+            AnalysisCompleteness.CoveredRegion or AnalysisCompleteness.Complete))
+            throw new ArgumentOutOfRangeException(nameof(completeness));
+        if ((completeness == AnalysisCompleteness.Complete) != totalDiagnosticCount.HasValue ||
+            totalDiagnosticCount is < 0)
+            throw new ArgumentException("Only complete analysis has an exact nonnegative total.", nameof(totalDiagnosticCount));
+        var previousEnd = -1;
+        foreach (var span in certifiedCoverage)
+        {
+            if (span.Start < 0 || span.Length < 0 || span.End > root.Span.End || span.Start < previousEnd)
+                throw new ArgumentException("Coverage must be sorted and nonoverlapping.", nameof(certifiedCoverage));
+            previousEnd = span.End;
+        }
+        if (completeness == AnalysisCompleteness.Complete &&
+            (certifiedCoverage.Count != 1 || certifiedCoverage[0] != root.Span))
+            throw new ArgumentException("Complete analysis must certify the whole root span.", nameof(certifiedCoverage));
+        if (windows.Count == 0)
+            throw new ArgumentException("At least one requested window is required.", nameof(windows));
+        previousEnd = -1;
+        foreach (var window in windows)
+        {
+            var range = window.SourceRange;
+            if (range.Start < 0 || range.Length < 0 || range.End > root.Span.End ||
+                range.Start <= previousEnd || window.ProjectedRowCount < 0 ||
+                !window.SourceIndexed && !window.Truncated ||
+                completeness == AnalysisCompleteness.Complete && !window.SourceIndexed)
+                throw new ArgumentException("Window delivery is not normalized or truthful.", nameof(windows));
+            previousEnd = range.End;
+        }
+        Version = version;
+        Completeness = completeness;
+        CertifiedCoverage = new ReadOnlyCollection<TextSpan>(certifiedCoverage.ToArray());
+        TotalDiagnosticCount = totalDiagnosticCount;
+        Root = root;
+        Diagnostics = new ReadOnlyCollection<Diagnostic>(diagnostics.ToArray());
+        Tokens = new ReadOnlyCollection<SemanticToken>(tokens.ToArray());
+        Windows = new ReadOnlyCollection<WindowProjection>(windows.ToArray());
+    }
+
+    /// <summary>Version of every absolute source span in this result.</summary>
+    public long Version { get; }
+    /// <summary>Semantic validity; independent of the number of projected rows.</summary>
+    public AnalysisCompleteness Completeness { get; }
+    /// <summary>Sorted certified intervals without a claim about disjoint gaps.</summary>
+    public IReadOnlyList<TextSpan> CertifiedCoverage { get; }
+    /// <summary>Exact whole-file diagnostic count only for complete analysis.</summary>
+    public int? TotalDiagnosticCount { get; }
+    /// <summary>Bounded, source-anchored semantic projection.</summary>
+    public SemanticNode Root { get; }
+    /// <summary>Diagnostics belonging to projected source owners.</summary>
+    public IReadOnlyList<Diagnostic> Diagnostics { get; }
+    /// <summary>Tokens belonging to projected source owners.</summary>
+    public IReadOnlyList<SemanticToken> Tokens { get; }
+    /// <summary>Per-window delivery, distinct from semantic certification and global count.</summary>
+    public IReadOnlyList<WindowProjection> Windows { get; }
+    /// <summary>True when any requested window lacks a fully indexed, bounded projection.</summary>
+    public bool ProjectionTruncated => Windows.Any(window => window.Truncated);
+}

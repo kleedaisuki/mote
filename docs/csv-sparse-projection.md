@@ -1,0 +1,32 @@
+# CSV sparse projection: one version, two windows
+
+Status: implemented as an additive CSV-only capability on 2026-09-30. This is **not** a Native viewport/preview integration or a release performance claim. The owning source remains `Document`/`TextSnapshot`; `CsvIncrementalSession` retains only record boundaries, widths, and local error counts. The public `IFormatSession.Analyze` signature and one-window behavior remain intact. `IWindowedFormatSession` is optional, and at present only CSV implements it.
+
+## Contract and dependency proof
+
+`AnalyzeWindows` accepts one to eight half-open absolute UTF-16 ranges, with at most 512 Ki total requested width. It sorts and merges touching/overlapping ranges, updates the record index once for the supplied version/edit chain, then projects each intersecting logical record once. A record crossing two disjoint windows has one row owner; only cells/tokens/row-local errors intersecting a requested window are emitted. The result has a sorted interval-set `CertifiedCoverage`, not a convex hull: after a cold `Visible` request the only certificate is the scanned whole-record prefix, and a distant second window remains unprojected/`Provisional`. After a `Full` scan the certificate covers the whole file and `TotalDiagnosticCount` is exact even when projection is sparse. `Complete` does **not** imply all rows are rendered.
+
+`WindowedAnalysis.Windows` separately reports each normalized window's `SourceIndexed`, `ProjectedRowCount`, and conservative `Truncated`; `ProjectionTruncated` is their aggregate. Semantic completeness does not imply projection completeness. The 4,096-row **and 8,192-cell** caps are each divided equally among requested windows (one-window legacy route still gets the original caps), so a dense head cannot starve a nonempty disjoint tail of either rows or editable/renderable cell content. A cell crossing two windows is stored only once and debits available quota in each interested window. Unused quota is not redistributed in this first slice: this bounds work simply, but may underutilize the global cap when one window is sparse. A cold unindexed window—including a zero-length request at offset zero before a giant first record closes—reports `SourceIndexed=false`, `Truncated=true` instead of letting an empty projection masquerade as empty source. Bounded cell/token/diagnostic omission also conservatively marks truncation.
+
+The first row supplies expected column width. A width edit there changes later `CSV004` truth without changing their lexical record boundaries: the index reuses the suffix's row widths but calculates the global mismatch count against the current first width, while projected `CSV004` messages are reconstructed from the current snapshot. This separates syntax reuse from semantic dependency invalidation. Any missing edit chain falls back to the authoritative snapshot; cancellation commits neither a new version nor a partial count. The projection owns no cached text or index and must be discarded if its document/version is obsolete.
+
+The existing single-window API deliberately bypasses the new 512 Ki request-width bound so a legacy whole-file visible range remains accepted. Its small-file `Full` behavior still projects all rows for compatibility; the optional windowed API always projects only requested owners. Retained row-index budget and Native source-map wiring are **not** implemented in this slice. In particular, the 100 MiB fixture with millions of short records can retain more than the proposed 32 MiB format-index budget from [semantic-ir-evolution.md](semantic-ir-evolution.md). A separate cache-cap/no-cache-streaming design is required before that budget can be called met.
+
+## Focused validation
+
+`CsvWindowedAnalysisTests` checks two distant windows on >2 MiB input with an offscreen ragged row, exact UTF-16 emoji spans, cold distant `Provisional` (including zero-length interest before a giant first record closes), merged overlapping windows and a quoted CRLF record crossing both windows, a million-comma row, a 6,000-row/four-cell head plus disjoint two-cell tail that proves both fair budgets and explicit truncation, a first-row width edit that creates two offscreen width warnings, cancellation and a stale/incomplete edit chain, and one-window old/new projection equivalence. The CSV-focused suite passed 32/32 in Release on Windows/.NET 10; Formats and Mote.Tests full Release compilations had zero warnings/errors. These tests establish format-session behavior, not GUI scheduling, source-map activation, or macOS/AOT behavior.
+
+`tests/CsvSparseBenchmark/` builds an in-memory 3 or 100 MiB-ish CRLF source, performs one unmeasured `Full` index build, then measures warm projections on one session. It excludes opening, cold indexing, file I/O, rendering, and UI paint. Command: `dotnet run --project tests/CsvSparseBenchmark/CsvSparseBenchmark.csproj -c Release -v:q -- 100 31` (similarly `3 31`). Each route has 31 timed calls after one untimed warm-up; p95 is the nearest-rank observation and allocation is mean current-thread allocated bytes. The four routes are legacy one-window, optional one-window, two sequential legacy calls, and one optional two-window batch. A local Windows x64 managed Release run, not a controlled statistical study, yielded:
+
+| UTF-16 source | Route | p50 ms | p95 ms | Mean allocated bytes |
+| --- | --- | ---: | ---: | ---: |
+| 3,145,764 units | legacy one | 0.0576 | 0.0855 | 105,152 |
+| 3,145,764 units | windowed one | 0.0377 | 0.3782 | 105,032 |
+| 3,145,764 units | two calls | 0.0365 | 0.0518 | 110,616 |
+| 3,145,764 units | windowed two | 0.0334 | 0.0503 | 109,600 |
+| 104,857,661 units | legacy one | 0.0758 | 0.2382 | 105,351 |
+| 104,857,661 units | windowed one | 0.0686 | 0.0814 | 105,032 |
+| 104,857,661 units | two calls | 0.1203 | 0.3095 | 110,616 |
+| 104,857,661 units | windowed two | 0.1015 | 0.1894 | 109,600 |
+
+The 100 MiB warm batch is about 1.19× lower median than two calls in this process; allocations are close after removing a segment-wise iterator. One-window medians are close and noisy, not evidence of a material regression. At 3 MiB the median benefit is small; warm results are too noisy for a universal speedup claim. More importantly, this benchmark says nothing about the expensive first full index, long quoted records, cross-platform AOT, actual preview benefit, or input-to-compositor latency. Re-run on the four Native targets and adversarial CSV distributions before enabling product usage.

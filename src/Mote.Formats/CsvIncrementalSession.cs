@@ -12,13 +12,15 @@ namespace Mote.Formats;
 /// and diagnostics are reparsed from bounded snapshot ranges for projected records.
 /// This session is single-caller and commits only after successful analysis.
 /// </remarks>
-internal sealed class CsvIncrementalSession : IFormatSession
+internal sealed class CsvIncrementalSession : IWindowedFormatSession
 {
     private const int BlockSize = 1024;
     private const int VisibleScanBudget = 64 * 1024;
     private const int ProjectionRowBudget = 4096;
     private const int ProjectionCellBudget = 8192;
     private const int MaxProjectedCellSourceLength = 64 * 1024;
+    private const int MaxWindows = 8;
+    private const int MaxWindowWidth = 512 * 1024;
     private List<Segment> _segments = [];
     private long? _version;
     private bool _complete;
@@ -28,12 +30,31 @@ internal sealed class CsvIncrementalSession : IFormatSession
     public DocumentAnalysis Analyze(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> changesSinceCommittedState,
         AnalysisRequest request, CancellationToken cancellationToken = default)
     {
+        var result = AnalyzeWindowsCore(snapshot, changesSinceCommittedState,
+            [request.VisibleRange], request.Scope, false, cancellationToken);
+        // The legacy API is a single contiguous certificate, never a convex hull.
+        var coverage = result.CertifiedCoverage.Count == 0 ? new TextSpan(0, 0) : result.CertifiedCoverage[0];
+        return new DocumentAnalysis(result.Version, coverage, result.Completeness,
+            result.Root, result.Diagnostics, result.Tokens, result.TotalDiagnosticCount);
+    }
+
+    /// <inheritdoc />
+    public WindowedAnalysis AnalyzeWindows(TextSnapshot snapshot,
+        IReadOnlyList<VersionedEdit> changesSinceCommittedState, IReadOnlyList<TextSpan> windows,
+        AnalysisScope scope, CancellationToken cancellationToken = default)
+        => AnalyzeWindowsCore(snapshot, changesSinceCommittedState, windows, scope, true, cancellationToken);
+
+    private WindowedAnalysis AnalyzeWindowsCore(TextSnapshot snapshot,
+        IReadOnlyList<VersionedEdit> changesSinceCommittedState, IReadOnlyList<TextSpan> windows,
+        AnalysisScope scope, bool enforceBudget, CancellationToken cancellationToken)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(changesSinceCommittedState);
-        ValidateRange(snapshot, request.VisibleRange);
-        if (request.Scope is not (AnalysisScope.Visible or AnalysisScope.Full))
-            throw new ArgumentOutOfRangeException(nameof(request));
+        var normalized = NormalizeWindows(snapshot, windows, enforceBudget);
+        if (scope is not (AnalysisScope.Visible or AnalysisScope.Full))
+            throw new ArgumentOutOfRangeException(nameof(scope));
+        var furthest = normalized[^1];
 
         List<Segment> rows;
         bool complete;
@@ -41,14 +62,14 @@ internal sealed class CsvIncrementalSession : IFormatSession
         {
             rows = _segments;
             complete = _complete;
-            if (!complete && request.Scope == AnalysisScope.Full)
+            if (!complete && scope == AnalysisScope.Full)
             {
                 rows = ResumeAll(snapshot, rows, cancellationToken);
                 complete = true;
             }
-            else if (!complete && request.VisibleRange.End <= VisibleScanBudget)
+            else if (!complete && furthest.End <= VisibleScanBudget)
             {
-                rows = ExtendVisiblePrefix(snapshot, rows, request.VisibleRange, cancellationToken);
+                rows = ExtendVisiblePrefix(snapshot, rows, furthest, cancellationToken);
                 complete = rows.Count == 0 ? snapshot.Length == 0 : rows[^1].After == snapshot.Length;
             }
         }
@@ -57,22 +78,50 @@ internal sealed class CsvIncrementalSession : IFormatSession
             rows = ParseIncremental(snapshot, changesSinceCommittedState[0].Change, cancellationToken);
             complete = true;
         }
-        else if (request.Scope == AnalysisScope.Full)
+        else if (scope == AnalysisScope.Full)
         {
             rows = ParseAll(snapshot, cancellationToken);
             complete = true;
         }
         else
         {
-            rows = ParseVisiblePrefix(snapshot, request.VisibleRange, cancellationToken);
+            rows = ParseVisiblePrefix(snapshot, furthest, cancellationToken);
             complete = rows.Count == 0 ? snapshot.Length == 0 : rows[^1].After == snapshot.Length;
         }
-        var result = Project(snapshot, rows, request, complete, cancellationToken);
+        var result = Project(snapshot, rows, normalized, scope, complete, !enforceBudget, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         _segments = rows;
         _version = snapshot.Version;
         _complete = complete;
         return result;
+    }
+
+    private static TextSpan[] NormalizeWindows(TextSnapshot snapshot, IReadOnlyList<TextSpan> windows, bool enforceBudget)
+    {
+        ArgumentNullException.ThrowIfNull(windows);
+        if (windows.Count is < 1 or > MaxWindows)
+            throw new ArgumentOutOfRangeException(nameof(windows), "CSV accepts one to eight source windows.");
+        var sorted = windows.ToArray();
+        long width = 0;
+        foreach (var window in sorted)
+        {
+            ValidateRange(snapshot, window);
+            width += window.Length;
+        }
+        if (enforceBudget && width > MaxWindowWidth)
+            throw new ArgumentOutOfRangeException(nameof(windows), "CSV projection windows exceed 512 Ki UTF-16 units.");
+        Array.Sort(sorted, (a, b) => a.Start.CompareTo(b.Start));
+        var merged = new List<TextSpan>(sorted.Length);
+        foreach (var window in sorted)
+        {
+            if (merged.Count > 0 && window.Start <= merged[^1].End)
+            {
+                var previous = merged[^1];
+                merged[^1] = new TextSpan(previous.Start, Math.Max(previous.End, window.End) - previous.Start);
+            }
+            else merged.Add(window);
+        }
+        return merged.ToArray();
     }
 
     /// <inheritdoc />
@@ -227,7 +276,8 @@ internal sealed class CsvIncrementalSession : IFormatSession
 
     private static Row ParseRow(SnapshotCursor cursor, CancellationToken ct, bool capture,
         out RowPayload? payload, int maxPosition = int.MaxValue,
-        TextSpan? captureRange = null, int maxCells = ProjectionCellBudget)
+        IReadOnlyList<TextSpan>? captureRanges = null, int maxCells = ProjectionCellBudget,
+        int[]? windowCellQuota = null, int[]? projectedWindowCells = null)
     {
         if (cursor.Position >= maxPosition) throw new ScanBudgetExceededException();
         var start = cursor.Position;
@@ -236,12 +286,15 @@ internal sealed class CsvIncrementalSession : IFormatSession
         var tokens = capture ? new List<SemanticToken>() : null;
         var width = 0;
         var errors = 0;
+        var truncated = capture && maxCells == 0;
         void AddDiagnostic(string code, string message, TextSpan span)
         {
             errors++;
-            if (diagnostics is { Count: < ProjectionCellBudget } &&
-                (captureRange is null || Intersects(span.Start, span.End, captureRange.Value)))
+            if (diagnostics is null ||
+                captureRanges is not null && !IntersectsAny(span.Start, span.End, captureRanges)) return;
+            if (diagnostics.Count < ProjectionCellBudget)
                 diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error, code, message, span));
+            else truncated = true;
         }
         while (true)
         {
@@ -249,17 +302,35 @@ internal sealed class CsvIncrementalSession : IFormatSession
             if ((cursor.Position & 4095) == 0) ct.ThrowIfCancellationRequested();
             if (cursor.Peek() == ',')
             {
+                if (capture && cells!.Count >= maxCells) truncated = true;
+                if (capture && windowCellQuota is not null)
+                    for (var i = 0; i < captureRanges!.Count; i++)
+                        if (projectedWindowCells![i] >= windowCellQuota[i] &&
+                            cursor.Position <= captureRanges[i].End)
+                            truncated = true;
                 // Offscreen empty fields have no payload or diagnostics. Preserve
                 // the boundary cell itself, including the zero-width viewport edge.
                 var skipUntil = maxPosition;
                 if (capture && cells!.Count < maxCells)
                 {
-                    if (captureRange is { } range)
+                    if (captureRanges is { } ranges)
                     {
-                        if (cursor.Position < range.Start)
-                            skipUntil = Math.Min(skipUntil, range.Start);
-                        else if (cursor.Position <= range.End)
-                            skipUntil = cursor.Position;
+                        for (var i = 0; i < ranges.Count; i++)
+                        {
+                            if (windowCellQuota is not null && projectedWindowCells![i] >= windowCellQuota[i])
+                                continue;
+                            var range = ranges[i];
+                            if (cursor.Position < range.Start)
+                            {
+                                skipUntil = Math.Min(skipUntil, range.Start);
+                                break;
+                            }
+                            if (cursor.Position <= range.End)
+                            {
+                                skipUntil = cursor.Position;
+                                break;
+                            }
+                        }
                     }
                     else skipUntil = cursor.Position;
                 }
@@ -310,9 +381,13 @@ internal sealed class CsvIncrementalSession : IFormatSession
                         new TextSpan(invalidStart, cursor.Position - invalidStart));
                 }
                 var tokenSpan = new TextSpan(fieldStart, cursor.Position - fieldStart);
-                if (tokens is { Count: < ProjectionCellBudget } &&
-                    (captureRange is null || Intersects(tokenSpan.Start, tokenSpan.End, captureRange.Value)))
-                    tokens.Add(new SemanticToken("string", tokenSpan));
+                if (tokens is not null &&
+                    (captureRanges is null || IntersectsAny(tokenSpan.Start, tokenSpan.End, captureRanges)))
+                {
+                    if (tokens.Count < ProjectionCellBudget)
+                        tokens.Add(new SemanticToken("string", tokenSpan));
+                    else truncated = true;
+                }
             }
             else
             {
@@ -331,15 +406,29 @@ internal sealed class CsvIncrementalSession : IFormatSession
             }
             width++;
             var cellSpan = new TextSpan(fieldStart, cursor.Position - fieldStart);
-            if (cells is not null && cells.Count < maxCells &&
-                cellSpan.Length <= MaxProjectedCellSourceLength &&
-                (captureRange is null || CellIntersects(cellSpan, captureRange.Value)))
+            if (cells is not null &&
+                (captureRanges is null || CellIntersectsAny(cellSpan, captureRanges)))
             {
-                var value = quoted
-                    ? cursor.Slice(fieldStart + 1, contentEnd - fieldStart - 1)
-                        .Replace("\"\"", "\"", StringComparison.Ordinal)
-                    : cursor.Slice(fieldStart, cellSpan.Length);
-                cells.Add(new Cell(cellSpan, value));
+                var hasWindowBudget = windowCellQuota is null;
+                if (windowCellQuota is not null)
+                    for (var i = 0; i < captureRanges!.Count; i++)
+                        if (CellIntersects(cellSpan, captureRanges[i]) &&
+                            projectedWindowCells![i] < windowCellQuota[i])
+                            hasWindowBudget = true;
+                if (hasWindowBudget && cells.Count < maxCells && cellSpan.Length <= MaxProjectedCellSourceLength)
+                {
+                    var value = quoted
+                        ? cursor.Slice(fieldStart + 1, contentEnd - fieldStart - 1)
+                            .Replace("\"\"", "\"", StringComparison.Ordinal)
+                        : cursor.Slice(fieldStart, cellSpan.Length);
+                    cells.Add(new Cell(cellSpan, value));
+                    if (windowCellQuota is not null)
+                        for (var i = 0; i < captureRanges!.Count; i++)
+                            if (CellIntersects(cellSpan, captureRanges[i]) &&
+                                projectedWindowCells![i] < windowCellQuota[i])
+                                projectedWindowCells[i]++;
+                }
+                else truncated = true;
             }
             if (cursor.Peek() != ',') break;
             cursor.Advance();
@@ -351,7 +440,7 @@ internal sealed class CsvIncrementalSession : IFormatSession
             if (cursor.Peek() == '\n') cursor.Advance();
         }
         else if (cursor.Peek() == '\n') cursor.Advance();
-        payload = capture ? new RowPayload(cells!, diagnostics!, tokens!) : null;
+        payload = capture ? new RowPayload(cells!, diagnostics!, tokens!, truncated) : null;
         return new Row(start, end, cursor.Position, width, errors);
     }
 
@@ -360,13 +449,26 @@ internal sealed class CsvIncrementalSession : IFormatSession
             ? cell.Start >= range.Start && cell.Start <= range.End
             : Intersects(cell.Start, cell.End, range);
 
+    private static bool CellIntersectsAny(TextSpan cell, IReadOnlyList<TextSpan> ranges)
+    {
+        foreach (var range in ranges)
+            if (CellIntersects(cell, range)) return true;
+        return false;
+    }
+
+    private static bool IntersectsAny(int start, int end, IReadOnlyList<TextSpan> ranges)
+    {
+        foreach (var range in ranges)
+            if (Intersects(start, end, range)) return true;
+        return false;
+    }
+
     private sealed class ScanBudgetExceededException : Exception;
 
-    private static DocumentAnalysis Project(TextSnapshot snapshot, List<Segment> segments,
-        AnalysisRequest request, bool complete, CancellationToken ct)
+    private static WindowedAnalysis Project(TextSnapshot snapshot, List<Segment> segments,
+        IReadOnlyList<TextSpan> windows, AnalysisScope scope, bool complete, bool legacyProjection, CancellationToken ct)
     {
-        var visible = request.VisibleRange;
-        var fullProjection = request.Scope == AnalysisScope.Full;
+        var fullProjection = scope == AnalysisScope.Full;
         var nodes = new List<SemanticNode>();
         var diagnostics = new List<Diagnostic>();
         var tokens = new List<SemanticToken>();
@@ -374,46 +476,89 @@ internal sealed class CsvIncrementalSession : IFormatSession
         var total = 0;
         // A full request still gets complete *semantic validation* on giant files,
         // but projecting every cell would create another document-sized object graph.
-        var projectAll = complete && fullProjection && snapshot.Length <= 1024 * 1024 &&
+        var projectAll = legacyProjection && complete && fullProjection && snapshot.Length <= 1024 * 1024 &&
             segments.Sum(segment => segment.Count) <= ProjectionRowBudget &&
             segments.Sum(segment => segment.CellCount) <= ProjectionCellBudget &&
             segments.All(segment => segment.MaxRowLength <= MaxProjectedCellSourceLength);
         var projectedCells = 0;
+        var cellQuota = new int[windows.Count];
+        var projectedWindowCells = new int[windows.Count];
+        for (var i = 0; i < cellQuota.Length; i++)
+            cellQuota[i] = ProjectionCellBudget / windows.Count +
+                (i < ProjectionCellBudget % windows.Count ? 1 : 0);
+        var emittedRows = new HashSet<int>();
+        var truncatedRows = new HashSet<int>();
         foreach (var segment in segments)
         {
             ct.ThrowIfCancellationRequested();
             if (complete) total += segment.ErrorCount + segment.Count - segment.WidthCount(expected);
-            if (!projectAll && (nodes.Count >= ProjectionRowBudget ||
-                !Intersects(segment.Start, segment.After, visible))) continue;
-            foreach (var row in segment.Enumerate(visible, projectAll))
+        }
+        var indexedUntil = segments.Count == 0 ? 0 : segments[^1].After;
+        var delivery = new List<WindowProjection>(windows.Count);
+        for (var windowIndex = 0; windowIndex < windows.Count; windowIndex++)
+        {
+            var window = windows[windowIndex];
+            var quota = ProjectionRowBudget / windows.Count +
+                (windowIndex < ProjectionRowBudget % windows.Count ? 1 : 0);
+            var sourceIndexed = complete || indexedUntil > 0 && window.End <= indexedUntil;
+            var truncated = !sourceIndexed;
+            var rowsInWindow = 0;
+            var rowBudgetExceeded = false;
+            foreach (var segment in segments)
             {
-                if (!projectAll && nodes.Count >= ProjectionRowBudget) break;
-                var projected = ParseRow(new SnapshotCursor(snapshot, row.Start), ct, true, out var payload,
-                    captureRange: projectAll ? null : visible,
-                    maxCells: ProjectionCellBudget - projectedCells);
-                if (projected.End != row.End || projected.After != row.After || projected.Width != row.Width ||
-                    projected.ErrorCount != row.ErrorCount)
-                    throw new InvalidOperationException("CSV record index no longer matches its snapshot.");
-                var widthMismatch = expected >= 0 && row.Width != expected;
-                var children = payload!.Cells.Select(cell => new SemanticNode("cell", cell.Span, value: cell.Value)).ToArray();
-                projectedCells += children.Length;
-                nodes.Add(new SemanticNode("row", new TextSpan(row.Start, row.End - row.Start), children: children));
-                diagnostics.AddRange(payload.Diagnostics);
-                if (widthMismatch)
-                    diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "CSV004",
-                        $"Row has {row.Width} columns; the first row has {expected}.",
-                        new TextSpan(row.Start, row.End - row.Start)));
-                tokens.AddRange(payload.Tokens);
+                ct.ThrowIfCancellationRequested();
+                if (!projectAll && !Intersects(segment.Start, segment.After, window)) continue;
+                foreach (var row in segment.Enumerate(window, projectAll))
+                {
+                    if (emittedRows.Contains(row.Start))
+                    {
+                        rowsInWindow++;
+                        truncated |= truncatedRows.Contains(row.Start);
+                        continue;
+                    }
+                    if (!projectAll && (rowsInWindow >= quota || nodes.Count >= ProjectionRowBudget))
+                    {
+                        truncated = true;
+                        rowBudgetExceeded = true;
+                        break;
+                    }
+                    emittedRows.Add(row.Start);
+                    rowsInWindow++;
+                    var projected = ParseRow(new SnapshotCursor(snapshot, row.Start), ct, true, out var payload,
+                        captureRanges: projectAll ? null : windows,
+                        maxCells: ProjectionCellBudget - projectedCells,
+                        windowCellQuota: projectAll ? null : cellQuota,
+                        projectedWindowCells: projectAll ? null : projectedWindowCells);
+                    if (projected.End != row.End || projected.After != row.After || projected.Width != row.Width ||
+                        projected.ErrorCount != row.ErrorCount)
+                        throw new InvalidOperationException("CSV record index no longer matches its snapshot.");
+                    var widthMismatch = expected >= 0 && row.Width != expected;
+                    var children = payload!.Cells.Select(cell => new SemanticNode("cell", cell.Span, value: cell.Value)).ToArray();
+                    projectedCells += children.Length;
+                    if (payload.Truncated)
+                    {
+                        truncated = true;
+                        truncatedRows.Add(row.Start);
+                    }
+                    nodes.Add(new SemanticNode("row", new TextSpan(row.Start, row.End - row.Start), children: children));
+                    diagnostics.AddRange(payload.Diagnostics);
+                    if (widthMismatch)
+                        diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "CSV004",
+                            $"Row has {row.Width} columns; the first row has {expected}.",
+                            new TextSpan(row.Start, row.End - row.Start)));
+                    tokens.AddRange(payload.Tokens);
+                }
+                if (rowBudgetExceeded) break;
             }
+            delivery.Add(new WindowProjection(window, rowsInWindow, sourceIndexed, truncated));
         }
         var root = new SemanticNode("table", new TextSpan(0, snapshot.Length), children: nodes);
-        var indexedUntil = segments.Count == 0 ? 0 : segments[^1].After;
         var completeness = complete ? AnalysisCompleteness.Complete :
-            indexedUntil > 0 && visible.End <= indexedUntil
+            indexedUntil > 0 && windows[^1].End <= indexedUntil
                 ? AnalysisCompleteness.CoveredRegion : AnalysisCompleteness.Provisional;
         var coverage = new TextSpan(0, complete ? snapshot.Length : indexedUntil);
-        return new DocumentAnalysis(snapshot.Version, coverage, completeness,
-            root, diagnostics, tokens, complete ? total : null);
+        return new WindowedAnalysis(snapshot.Version, completeness, [coverage],
+            complete ? total : null, root, diagnostics, tokens, delivery);
     }
 
     private static bool Intersects(int start, int end, TextSpan range) =>
@@ -474,7 +619,8 @@ internal sealed class CsvIncrementalSession : IFormatSession
 
     private readonly record struct Cell(TextSpan Span, string Value);
 
-    private sealed record RowPayload(List<Cell> Cells, List<Diagnostic> Diagnostics, List<SemanticToken> Tokens);
+    private sealed record RowPayload(List<Cell> Cells, List<Diagnostic> Diagnostics,
+        List<SemanticToken> Tokens, bool Truncated);
 
     /// <summary>Cached row payload with a lazy translation for unchanged suffixes.</summary>
     private readonly record struct Row
