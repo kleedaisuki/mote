@@ -1128,6 +1128,48 @@ jobs:
             if ($count -ne 1) { throw "AppKit Grid AX selector marker missing or duplicated (exit $code)." }
           }
           if ($code -ne 0) { throw "AppKit Grid AX selector diagnostic failed (exit $code)." }
+      # Exact-PID separate Swift AX client, not an in-process selector or a
+      # VoiceOver/IME acceptance. It owns only a synthetic file and process;
+      # absent AX trust or inaccessible context-menu navigation is not a pass.
+      - name: Diagnose external macOS CSV Grid AX (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/MacGridAxExternalProbe/Probe.swift'; hash = '0CB3E56BF68EBB22DA13316FE9AF1520D055DF0E41433F699359BCAC5E8FF36D' },
+            @{ path = 'tests/MacGridAxExternalProbe/Run.ps1'; hash = '0A867687F62795790989B20A347A70EBEB93888923A666157DB45F5F5F816CEA' }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if (-not [StringComparer]::Ordinal.Equals($actual, $pin.hash)) {
+              throw 'External Mac Grid AX probe differs from reviewed bytes.'
+            }
+          }
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $report = ".cache/ci-inventory/$rid/mac-grid-ax-external.json"
+          & ./tests/MacGridAxExternalProbe/Run.ps1 `
+            -ExecutablePath $exe -RuntimeIdentifier $rid -ReportPath $report
+          $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          $binary = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+          if (-not [StringComparer]::Ordinal.Equals($result.status, 'passed') -or
+              -not [StringComparer]::Ordinal.Equals($result.binary_sha256, $binary) -or
+              -not $result.editor_normal_exit -or -not $result.input_sha256_unchanged) {
+            throw 'External Mac Grid AX diagnostic did not pass; inspect the retained report.'
+          }
+          Write-Host 'External Mac CSV Grid AX subset passed; VoiceOver/IME/geometry/release gates remain untested.'
+      - name: Upload external macOS CSV Grid AX diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-grid-ax-external-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-grid-ax-external.json
+          if-no-files-found: warn
+          retention-days: 14
       # Two process-owned hidden NSScroller instances only; probe source bytes
       # are independently reviewed and no clipboard or desktop input is used.
       - name: Diagnose native macOS logical Grid scrollers (non-gating)
