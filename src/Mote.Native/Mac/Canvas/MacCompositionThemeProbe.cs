@@ -374,15 +374,28 @@ internal static class MacCompositionThemeProbe
             {
                 var source = CurrentSource();
                 var host = _shell.ProbeNativeText;
+                var before = _hostBeforeCancellation;
                 var stamp = CurrentStamp();
                 var selection = Selection();
                 var caret = _insertionOffset + Candidate.Length;
+                var prefix = 0;
+                while (prefix < Math.Min(host.Length, before.Length) &&
+                    host[prefix] == before[prefix]) ++prefix;
+                var suffix = 0;
+                while (suffix < Math.Min(host.Length, before.Length) - prefix &&
+                    host[host.Length - suffix - 1] == before[before.Length - suffix - 1]) ++suffix;
+                var nativeSelection = ObjC.SendRange(_shell.ProbeEditorView,
+                    ObjC.Sel("selectedRange"));
                 Console.Error.WriteLine("Mac composition-theme cancel state: " +
                     $"generation-eq={stamp.Generation == _baseStamp.Generation};" +
                     $"version-eq={stamp.Version == _committedVersion};" +
                     $"source-eq={source == _committedSource};source-length={source.Length};" +
                     $"input-eq={SameInput()};host-eq={host == _hostBeforeCancellation};" +
-                    $"host-length={host.Length};expected-host-length={_hostBeforeCancellation.Length};" +
+                    $"host-length={host.Length};expected-host-length={before.Length};" +
+                    $"first-mismatch={prefix};matching-suffix={suffix};" +
+                    $"absolute-range-shift={before.Length > 0 && host == before[1..] + CancelCandidate};" +
+                    $"tail-replaced={before.Length > 0 && host == before[..^1] + CancelCandidate};" +
+                    $"native-selection={nativeSelection.Location},{nativeSelection.Length};" +
                     $"selection-eq={selection == (caret, caret)};analysis-ready={AnalysisReady()};");
             }
             catch (Exception) { /* A diagnostic cannot replace the original failure. */ }

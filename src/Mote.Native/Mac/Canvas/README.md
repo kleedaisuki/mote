@@ -305,8 +305,21 @@ version 1 in that captured phase; three appearance callbacks and two
 composition-settled callbacks were observed by the failing probe. The stage-7
 check originally combined canonical source, native host, selection, and preview
 assertions, so this evidence does **not** identify which property failed. A
-content-free check-code rerun is pending. This is a synthetic AppKit protocol
+content-free check-code rerun was needed. This is a synthetic AppKit protocol
 result, not evidence about an actual Chinese input method or its cancellation.
+
+The check-code rerun,
+[run 36684299172](https://github.com/kleedaisuki/mote/actions/runs/36684299172),
+isolated the first failure to **native host restoration** in all four cases.
+Canonical generation/version/source and the input-file hash stayed equal to
+the committed state (source length 39, version 1), and analysis remained ready.
+The native host length returned to its pre-cancellation length (39 in default,
+21 in canvas) but its contents did not match. Default native selection also
+missed its expected caret; canvas global selection remained correct. This
+supports neither a successful cancellation nor a claim of engine data loss.
+The next diagnostic records mismatch positions and native range coordinates
+without logging characters or paths, to distinguish a direct-selector range
+interpretation error before changing the test sequence.
 
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release
