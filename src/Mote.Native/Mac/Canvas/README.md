@@ -296,7 +296,7 @@ fixture hash remained unchanged. The three retained PNGs per mode are
 inspectable but are not used as a semantic-pixel or compositor oracle.
 No real CJK input method or cancellation was exercised.
 
-The follow-up synthetic cancellation extension has **not** passed yet.
+The first follow-up synthetic cancellation extension did **not** pass.
 [Run 36682437200](https://github.com/kleedaisuki/mote/actions/runs/36682437200)
 passed the strict jobs, but its non-gating composition diagnostic failed in
 both Mac RIDs and both editor modes at `stage 7 check cancelled-dark` after
@@ -330,9 +330,24 @@ probe, while the canonical source/version/file remained unchanged. Apple's
 [`NSTextInputClient` specification](https://developer.apple.com/documentation/appkit/nstextinputclient/setmarkedtext%28_%3Aselectedrange%3Areplacementrange%3A%29)
 describes the replacement range relative to marked text; this observation is
 about this direct programmatic `NSTextView` call, **not** a claim that the
-protocol generally uses absolute ranges. The next probe passes the native
+protocol generally uses absolute ranges. The corrected probe passes the native
 `markedRange()` returned by that same text view and retains every source,
 host, selection, callback, theme, and Undo/Redo assertion.
+
+[Run 36686933536](https://github.com/kleedaisuki/mote/actions/runs/36686933536)
+passed the non-gating **synthetic commit-and-cancel diagnostic** on published
+`osx-arm64` and `osx-x64` Mach-O executables in both default and canvas modes.
+All four mode/RID cases captured five phases, including `dark-marked` and
+`dark-cancelled`, with three appearance callbacks and two settled callbacks.
+During the second candidate, the canonical source stayed at generation 2,
+version 1; after clearing the marked range, the native host, canonical source,
+file hash, and exact caret returned to the post-commit state with **no extra
+engine version**. Default native selection moved 39→40→39; canvas global
+selection stayed 21 throughout the second mark. The latest dark policy and
+native preview accent applied after cancellation, and Undo/Redo still restored
+the original committed edit. This validates only the controlled programmatic
+AppKit sequence; it is not evidence that a real CJK input method, conversion
+session, candidate window, or user cancellation follows the same path.
 
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release
