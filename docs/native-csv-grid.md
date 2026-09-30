@@ -1,7 +1,8 @@
 # Native CSV Grid implementation
 
-Status: bounded native implementation and focused local plus synthetic hosted
-AppKit evidence; **not external accessibility or release acceptance**.
+Status: bounded native implementation, focused local/synthetic hosted evidence,
+and scoped real Windows/macOS clipboard acceptance; **not desktop interaction,
+external accessibility or release acceptance**.
 The reviewed [Grid architecture](csv-grid-architecture.md) and shipped Formats
 contract (`9034fbe`) remain the semantic source of truth.
 
@@ -106,6 +107,47 @@ do **not** prove a full controller Save/reopen on Mac, actual clipboard
 publication, physical keyboard/IME, external AX/VoiceOver, complete logical
 scrollbar behavior, large-file responsiveness or pixel presentation.
 
+### Actual clipboard target checkpoint (2026-10-01)
+
+[CI 36752189587](https://github.com/kleedaisuki/mote/actions/runs/36752189587)
+passed seven strict jobs, including a dedicated disposable Windows runner test
+using a hidden production owner-data table, actual controller/publisher and
+independent `CF_UNICODETEXT` readback. Its fresh exact report has
+`status=passed`, `nativeClipboard=true`, current run identity, reviewed CRLF
+source hash and all six case IDs. This is a freshly built **managed** test
+harness, not Windows Native AOT clipboard execution
+([Windows workflow evidence](validation/native-csv-grid-clipboard.md)).
+
+[CI 36756839425](https://github.com/kleedaisuki/mote/actions/runs/36756839425)
+at `7420d0b` passed **nine strict jobs**, including separate gating disposable
+Mac x64 and ARM64 clipboard jobs. Both newly published strict single-binary
+Native AOT executables ran the reviewed hidden production `NSTableView`, actual
+controller and production `NSPasteboard` publisher workflow. Each exited zero,
+emitted the exact actual-mode marker and produced a fresh `status=passed`,
+`nativeClipboard=true` report with current run key, reviewed LF source hash
+and all six case IDs; stderr was empty
+([Mac workflow/report evidence](validation/native-mac-csv-grid-clipboard.md),
+[reviewed invocation](validation/native-mac-grid-clipboard-invocation.md)).
+
+| Independently expected case | Acceptance boundary |
+| --- | --- |
+| Quoted CRLF | Exact decoded CRLF/tab/quote payload, not sanitized display |
+| Empty final row | Exact empty-record encoding, no invented terminal separator |
+| Missing refusal | Delivered rejection before publication; sentinel unchanged |
+| Explicit Missing padding | Exact explicitly requested CSV padding |
+| Embedded NUL refusal | No successful publisher call; sentinel unchanged |
+| Over-cap refusal | No clipped success or publication; sentinel unchanged |
+
+Copy leaves canonical source identity/version, selection, modified/history state
+and fixture bytes unchanged; Undo adds no transaction. Mac refusal cases also
+check unchanged pasteboard `changeCount`. Actual-mode mutation is approved only
+on reviewed disposable GitHub-hosted runners, not personal or self-hosted hosts;
+old clipboard contents are deliberately not preserved or restored.
+These results establish hidden-table/controller publisher/readback semantics,
+**not** desktop menus/pointer/shortcuts, Mac source NSTextView editing, external
+Grid AX/UIA/VoiceOver/Narrator, real IME, clipboard contention/failure recovery,
+physical paint, Universal Clipboard behavior on a personal Mac or latency.
+
 ### Remaining release gates / deliberate truthful limits
 
 - Native scrollbars describe the **bounded installed window**, not the complete
@@ -119,15 +161,19 @@ scrollbar behavior, large-file responsiveness or pixel presentation.
 - Windows has no dedicated selected-cell multiline detail panel. Mac has a
   bounded detail area. Giant values reveal source; neither adapter decodes a
   giant field on paint.
-- Real native clipboard publication/readback and injected publication failure
-  are not exercised by local tests or the safe Mac probe. NUL refusal is proved
-  through policy/controller adapter-call admission, not whole-clipboard rollback.
+- Actual native clipboard publication/readback and NUL/size/Missing refusal now
+  have the scoped dedicated Windows and both-Mac-RID hosted evidence above. The
+  original safe in-memory Mac Grid probe still never publishes. Desktop menu/
+  shortcut routing, injected OS publication failure and contention recovery remain
+  unverified; no whole-clipboard rollback or old-content preservation is promised.
 - Native UIA GridItem/Selection/Table patterns, external AX selected-cell
   semantics, Narrator/VoiceOver, physical input and real IME editing need separate
   target evidence. Cell labels/native control creation do not establish them.
-- Four-RID AOT runtime evidence and startup/source-ready, warm scrolling,
-  Apply-to-visible, callback/install p95 and peak-memory measurements remain
-  root-owned release work. No native latency percentile is claimed.
+- Four-RID strict single-binary AOT inventory/runtime evidence is established
+  at the cited checkpoints; that is not four-RID desktop Grid acceptance.
+  Startup/source-ready, warm scrolling, Apply-to-visible, callback/install p95
+  and peak-memory measurements remain release work. No native latency
+  percentile is claimed.
 - A failure-directed check reproduced a pre-existing **P0 Windows source-host
   data-loss bug**: RichEdit imported only the prefix before NUL and the next
   ordinary edit deleted the unseen canonical suffix. Length-aware streaming
