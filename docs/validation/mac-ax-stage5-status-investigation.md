@@ -5,6 +5,13 @@ edits; no build, rerun, dispatch, staging, commit or push. This note examines th
 new hosted evidence and the **frozen run revision**, not concurrent working-tree
 edits owned by the Grid / analysis teams.
 
+**Resolution update:** the separate persistent-notice fix and exact two-RID
+stage-6 target acceptance are recorded in
+[mac-ax-warning-lifetime-fix.md](mac-ax-warning-lifetime-fix.md) and
+[CI 36763097147](https://github.com/kleedaisuki/mote/actions/runs/36763097147).
+The diagnosis below remains the historical evidence for the earlier failing
+revision, not a statement that the patched branch still fails stage 5.
+
 ## Conclusion
 
 This is a **product status-lifecycle defect**, not a stale requirement that should
