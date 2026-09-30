@@ -1,0 +1,85 @@
+# TOML large-file ownership certification
+
+## Decision and boundary (2026-09-30)
+
+`TomlIncrementalSession` can now certify a valid source-order pattern that it previously
+reported as `Provisional`: a dotted assignment may define an **implicit parent** created
+by either an ordinary table header or an array-of-tables header. For example:
+
+```toml
+[a.x.y]
+[a]
+x.z = 3
+```
+
+The same transition works if the first header is `[[a.x.y]]`. In both cases `x` exists
+implicitly after the first header; the later dotted assignment adds `z` under `x` and
+defines `x`. It is then invalid to explicitly redeclare `[a.x]`. Conversely, if `[a.x]`
+was explicitly declared before `x.z = 3`, the dotted assignment cannot extend that
+explicit table. A duplicate `x.z` remains invalid. TOML's [table rules](https://toml.io/en/v1.1.0#table)
+distinguish implicit table creation, dotted-key definition, and explicit table headers;
+its [array-of-tables rules](https://toml.io/en/v1.1.0#array-of-tables) bind nested
+references to the most recent array element.
+
+The ownership index uses one existing state transition, `ImplicitHeader → Dotted`,
+when a dotted assignment traverses an implicit parent. This is more accurate and simpler
+than the previously contemplated separate ordinary-header and array-header origin types:
+both follow the same rule for this transition. The parent's child scope is retained, so
+duplicate and scalar-prefix conflicts continue to be detected. Later explicit opening
+is rejected because only an *unconsumed* `ImplicitHeader` may become `ExplicitTable`.
+
+This is a narrow certification extension, **not** general TOML conformance. Each logical
+statement must still pass Tomlyn 2.10.1 validation; the whole-file index must remain
+exhaustive (at most 200,000 bindings); statement length, line count, and total count
+retain their existing caps. Dotted traversal through an already explicit header or an
+array element remains `Provisional` rather than guessed. Parent array-element re-entry
+after a nested header remains `Provisional` because Tomlyn's validated whole-file
+behavior conflicts with two independent processors there. The change does not create a
+source copy, relax the 4 MiB path threshold, alter UTF-16 source spans, or add an AOT
+dependency. Large-file Full still re-streams after edits; `Visible` remains provisional.
+
+## Differential evidence
+
+Direct, exact fixture checks used Python 3.14.6 `tomllib` and Rust 1.98.1 with
+`toml = 1.1.6` (source in `.temp/TomlCertRust/src/main.rs`):
+
+| Source-order pattern | Python | Rust | New large-file result |
+| --- | --- | --- | --- |
+| `[a.x.y]` → `[a]` → `x.z=3` | valid | valid | `Complete` |
+| `[[a.x.y]]` → `[a]` → `x.z=3` | valid | valid | `Complete` |
+| `[a.x]` → `[a]` → `x.z=3` | invalid | invalid | `Provisional` |
+| `[a.x.y]` → `[a]` → `x.z=3` → `[a.x]` | invalid | invalid | `Provisional` |
+| `[[a.x.y]]` → `[a]` → `x.z=3` → `[a.x]` | invalid | invalid | `Provisional` |
+| `[[a.x.y]]` → `[a]` → `x.z=3` → `x.z=4` | invalid | invalid | `Provisional` |
+
+The project-local `.temp/TomlCertProbe/Program.cs` replays production
+`ProcessStatement`/`Continues`/`TomlOwnershipIndex` against the pre-existing
+`.temp/TomlNested` corpora without padding each small input above 4 MiB. Python and
+Rust had identical validity decisions on all 40,000 generated cases. After the change,
+the 10,000-case seed-6451 corpus returned 3,228 `Complete`, all oracle-valid; the
+30,000-case seed-7741 adversarial corpus returned 5,434 `Complete`, all oracle-valid.
+The previously documented restricted certifier returned 3,223 and 5,425 respectively.
+Thus 14 additional *sampled* valid documents are certified, with zero false `Complete`
+in this finite probe. This is differential evidence, **not a proof** for the full grammar;
+the model's restrictive fallback remains part of its correctness argument.
+
+`dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release --filter
+"FullyQualifiedName~Toml" --no-restore -v quiet` passed **25/25**, including >4 MiB
+fixtures, quoted-key equivalence, source-span anchoring, explicit-header conflicts, and
+duplicate descendants. A local Release rerun of the unchanged 100 MiB nested-AoT
+fixture returned `Complete` in 1,512 ms with 1,143.9 MiB cumulative thread allocation,
+651.7 MiB process peak working set, and cancellation observed at 32 ms after a 10 ms
+timer. Those one-run values are not a before/after performance conclusion; the prior
+fixture recorded 1,483 ms, 1,144 MiB, and 577 MiB peak working set under uncontrolled
+conditions. The substantial allocation cost remains an open performance issue.
+
+## Correction to earlier scratch finding
+
+The earlier `src/Mote.Formats/README.md` and `.temp/TomlNested/README.md` describe
+`[a.x.y]` → `[a]` → `x.z=3` as invalid. That specific minimal is actually **valid** in
+both independent oracles. Inspecting the eleven older corpus mismatches shows the
+invalid examples additionally had an explicit `[a.x]` before the dotted assignment or
+after it. The previous conservative `Provisional` result was safe, but its explanatory
+counterexample was wrong. The shared formats README should be reconciled when its
+current writer completes; do not use the obsolete example as a negative conformance
+fixture.

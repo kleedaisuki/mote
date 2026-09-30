@@ -26,9 +26,10 @@ internal sealed class TomlOwnershipIndex
 
     /// <summary>
     /// Whether source-order features stayed in the subset whose ownership is certified by
-    /// this trie and Tomlyn's statement parser. Reopening an array element after declaring
-    /// a nested header is excluded because Tomlyn's whole-document validator disagrees with
-    /// independent TOML parsers in that sequence.
+    /// this trie and Tomlyn's statement parser. A dotted key may define an implicit header
+    /// parent, but dotted traversal of an explicit header remains outside this subset.
+    /// Reopening an array element after declaring a nested header is also excluded because
+    /// Tomlyn's whole-document validator disagrees with independent TOML parsers there.
     /// </summary>
     internal bool IsCertifiable { get; private set; } = true;
 
@@ -37,7 +38,7 @@ internal sealed class TomlOwnershipIndex
     {
         var parts = Parts(key);
         if (parts.Count == 0) return Conflict("Invalid table path.", key, sourceOffset);
-        var parent = ResolveParent(_root, parts, true, key, sourceOffset, out var problem);
+        var parent = ResolveParent(_root, parts, Origin.ImplicitHeader, key, sourceOffset, out var problem);
         if (problem is not null) return problem;
         if (parent is null) return null;
         var name = parts[^1];
@@ -70,7 +71,7 @@ internal sealed class TomlOwnershipIndex
     {
         var parts = Parts(key);
         if (parts.Count == 0) return Conflict("Invalid key.", key, sourceOffset);
-        var parent = ResolveParent(_current, parts, false, key, sourceOffset, out var problem);
+        var parent = ResolveParent(_current, parts, Origin.Dotted, key, sourceOffset, out var problem);
         if (problem is not null) return problem;
         if (parent is null) return null;
         var name = parts[^1];
@@ -81,7 +82,7 @@ internal sealed class TomlOwnershipIndex
     }
 
     /// <summary>Traverses parents, preserving the latest element of every array table.</summary>
-    private Scope? ResolveParent(Scope start, IReadOnlyList<string> parts, bool headerParents,
+    private Scope? ResolveParent(Scope start, IReadOnlyList<string> parts, Origin newParentOrigin,
         KeySyntax key, int sourceOffset, out Diagnostic? problem)
     {
         problem = null;
@@ -90,7 +91,7 @@ internal sealed class TomlOwnershipIndex
         {
             if (!scope.Children.TryGetValue(parts[i], out var binding))
             {
-                binding = NewBinding(scope, parts[i], headerParents ? Origin.ImplicitHeader : Origin.Dotted);
+                binding = NewBinding(scope, parts[i], newParentOrigin);
                 if (binding is null) return null;
             }
             if (binding.Origin is Origin.Value or Origin.InlineTable)
@@ -98,11 +99,16 @@ internal sealed class TomlOwnershipIndex
                 problem = Conflict($"Key '{parts[i]}' cannot contain another key or table.", key, sourceOffset);
                 return null;
             }
-            // A dotted assignment through a header-created namespace has nuanced
-            // validity rules that the local statement parser cannot adjudicate alone.
-            if (!headerParents && binding.Origin is Origin.ImplicitHeader or Origin.ExplicitTable or Origin.ArrayTable)
-                IsCertifiable = false;
-            if (headerParents && binding.Origin == Origin.ArrayTable)
+            // A header-created parent remains implicit until a dotted assignment
+            // traverses it. That assignment defines the table, sealing later [table]
+            // redeclaration while still allowing another dotted sibling.
+            if (newParentOrigin == Origin.Dotted)
+            {
+                if (binding.Origin == Origin.ImplicitHeader) binding.Origin = Origin.Dotted;
+                else if (binding.Origin is Origin.ExplicitTable or Origin.ArrayTable)
+                    IsCertifiable = false;
+            }
+            if (newParentOrigin != Origin.Dotted && binding.Origin == Origin.ArrayTable)
                 binding.HasChildHeader = true;
             scope = binding.Scope!;
         }

@@ -20,11 +20,11 @@ namespace Mote.Formats;
 /// may become Complete only for the restricted language accepted by TryAnalyzeLarge: every
 /// bounded logical statement is individually accepted by Tomlyn, statement boundaries occur
 /// only at top-level newlines outside strings/collections, and the trie holds every key binding.
-/// Scalar and inline-table bindings seal their path; only header-created implicit parents may
-/// later become explicit tables. Nested array-table headers may be certified while each
-/// parent element is current; reopening an array table after a nested header remains
-/// Provisional because Tomlyn's validated source-order behavior conflicts with independent
-/// TOML oracles in that sequence.
+/// Scalar and inline-table bindings seal their path. Header-created implicit parents may
+/// become explicit tables or be defined by a dotted assignment, but never both. Nested
+/// array-table headers may be certified while each parent element is current; reopening
+/// an array table after a nested header remains Provisional because Tomlyn's validated
+/// source-order behavior conflicts with independent TOML oracles in that sequence.
 /// </remarks>
 internal sealed class TomlIncrementalSession : IFormatSession
 {

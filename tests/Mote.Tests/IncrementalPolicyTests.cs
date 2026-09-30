@@ -415,7 +415,6 @@ public sealed class IncrementalPolicyTests
     /// <summary>Offscreen ownership conflicts cannot be silently certified.</summary>
     [Theory]
     [InlineData("k00000 = 0\n")]
-    [InlineData("[a.x.y]\n[a]\nx.z = 3\n")]
     public void Toml_large_full_session_downgrades_uncertain_ownership(string suffix)
     {
         var value = new string('x', 100);
@@ -476,6 +475,63 @@ public sealed class IncrementalPolicyTests
         Assert.Equal(0, actual.TotalDiagnosticCount);
         Assert.Equal(new TextSpan(0, source.Length), actual.Coverage);
         Assert.Contains(actual.Root.Children, node => node.Kind is "table" or "array-table");
+    }
+
+    /// <summary>
+    /// An ordinary or array-table header creates a still-open implicit parent: after its
+    /// outer parent is opened, a dotted sibling may define that implicit namespace.
+    /// </summary>
+    [Theory]
+    [InlineData("[a.x.y]\n[a]\nx.z = 3\n")]
+    [InlineData("[[a.x.y]]\n[a]\nx.z = 3\n")]
+    [InlineData("[[a.\"x\".y]]\n[a]\nx.z = 3\n")]
+    public void Toml_large_implicit_header_parent_allows_dotted_sibling(string suffix)
+    {
+        Assert.Empty(DocumentPolicies.ForKind(DocumentKind.Toml).Analyze(suffix).Diagnostics);
+        var source = RootArrayTableCorpus() + suffix;
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(source.Length - suffix.Length, suffix.Length), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Complete, actual.Completeness);
+        Assert.Equal(0, actual.TotalDiagnosticCount);
+        Assert.Equal(new TextSpan(0, source.Length), actual.Coverage);
+        var entry = Assert.Single(actual.Root.Children,
+            node => node.Kind == "entry" && node.Name == "x.z");
+        Assert.Equal("x.z = 3", source.Substring(entry.Span.Start, entry.Span.Length).TrimEnd());
+    }
+
+    /// <summary>An explicitly declared table cannot be traversed by a dotted sibling.</summary>
+    [Fact]
+    public void Toml_large_explicit_header_parent_stays_provisional()
+    {
+        const string suffix = "[a.x]\n[a]\nx.z = 3\n";
+        var source = RootArrayTableCorpus() + suffix;
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(source.Length - suffix.Length, suffix.Length), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+    }
+
+    /// <summary>
+    /// Once a dotted assignment traverses a header-created implicit parent, that parent
+    /// cannot be explicitly reopened; duplicate dotted descendants also remain errors.
+    /// </summary>
+    [Theory]
+    [InlineData("[a.x.y]\n[a]\nx.z = 3\n[a.x]\n")]
+    [InlineData("[[a.x.y]]\n[a]\nx.z = 3\n[a.x]\n")]
+    [InlineData("[[a.x.y]]\n[a]\nx.z = 3\nx.z = 4\n")]
+    public void Toml_large_dotted_header_parent_seals_and_detects_duplicates(string suffix)
+    {
+        var source = RootArrayTableCorpus() + suffix;
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Toml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(source.Length - suffix.Length, suffix.Length), AnalysisScope.Full));
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
     }
 
     /// <summary>Builds a bounded >4 MiB TOML array-table corpus with one valid key per element.</summary>
