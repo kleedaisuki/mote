@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Mote.Engine;
 
 [assembly: InternalsVisibleTo("Mote.Tests")]
@@ -284,7 +285,8 @@ internal sealed partial class CsvIncrementalSession : ICsvGridFormatSession
                 ct.ThrowIfCancellationRequested();
                 Account(segment.Get(i));
             }
-        var cursor = new SnapshotCursor(snapshot, prefix.Count == 0 ? 0 : prefix[^1].After, work);
+        using var cursor = new SnapshotCursor(snapshot, prefix.Count == 0 ? 0 : prefix[^1].After, work,
+            streamChunks: true);
         var builder = new RecordBuilder();
         while (cursor.Position < snapshot.Length)
         {
@@ -1020,16 +1022,33 @@ internal sealed partial class CsvIncrementalSession : ICsvGridFormatSession
         }
     }
 
-    /// <summary>Small ranged reader over a rope snapshot, independent of chunk boundaries.</summary>
-    private sealed class SnapshotCursor
+    /// <summary>Ranged projection reader, with zero-copy forward chunks for authoritative Full scans.</summary>
+    /// <remarks>
+    /// Borrowed chunk memories are immutable and snapshot-owned; no source text enters the committed cache.
+    /// Only monotonic Full scanning uses the enumerator. Random certificate seeks keep bounded range reads,
+    /// avoiding a walk from the document start for each distant projection.
+    /// </remarks>
+    private sealed class SnapshotCursor : IDisposable
     {
         private const int WindowSize = 8192;
         private readonly TextSnapshot _snapshot;
         private string _window = string.Empty;
+        private int _windowOffset;
+        private int _windowLength;
         private int _windowStart = -1;
+        private readonly IEnumerator<ReadOnlyMemory<char>>? _chunks;
 
-        internal SnapshotCursor(TextSnapshot snapshot, int start, ScanWork work)
-        { _snapshot = snapshot; Position = start; Work = work; }
+        internal SnapshotCursor(TextSnapshot snapshot, int start, ScanWork work, bool streamChunks = false)
+        {
+            _snapshot = snapshot;
+            Position = start;
+            Work = work;
+            if (streamChunks)
+            {
+                _chunks = snapshot.GetChunks().GetEnumerator();
+                _windowStart = 0;
+            }
+        }
         internal ScanWork Work { get; }
         internal TextSnapshot Snapshot => _snapshot;
 
@@ -1038,20 +1057,54 @@ internal sealed partial class CsvIncrementalSession : ICsvGridFormatSession
         internal int Position { get; private set; }
         internal int Length => _snapshot.Length;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal char Peek()
         {
             if (Position >= Length) return '\0';
-            if (Position < _windowStart || Position >= _windowStart + _window.Length)
-            {
-                _windowStart = Position;
-                _window = _snapshot.GetText(Position, Math.Min(WindowSize, Length - Position));
-            }
-            return _window[Position - _windowStart];
+            if (Position < _windowStart || Position >= _windowStart + _windowLength) LoadWindow();
+            return _window[_windowOffset + Position - _windowStart];
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal char Read() { var c = Peek(); Position++; return c; }
         internal void Advance() { Position++; }
         internal string Slice(int start, int length) => _snapshot.GetText(start, length);
+
+        /// <summary>Loads borrowed forward memory or a bounded copied window, without changing consumed-source accounting.</summary>
+        private void LoadWindow()
+        {
+            if (_chunks is null)
+            {
+                _windowStart = Position;
+                _window = _snapshot.GetText(Position, Math.Min(WindowSize, Length - Position));
+                _windowOffset = 0;
+                _windowLength = _window.Length;
+                return;
+            }
+            if (Position < _windowStart)
+                throw new InvalidOperationException("A forward CSV scan cannot seek backwards.");
+            while (Position >= _windowStart + _windowLength)
+            {
+                _windowStart += _windowLength;
+                if (!_chunks.MoveNext())
+                    throw new InvalidOperationException("Snapshot chunks ended before the declared length.");
+                // GetChunks documents immutable string chunks. Borrow their backing
+                // string so the per-character loop stays a direct indexed read.
+                if (MemoryMarshal.TryGetString(_chunks.Current, out var text, out _windowOffset, out _windowLength))
+                    _window = text!;
+                else
+                {
+                    // Preserve the reader contract if a future Engine uses other
+                    // immutable memory; only that individual chunk is copied.
+                    _window = _chunks.Current.ToString();
+                    _windowOffset = 0;
+                    _windowLength = _window.Length;
+                }
+            }
+        }
+
+        /// <summary>Releases only the traversal state; snapshot ownership and committed cache state are unchanged.</summary>
+        public void Dispose() => _chunks?.Dispose();
 
         /// <summary>Consumes consecutive delimiters without crossing a visible-scan limit.</summary>
         internal int SkipCommas(int maxPosition, CancellationToken ct)
@@ -1060,14 +1113,10 @@ internal sealed partial class CsvIncrementalSession : ICsvGridFormatSession
             while (Position < Length && Position < maxPosition)
             {
                 ct.ThrowIfCancellationRequested();
-                if (Position < _windowStart || Position >= _windowStart + _window.Length)
-                {
-                    _windowStart = Position;
-                    _window = _snapshot.GetText(Position, Math.Min(WindowSize, Length - Position));
-                }
+                if (Position < _windowStart || Position >= _windowStart + _windowLength) LoadWindow();
                 var offset = Position - _windowStart;
-                var available = Math.Min(4096, Math.Min(_window.Length - offset, maxPosition - Position));
-                var next = _window.AsSpan(offset, available).IndexOfAnyExcept(',');
+                var available = Math.Min(4096, Math.Min(_windowLength - offset, maxPosition - Position));
+                var next = _window.AsSpan(_windowOffset + offset, available).IndexOfAnyExcept(',');
                 var consumed = next < 0 ? available : next;
                 Position += consumed;
                 count += consumed;
