@@ -81,3 +81,70 @@ that artifacts root, confirming the workflow build-path/case contract. No hosted
 UIA execution or new editor performance result is claimed. Before accepting hosted evidence, independently audit the downloaded
 artifact binary/source hashes, classification, Errors/Inconclusive arrays and
 blocked global-focus status; do not promote the opt-in registration by default.
+
+## Independent hosted result: 2026-10-01, run 36783978146
+
+The first actual hosted client execution at commit
+`f8810b28d2dc2ce71676f05789ad36ba6508a8af` passes the **declared diagnostic
+subset**, not accessibility release acceptance. This result supersedes the
+pending-hosted status above only for that subset. The independently audited
+artifacts are under `.cache/ci-36783978146-grid-windows/` (`inventory.json`,
+`report.json`, `build.log`); the separately downloaded
+`native-inventory-win-x64` artifact is under its `publish-inventory/` subdirectory.
+
+### Attribution and independent checks
+
+- Both the driver inventory and the client report identify binary SHA256
+  `EF49E969C34E5D72E5A2B202EFB62F73F16EB5A940B369DB8B10949EF169BAA5`.
+  The workflow uses the published win-x64 AOT editor, and the client hashes the
+  executable it launches. The independent publish inventory records one
+  `mote.exe`, 7,068,672 bytes, no companion payload or bundled native library,
+  and no unexpected static imports. **That publish inventory has no SHA256**;
+  its size/path cannot provide a third independent binary-hash comparison.
+  The executable itself was not downloaded or rehashed by this audit.
+- Hosted Program.cs SHA256 matches the reviewed source pin
+  `1AF72C383BB49ADD171AD8E6DADA7EE2BD012506262D5FBC292DA06B4453F6C7`.
+  Hosted project SHA256 is the admitted CRLF value
+  `6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4`.
+  Independent Python byte conversion of the reviewed local LF project
+  reproduces both LF and CRLF pins exactly; this is not arbitrary normalization
+  of an untrusted hosted file.
+- Independently reconstructing all 1100 records and 32 columns, with values
+  `R{one-based row}C{one-based column}` and CRLF record endings, reproduces
+  fixture SHA256 `86796C9AF5EADC2DB5A0B8FBE3F14245DF7AB2F0456E6EE5189ED6987819E0B4`.
+- Actual client exit is 0, timeout is false, Classification is exactly `pass`,
+  and both Errors and Inconclusive arrays are empty. Build log reports zero
+  warnings/errors. Environment is Windows NT 10.0.26100.0, X64, target PID 8448.
+  Audit commands included `Get-FileHash` for the client source/project,
+  `gh run download 36783978146 -n native-inventory-win-x64 -D
+  .cache/ci-36783978146-grid-windows/publish-inventory`, and Python assertions
+  over raw-byte pins, fixture reconstruction and downloaded JSON fields.
+
+### Observed behavior and what the pinned client actually tests
+
+| Claim | Evidence and boundary |
+| --- | --- |
+| Bounded initial Grid | Reported local Grid counts are 64 rows by 16 columns. Raw, Control and Content views each contain 1104 children, consistent with 1024 cells plus 64 row headers and 16 column headers. Each UnexpectedChildren array is empty. The client rejects non-Grid HeaderItem/DataItem prefixes but does **not** assert unique AutomationIds or exact child count, so this is not a duplicate-node uniqueness proof. |
+| Read-only cell and selection | Pinned executed checks require first presentation value `R1C1` to be read-only and omit source Invoke. Select on (0,0), then AddToSelection on (0,1), yields selection count 2; adding (1,1) must throw InvalidOperationException and leave count 2. These checks passed; the report does not serialize selected identities and the client does not independently compare their coordinates. Thus it proves the admitted operation/count and atomic rejection subset, not arbitrary rectangle membership correctness. |
+| Logical ranges | Initial row range: min 0, max 1076, value 0, read-only, small change 1, large change 24. Initial column range: min 0, max 28, value 0, read-only, small change 1, large change 4. After Go to: row max 1074/value 1000, column max 31/value 16, both min 0/read-only. Maxima are observed geometry-dependent snapshots, not a stable cross-host constant; the client specifically asserts distant origin values 1000/16. Writes are not exercised. |
+| Coordinate navigation | Prompt ownership check passes for the launched PID; readback is `1001:17`. New first cell name/value is `Row 1001, Column 17; presentation value: R1001C17`; status reports absolute anchor and active coordinates 1001:17. Executed GridItem check requires this cell's local indices to remain (0,0). |
+| Retained-node retirement | Pinned check reads the original first cell after rebase and requires ElementNotAvailableException. Empty Errors/Inconclusive and pass classification demonstrate the check completed. There is no separate serialized stale-node boolean. |
+| Owned synthetic F6 | All five expected HWNDs exactly match observed HWNDs: table, row navigation, column navigation, Go to button, source. Unlike earlier local evidence, all five actual global semantic focus readings belong to the launched PID and have semantic HasKeyboardFocus true. On table entry the HWND-derived table element has HasKeyboardFocus **false**, while global semantic focus is the selected DataItem `Row 1, Column 2; presentation value: R1C2` with HasKeyboardFocus **true**. Do not flatten this into a claim that every HWND element advertises keyboard focus. Native row/column focus assertions pass, with previous element unfocused. This is owned message-driven F6, not physical keyboard or reader acceptance. |
+| External cell SetFocus | Distant cell SetFocus is explicitly refused with InvalidOperationException on the off-owner generated COM callback. The client treats this safe refusal as expected and records it as blocked; it is **not** successful external cell focus delivery. |
+
+The 1000-query sequence took 360.7573 ms and its maximum single query was
+11.2121 ms; overall client elapsed time was 15,999.5709 ms. These are one hosted
+synthetic run with waits and UIA/client overhead, not startup, editing latency,
+physical paint, a percentile estimate, or a regression benchmark.
+
+### Supported verdict and remaining gates
+
+No implementation failure is demonstrated by these artifacts within the stated
+subset. The initial rejected checkout still provides no execution evidence.
+The present pass does not justify enabling Grid accessibility by default.
+No screen reader speech, physical IME, win-arm64 Grid behavior, 100 MiB memory
+teardown, multi-monitor scaling, RangeValue writes or successful off-owner cell
+focus was tested. The table-HWND versus selected-DataItem focus distinction is
+an observed fact that needs reader/contract-specific acceptance, not evidence
+by itself of a product defect. Probe coverage also lacks unique-child-ID and
+selected-identity assertions; avoid stronger claims than the executed checks.
