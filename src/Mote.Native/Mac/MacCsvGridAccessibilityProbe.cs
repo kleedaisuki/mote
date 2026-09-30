@@ -66,6 +66,7 @@ internal static class MacCsvGridAccessibilityProbe
             "group exposes semantic Table and real navigation/detail, not native scroll subtree");
         Require(ObjC.Send(table, ObjC.Sel("accessibilityParent")) == grid.View,
             "stable Table parents to the existing Grid group");
+        CheckShownMenu(table, physicalTable);
         Require(ObjC.Send(table, ObjC.Sel("accessibilityRowCount")) == 3, "local row count, not file count");
         Require(ObjC.Send(table, ObjC.Sel("accessibilityColumnCount")) == 2, "local column count");
         var rows = ObjC.Send(table, ObjC.Sel("accessibilityRows"));
@@ -169,10 +170,39 @@ internal static class MacCsvGridAccessibilityProbe
             Require(ObjC.Send(root, ObjC.Sel("isAccessibilityElement")) == 0 &&
                 ObjC.Send(root, ObjC.Sel("accessibilityRole")) == 0 &&
                 ObjC.Send(root, ObjC.Sel("accessibilityParent")) == 0 &&
-                ObjC.Send(root, ObjC.Sel("accessibilityRows")) == 0,
-                "retained detached proxy has no owner, parent, role or rows");
+                ObjC.Send(root, ObjC.Sel("accessibilityRows")) == 0 &&
+                ObjC.Send(root, ObjC.Sel("accessibilityShownMenu")) == 0,
+                "retained detached proxy has no owner, parent, role, rows or transient menu");
         }
         finally { ObjC.Send(root, ObjC.Sel("release")); }
+    }
+
+    /// <summary>Tests a native relation marker without displaying a menu or granting source actions.</summary>
+    private static void CheckShownMenu(nint table, nint physicalTable)
+    {
+        var menu = ObjC.New("NSMenu");
+        var installed = ObjC.Send(physicalTable, ObjC.Sel("menu"));
+        var original = ObjC.Send(physicalTable, ObjC.Sel("accessibilityShownMenu"));
+        ObjC.Send(original, ObjC.Sel("retain"));
+        try
+        {
+            ObjC.Send(physicalTable, ObjC.Sel("setAccessibilityShownMenu:"), menu);
+            Require(ObjC.Send(physicalTable, ObjC.Sel("accessibilityShownMenu")) == menu &&
+                ObjC.Send(table, ObjC.Sel("accessibilityShownMenu")) == menu,
+                "proxy preserves exact physical shown-menu relation without independent presentation");
+            Require(Task.Run(() => ObjC.Send(table, ObjC.Sel("accessibilityShownMenu")))
+                .GetAwaiter().GetResult() == 0, "shown-menu relation refuses off-main owner access");
+            ObjC.Send(physicalTable, ObjC.Sel("setAccessibilityShownMenu:"), 0);
+            Require(ObjC.Send(table, ObjC.Sel("accessibilityShownMenu")) == 0 &&
+                ObjC.Send(physicalTable, ObjC.Sel("menu")) == installed,
+                "proxy does not advertise the installed context menu when no menu is shown");
+        }
+        finally
+        {
+            ObjC.Send(physicalTable, ObjC.Sel("setAccessibilityShownMenu:"), original);
+            ObjC.Send(original, ObjC.Sel("release"));
+            ObjC.Send(menu, ObjC.Sel("release"));
+        }
     }
 
     private static nint Cell(nint table, int column, int row) => ObjC.Send(table, ObjC.Sel("accessibilityCellForColumn:row:"), column, row);

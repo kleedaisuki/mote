@@ -100,3 +100,65 @@ opt-in processes on `osx-x64` and `osx-arm64` from the repaired commit. Capture
 the enclosing process exit, not merely the nested selector marker. No workflow
 change is necessary for this follow-up. External AX/VoiceOver, geometry and
 physical input/IME release gates remain separate and unclaimed.
+
+## Semantic proxy shown-menu relation (2026-10-01)
+
+The later non-view Table proxy passed the preceding frozen-intent checks in
+both native targets at CI `36791254056`, but its external helper failed after
+`AXShowMenu` returned success: no unique `Go to row:column…` item was found.
+That success means only that AppKit triggered an action, not that a readable
+menu was observed. The external traversal deliberately does not expand Table
+children. Thus this failure alone cannot distinguish a missing native menu
+from an omitted transient relationship or a helper traversal/label assumption.
+See the independent target accounting in [the proxy record](mac-grid-table-proxy.md).
+
+Inspection found a concrete representation omission: the proxy forwards the
+existing physical Table's `accessibilityPerformShowMenu`, but did not expose
+its `accessibilityShownMenu` informational getter. Apple's
+[modern property contract](https://developer.apple.com/documentation/appkit/nsaccessibility-c.protocol/accessibilityshownmenu)
+defines this as the currently displayed menu, and the external
+[`AXShownMenuUIElement` relation](https://developer.apple.com/documentation/applicationservices/kaxshownmenuuielementattribute)
+provides access to contextual menus without general descendant traversal.
+
+The correction registers that modern getter on the semantic root and forwards
+the **exact existing physical Table getter**. Main-thread and live-owner checks
+precede the forwarding; a retained detached root returns nil. This is read-only
+information, not an AX setter, a newly fabricated menu, a synthetic event or a
+second menu lifecycle. The installed `menu` is not returned unconditionally:
+a configured context menu is not necessarily currently shown. Existing
+`accessibilityPerformShowMenu`, `menuWillOpen:` identity capture, physical input
+and menu command admission are unchanged.
+
+The in-process native selector probe adds a discriminating relation test using
+a process-owned NSMenu marker temporarily assigned to the physical native
+`accessibilityShownMenu` property. It requires the proxy to return that same
+object, refuses an off-main lookup, then clears the property and requires nil
+while the installed physical context menu remains unchanged. `finally`
+restores the exact original property with explicit balanced retains/releases.
+The retained-root-after-disposal test now also requires nil for this getter.
+The marker test does **not** display a menu and is not evidence of actual menu
+tracking, cross-process transport or successful logical navigation. With the
+old proxy getter omission, the marker identity assertion would fail; this
+negative is a code-path inference until exercised on a Mac target.
+
+Local Windows/.NET SDK 10.0.400 validation compiled the source and passed the
+existing focused managed filter **10/10**, with no AppKit execution:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore `
+  --filter 'FullyQualifiedName~MacGridAccessibility' --verbosity minimal `
+  --logger 'trx;LogFileName=shown-menu-bridge.trx' `
+  --results-directory .cache/mac-grid-menu-regression
+```
+
+Actual two-RID native relation/combined-probe execution and the separate client
+remain required. The helper's new bounded, content-free shown-menu/type/role
+diagnostics preserve its original query budget and menu assertion; they are
+needed to distinguish product presentation from traversal/label assumptions.
+This narrow information bridge is **not** a claim that the hosted external
+failure has been fixed. No public Engine/Formats API or extra product binary
+was introduced.
+
+Independent static review found no substantive defect in this bounded bridge;
+its exact scope and target limitations are preserved in
+[the shown-menu review](../reviews/mac-grid-shown-menu-bridge-review.md).

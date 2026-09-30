@@ -214,7 +214,7 @@ internal sealed unsafe partial class MacCsvGrid
             "accessibilitySelectedRows", "accessibilitySelectedColumns", "accessibilityHelp", "accessibilityRole",
             "accessibilityRowCount", "accessibilityColumnCount", "accessibilityFocusedUIElement",
             "accessibilityLabel", "accessibilityParent", "accessibilityWindow", "accessibilityTopLevelUIElement",
-            "accessibilityIdentifier" })
+            "accessibilityIdentifier", "accessibilityShownMenu" })
             Add(cls, selector, (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint>)&AccessibilityTableRead,
                 selector.EndsWith("Count", StringComparison.Ordinal) ? "q@:" : "@@:");
         Add(cls, "accessibilityCellForColumn:row:",
@@ -337,6 +337,9 @@ internal sealed unsafe partial class MacCsvGrid
             if (AccessibilitySelector(selector, "accessibilityWindow") || AccessibilitySelector(selector, "accessibilityTopLevelUIElement"))
                 return ObjC.Send(g._table, ObjC.Sel("window"));
             if (AccessibilitySelector(selector, "accessibilityIdentifier")) return ObjC.String("mote.csv.table");
+            // The native view still owns menu presentation; the proxy must preserve its transient relation.
+            if (AccessibilitySelector(selector, "accessibilityShownMenu"))
+                return ObjC.Send(g._table, selector);
             if (AccessibilitySelector(selector, "accessibilityFocusedUIElement"))
                 return g.AccessibilityFocusedElement();
             if (AccessibilitySelector(selector, "accessibilityHelp")) return ObjC.String(g._accessibilityFrame?.Status ?? "No installed CSV window");
