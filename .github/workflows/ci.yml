@@ -226,6 +226,32 @@ jobs:
         run: |
           $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote.exe"
           & ./tests/NativeWindowsWorkflow.ps1 -ExecutablePath $executable
+      # Keep legacy-page compatibility strict; ordinary Continuous first earns
+      # independent HWND/UIA/source-byte evidence without masking a failure.
+      - name: Diagnose ordinary Windows Continuous open-edit-save-reopen (non-gating)
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeWindowsContinuousWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -ReportPath ".cache/ci-inventory/$rid/native-continuous-win.json"
+      - name: Upload ordinary Windows Continuous diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-continuous-win-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-continuous-win.json
+            .temp/gui-continuous-workflow/**/*-stderr.txt
+            .temp/gui-continuous-workflow/**/*-stdout.txt
+            .temp/gui-continuous-workflow/**/stderr.txt
+            .temp/gui-continuous-workflow/**/stdout.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       # Mutates only a GitHub-hosted runner's HKCU app preference inside one
       # try/finally, then restores the exact value kind/data or key absence.
       # Real HWND colors/selection are diagnostic until first hosted evidence.
@@ -674,6 +700,30 @@ jobs:
           & ./tests/NativeMacExternalWorkflow.ps1 `
             -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
             -ReportPath ".cache/ci-inventory/$rid/mac-external-workflow.json"
+      # The ordinary product is now Canvas; legacy-page keeps its strict oracle.
+      # This new external source-AX + keyboard/disk check remains diagnostic.
+      - name: Diagnose ordinary macOS Continuous keyboard workflow (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacContinuousWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/native-continuous-mac.json"
+      - name: Upload ordinary macOS Continuous diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-continuous-mac-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-continuous-mac.json
+            .temp/mac-continuous-workflow/**/*.stdout.txt
+            .temp/mac-continuous-workflow/**/*.stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       - name: Upload external macOS workflow report
         if: always() && startsWith(matrix.rid, 'osx-')
         uses: actions/upload-artifact@v4

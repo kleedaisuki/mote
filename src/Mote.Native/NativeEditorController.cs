@@ -21,6 +21,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     private readonly INativeEditorShell _shell;
     private readonly INativeCanvasShell? _canvasShell;
     private readonly AccessibleDocument? _accessibleDocument;
+    /// <summary>Null retains the historical diagnostic adapter behavior.</summary>
+    private readonly EditorPresentationProfile? _productProfile;
     private readonly int _uiThreadId = Environment.CurrentManagedThreadId;
     private readonly MoteConfiguration _configuration;
     /// <summary>The palette last committed to both controller and native shell.</summary>
@@ -70,11 +72,23 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     /// <summary>Wires platform events to engine transactions and static format policies.</summary>
     public NativeEditorController(INativeEditorShell shell, MoteConfiguration configuration,
-        IThemePolicy theme, string? startupPath)
+        IThemePolicy theme, string? startupPath,
+        EditorPresentationProfile? productProfile = null)
     {
         _shell = shell;
         _canvasShell = shell is INativeCanvasShell { CanvasEnabled: true } canvas
             ? canvas : null;
+        bool? expectedCanvas = productProfile switch
+        {
+            EditorPresentationProfile.Continuous => true,
+            EditorPresentationProfile.LegacyPage => false,
+            null => null,
+            _ => throw new ArgumentOutOfRangeException(nameof(productProfile))
+        };
+        if (expectedCanvas is { } expected && expected != (_canvasShell is not null))
+            throw new ArgumentException("The product profile and native shell disagree.",
+                nameof(productProfile));
+        _productProfile = productProfile;
         _configuration = configuration;
         _theme = theme;
         _startupPath = startupPath;
@@ -1127,8 +1141,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         var health = MoteTelemetry.Health;
         var traceWarning = health.SinkFaulted || health.DroppedRecords > 0
             ? " · Trace degraded" : "";
-        var accessibilityWarning = _accessibilityUnavailable
-            ? " · Accessibility provider unavailable" : "";
+        var accessibilityWarning = _accessibilityUnavailable &&
+            _productProfile != EditorPresentationProfile.Continuous
+                ? " · Accessibility provider unavailable" : "";
         var statusSuffix = warnings + traceWarning + accessibilityWarning +
             (_operationStatus.Length == 0 ? "" : " · " + _operationStatus);
         if (_canvasShell is not null)
@@ -1183,8 +1198,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             _shell.LineEndingMode);
         _requestedCaretSource = null;
         var line = snapshot.GetLineIndexFromOffset(frame.TopAnchor.SourceOffset) + 1;
-        var status = $"Line {line:N0} / {snapshot.LineCount:N0} · continuous canvas (experimental)" +
-            statusSuffix;
+        var presentation = _productProfile == EditorPresentationProfile.Continuous
+            ? "continuous canvas" : "continuous canvas (experimental)";
+        var status = $"Line {line:N0} / {snapshot.LineCount:N0} · {presentation}" + statusSuffix;
+        if (_accessibilityUnavailable && _productProfile == EditorPresentationProfile.Continuous)
+            status = "AX unavailable: save, restart --legacy-page · " + status;
         var needsBinding = _canvasBoundGeneration != _canvasGeneration ||
             _canvasBoundVersion != snapshot.Version ||
             (_navigation.Active != _canvasBoundActive &&

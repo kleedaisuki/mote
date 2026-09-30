@@ -1,4 +1,4 @@
-# Diagnose a published macOS editor using external System Events keyboard commands.
+# Diagnose the explicit legacy-page compatibility profile with external keyboard commands.
 # The hosted workflow treats any non-success report as a strict failure.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
@@ -154,6 +154,7 @@ function Start-Editor {
     $start.WorkingDirectory = $root
     $start.UseShellExecute = $false
     $start.Environment['MOTE_HOME'] = Join-Path $scratch 'home'
+    [void]$start.ArgumentList.Add('--legacy-page')
     [void]$start.ArgumentList.Add($file)
     return [Diagnostics.Process]::Start($start)
 }

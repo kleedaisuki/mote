@@ -1233,6 +1233,7 @@ public sealed partial class NativeControllerTests
 
         Assert.Null(shell.CanvasAccessibilityDocument);
         Assert.Contains("Accessibility provider unavailable", shell.CanvasStatus);
+        Assert.Contains("continuous canvas (experimental)", shell.CanvasStatus);
         Assert.DoesNotContain(path, shell.CanvasStatus, StringComparison.Ordinal);
         Assert.DoesNotContain("private source marker", shell.CanvasStatus, StringComparison.Ordinal);
         Assert.Empty(shell.Errors);

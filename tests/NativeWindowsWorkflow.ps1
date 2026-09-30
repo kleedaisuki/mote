@@ -1,4 +1,4 @@
-# Exercise a published Win32 editor through real OS window/control messages and disk I/O.
+# Exercise the explicit legacy-page compatibility profile through real Win32 messages.
 param([Parameter(Mandatory)][string] $ExecutablePath)
 
 Set-StrictMode -Version Latest
@@ -78,7 +78,7 @@ try {
     $path = Join-Path $scratch 'note.md'
     $source = "alpha`nbeta`n"
     [IO.File]::WriteAllText($path, $source, [Text.UTF8Encoding]::new($false))
-    $process = Start-Process -FilePath $exe -ArgumentList $path -PassThru `
+    $process = Start-Process -FilePath $exe -ArgumentList @('--legacy-page', ('"' + $path + '"')) -PassThru `
         -RedirectStandardOutput (Join-Path $scratch 'stdout.txt') `
         -RedirectStandardError (Join-Path $scratch 'stderr.txt')
     Wait-Until {
@@ -117,7 +117,7 @@ try {
     if ($process.ExitCode -ne 0) { throw "Native editor exited with code $($process.ExitCode)." }
 
     # Reopen through the published GUI, rather than treating a disk read as a UI reopen.
-    $process = Start-Process -FilePath $exe -ArgumentList $path -PassThru `
+    $process = Start-Process -FilePath $exe -ArgumentList @('--legacy-page', ('"' + $path + '"')) -PassThru `
         -RedirectStandardOutput (Join-Path $scratch 'reopen-stdout.txt') `
         -RedirectStandardError (Join-Path $scratch 'reopen-stderr.txt')
     Wait-Until {

@@ -77,8 +77,10 @@ internal static class Program
         }
         if (args.Length == 1 && args[0] is "--help" or "-h")
         {
-            Console.WriteLine("Usage: mote [path] [--smoke-gui|--check-runtime]");
-            Console.WriteLine("Experimental canvas: mote --canvas-experimental [path]");
+            Console.WriteLine("Usage: mote [path] | mote --legacy-page [path]");
+            Console.WriteLine("Default: continuous source-backed editor (under validation); --legacy-page restores the established page view.");
+            Console.WriteLine("GUI startup diagnostic: mote [--legacy-page] --smoke-gui");
+            Console.WriteLine("Historical canvas A/B diagnostic: mote --canvas-experimental [path]");
             Console.WriteLine("Windows UIA fragment diagnostic: mote --canvas-experimental --uia-fragment-experimental [path]");
             Console.WriteLine("macOS diagnostic: mote --check-native-mac-workflow <input> <output>");
             Console.WriteLine("Canvas diagnostics: --check-native-windows-canvas | --check-native-mac-canvas");
@@ -87,26 +89,19 @@ internal static class Program
             Console.WriteLine("Experimental AppKit AX tree diagnostic: --check-native-mac-canvas-ax <input>");
             Console.WriteLine("Experimental AppKit horizontal diagnostic: --check-native-mac-horizontal <short-line> <long-line> <output-dir>");
             Console.WriteLine("Experimental AppKit live-theme diagnostic: --check-native-mac-theme <input.md> <output-dir> <default|canvas>");
-            Console.WriteLine("Experimental AppKit marked-text/theme diagnostic: --check-native-mac-composition-theme <input.md> <output-dir> <default|canvas>");
+            Console.WriteLine("Experimental AppKit marked-text commit/cancel/theme diagnostic: --check-native-mac-composition-theme <input.md> <output-dir> <default|canvas>");
             Console.WriteLine("On-screen read-only canvas: --check-native-canvas-window <100MiB-many-line-file> <50MiB-one-line-file> <output-dir> <theme-id>");
             return 0;
         }
-        var canvasMode = args.Length > 0 && args[0] == "--canvas-experimental";
-        var remaining = canvasMode ? args[1..] : args;
-        var fragmentMode = remaining.Length > 0 && remaining[0] == "--uia-fragment-experimental";
-        if (fragmentMode)
+        if (!NativeLaunchParser.TryParse(args, out var launch, out var argumentError))
         {
-            if (!canvasMode || !OperatingSystem.IsWindows())
-            {
-                Console.Error.WriteLine("The UIA fragment diagnostic requires Windows canvas mode.");
-                return 2;
-            }
-            remaining = remaining[1..];
+            Console.Error.WriteLine(argumentError);
+            return 2;
         }
-        var smoke = remaining.Length == 1 && remaining[0] == "--smoke-gui";
-        if (remaining.Contains("--uia-fragment-experimental") || !smoke && remaining.Length > 1)
+        if (launch is NativeLaunchRoute.CanvasDiagnostic { FragmentRoot: true } &&
+            !OperatingSystem.IsWindows())
         {
-            Console.Error.WriteLine("mote opens one file per process; provide at most one path.");
+            Console.Error.WriteLine("The UIA fragment diagnostic requires Windows canvas mode.");
             return 2;
         }
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
@@ -133,13 +128,13 @@ internal static class Program
             }
         }
 
-        INativeEditorShell shell = OperatingSystem.IsWindows()
-            ? new Windows.WindowsEditorShell(canvasMode, fragmentMode)
-            : new Mac.MacEditorShell(canvasMode);
+        var selectedLaunch = launch!;
+        INativeEditorShell shell = NativeShellFactory.Create(selectedLaunch);
         var theme = ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark);
         using var app = new NativeEditorController(shell, config, theme,
-            smoke ? null : remaining.FirstOrDefault());
-        if (!smoke && themeWarning is not null)
+            selectedLaunch.Path,
+            selectedLaunch is NativeLaunchRoute.Product product ? product.Profile : null);
+        if (!selectedLaunch.Smoke && themeWarning is not null)
         {
             // The status bar counts warnings but cannot display their details.
             // A typo is rare and actionable, so show its text once after the
@@ -153,7 +148,7 @@ internal static class Program
                 shell.Post(() => shell.ShowError(warningText));
             };
         }
-        if (smoke)
+        if (selectedLaunch.Smoke)
         {
             shell.Shown += () =>
             {

@@ -33,14 +33,50 @@ published executable is self-contained, but startup and OS-control behavior
 must be measured separately on each target architecture ([Microsoft Native
 AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
 
+The 2026-09-30 profile-wiring checkpoint published with the command above to
+`.cache/native-profile-win-x64/`: its inventory contained **one** `mote.exe`
+(6,171,648 bytes; SHA-256
+`374763A343471C8CCD8D729E479DB76BF44C3EBE1A3880AA8EC09D36266FD995`).
+Separate, 30-second-bounded process runs of ordinary `--smoke-gui` and
+`--legacy-page --smoke-gui` both exited 0 and printed exactly
+`mote-native-gui-ready`; redirected output is retained under
+`.temp/profile-smoke/`. This proves both new startup routes create and close a
+native GUI in the local Windows x64 build, **not** real input, source AX tree,
+physical paint, or the other three RIDs.
+The same executable also passed
+`pwsh -NoProfile -File tests/NativeWindowsWorkflow.ps1 -ExecutablePath .cache/native-profile-win-x64/mote.exe`:
+the explicit `--legacy-page` process opened 11 UTF-16 units, accepted one
+real RichEdit `WM_CHAR`, saved 12, and a fresh GUI process reopened all 12
+(exit 0, `native-windows-open-edit-save-reopen-ok`). This checks the rollback
+route's existing Windows workflow, not Continuous editing or another RID.
+
 ## Current behavior and explicit limits
+
+On this development branch, ordinary `mote [path]` uses the source-backed
+`Continuous` presentation and automatically enables the single-source Windows
+UIA fragment route; `mote --legacy-page [path]` retains the established native
+text-page workflow as an explicit rollback. Presentation is fixed for the
+window lifetime. The historical `--canvas-experimental` and optional
+`--uia-fragment-experimental` invocations remain diagnostic A/B routes, not
+alternative product configuration. **This wiring is under validation, not a
+release-readiness claim:** real IME, reader, four-RID editing and measured
+input-to-screen gates in [the migration design](../../docs/virtual-editor-design.md)
+remain conjunctive. If the source accessibility provider cannot attach or
+later detaches, editing keeps the canonical document; the persistent status
+explains how to save and restart with `--legacy-page`. Mote never moves a dirty
+document or marked text between modes inside one process. On Windows, the
+source canvas must expose exactly one **editable source** UIA Document; the
+separate read-only RichEdit preview may correctly expose a second Document
+([Microsoft's standard-control UIA mapping](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-controlsupport)).
+The input ribbon and hidden page must not expose duplicate source Documents.
+Preview labeling, reader speech and focus behavior remain separate gates.
 
 - Open, New, Save, Save As, Undo, Redo, and formatting are wired to the engine.
   Open/save run off the UI thread. Save As over an existing file requires an
   additional approval after a fingerprint is captured; a changed target is
   rejected. Invalid UTF-8 is not silently replaced.
-- The editor control holds a nominal 64 KiB source page with 8 KiB of edit
-  slack before a focus-preserving rebase. This avoids the
+- The `--legacy-page` editor control holds a nominal 64 KiB source page with
+  8 KiB of edit slack before a focus-preserving rebase. This avoids the
   gigabyte-scale full-control mirror observed for large text and long lines,
   but page navigation is **not** a finished virtualized whole-file editor.
   Global Select All, Copy, Cut, Find Next and Go To Line use engine offsets;
@@ -71,10 +107,11 @@ AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)).
   cannot block the native input thread, but OS/format-specific peak memory and
   background CPU cost remain release gates.
 - A separate `Viewport/` model represents continuous source-backed scrolling
-  and bounded visible slices without a per-line object graph. The default
-  editor still uses the native page control. `--canvas-experimental [path]`
-  opts into an evolving continuous canvas with a visible caret-local OS input
-  host; it is **not** the default or a parity claim. Read-only DirectWrite and
+  and bounded visible slices without a per-line object graph. The development
+  branch's ordinary route now composes this with a visible, bounded OS input
+  ribbon and one source-backed accessibility document. The older
+  `--canvas-experimental [path]` route remains an evolving A/B diagnostic, not
+  a parity claim. Read-only DirectWrite and
   CoreText geometry probes remain available through
   `--check-native-windows-canvas` and `--check-native-mac-canvas`.
 - Native preview is a bounded, source-mapped semantic rendering: Markdown
@@ -96,7 +133,7 @@ The controller translates user selection changes back into source coordinates an
 
 The model deliberately does not own page movement, platform prompts, or clipboard APIs. These remain controller/shell policy and mechanism respectively. Off-page selections remain in engine coordinates across page transitions; the native caret is parked at the new page until the user changes selection or explicitly edits there. The shell defers selection-collapse events from typing until after its text-change event, so typing over a global selection replaces the entire source range, not merely the visible page.
 
-## Experimental interactive canvas contract
+## Continuous canvas contract under validation
 
 `--canvas-experimental` preserves the same engine-owned document, undo, I/O,
 format sessions, global UTF-16 navigation, and preview. `CanvasFrame` paints
@@ -110,7 +147,8 @@ The legacy contiguous analysis/preview bridge is separately capped to 64 Ki,
 even if two visible slices lie across a huge source gap. Thus a later visible
 slice may lack semantic overlay until a multi-range analysis path exists.
 
-This opt-in path is a product experiment, not a default-switch gate pass.
+The ordinary-path profile wiring is a product experiment, not a default-switch
+release gate pass.
 The experimental Windows and macOS adapters are designed to route exact
 plain-text clipboard payloads larger than the input host directly to the
 controller as one global transaction; rich clipboard formatting is never
@@ -123,8 +161,8 @@ The experimental canvas no longer imposes a duplicate 32 MiB hard cap;
 evidence before product parity can be claimed. Target-OS CJK IME composition,
 screen-reader access to off-host text, rich Unicode hit-test/candidate geometry,
 semantic colors on the native host row, background analysis latency, and
-end-to-end 100 MiB editing remain independent acceptance gates. Keep the
-working default page editor until those are demonstrated rather than inferred
+end-to-end 100 MiB editing remain independent acceptance gates. Keep
+`--legacy-page` available until those are demonstrated rather than inferred
 from a successful geometry or GUI smoke probe.
 
 In particular, an input method can finalize a candidate whose bounded host
