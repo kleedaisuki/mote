@@ -173,6 +173,33 @@ with exactly one `save.failure.replace/-2147024864` and unchanged original
 bytes. Only then can the bounded ordinary samples provide non-reproduction
 evidence. Current artifacts alone cannot answer that numeric-control contract.
 
+## Independent instrumentation follow-up
+
+After this report's initial artifact audit, the driver owner added content-free
+`close_error_stage`, `close_reason`, `close_predicates`, and deepest bounded
+exception type/HResult fields. Independent source review confirmed the serialized
+row contains derived booleans/counts/Static styles/lengths only, not the
+`MoteSaveDialogObservation.Text` field, title, fixture path, or exception message.
+The exact PID/owner/title/purpose/button guards and existing bounded WM_GETTEXT
+mechanism remain intact; no speculative dialog representation change was made.
+
+An independent narrow helper harness extracts the four pure functions using the
+PowerShell AST and never executes the driver body or Win32 calls:
+
+```powershell
+pwsh -NoProfile -File .temp/windows-save-first-target-audit/predicates.ps1
+```
+
+Four cases passed: unknown private title/text is absent from serialized output;
+current Save prefix and exact discard text produce only their intended flags;
+and a private-message wrapped UnauthorizedAccessException exposes only type
+and HResult `-2147024891`. Output is retained in
+`.temp/windows-save-first-target-audit/predicate-evidence.json`. This supplements,
+not repeats, the owner's broader self-test/compiler checks. It does not validate
+hosted dialog enumeration, button acknowledgement, orderly exit, or trace drain.
+At review time teardown PostMessage return values were still ignored: stages
+locate the attempted operation but do not prove its acknowledgement succeeded.
+
 ## Local source references
 
 - [Diagnostic contract](../windows-save-diagnostic-driver.md).

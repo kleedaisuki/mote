@@ -106,6 +106,23 @@ function Test-RetainedRecoveryText([string] $Text, [string] $Fixture) {
     return $Text -cmatch ('^' + [regex]::Escape($prefix) + '[0-9]{1,10}' + [regex]::Escape($suffix) + '$')
 }
 
+# Export predicate outcomes, never modal text or a host-derived text digest.
+function Get-ClosePredicates([bool] $OwnedMatch, [string] $Title, [string] $Text,
+    [string] $Fixture, [int] $StaticCount, [int[]] $StaticTypes, [bool] $AtTextCap) {
+    return @{ owned_match = $OwnedMatch; title_is_mote = $Title -ceq 'mote';
+        text_length = $Text.Length; static_count = $StaticCount; static_types = @($StaticTypes);
+        text_at_cap = $AtTextCap; save_failure_prefix = Test-SaveFailureText $Text;
+        retained_warning_match = Test-RetainedRecoveryText $Text $Fixture;
+        discard_match = $Text -ceq 'Discard unsaved changes?' }
+}
+
+# Exception wrappers are common in PowerShell; codes identify the actual failing API.
+function Get-ExceptionCodes([Exception] $Exception) {
+    $deepest = $Exception
+    for ($depth = 0; $depth -lt 8 -and $null -ne $deepest.InnerException; $depth++) { $deepest = $deepest.InnerException }
+    return @{ type = $deepest.GetType().FullName; hresult = $deepest.HResult }
+}
+
 if (-not $IsWindows) { throw 'Windows PowerShell 7 required.' }
 if ($SelfTest) {
     $dir = Assert-OwnedPath (Join-Path $root ('.temp/windows-save-diagnostic/selftest-' + [guid]::NewGuid().ToString('N')))
@@ -144,6 +161,14 @@ if ($SelfTest) {
     $warning = "The retained Save recovery will remain after closing this document:`n$(Join-Path $dir ".mote-save-$recoveryId.recovery")`nIt is attempted snapshot v1, not necessarily your latest edits. Inspect, copy, or remove it explicitly before saving this target again."
     if (-not (Test-RetainedRecoveryText $warning $target)) { throw 'Owned retained-recovery warning rejected.' }
     if (Test-RetainedRecoveryText $warning (Join-Path $dir 'other.md')) { throw 'Foreign retained-recovery path accepted.' }
+    $predicates = Get-ClosePredicates $true 'mote' 'Save failed. synthetic' $target 2 @(3, 0) $false
+    if (-not $predicates.save_failure_prefix -or $predicates.static_types[0] -ne 3) { throw 'Close predicate evidence failed.' }
+    $unrecognized = Get-ClosePredicates $false 'other' 'unrecognized synthetic text' $target 1 @(0) $true
+    if ($unrecognized.owned_match -or $unrecognized.title_is_mote -or $unrecognized.save_failure_prefix) { throw 'Unknown dialog predicate accepted.' }
+    if (($unrecognized | ConvertTo-Json -Depth 3).Contains('unrecognized synthetic text')) { throw 'Raw dialog text leaked into evidence.' }
+    $wrapped = [Exception]::new('private outer text', [IO.IOException]::new('private inner text'))
+    $codes = Get-ExceptionCodes $wrapped
+    if ($codes.type -cne 'System.IO.IOException' -or ($codes | ConvertTo-Json).Contains('private')) { throw 'Exception code evidence failed.' }
     Write-Output 'PASS: exact byte oracles and complete/incomplete trace controls; no GUI launch.'
     return
 }
@@ -199,6 +224,14 @@ public sealed class MoteSaveDiagnosticWatchdog : IDisposable {
     }
     public void Dispose() => timer.Dispose();
 }
+/// <summary>In-memory dialog text and content-free metadata; never serialize Text.</summary>
+public sealed class MoteSaveDialogObservation {
+    public string Text;
+    public int StaticCount;
+    public int[] StaticTypes;
+    public int[] StaticLengths;
+    public bool AtTextCap;
+}
 /// <summary>Bounded messages and exact PID/owner-filtered windows only.</summary>
 public static class MoteSaveDiagnosticWin32 {
     public delegate bool Callback(IntPtr h, IntPtr data);
@@ -207,6 +240,7 @@ public static class MoteSaveDiagnosticWin32 {
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint command);
+    [DllImport("user32.dll", EntryPoint="GetWindowLongW")] static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder text, int n);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr h, IntPtr after, string cls, string title);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
@@ -229,11 +263,18 @@ public static class MoteSaveDiagnosticWin32 {
         return result;
     }
     /// <summary>Inspect static dialog text, never arbitrary control data.</summary>
-    public static string DialogText(IntPtr h) {
+    public static MoteSaveDialogObservation InspectDialog(IntPtr h) {
         var text=new StringBuilder();
+        var types=new System.Collections.Generic.List<int>(); bool capped=false;
+        var lengths=new System.Collections.Generic.List<int>();
         EnumChildWindows(h,(child,d)=> { var cls=new StringBuilder(64); GetClassName(child,cls,64);
-            if(cls.ToString()=="Static" && text.Length<2048) text.Append(Text(child)); return true; },IntPtr.Zero);
-        return text.ToString();
+            if(cls.ToString()=="Static" && text.Length<2048) {
+                types.Add(GetWindowLong(child,-16) & 31);
+                var value=Text(child); lengths.Add(value.Length); capped |= value.Length>=511; text.Append(value);
+            }
+            return true; },IntPtr.Zero);
+        return new MoteSaveDialogObservation { Text=text.ToString(), StaticCount=types.Count,
+            StaticTypes=types.ToArray(), StaticLengths=lengths.ToArray(), AtTextCap=capped };
     }
     /// <summary>Acknowledge input synchronously with a half-second bound.</summary>
     public static long Send(IntPtr h, uint msg, long w, long l) {
@@ -283,6 +324,7 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
         pid = $null; start_utc = $null; save_posted = $false; outcome = 'infrastructure-failure';
         dirty = $null; modal_class = $null; responsive = $null; normal_exit = $false; exit_code = $null;
         save_failure_observed = $false;
+        close_error_stage = $null; close_reason = $null; close_predicates = $null;
         error_type = $null; trace_capture = 'incomplete'; disk = $null; held_ack = $false }
     $process = $null; $holder = $null; $watchdog = $null; $window = [IntPtr]::Zero; $modal = [IntPtr]::Zero
     $childClock = [Diagnostics.Stopwatch]::StartNew()
@@ -338,45 +380,85 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
             try {
                 if ($modal -ne [IntPtr]::Zero) {
                     # Never dismiss unknown dialogs or use global keyboard input.
+                    $row.close_error_stage = 'failure-owner-check'
                     $current = [MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, '#32770', $window)
-                    if ($current -ne $modal -or [MoteSaveDiagnosticWin32]::Text($modal) -cne 'mote' -or
-                        -not (Test-SaveFailureText ([MoteSaveDiagnosticWin32]::DialogText($modal)))) { throw 'Unrecognized failure dialog.' }
+                    $row.close_predicates = @{ owned_match = $current -eq $modal }
+                    if ($current -ne $modal) { $row.close_reason = 'owner-mismatch'; throw 'Unrecognized failure dialog.' }
+                    $row.close_error_stage = 'failure-title-read'
+                    $title = [MoteSaveDiagnosticWin32]::Text($modal)
+                    $row.close_predicates.title_is_mote = $title -ceq 'mote'
+                    if ($title -cne 'mote') { $row.close_reason = 'title-mismatch'; throw 'Unrecognized failure dialog.' }
+                    $row.close_error_stage = 'failure-static-read'
+                    $observed = [MoteSaveDiagnosticWin32]::InspectDialog($modal)
+                    $row.close_predicates = Get-ClosePredicates ($current -eq $modal) $title $observed.Text $fixture $observed.StaticCount $observed.StaticTypes $observed.AtTextCap
+                    $row.close_predicates.static_lengths = @($observed.StaticLengths)
+                    $row.close_error_stage = 'failure-purpose-guard'
+                    if (-not $row.close_predicates.save_failure_prefix) { $row.close_reason = 'save-purpose-mismatch'; throw 'Unrecognized failure dialog.' }
+                    $row.close_error_stage = 'failure-ok-lookup'
                     $ok = [MoteSaveDiagnosticWin32]::GetDlgItem($modal, 1)
-                    if ($ok -eq [IntPtr]::Zero) { throw 'No failure OK button.' }
-                    [void][MoteSaveDiagnosticWin32]::PostMessage($ok, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
+                    $row.close_predicates.button_found = $ok -ne [IntPtr]::Zero
+                    if ($ok -eq [IntPtr]::Zero) { $row.close_reason = 'button-missing'; throw 'No failure OK button.' }
+                    $row.close_error_stage = 'failure-ok-post'
+                    $row.close_predicates.post_ack = [MoteSaveDiagnosticWin32]::PostMessage($ok, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
+                    if (-not $row.close_predicates.post_ack) { $row.close_reason = 'message-post-failed'; throw 'Failure OK post failed.' }
+                    $row.close_error_stage = 'failure-dismiss-wait'
                     Wait-Diagnostic { [MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, '#32770', $window) -eq [IntPtr]::Zero } 34
                 }
-                if ($window -eq [IntPtr]::Zero) { throw 'No owned main window for normal close.' }
-                [void][MoteSaveDiagnosticWin32]::PostMessage($window, 0x10, [UIntPtr]::Zero, [IntPtr]::Zero)
+                $row.close_error_stage = 'main-close-post'
+                if ($window -eq [IntPtr]::Zero) { $row.close_reason = 'main-window-missing'; throw 'No owned main window for normal close.' }
+                $row.main_close_posted = [MoteSaveDiagnosticWin32]::PostMessage($window, 0x10, [UIntPtr]::Zero, [IntPtr]::Zero)
+                if (-not $row.main_close_posted) { $row.close_reason = 'message-post-failed'; throw 'Main close post failed.' }
                 $warningAck = $false; $discardAck = $false
                 while (-not $process.HasExited -and $childClock.Elapsed.TotalSeconds -lt 40) {
                     $discard = [MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, '#32770', $window)
                     if ($discard -ne [IntPtr]::Zero) {
-                        if ([MoteSaveDiagnosticWin32]::Text($discard) -cne 'mote') { throw 'Unrecognized close dialog title.' }
-                        $text = [MoteSaveDiagnosticWin32]::DialogText($discard)
+                        $row.close_error_stage = 'close-dialog-title-read'
+                        $title = [MoteSaveDiagnosticWin32]::Text($discard)
+                        $row.close_predicates = @{ owned_match = $true; title_is_mote = $title -ceq 'mote' }
+                        if ($title -cne 'mote') { $row.close_reason = 'title-mismatch'; throw 'Unrecognized close dialog title.' }
+                        $row.close_error_stage = 'close-dialog-static-read'
+                        $observed = [MoteSaveDiagnosticWin32]::InspectDialog($discard)
+                        $text = $observed.Text
+                        $row.close_predicates = Get-ClosePredicates $true 'mote' $text $fixture $observed.StaticCount $observed.StaticTypes $observed.AtTextCap
+                        $row.close_predicates.static_lengths = @($observed.StaticLengths)
+                        $row.close_error_stage = 'close-dialog-purpose-guard'
                         if (Test-RetainedRecoveryText $text $fixture) {
                             if (-not $warningAck) {
+                                $row.close_error_stage = 'recovery-warning-ok-lookup'
                                 $ok = [MoteSaveDiagnosticWin32]::GetDlgItem($discard, 1)
-                                if ($ok -eq [IntPtr]::Zero) { throw 'No recovery warning OK button.' }
-                                [void][MoteSaveDiagnosticWin32]::PostMessage($ok, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
+                                $row.close_predicates.button_found = $ok -ne [IntPtr]::Zero
+                                if ($ok -eq [IntPtr]::Zero) { $row.close_reason = 'button-missing'; throw 'No recovery warning OK button.' }
+                                $row.close_error_stage = 'recovery-warning-ok-post'
+                                $row.close_predicates.post_ack = [MoteSaveDiagnosticWin32]::PostMessage($ok, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
+                                if (-not $row.close_predicates.post_ack) { $row.close_reason = 'message-post-failed'; throw 'Recovery warning OK post failed.' }
                                 $warningAck = $true
                             }
                         }
                         elseif ($text -ceq 'Discard unsaved changes?') {
                             if (-not $discardAck) {
+                                $row.close_error_stage = 'discard-yes-lookup'
                                 $yes = [MoteSaveDiagnosticWin32]::GetDlgItem($discard, 6)
-                                if ($yes -eq [IntPtr]::Zero) { throw 'No discard Yes button.' }
-                                [void][MoteSaveDiagnosticWin32]::PostMessage($yes, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
+                                $row.close_predicates.button_found = $yes -ne [IntPtr]::Zero
+                                if ($yes -eq [IntPtr]::Zero) { $row.close_reason = 'button-missing'; throw 'No discard Yes button.' }
+                                $row.close_error_stage = 'discard-yes-post'
+                                $row.close_predicates.post_ack = [MoteSaveDiagnosticWin32]::PostMessage($yes, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
+                                if (-not $row.close_predicates.post_ack) { $row.close_reason = 'message-post-failed'; throw 'Discard Yes post failed.' }
                                 $discardAck = $true
                             }
                         }
-                        else { throw 'Unrecognized close dialog.' }
+                        else { $row.close_reason = 'close-purpose-mismatch'; throw 'Unrecognized close dialog.' }
                     }
                     Start-Sleep -Milliseconds 50
                 }
                 $row.normal_exit = $process.HasExited -and -not $watchdog.Forced
+                if ($row.normal_exit) { $row.close_error_stage = $null }
+                else { $row.close_error_stage = 'normal-exit-wait'; $row.close_reason = 'normal-exit-incomplete' }
             }
-            catch { $row.close_error_type = $_.Exception.GetType().FullName }
+            catch {
+                $row.close_error_type = $_.Exception.GetType().FullName
+                $row.close_exception = Get-ExceptionCodes $_.Exception
+                if ($null -eq $row.close_reason) { $row.close_reason = 'api-or-runtime-exception' }
+            }
         }
         # On an indeterminate Save, do not open target bytes until the child is gone.
         $evidenceDir = Join-Path $artifact "child-$ordinal"

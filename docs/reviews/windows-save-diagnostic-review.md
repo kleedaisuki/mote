@@ -6,7 +6,63 @@ telemetry serialization/drain, and dedicated documentation when available.
 This is static and synthetic-oracle review, not GUI, Native AOT execution, or a
 reproduction of error 1175. No production or worker-owned files were modified.
 
-## Final integration decision
+## Hosted-failure instrumentation delta review
+
+Reviewed after hosted run `36776080244` / job `110094208431`. The retained
+first-target audit is `docs/validation/windows-save-diagnostic-first-target.md`.
+That run established a preserved original target and exact attempted snapshot
+in its recovery sidecar, but failed diagnostic teardown, forcibly terminated
+the positive-control child, retained empty traces, and launched no ordinary
+children. It did not establish the numeric Save failure code or complete trace
+control. The cause of the immediate close exception remains unproven.
+
+**No substantive blocker found in the uncommitted instrumentation-only delta.**
+Reviewed driver SHA-256:
+`F5E8F67EC41A637A775A04841A57E19068CF667705726D904216BA62BC240F3E`.
+The publisher, production Save UI, and native Save policy are outside this
+delta and were not changed by it. No GUI, old executable, publish, or helper
+test was rerun by this reviewer; the independent validator's four helper
+cases are separate evidence, not a target-execution result.
+
+| Contract | Delta conclusion |
+| --- | --- |
+| Serialized privacy | `close_error_stage` and `close_reason` are fixed literals. `close_predicates` contains only booleans, text lengths, Static control counts/style categories, truncation indication, and button presence. Exception evidence contains deepest bounded type/HResult only. Dialog title/text, synthetic warning path, exception message, exception data, and text digests are not assigned to the serialized row. The `MoteSaveDialogObservation.Text` field remains in memory; the observation object itself is never serialized. |
+| Modal recognition | Original exact child PID, visible class `#32770`, owned main HWND, title `mote`, purpose predicates, fixture-specific retained-warning template, and IDOK/IDYES lookup gates remain intact. Failure-modal owner/title checks were separated for diagnosis, not relaxed. Close-loop `owned_match=true` follows a successful exact PID/owner-filtered `Find`, not an unverified caller assertion. |
+| Native observation | `InspectDialog` retains the same Static-child enumeration, bounded WM_GETTEXT reads and concatenation as its predecessor. Added GWL_STYLE masking records only `SS_TYPEMASK` categories; it does not skip icon text, reorder children, broaden recognized text, or introduce global input. |
+| Error handling | API/guard exceptions still terminate the close attempt and enter the existing safe teardown. The additional bounded exception unwrapping does not convert a guard failure into success or suppress the outer guaranteed process cleanup. Nulling `close_error_stage` occurs only after real normal exit without watchdog force. |
+| Trace/outcome semantics | Forced termination remains `incomplete-forced-exit` even if a terminal record exists. Complete capture still requires normal zero exit, one final session, semantic parse validity, and no dropped events. The positive-control assertion still blocks every ordinary child unless the original-byte/dirty/exact replace-HResult/complete-trace contract passes. |
+
+The delta is suitable for integration and a separately authorized current-source
+target run. It is **diagnostic instrumentation, not a demonstrated teardown
+fix**. A subsequent failed row can now distinguish owner/title/purpose/button
+guards and wrapped API exceptions without exposing raw dialog text. Do not
+infer the root cause from the first run's outer RuntimeException alone, and do
+not interpret this review as approval to weaken unknown-dialog rejection.
+
+### Final message-post acknowledgement delta
+
+The final worker edit arrived after the initial instrumentation review
+(`3C166D12A81A5C84ADC3C18832FBFAFA37465FCA9A5987B54D6005AF47FF6266`).
+It changes exactly four previously ignored PostMessage results: failure OK,
+main WM_CLOSE, retained-warning OK, and discard Yes. The result is now recorded
+as a boolean (`post_ack` or `main_close_posted`); false sets the fixed
+`message-post-failed` reason and throws into the existing safe teardown. Warning
+and discard acknowledgement flags are set only after a successful post.
+
+**No substantive blocker found in this final delta.** These stricter error
+checks neither widen modal recognition nor alter complete/forced trace rules.
+Post acknowledgement means queue acceptance, not completed dialog handling or
+process exit; the existing disappearance/normal-exit and terminal-trace checks
+remain necessary and present.
+
+Independent static verification reconstructed the previously reviewed script
+in memory by removing only those four result checks, and obtained exactly its
+`3C166D...` SHA-256. This establishes that no other edits were missed between
+the two reviewed revisions. The final PowerShell parser returned zero errors,
+and script/review `git diff --check` passed. No native message, GUI, publish,
+or prior helper test was executed for this check.
+
+## Initial frozen-candidate integration decision
 
 **No remaining substantive blocker found in the revised frozen candidate.**
 The driver/publisher/documentation may be integrated. This does not approve or

@@ -119,11 +119,65 @@ SDK 10.0.400 property-only MSBuild evaluation also confirmed that both
 isolated artifacts root's `obj/Mote.Native/` directory; no restore/build ran.
 The local validation summary is `.cache/windows-save-diagnostic-validation/evidence.json`.
 
-Current-source GUI, positive held-handle Save, actual orderly shutdown/drain,
-and hosted runner capability are **not yet exercised**. They must not be claimed
-from fake traces. The publish producer has not run locally because concurrent
+At the local implementation checkpoint, current-source GUI, positive held-handle
+Save, orderly shutdown/drain and hosted capability had not been exercised. They
+must not be claimed from fake traces. The publish producer has not run locally because concurrent
 source edits make its deliberately strict clean-source precondition fail. The
 new CI job uses a fresh checkout and disposable Windows runner, with a bounded
 positive control before ordinary samples, 15-minute job budget, seven-day
 synthetic artifact retention, and job-level non-gating status. Its first target
 report must be inspected even if the strict workflow remains green.
+
+## First hosted positive-control failure and targeted observability
+
+Hosted workflow run `36776080244` used HEAD
+`31b8cada7517a92fd3293b0ae53d2d161f66f1ca`, SDK 10.0.401, runtime pack 10.0.12,
+NTFS/Windows 10.0.26100, and fresh AOT executable SHA-256
+`ec09444eb6d551dca5134e7c6e7b53344a7bc9d2685b3e95d921b2eea4c1903e`
+(7,039,488 bytes). The retained row is
+`.cache/ci-36776080244-save/artifact/windows-save-diagnostic/eb39683a3f744ac3bce13a22c867209b/row-0.json`;
+the job log is `.cache/ci-36776080244-save/job.log`.
+
+The held-share control reached held acknowledgement, dirty document, responsive
+main HWND, child-owned failure modal and exact original target bytes. Close then
+threw a PowerShell RuntimeException; total child duration was 0.4824103 seconds,
+followed by forced exit and zero trace records. Independent post-exit byte audit
+also found the retained recovery sidecar exactly X+original (1,048,577 bytes),
+not missing attempted-save content. No ordinary child ran. This is a failed
+diagnostic-control lifecycle, not a measured replacement latency or complete
+HRESULT capture. Its subsecond duration excludes the 34/40/45-second timeout
+paths but does not identify the failing dialog guard.
+
+The archived implementation already used Unicode WM_GETTEXT through
+SendMessageTimeoutW, 500 milliseconds/call: the tempting cross-process
+GetWindowTextW hypothesis was checked and rejected. The targeted follow-up does
+**not** switch text APIs, filter Static controls speculatively, or relax unknown
+dialog refusal. It records content-free predicates to locate the next failure:
+
+- `close_error_stage`: one of the fixed owner/title/Static read, purpose guard,
+  button lookup/post, failure dismissal, main-close or normal-exit stages.
+- `close_reason`: only owner/title/purpose mismatch, missing button/main HWND,
+  message-post failure, incomplete normal exit, or API/runtime exception.
+- `close_predicates`: owner match, title-is-mote, exact/prefix purpose matches,
+  bounded aggregate and per-Static text lengths, Static count and type bits,
+  text-at-cap, button-found and PostMessage acknowledgement when applicable.
+- `close_exception`: deepest wrapper-unwrapped exception type and signed
+  HResult only. No dialog title/body/path, exception message, or derived text
+  digest is serialized. Reads still use the existing bounded message API.
+
+The Static type bits come from the fixed `SS_TYPEMASK` field of
+GWL_STYLE and may distinguish an icon control from text controls in a future
+row; this does not establish that an icon caused the first failure. No causal
+claim is made from the missing old predicate fields. Fake checks cover unknown
+purpose refusal, no raw text serialization, preserved Static metadata, and
+deepest exception codes. Independent fake evidence is retained under
+`.temp/windows-save-first-target-audit/`, without native calls or driver entry.
+A fresh hosted rerun remains necessary to learn which predicate/API actually
+fails and to establish normal-drain control capability.
+Microsoft's [WM_GETTEXT contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-gettext)
+distinguishes non-text Static controls from ordinary strings, which motivates
+recording control-kind metadata rather than assuming every Static child is body
+text. The [Static-style documentation](https://learn.microsoft.com/en-us/windows/win32/controls/static-control-styles)
+also cautions that SS_TYPEMASK does not represent all styles: reported low type
+bits are diagnostic metadata only, not a complete style classification or a
+new authorization predicate.
