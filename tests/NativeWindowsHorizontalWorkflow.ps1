@@ -67,6 +67,13 @@ public static class MoteHorizontalWin32 {
     [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr window, uint message, UIntPtr wParam, ref CharRange range);
     [DllImport("kernel32.dll")] public static extern IntPtr GlobalLock(IntPtr handle);
     [DllImport("kernel32.dll")] public static extern bool GlobalUnlock(IntPtr handle);
+    public static uint OwnerPid(IntPtr window) {
+        uint pid; GetWindowThreadProcessId(window, out pid); return pid;
+    }
+    public static string ClassName(IntPtr window) {
+        var name = new StringBuilder(128); GetClassNameW(window, name, name.Capacity);
+        return name.ToString();
+    }
     [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct CharRange { public int Min, Max; }
@@ -195,6 +202,14 @@ function Capture-Canvas {
     $center.Y = $windowRect.Top + [int]($height / 2)
     $topWindow = [MoteHorizontalWin32]::WindowFromPoint($center)
     if ($topWindow -ne $Canvas -and -not [MoteHorizontalWin32]::IsChild($Canvas, $topWindow)) {
+        $foreground = [MoteHorizontalWin32]::GetForegroundWindow()
+        $report.capture_obstruction = [ordered]@{
+            expected_editor_pid = $process.Id
+            hit_window = $topWindow.ToInt64()
+            hit_owner_pid = [MoteHorizontalWin32]::OwnerPid($topWindow)
+            hit_class = [MoteHorizontalWin32]::ClassName($topWindow)
+            foreground_pid = [MoteHorizontalWin32]::OwnerPid($foreground)
+        }
         throw 'Canvas is obscured at its center; desktop pixels cannot prove canvas rendering.'
     }
     $bitmap = [Drawing.Bitmap]::new($width, $height)
@@ -275,6 +290,7 @@ $report = [ordered]@{
     artifacts = $run
     error = ''
     clipboard_restored = $false
+    capture_obstruction = $null
 }
 try {
     $originalClipboard = [Windows.Forms.Clipboard]::GetDataObject()
