@@ -1,5 +1,13 @@
 # Native editing: input, drawing, and captured-screen latency
 
+The newer exact-HWND Windows Graphics Capture edit probe and independent
+synthetic-clock calibration are documented in
+[`PresentMeasurementDesign.md`](PresentMeasurementDesign.md). Its local
+source-state oracle works, but WGC frame metadata was observed later than
+callback arrival and the target was not foreground. It therefore makes **no
+edit-to-present latency or release-SLA claim**. The GDI probe below remains a
+first sampled screen-change observation, not a compositor timestamp.
+
 ## Endpoint contract
 
 The existing `document.edit_to_presentation` trace ends when the native shell

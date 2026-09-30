@@ -1,6 +1,6 @@
 # Windows compositor-frame measurement for ordinary Continuous mote
 
-Status: **design, not a measurement** (2026-09-30). This note deliberately does
+Status: **design plus an inconclusive local WGC edit capability probe** (2026-09-30). This note deliberately does
 not promote the existing GDI screen-observer results into paint or present
 latency. It targets the ordinary `mote <file>` Native AOT path, not the former
 `--canvas-experimental` switch or `--legacy-page` rollback path. No production
@@ -188,6 +188,169 @@ Even then call the metrics **synthetic message-to-compositor frame** and
 Independent photodiode work is required for the latter claim. On macOS, an
 analogous WindowServer/ScreenCaptureKit frame timestamp needs its own
 platform validation; this Windows design is not a cross-platform measurement.
+
+## Implemented WGC edit capability and local evidence (2026-09-30)
+
+`WgcEditObserver.cpp` is a **benchmark-only** C++/WinRT process. It enforces
+exact mote top-level/canvas/input HWND class and PID ownership, uses PMv2 DPI
+coordinates plus DWM extended frame bounds to crop a 220×24 glyph region,
+creates a hardware D3D11/WGC exact-window capture session, and emits only
+QPC/WGC timestamps, integer pixel-change counts and 64-bit synthetic-ROI
+signatures. Captured pixel arrays live in a 256-frame bounded memory vector;
+the **parent PowerShell harness** imposes a 20-second `WaitForExit` deadline
+on each helper process and never persists an image.
+`Build-WgcObserver.ps1` builds under repository `.cache` using the installed
+Windows SDK C++/WinRT headers and MinGW-w64 g++. `Measure-WindowsWgc.ps1`
+generates exact 1 or 100 MiB synthetic source under repository `.temp`,
+launches **ordinary** `mote <file>` Native AOT, and checks:
+
+* bounded `WM_NULL` quiet control and one bounded `WM_CHAR` input;
+* unchanged original bytes before Save;
+* exact full-source X Save → Undo original Save → Redo X Save;
+* initial/Undo A signatures equal, timed edited B/Redo B signatures equal,
+  A/B distinct, at least 128 changed glyph pixels, and stable nonblank A,
+  Undo A and B glyph ink measured against the modal ROI background color;
+* matching ROI **x/y offsets** across the separate timed, Undo and Redo WGC
+  sessions; full DWM/canvas geometry is checked within each session, not
+  compared across sessions; target child reaped, and safe
+  `.temp` cleanup. Native target PID/class, input focus, foreground,
+  visibility and DWM/canvas geometry are independently checked immediately
+  before `WM_CHAR`, at every frame callback, and after the timed candidate
+  interval. The reporting oracle rejects **any invalid sampled frame**, even
+  if later frames recover; it checks baseline, quiet-control and all timed
+  samples rather than only the selected B frame. This is *sampled* continuity,
+  not proof of uninterrupted state between callbacks. Capture errors/overflow and timestamp-order anomalies are
+  reported as inconclusive, never silently replaced with GDI timing.
+
+The state mask is deliberately inspectable: bit 1 = exact HWND class/PID and
+parentage, bit 2 = visible/not minimized, bit 4 = native-input focus, bit 8 =
+exact foreground HWND, and bit 16 = unchanged physical DWM/canvas geometry.
+`31` is required for a foreground result. A stable local `23` is evidence of
+valid identity/focus/geometry but **not** visible desktop foreground.
+
+Reproduction on a **synthetic file only**:
+
+```powershell
+./benchmarks/NativePaintLatency/Build-WgcObserver.ps1
+./benchmarks/NativePaintLatency/Measure-WindowsWgc.ps1 `
+  -ExecutablePath .cache/preview-name-win-x64/mote.exe `
+  -Cases many-1 -Repetitions 1 -AllowLocal
+```
+
+The helper is a development measurement tool, **not** a mote runtime sidecar;
+the product's strict one-file Native AOT delivery is unchanged. Automatic
+runs are restricted to a disposable GitHub-hosted Windows desktop; local runs
+require explicit `-AllowLocal`. The JSONL is under
+`.cache/benchmarks/native-wgc-latency/<run-id>/`; it contains no screenshot,
+pixel array, document body, user path or telemetry from ordinary usage.
+
+The local first proof used strict win-x64 AOT SHA-256
+`B532E5CEE1A1BB21FACFFC561479D0FA858F4D723F3DAF058CE7075165D70128`
+(the branch's Preview-Name-enhanced ordinary Continuous build), Windows 11
+10.0.26200, Intel i9-12900H and an NVIDIA RTX 3070 Ti Laptop GPU listed by
+WMI. The listed GPU is **not** proof which adapter created the WGC device.
+The first source-verified run is retained at
+`.cache/benchmarks/native-wgc-latency/f28b91c0009543d9933def2d104fe542/`:
+the A/B glyphs differed in 2,321 ROI pixels, all four byte/source oracles
+passed, control changed 0 pixels, and capture reported no vector overflow or
+processing error. Its raw WGC-metadata-minus-dispatch difference was
+30.7384 ms and input acknowledgment 4.4808 ms. A second source-verified run
+at `.cache/benchmarks/native-wgc-latency/a002d9c3e1724b998e7517fbcd8d6986/`
+again changed 2,321 glyph pixels and passed the same oracles, with raw
+metadata-minus-dispatch 40.198 ms, input acknowledgment 12.1874 ms, and
+observer-side ROI processing 0.4037 ms for the first B frame. These are
+**diagnostic observations, not latency estimates or a distribution**.
+
+Both local runs were *not foreground*, so exact-window WGC can describe its
+capture composition but not a visible desktop presentation. More importantly,
+in the latter run the frame's `SystemRelativeTime` was **0.8281 ms later**
+than the callback-arrival QPC sampled before reading that frame; the earlier
+run also exhibited a future metadata timestamp exceeding 1 ms. That ordering
+conflicts with treating the two values as straightforward same-origin
+render-before-arrival events. The current harness flags any future difference
+above 1 µs and leaves `first_observed_b_metadata_delta_ms` null when it or
+foreground validation fails. The old stored JSONL used a looser threshold;
+its `clock_order_anomaly=false` in the second run must be reinterpreted as
+**anomaly true** under the corrected contract. No p95 or mote rendering
+bottleneck follows from two such runs.
+
+The failure sequence was informative: a first edit attempt without verified
+native-input focus left the source and WGC ROI unchanged; another had
+misaligned ROI coordinates until the helper became PMv2 DPI-aware. These
+negative results motivated explicit input-focus and cross-session ROI
+contracts, rather than permissive pixel matching. WGC exposes no reliable
+per-frame loss count; the helper's `sample_vector_overflow=0` only proves its own
+fixed vector did not fill. Callback-arrival gaps and total observer ROI
+processing duration are recorded, but a long idle gap does not itself prove
+loss, nor does a short gap exclude it. Software WARP fallback is diagnostic
+only and cannot authorize a hardware latency claim. Thus even a future valid record should be named
+**first observed source-B WGC frame**, not guaranteed first compositor frame.
+
+One **post-review contract validation** (not a distribution or latency
+benchmark) is stored at
+`.cache/benchmarks/native-wgc-latency/6f056981c37f4840ac20c0bb4f7caf46/`.
+On the same strict AOT binary, exact source-state oracles and all three
+source-ROI signatures passed; A and Undo A each had 1,583 modal-background
+contrasting glyph pixels, B and Redo B each 1,590, with 2,321 A→B changed
+pixels. Target-state flags were 23 at the **three persisted marks** (before
+edit, first B callback and after the candidate interval) versus 31 required:
+identity, visibility, native-input focus and geometry were valid at those
+marks, but the local target never became foreground. This artifact predates
+the all-sampled-frame reporting gate; it must not be cited as proof of every
+intermediate callback's state. The pure no-GUI
+`Test-WgcStateOracle.ps1` verifies that an intermediate 31→23→31 recovery is
+rejected, whereas all-31 sampled frames pass and stable 23 stays ineligible.
+Quiet control changed zero pixels, observer-side maximum
+per-frame ROI processing was 0.5368 ms, and no local-vector overflow or
+callback error occurred. The 540.6613 ms maximum inter-callback gap occurred
+across sparse updates and is **not** evidence of a lost or slow product frame.
+The raw WGC-metadata-minus-dispatch number was 24.5638 ms and the frame
+metadata again lay 0.7665 ms **after** callback arrival. Thus the result
+remains `source_verified_but_timing_inconclusive`; reportable latency is null.
+
+### Independent self-painted clock check
+
+`WgcClockProbe.cpp` removes mote from the causal chain entirely. It creates
+its **own** 320×240 solid-color Win32 window, synchronously completes each
+red/blue `WM_PAINT` before proceeding, and uses exact-HWND WGC to read only its
+center pixel. Numeric QPC brackets and frame metadata can be reproduced with
+`Measure-WgcClock.ps1`; the benchmark-only C++ files are built to `.cache`,
+with compiler temporaries redirected to repository `.temp`. Neither raw
+screen pixels nor screenshots are written.
+
+The first bounded local run is retained as numeric CSV at
+`.cache/benchmarks/native-paint-latency/wgc/clock-f3f896fa4d114580b11117b75f0fbf49.csv`.
+The offline parser's machine-readable summary is at
+`.cache/benchmarks/native-paint-latency/wgc/clock-bbe3cb1e3189411da77043b13f4491ab/summary.json`;
+it matched all six toggles and counted six future metadata timestamps.
+QPC frequency was 10 MHz; WGC used hardware D3D, yielded one initial frame
+plus all six deterministic toggles, with no local-vector overflow or capture
+error. The matching source color was observed for every toggle. The frame
+metadata was **later than callback arrival in all six frames**, not merely
+in mote's GDI/Canvas path:
+
+| Toggle | WGC metadata minus callback arrival | WM_PAINT completion to WGC metadata |
+| ---: | ---: | ---: |
+| 0 | +0.32 ms | 16.77 ms |
+| 1 | +1.90 ms | 16.53 ms |
+| 2 | +2.55 ms | 14.56 ms |
+| 3 | +0.44 ms | 13.83 ms |
+| 4 | +1.09 ms | 23.26 ms |
+| 5 | +3.38 ms | 24.72 ms |
+
+This falsifies the explanation that mote itself made the earlier future
+timestamps. It does **not** establish the exact cause: WGC's timestamp may
+represent a future composition/display scheduling point rather than callback
+completion, there may be an undocumented clock mapping offset, or the driver
+may behave differently from the API's terse description. The variability
+precludes blindly subtracting a single constant offset. The paint-to-WGC
+numbers are **not** input-to-present or physical display latency; the
+calibration window uses synchronous `UpdateWindow`, not a keyboard event.
+
+Next, compare WGC with an independent
+OS desktop timestamp (DXGI `LastPresentTime` or ETW) on a disposable foreground
+host before admitting any numeric edit-to-compositor release gate. The
+ordinary 100 MiB WGC case remains implemented but unmeasured at this milestone.
 
 ## Sources
 
