@@ -1,6 +1,6 @@
 # Certified Markdown block summaries
 
-Status: restricted fence extension implemented, 2026-09-29. This is **not** general incremental CommonMark parsing. Implementation: `src/Mote.Formats/MarkdownIncrementalSession.cs`.
+Status: restricted fence and ATX-heading adjacency extensions implemented, 2026-09-30. This is **not** general incremental CommonMark parsing. Implementation: `src/Mote.Formats/MarkdownIncrementalSession.cs`.
 
 ## Motivation and proof boundary
 
@@ -10,14 +10,22 @@ The session stores compact `(start, length, kind, heading level)` source-coordin
 
 ## Restricted grammar
 
-- Blocks are separated by at least one truly empty LF or CRLF line. All positions are absolute UTF-16. At most 100,000 blocks are admitted; each block and physical line is bounded by 64 Ki UTF-16 units.
+- Blocks are separated by at least one truly empty LF or CRLF line, **except** a certified ATX heading may immediately follow a certified paragraph, heading, or closed fence, and a certified paragraph may immediately follow a heading. Two adjacent paragraph lines are not independent: CommonMark merges them, so this still downgrades to `Provisional`. Fence openers still require a blank separator. All positions are absolute UTF-16. At most 100,000 blocks are admitted; each block and physical line is bounded by 64 Ki UTF-16 units.
 - Existing flat headings/paragraphs reject reference/link/escape/entity/container/list/thematic syntax and most inline markup.
 - Added fence: a column-zero opener of 3–16 matching backticks or tildes, optionally followed by an ASCII alphanumeric, hyphen or underscore info word; a later line must contain the *exact same marker* and no other characters. Interior lines, including blank lines and reference-like text, are opaque. Markdig must parse the entire candidate as exactly one source-spanned `FencedCodeBlock` before it is certified. Early, indented or longer closers, an unclosed fence, or a budget overflow trigger `Provisional` rather than a guessed result.
-- A local edit inside a certified block reparses only the changed bounded slice. If it ceases to be independent, the session recertifies or returns bounded `Provisional`. A canceled call does not publish state.
+- A local edit inside a certified block reparses only the changed bounded slice. It may retain the cache only if the **block kind remains unchanged**; otherwise a heading-to-paragraph edit could merge two physical lines while falsely preserving old node boundaries. Kind changes, changed separators, or syntax outside the grammar recertify or return bounded `Provisional`. A canceled call does not publish state.
 - An uncached large-file `Visible` request does **not** run whole-file certification. It returns a bounded `Provisional` projection promptly; a later idle `Full` request may certify the same version, after which visible requests reuse the `Complete` index. This separates edit/open responsiveness from global validation.
 - Projection covers at most 256 Ki UTF-16 units of block starts and 2,048 blocks; one intersecting whole block can extend up to 64 Ki beyond that window. Whole-file `Complete` coverage and exact diagnostic count are independent of projection size.
 
-This subset is deliberately stricter than valid CommonMark: adjacent blocks without blanks, many valid fence variations, lists and cross-block reference links remain `Provisional` on large files. This is a coverage limit, not a validity judgment.
+This subset is deliberately stricter than valid CommonMark: paragraph-to-paragraph adjacency, heading-to-fence adjacency, many valid fence variations, lists and cross-block reference links remain `Provisional` on large files. This is a coverage limit, not a validity judgment.
+
+## ATX-heading adjacency proof slice (2026-09-30)
+
+The local certificate first validates each entire physical line with the production Markdig pipeline as one source-spanned heading or paragraph. Its restrictive body alphabet excludes link references, escapes, entities, containers, Setext underlines, and other syntax that could reinterpret neighboring lines. [CommonMark §4.2, examples 77–78](https://spec.commonmark.org/0.31.2/#atx-headings) explicitly shows that an ATX heading interrupts a paragraph without surrounding blank lines; a paragraph after that heading begins a new block. A closed certified fence is likewise finished before a following heading. In contrast, adjacent paragraph lines are one Markdig paragraph and must not be projected as two nodes. The certifier records the pair of physical lines as the obstruction when this relation fails, allowing edits to either line to trigger a new proof attempt. The incremental edit path now demands unchanged block kind before reusing source coordinates; this is needed specifically for an edited heading marker next to a paragraph.
+
+`tests/Mote.Tests/MarkdownAdjacencyCertificationTests.cs` compares the certified distant-viewport semantic tree and tokens against an **independent whole-document Markdig oracle** on >16 MiB LF and CRLF corpora, including paragraph→heading→paragraph seams. It also compares fence→heading and heading→heading seams, checks versioned local edit/canceled-call retry, revokes `Complete` on heading→paragraph merging, repairs it in the same session, and verifies that offscreen cross-block reference use/definition still stays `Provisional`. Targeted Release tests passed **6/6**; the preexisting Markdown filter passed **35/35** after the implementation change. These are finite differential checks of the restricted grammar, not a proof of all CommonMark extensions.
+
+A separate repo-local file-backed Release probe (`dotnet run --project .temp/MarkdownAdjacencyProbe/MarkdownAdjacencyProbe.csproj -c Release -- 100`) generated 104,859,020 UTF-16 units of adjacent heading/paragraph lines. On one Windows x64 .NET 10 run, cold `Full` was `Complete` with zero diagnostics in **626.34 ms**, a near-start one-character heading edit remained `Complete` in **1.107 ms**, cancellation requested after 5 ms surfaced in **11.09 ms**, and observed whole-process RSS was **263.4 MiB** after the sequence. These are isolated format-session observations, not p95 or native GUI latency. The temporary fixture is under `.temp/`, not a shipped artifact.
 
 ## Reproducible evidence
 

@@ -120,9 +120,11 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
 
     /// <summary>
     /// Certifies a deliberately small, dependency-free CommonMark subset from
-    /// bounded physical-line reads. Exact blank separators make each heading,
-    /// paragraph or closed fence an independent Markdig block. Active syntax
-    /// outside fences is not admitted. One failure rejects the whole document.
+    /// bounded physical-line reads. Exact blank separators isolate each block;
+    /// ATX headings may additionally border another certified block without a
+    /// separator because they interrupt paragraphs and end before the next
+    /// physical line. Active syntax outside fences is not admitted. One failure
+    /// rejects the whole document.
     /// </summary>
     private static bool TryCertifyFlat(TextSnapshot snapshot, CancellationToken ct,
         out List<FlatRun> runs, out TextSpan? badLine)
@@ -182,19 +184,10 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
                 continue;
             }
             if (bodyLength == 0) { separated = true; continue; }
-            if (!separated)
-            {
-                // Missing separation depends on both physical lines. Editing
-                // the earlier line can create a blank even if this line stays
-                // byte-for-byte unchanged.
-                var previous = blocks[^1].Start;
-                badLine = new TextSpan(previous, end - previous);
-                return false;
-            }
             // A count-budget failure is not an intrinsic defect of this line:
             // deleting earlier blocks may make the same line admissible.
             if (blocks.Count == MaxFlatBlocks) return false;
-            if (TryFenceOpener(raw.AsSpan(0, bodyLength), out var marker))
+            if (separated && TryFenceOpener(raw.AsSpan(0, bodyLength), out var marker))
             {
                 fenceStart = start;
                 fenceMarker = marker;
@@ -203,7 +196,18 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
             }
             if (!IsVerifiedFlatBlock(raw[..bodyLength], out var level))
             {
-                badLine = new TextSpan(start, rawLength);
+                var obstructionStart = separated ? start : blocks[^1].Start;
+                badLine = new TextSpan(obstructionStart, end - obstructionStart);
+                return false;
+            }
+            if (!separated && level == 0 && blocks[^1].Kind != CertifiedKind.Heading)
+            {
+                // A heading starts a new CommonMark block without a blank line,
+                // and a paragraph starts a new block immediately after a heading.
+                // Two adjacent paragraph lines instead form one paragraph. Keep
+                // both lines in the obstruction so repairing either retries.
+                var previous = blocks[^1].Start;
+                badLine = new TextSpan(previous, end - previous);
                 return false;
             }
             blocks.Add(new FlatBlock(start, bodyLength,
@@ -356,6 +360,10 @@ internal sealed class MarkdownIncrementalSession : IFormatSession
         if (newLength is < 1 or > MaxExactLineLength) return false;
         var source = snapshot.GetText(start, (int)newLength);
         if (!IsVerifiedCertifiedBlock(source, out var kind, out var level)) return false;
+        // A newly certified block is not necessarily independent of its old
+        // neighbors: changing a heading into a paragraph can merge adjacent
+        // lines. Rebuild the global certificate when the block kind changes.
+        if (kind != block.Kind) return false;
         var delta = change.InsertText.Length - change.DeleteLength;
         var updated = new FlatBlock(0, (int)newLength, kind, level);
         for (var i = 0; i < _flatRuns.Count; i++)
