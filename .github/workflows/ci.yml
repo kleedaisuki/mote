@@ -810,6 +810,45 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+      # Target-host preview gestures are diagnostic until AX/Quartz behavior is
+      # independently observed on both Mach-O architectures. Four cases cover
+      # both editor profiles, pointer activation, Return, and Space.
+      - name: Diagnose macOS preview-to-source navigation (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 12
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $cases = @(
+            @{ name = 'continuous-pointer'; legacy = $false; pointer = $true; space = $false },
+            @{ name = 'continuous-enter'; legacy = $false; pointer = $false; space = $false },
+            @{ name = 'legacy-pointer'; legacy = $true; pointer = $true; space = $false },
+            @{ name = 'legacy-space'; legacy = $true; pointer = $false; space = $true }
+          )
+          $failed = @()
+          foreach ($case in $cases) {
+            try {
+              & ./tests/NativeMacPreviewNavigation.ps1 `
+                -ExecutablePath $exe `
+                -ReportPath ".cache/ci-inventory/$rid/mac-preview-navigation-$($case.name).json" `
+                -LegacyPage:$($case.legacy) -Pointer:$($case.pointer) -Space:$($case.space)
+            } catch {
+              $failed += $case.name
+              Write-Warning "Preview navigation $($case.name) failed: $_"
+            }
+          }
+          if ($failed.Count) { throw "Mac preview navigation cases failed: $($failed -join ', ')" }
+      - name: Upload macOS preview navigation diagnostics
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-preview-navigation-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-preview-navigation-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       - name: Upload external macOS workflow report
         if: always() && startsWith(matrix.rid, 'osx-')
         uses: actions/upload-artifact@v4
