@@ -61,6 +61,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private static readonly Win32.SubclassProcedure PreviewSubclassProcedure = PreviewSubclass;
     private static WindowsEditorShell? _creating;
     private static WindowsEditorShell? _active;
+    /// <summary>Native pane traversal never moves focus from a foreign COM or worker thread.</summary>
+    private readonly int _ownerThread = Environment.CurrentManagedThreadId;
     private readonly ConcurrentQueue<Action> _posted = new();
     private readonly WindowsRichEditUndoScope _editorUndo = new();
     private nint _window;
@@ -300,6 +302,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             var result = Win32.GetMessageW(out var message, 0, 0, 0);
             if (result == 0) break;
             if (result < 0) throw new Win32Exception(Marshal.GetLastPInvokeError(), "Windows message loop failed.");
+            // F6 navigates panes; Tab remains a source editing key, not dialog traversal.
+            if (message.Id == Win32.WM_KEYDOWN && message.WParam == 0x75 &&
+                Win32.GetKeyState(0x11) >= 0 && Win32.GetKeyState(0x12) >= 0 &&
+                CyclePaneFocus(Win32.GetKeyState(0x10) < 0)) continue;
             if (_accelerators != 0 && Win32.TranslateAcceleratorW(_window, _accelerators, ref message) != 0)
                 continue;
             Win32.TranslateMessage(ref message);
@@ -311,6 +317,31 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_uiFont != 0) Win32.DeleteObject(_uiFont);
         _active = null;
     }
+
+    /// <summary>Cycles visible, enabled panes on their native owner thread without settling source composition.</summary>
+    /// <remarks>F6/Shift+F6 is separate from Tab and does not invoke the accessibility COM focus boundary.</remarks>
+    internal bool CyclePaneFocus(bool reverse)
+    {
+        if (Environment.CurrentManagedThreadId != _ownerThread || IsTextComposing || _window == 0) return false;
+        var source = _canvasIsland?.InputHandle ?? _editor;
+        nint[] candidates = _grid is { } grid
+            ? [source, grid.Handle, grid.RowScroller, grid.ColumnScroller, grid.CoordinateControl]
+            : [source];
+        var available = candidates.Where(control => control != 0 && WindowsGridInterop.IsWindowVisible(control) &&
+            PaneIsWindowEnabled(control)).ToArray();
+        if (available.Length == 0) return false;
+        var current = WindowsGridInterop.GetFocus();
+        var index = Array.IndexOf(available, current);
+        var target = index < 0 ? available[reverse ? available.Length - 1 : 0] :
+            available[(index + (reverse ? available.Length - 1 : 1)) % available.Length];
+        Win32.SetFocus(target);
+        return WindowsGridInterop.GetFocus() == target;
+    }
+
+    /// <summary>Native enablement is queried independently from visibility when pruning the pane cycle.</summary>
+    [DllImport("user32.dll", EntryPoint = "IsWindowEnabled")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PaneIsWindowEnabled(nint window);
 
     /// <inheritdoc />
     public void Close()
@@ -1065,7 +1096,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private void EnsureGrid()
     {
         if (_grid is not null) return;
-        _grid = new WindowsCsvGrid(_window, 104, _theme);
+        _grid = new WindowsCsvGrid(_window, 104, _theme, () => IsTextComposing);
         _grid.IntentRequested += intent => GridIntentRequested?.Invoke(intent);
         _grid.WindowRequested += request => GridWindowRequested?.Invoke(request);
         _grid.GestureBeginning += begin => GridGestureBeginning?.Invoke(begin);

@@ -1,7 +1,9 @@
 # CSV Grid external accessibility contract
 
-Date: 2026-10-01. Status: **implementation contract, not implemented or externally
-accepted**. Inspected native adapters at `f7d7e44`; the logical-scrollbar code is
+Date: 2026-10-01. Status: **implementation contract; bounded model and experimental
+native adapters implemented, not externally accepted**. See the evolving
+[implementation/evidence ledger](csv-grid-accessibility-implementation.md).
+Original design inspected native adapters at `f7d7e44`; the logical-scrollbar code is
 already present in this checkout even though the older
 [scrollbar design](csv-grid-logical-scrollbar.md) retains its proposal heading.
 This document introduces no code, public API, configuration or release claim.

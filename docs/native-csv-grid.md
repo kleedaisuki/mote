@@ -1,8 +1,8 @@
 # Native CSV Grid implementation
 
 Status: bounded native implementation, focused local/synthetic hosted evidence,
-and scoped real Windows/macOS clipboard acceptance; **not desktop interaction,
-external accessibility or release acceptance**.
+scoped real Windows/macOS clipboard acceptance and experimental bounded Windows
+UIA read/selection/navigation evidence; **not complete desktop, reader or release acceptance**.
 The reviewed [Grid architecture](csv-grid-architecture.md) and shipped Formats
 contract (`9034fbe`) remain the semantic source of truth.
 
@@ -175,6 +175,22 @@ is inferred from portable arithmetic or hidden-control tests.
 
 ### Remaining release gates / deliberate truthful limits
 
+- The bounded-window accessibility model and experimental native UIA/AX adapters
+  are now implemented locally ([implementation ledger](csv-grid-accessibility-implementation.md),
+  [Mac scope](validation/mac-grid-accessibility.md)). Native pattern indices stay
+  local and absolute CSV ordinals remain in labels/headers; no whole-file Table
+  is advertised. Mac registration is opt-in pending external target acceptance.
+  An initial real Windows AOT/MTA probe established readable Table/header/value
+  facts but exposed wrong-thread selection refusal. The corrected bounded
+  selection dispatcher, three-view tree, read-only range facts, synthetic
+  own-thread F6, distant Go-to and stale-cell matrix subsequently passed scoped
+  win-x64 AOT checks ([exact scope, source delta and focus gates](validation/windows-grid-accessibility.md)).
+  Shared model tests and portable Mac geometry/fixture tests are not external
+  reader evidence. Source-command
+  Invoke/AX press/Copy/Replace remain omitted until controller acknowledgment
+  and actual terminal outcomes are implemented and accepted; keyboard/menu
+  commands retain their existing behavior.
+
 - Logical row/column scroll controls are now implemented at the checkpoint
   above; retained native rows remain bounded. In-process Mac AppKit synthetic
   scroller acceptance is established, but external UIA/AX values/focus, real desktop
@@ -193,9 +209,10 @@ is inferred from portable arithmetic or hidden-control tests.
   original safe in-memory Mac Grid probe still never publishes. Desktop menu/
   shortcut routing, injected OS publication failure and contention recovery remain
   unverified; no whole-clipboard rollback or old-content preservation is promised.
-- Native UIA GridItem/Selection/Table patterns, external AX selected-cell
-  semantics, Narrator/VoiceOver, physical input and real IME editing need separate
-  target evidence. Cell labels/native control creation do not establish them.
+- Experimental UIA GridItem/Selection/Table and AX selected-cell implementations
+  still need separate external target evidence, as do Narrator/VoiceOver,
+  physical input and real IME editing. Cell labels, pattern pointers, managed
+  compilation and native control creation do not establish these gates.
 - Four-RID strict single-binary AOT inventory/runtime evidence is established
   at the cited checkpoints; that is not four-RID desktop Grid acceptance.
   Startup/source-ready, warm scrolling, Apply-to-visible, callback/install p95

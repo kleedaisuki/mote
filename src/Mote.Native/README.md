@@ -124,11 +124,22 @@ Preview labeling, reader speech and focus behavior remain separate gates.
   activation retains its established marker target while literal provenance is
   independently exact. See [Flow integration](../../docs/native-flow-implementation-contract.md)
   and [navigation](../../docs/native-preview-navigation.md).
-  CSV still uses the compatibility text surface, not the final virtual Grid;
+  CSV uses its separate bounded native Grid, not a whole-file virtual Table;
   image resources and external-link actions remain separate unfinished phases.
   Host tests and hidden Windows HWND evidence do not establish four-RID AOT,
   physical Copy, accessibility or real IME acceptance. The isolated Mac probe
   is `--check-native-mac-flow-rendering` and requires target execution.
+- Native CSV Grid accessibility is experimental and disabled by default. Set
+  `MOTE_NATIVE_GRID_ACCESSIBILITY=1` before process startup to register its
+  bounded UIA/AX tree. Native Table indices are local; labels and headers carry
+  absolute CSV ordinals. Windows F6 / Shift+F6 cycles source, Table, available
+  logical scrollers and Go-to without changing source Tab behavior. Windows
+  accessible navigation ranges are read-only; use native keys or Go-to to move.
+  Grid source-command Invoke/press actions remain omitted, and external Windows
+  cell SetFocus is deliberately refused pending a safe owner-thread boundary.
+  This opt-in does not change the source editor provider or establish reader,
+  real IME or cross-platform release acceptance. See the
+  [implementation/evidence ledger](../../docs/csv-grid-accessibility-implementation.md).
 - Ordinary Continuous plain text defaults to full-width source by the format
   presentation convention; `[editor] preview = "split"` explicitly retains its
   bounded preview, while `"source"` hides it for any format. `"auto"` is the

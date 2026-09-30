@@ -58,7 +58,9 @@ internal static class MacCsvGridProbe
         Require(table != 0 && shell.ProbeGrid.Identity == view.Identity,"real table and exact identity");
         Require(ObjC.Send(table,ObjC.Sel("numberOfRows")) == 2,"bounded native row count");
         Require(ObjC.Send(table,ObjC.Sel("numberOfColumns")) == 3,"actual columns including Missing delivery");
-        Require(ObjC.ManagedString(ObjC.Send(table,ObjC.Sel("accessibilityLabel"))) == "Mote CSV grid","native table AX label");
+        Require(ObjC.ManagedString(ObjC.Send(table,ObjC.Sel("accessibilityLabel"))) ==
+            (Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1" ? "CSV grid window" : "Mote CSV grid"),"native table AX label");
+        MacCsvGridAccessibilityProbe.Check(shell);
         var cell = SendCell(table,ObjC.Sel("viewAtColumn:row:makeIfNecessary:"),1,0,1);
         Require(cell != 0 && ObjC.ManagedString(ObjC.Send(cell,ObjC.Sel("stringValue"))) == "b","ready cell readback");
         Require(ObjC.Send(cell,ObjC.Sel("isEditable")) == 0,"read-only native field");
@@ -139,7 +141,8 @@ internal static class MacCsvGridProbe
         Require(shell.ProbeNativeText == source,"table never edits source");
     }
 
-    private static void Key(nint table, string characters, nuint flags = 0)
+    /// <summary>Dispatches a synthetic native key to the probe table without posting global input.</summary>
+    internal static void Key(nint table, string characters, nuint flags = 0)
     {
         var evt = KeyEvent(ObjC.Class("NSEvent"),ObjC.Sel("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:"),
             10,new(0,0),flags,0,0,0,ObjC.String(characters),ObjC.String(characters),0,0);

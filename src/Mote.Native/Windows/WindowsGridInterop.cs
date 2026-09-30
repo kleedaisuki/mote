@@ -40,6 +40,25 @@ internal static class WindowsGridInterop
     [DllImport("user32.dll")]
     internal static extern int GetSystemMetrics(int index);
 
+    /// <summary>Acquires the HWND owner's STA for platform COM callback marshalling.</summary>
+    [DllImport("ole32.dll")]
+    internal static extern int CoInitializeEx(nint reserved, uint apartment);
+    /// <summary>Balances only successful S_OK/S_FALSE apartment acquisitions.</summary>
+    [DllImport("ole32.dll")]
+    internal static extern void CoUninitialize();
+    /// <summary>Bounded synchronous UI-thread admission; timeout never reports queued success.</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern nint SendMessageTimeoutW(nint window, uint message, nuint parameter, nint data, uint flags, uint timeout, out nuint result);
+    /// <summary>Publishes native control labels from bounded immutable accessibility facts.</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern bool SetWindowTextW(nint window, string text);
+    /// <summary>Converts platform cell rectangles to screen coordinates.</summary>
+    [DllImport("user32.dll")]
+    internal static extern bool ClientToScreen(nint window, ref Win32.Point point);
+    /// <summary>Hidden table slots have no visible geometry.</summary>
+    [DllImport("user32.dll")]
+    internal static extern bool IsWindowVisible(nint window);
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct Controls { internal uint Size, Classes; }
     [StructLayout(LayoutKind.Sequential)]

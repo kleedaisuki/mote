@@ -11,7 +11,7 @@ namespace Mote.Native.Mac;
 /// <summary>A read-only AppKit table over ready bounded CSV descriptors, never engine text.</summary>
 /// <remarks>Native callbacks only read the installed projection. Commands carry its identity.</remarks>
 [SupportedOSPlatform("macos")]
-internal sealed unsafe class MacCsvGrid : IDisposable
+internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilityActions
 {
     /// <summary>Instances are removed before their delegate is released on the UI thread.</summary>
     private static readonly Dictionary<nint, MacCsvGrid> Instances = [];
@@ -25,6 +25,8 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     private readonly Func<NativeGridGestureBegin, NativeGridGesture?>? _beginGesture;
     private readonly Action<NativeGridGestureAction>? _gestureAction;
     private readonly Action<int, int>? _geometryChanged;
+    /// <summary>Physical source composition blocks accessibility focus transfer without committing preedit.</summary>
+    private readonly Func<bool>? _isCompositionActive;
     private (int Rows, int Columns)? _measuredPage;
     private NativeGridScrollFrame? _navigation;
     private NativeGridGesture? _tracking;
@@ -77,10 +79,11 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     internal MacCsvGrid(Action<NativeGridIntent> command, Action<NativeGridWindowRequest> windowRequest,
         Func<NativeGridGestureBegin, NativeGridGesture?>? beginGesture = null,
         Action<NativeGridGestureAction>? gestureAction = null,
-        Action<int, int>? geometryChanged = null)
+        Action<int, int>? geometryChanged = null, Func<bool>? isCompositionActive = null)
     {
         _command = command; _windowRequest = windowRequest;
         _beginGesture = beginGesture; _gestureAction = gestureAction; _geometryChanged = geometryChanged;
+        _isCompositionActive = isCompositionActive;
         RegisterClasses();
         View = ObjC.Send(ObjC.Send(ObjC.Class(ContainerClass), ObjC.Sel("alloc")),
             ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 0, 390, 730));
@@ -127,6 +130,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
         ObjC.Send(_detail, ObjC.Sel("setDrawsBackground:"), 0);
         ObjC.Send(_detail, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("CSV selected cell detail"));
         ObjC.Send(View, ObjC.Sel("addSubview:"), _detail);
+        InitializeAccessibility();
     }
 
     /// <summary>Retained container used in the established preview split.</summary>
@@ -146,7 +150,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
             if (frame?.Pending == true)
             {
                 _identity = null; _projection = null; _anchorRow = -1;
-                _displayColumns = frame.RequestedColumns;
+                _displayColumns = AccessibilityColumns(frame, null, frame.RequestedColumns);
                 _slots = NativeGridPlanner.Slots(null, frame.RequestedRows, frame.Rows.Count);
                 _ready = PendingStrings(_slots.Length, _displayColumns.Count);
                 if (!InstallColumns(_displayColumns, serial)) return;
@@ -168,6 +172,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     /// <summary>Invalidates outer installs before entering any AppKit or controller callback.</summary>
     private long BeginInstallation()
     {
+        RetireAccessibility();
         _installing = true;
         return checked(++_installSerial);
     }
@@ -177,7 +182,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     /// <summary>A superseded outer finally must not alter the winning installation's guard.</summary>
     private void FinishInstallation(long serial)
     {
-        if (Current(serial)) _installing = false;
+        if (Current(serial)) { _installing = false; PublishAccessibility(); }
     }
 
     private bool ApplyNavigation(NativeGridScrollFrame? frame, long serial)
@@ -386,6 +391,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     /// <summary>Installs bounded display strings before allowing AppKit to ask for rows.</summary>
     internal void Install(GridRenderProjection projection, NativePresentationId identity, NativeGridScrollFrame? navigation = null)
     {
+        var retainedAccessibilitySelection = AccessibilityEnabled ? _selection : null;
         var serial = BeginInstallation();
         try
         {
@@ -404,7 +410,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
             _identity = null; _projection = null; _anchorRow = -1;
             if (!ApplyNavigation(navigation, serial)) return;
             if (projection.Version != identity.Document.Version) return;
-            _displayColumns = navigation?.RequestedColumns ?? projection.RequestedColumns;
+            _displayColumns = AccessibilityColumns(navigation, projection, navigation?.RequestedColumns ?? projection.RequestedColumns);
             var requested = navigation?.RequestedRows ?? projection.RequestedRows;
             var known = navigation?.Rows.Count ?? projection.Extent.ExactRowCount ?? projection.Extent.CertifiedPrefixRows;
             _slots = NativeGridPlanner.Slots(projection, requested, known);
@@ -446,6 +452,11 @@ internal sealed unsafe class MacCsvGrid : IDisposable
                 anchorColumn >= _displayColumns.Start && anchorColumn < _displayColumns.End)
             { _anchorRow = FindLocalRow(anchor); _anchorColumn = anchorColumn - _displayColumns.Start; }
             UpdateDetail(serial);
+            if (Current(serial) && retainedAccessibilitySelection is { } retainedSelection && retainedSelection.Document == identity.Document)
+            {
+                _selection = retainedSelection;
+                RefreshSelectionColors(serial);
+            }
         }
         finally { FinishInstallation(serial); }
         if (Current(serial)) PublishGeometry();
@@ -469,12 +480,14 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     /// <summary>Recolors read-only table and detail without source or Undo changes.</summary>
     internal void SetTheme(IThemePolicy theme)
     {
+        RetireAccessibility();
         _theme = theme;
         ObjC.Send(_table, ObjC.Sel("setBackgroundColor:"), Color(theme.Palette.PreviewBackground));
         ObjC.Send(_detail, ObjC.Sel("setTextColor:"), Color(theme.Palette.PreviewForeground));
         ObjC.Send(_detail, ObjC.Sel("setFont:"), ObjC.Send(ObjC.Class("NSFont"),
             ObjC.Sel("systemFontOfSize:"), theme.Typography.UiFontSize));
         ObjC.Send(_table, ObjC.Sel("reloadData"));
+        PublishAccessibility();
     }
 
     /// <summary>Commands never copy sanitized display strings or modify AppKit field text.</summary>
@@ -489,6 +502,14 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     private NativeGridIntent? CaptureIntent(NativeGridIntentKind kind)
     {
         if (_installing || _identity is not { } identity || _projection is not { } projection) return null;
+        if (AccessibilityEnabled && kind is NativeGridIntentKind.Reveal or NativeGridIntentKind.Replace &&
+            _accessibilityFrame?.FocusedCell is { } focused)
+        {
+            var focusedCell = NativeCsvGrid.Row(projection, focused.Row) is { } focusedRow
+                ? NativeCsvGrid.Cell(focusedRow, focused.Column) : null;
+            return focusedCell is { SourceRange: not null, State: not GridValueState.Pending and not GridValueState.Missing }
+                ? new NativeGridIntent(identity, kind, focused.Row, focused.Column) : null;
+        }
         var row = (int)ObjC.Send(_table, ObjC.Sel("selectedRow"));
         if (row < 0 || row >= _slots.Length || _column >= _displayColumns.Count) return null;
         var anchorRow = _anchorRow >= 0 && _anchorRow < _slots.Length ? _anchorRow : row;
@@ -638,7 +659,12 @@ internal sealed unsafe class MacCsvGrid : IDisposable
 
     private void UpdateDetail(long? installation = null)
     {
-        if (_projection is not { } projection) return;
+        if (!_installing)
+        {
+            _accessibilityFocusCell = null;
+            _accessibilityTableFocus = false;
+        }
+        if (_projection is not { } projection) { RefreshSelectionColors(installation); return; }
         var row = (int)ObjC.Send(_table, ObjC.Sel("selectedRow"));
         if (installation is { } serial && !Current(serial)) return;
         if (_identity is { } identity && row >= 0 && row < _slots.Length && _slots[row] is not null)
@@ -652,6 +678,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
             "\nShift: rectangle · Return: source · ⌘C: copy · ⌘Return: replace · Page ↑/↓: rows · ⌥←/→: columns"));
         if (installation is { } current && !Current(current)) return;
         RefreshSelectionColors(installation);
+        if (!_installing) PublishAccessibility();
     }
 
     private nint CellView(nint column, int row)
@@ -708,6 +735,16 @@ internal sealed unsafe class MacCsvGrid : IDisposable
         var anchorColumn = _anchorRow >= 0 ? _anchorColumn : _column;
         var selected = currentRow >= 0 && row >= Math.Min(anchor, currentRow) && row <= Math.Max(anchor, currentRow) &&
             column >= Math.Min(anchorColumn, _column) && column <= Math.Max(anchorColumn, _column);
+        if (AccessibilityEnabled && _selection is { } retained &&
+            retained.Document == (_navigation?.Navigation.Document ?? _identity?.Document))
+        {
+            var absoluteRow = (_navigation?.RequestedRows.Start ?? _projection?.RequestedRows.Start ?? 0) + row;
+            var absoluteColumn = _displayColumns.Start + column;
+            selected = absoluteRow >= Math.Min(retained.AnchorRow ?? retained.Row, retained.Row) &&
+                absoluteRow <= Math.Max(retained.AnchorRow ?? retained.Row, retained.Row) &&
+                absoluteColumn >= Math.Min(retained.AnchorRow is null ? retained.Column : retained.AnchorColumn, retained.Column) &&
+                absoluteColumn <= Math.Max(retained.AnchorRow is null ? retained.Column : retained.AnchorColumn, retained.Column);
+        }
         ObjC.Send(view, ObjC.Sel("setDrawsBackground:"), selected ? 1 : 0);
         if (installation is { } current && !Current(current)) return;
         ObjC.Send(view, ObjC.Sel("setBackgroundColor:"), Color(_theme?.Palette.SelectionBackground ?? new ThemeColor(53,90,133)));
@@ -743,6 +780,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
             Add(cls, "keyDown:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&KeyDown, "v@:@");
             Add(cls, "scrollWheel:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ScrollWheel, "v@:@");
             Add(cls, "mouseDown:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&MouseDown, "v@:@");
+            RegisterTableAccessibility(cls);
             ObjC.RegisterClassPair(cls);
         }
         cls = ObjC.AllocateClassPair(ObjC.Class("NSObject"), DelegateClass, 0);
@@ -963,6 +1001,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
             var shift = (flags & (1u << 17)) != 0;
             if (key is "\uf700" or "\uf701" or "\uf702" or "\uf703")
             {
+                if (!grid.PrepareAccessibilityKeyboardNavigation()) return;
                 if (!shift || grid._anchorRow < 0) { grid._anchorRow = (int)ObjC.Send(self, ObjC.Sel("selectedRow")); grid._anchorColumn = grid._column; }
                 if (!shift) grid._anchorRow = -1;
             }
@@ -996,6 +1035,7 @@ internal sealed unsafe class MacCsvGrid : IDisposable
     public void Dispose()
     {
         SetNavigation(null);
+        RetireAccessibility();
         _identity = null;
         foreach (var scroller in new[] { _rowScroller, _columnScroller })
         { ObjC.Send(scroller, ObjC.Sel("setTarget:"), 0); Instances.Remove(scroller); ObjC.Send(scroller, ObjC.Sel("release")); }

@@ -1,8 +1,11 @@
 using System.ComponentModel;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Mote.Formats;
 using Mote.Themes;
+using Mote.Native.Windows.Accessibility;
 
 namespace Mote.Native.Windows;
 
@@ -11,7 +14,7 @@ namespace Mote.Native.Windows;
 /// never access the engine, parse CSV, decode source, or retain a whole-file mirror.
 /// </summary>
 [SupportedOSPlatform("windows")]
-internal sealed class WindowsCsvGrid : IDisposable
+internal sealed class WindowsCsvGrid : IDisposable, IGridAccessibilityActions
 {
     private static readonly Win32.SubclassProcedure Procedure = Dispatch;
     private GCHandle _root;
@@ -28,6 +31,8 @@ internal sealed class WindowsCsvGrid : IDisposable
     internal nint RowScroller { get; private set; }
     /// <summary>Allows shell status publication only for the surviving installation after reentrancy.</summary>
     internal bool HasNavigation(NativeGridScrollFrame? frame) => ReferenceEquals(_navigation, frame);
+    /// <summary>The actual coordinate button for the shell-owned pane focus cycle.</summary>
+    internal nint CoordinateControl => _goToHandle;
     /// <summary>Owned logical column scrollbar.</summary>
     internal nint ColumnScroller { get; private set; }
     /// <summary>The controller supplies the exact authority retained by subsequent phases.</summary>
@@ -47,35 +52,93 @@ internal sealed class WindowsCsvGrid : IDisposable
     private bool _installing;
     private long _installation;
     private bool _wholeRows;
+    private bool _selectionCleared;
+    private readonly Func<bool> _isCompositionActive;
+    private readonly bool _accessibilityEnabled;
+    private bool _ownsComApartment;
+    private readonly int _uiThread = Environment.CurrentManagedThreadId;
+    private readonly WindowsGridUiaBridge _uia;
+    private readonly WindowsGridUiaGroup _accessibleGroup;
+    private readonly WindowsGridUiaGroup _accessibleStatus;
+    private readonly WindowsGridUiaScroller _accessibleRowScroller, _accessibleColumnScroller;
+    private nint _groupHandle, _goToHandle, _statusHandle;
+    private GridAccessibilityFrame? _accessibleFrame;
+    private long _accessibleSerial;
+    private GridCoordinate? _accessibleFocusedCell;
+    private bool _tableOnlyFocus;
+    private const uint AccessibilityRequestMessage = 0x804B;
+    private readonly ConcurrentDictionary<long, AccessibilityRequest> _accessibleRequests = new();
+    private long _accessibleRequestSerial;
+    private int _accessibleRequestActive;
+    private AccessibilityRequest? _admittingAccessibilityRequest;
+    /// <summary>A bounded synchronous HWND admission token, never an unmanaged retained pointer.</summary>
+    private sealed record AccessibilityRequest(GridAccessibilityId Id, GridSelectionMutation Mutation, long Deadline)
+    {
+        /// <summary>Timeout cancellation is checked again immediately before UI admission.</summary>
+        internal int Cancelled;
+        /// <summary>Serializes only callback-free selection commit against timeout cancellation.</summary>
+        internal readonly object Gate = new();
+        /// <summary>Actual completed synchronous result, not merely a queued admission.</summary>
+        internal GridAccessibilityResult? Completed;
+        /// <summary>Whether admission remains within the caller's bounded synchronous wait.</summary>
+        internal bool Expired => Volatile.Read(ref Cancelled) != 0 || Stopwatch.GetTimestamp() >= Deadline;
+    }
     private (int Row, int Column, bool Extend)? _pendingSelection;
+    /// <summary>A coordinate dialog target bound to the actual admitted navigation serial, never a prediction.</summary>
+    private (NativeDocumentStamp Document, long BeginSerial, long? RequestSerial, int Row, int Column)? _coordinateSelection;
 
     /// <summary>Creates a hidden report table; its parent forwards WM_NOTIFY to HandleNotify.</summary>
-    internal WindowsCsvGrid(nint parent, int id, IThemePolicy theme)
+    internal WindowsCsvGrid(nint parent, int id, IThemePolicy theme, Func<bool>? isCompositionActive = null, bool? accessibilityEnabled = null)
     {
         _theme = theme;
         _parent = parent;
+        _isCompositionActive = isCompositionActive ?? (() => false);
+        _accessibilityEnabled = accessibilityEnabled ?? Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1";
+        try
+        {
+        _ownsComApartment = WindowsGridInterop.CoInitializeEx(0, 2) >= 0;
         var controls = new WindowsGridInterop.Controls
         { Size = (uint)Marshal.SizeOf<WindowsGridInterop.Controls>(), Classes = 1 };
         if (!WindowsGridInterop.InitCommonControlsEx(ref controls)) throw new Win32Exception();
+        _groupHandle = Win32.CreateWindowExW(0, "STATIC", "Mote CSV grid navigation",
+            Win32.WS_CHILD | 0x02000000, 0, 0, 100, 100, parent, (nint)(id + 1100), Win32.GetModuleHandleW(null), 0);
+        if (_groupHandle == 0) throw new Win32Exception(Marshal.GetLastPInvokeError());
+        _accessibleGroup = new(_groupHandle);
         Handle = Win32.CreateWindowExW(Win32.WS_EX_CLIENTEDGE, "SysListView32", "CSV table",
             Win32.WS_CHILD | Win32.WS_TABSTOP | 0x0001 | 0x1000 | 0x0008,
-            0, 0, 100, 100, parent, (nint)id, Win32.GetModuleHandleW(null), 0);
+            0, 0, 100, 100, _groupHandle, (nint)id, Win32.GetModuleHandleW(null), 0);
         if (Handle == 0) throw new Win32Exception(Marshal.GetLastPInvokeError());
         _root = GCHandle.Alloc(this);
         if (!Win32.SetWindowSubclass(Handle, Procedure, 1, (nuint)GCHandle.ToIntPtr(_root)))
         { Dispose(); throw new Win32Exception(Marshal.GetLastPInvokeError()); }
+        if (!Win32.SetWindowSubclass(_groupHandle, Procedure, 1, (nuint)GCHandle.ToIntPtr(_root)))
+        { Dispose(); throw new Win32Exception(Marshal.GetLastPInvokeError()); }
+        _goToHandle = Win32.CreateWindowExW(0, "BUTTON", "Go to CSV cell…", Win32.WS_CHILD | Win32.WS_TABSTOP,
+            0, 0, 130, 24, _groupHandle, (nint)(id + 1101), Win32.GetModuleHandleW(null), 0);
+        _statusHandle = Win32.CreateWindowExW(0, "STATIC", "CSV grid status", Win32.WS_CHILD,
+            0, 0, 100, 24, _groupHandle, (nint)(id + 1102), Win32.GetModuleHandleW(null), 0);
+        if (_goToHandle == 0 || _statusHandle == 0) { Dispose(); throw new Win32Exception(Marshal.GetLastPInvokeError()); }
         // Grid lines + double buffering. Sorting and header drag/drop are deliberately absent.
         Win32.SendMessageW(Handle, WindowsGridInterop.First + 54, 0, 0x00010001);
         RowScroller = CreateScroller(id + 1000, true);
         ColumnScroller = CreateScroller(id + 1001, false);
+        _accessibleRowScroller = new(RowScroller, true);
+        _accessibleColumnScroller = new(ColumnScroller, false);
+        _accessibleStatus = new(_statusHandle, true);
+        if (!Win32.SetWindowSubclass(_statusHandle, Procedure, 1, (nuint)GCHandle.ToIntPtr(_root)))
+        { Dispose(); throw new Win32Exception(Marshal.GetLastPInvokeError()); }
+        _uia = new(Handle, this, AccessibleBounds, _accessibleStatus);
+        _uia.BindHeader(Win32.SendMessageW(Handle, WindowsGridInterop.First + 31, 0, 0));
         SetTheme(theme);
+        }
+        catch { Dispose(); throw; }
     }
 
     /// <summary>The actual owner-data report HWND, not a text preview.</summary>
     internal nint Handle { get; private set; }
     /// <summary>Whether keyboard focus belongs to this detached native table.</summary>
     internal bool HasFocus => Handle != 0 && (WindowsGridInterop.GetFocus() == Handle ||
-        WindowsGridInterop.GetFocus() == RowScroller || WindowsGridInterop.GetFocus() == ColumnScroller);
+        WindowsGridInterop.GetFocus() == RowScroller || WindowsGridInterop.GetFocus() == ColumnScroller || WindowsGridInterop.GetFocus() == _goToHandle);
     /// <summary>Ready-cache selection/action; the controller validates exact installation identity.</summary>
     internal event Action<NativeGridIntent>? IntentRequested;
     /// <summary>Coalesced bounded coordinate request, never synchronous data loading.</summary>
@@ -87,6 +150,8 @@ internal sealed class WindowsCsvGrid : IDisposable
     internal void Install(GridRenderProjection? grid, NativePresentationId identity)
     {
         var installation = ++_installation;
+        _accessibleFrame = null; _uia.Clear();
+        _accessibleFocusedCell = null; _tableOnlyFocus = false;
         var sameDocument = _selectionDocument == identity.Document;
         _installedIdentity = grid is null ? null : identity;
         var selectedPending = false;
@@ -121,7 +186,7 @@ internal sealed class WindowsCsvGrid : IDisposable
             {
                 _row = grid.Rows.Count == 0 ? grid.RequestedRows.Start : grid.Rows[0].Ordinal;
                 _column = Columns.Start;
-                _anchorRow = _row; _anchorColumn = _column; _wholeRows = false;
+                _anchorRow = _row; _anchorColumn = _column; _wholeRows = false; _selectionCleared = false;
             }
             if (_pendingSelection is { } pending && grid.Rows.Any(row => row.Ordinal == pending.Row) &&
                 pending.Column >= Columns.Start && pending.Column < Columns.End)
@@ -135,7 +200,7 @@ internal sealed class WindowsCsvGrid : IDisposable
             if (installation != _installation) return;
             SetNativeFocus(false);
         }
-        finally { _installing = false; }
+        finally { if (installation == _installation) { _installing = false; PublishAccessibility(); } }
         if (installation != _installation) return;
         Win32.InvalidateRect(Handle, 0, false);
         HideLocalScrollbars();
@@ -146,7 +211,7 @@ internal sealed class WindowsCsvGrid : IDisposable
     {
         var handle = Win32.CreateWindowExW(0, "SCROLLBAR", vertical ? "File rows" : "File columns",
             Win32.WS_CHILD | Win32.WS_TABSTOP | (vertical ? 1u : 0u),
-            0, 0, 10, 10, _parent, (nint)id, Win32.GetModuleHandleW(null), 0);
+            0, 0, 10, 10, _groupHandle, (nint)id, Win32.GetModuleHandleW(null), 0);
         if (handle == 0) throw new Win32Exception(Marshal.GetLastPInvokeError());
         if (!Win32.SetWindowSubclass(handle, Procedure, 1, (nuint)GCHandle.ToIntPtr(_root)))
         { Win32.DestroyWindow(handle); throw new Win32Exception(Marshal.GetLastPInvokeError()); }
@@ -157,9 +222,29 @@ internal sealed class WindowsCsvGrid : IDisposable
     internal void SetNavigation(NativeGridScrollFrame? frame)
     {
         var installation = ++_installation;
+        _accessibleFrame = null; _uia.Clear();
+        _accessibleFocusedCell = null; _tableOnlyFocus = false;
+        _installing = true;
+        try
+        {
         if (_navigation?.Navigation != frame?.Navigation) { _gesture = null; _rowWheelRemainder = _columnWheelRemainder = 0; }
         if (_navigation?.Navigation.Document != frame?.Navigation.Document) _geometry = null;
         var placementChanged = _navigation?.RequestSerial != frame?.RequestSerial;
+        if (_coordinateSelection is { } coordinate)
+        {
+            if (frame is null || frame.Navigation.Document != coordinate.Document) _coordinateSelection = null;
+            else if (coordinate.RequestSerial is { } frozenSerial)
+            {
+                if (frame.RequestSerial != frozenSerial) _coordinateSelection = null;
+            }
+            else if (frame.RequestSerial > coordinate.BeginSerial)
+            {
+                if (frame.Pending && coordinate.Row >= frame.RequestedRows.Start && coordinate.Row < frame.RequestedRows.End &&
+                    coordinate.Column >= frame.RequestedColumns.Start && coordinate.Column < frame.RequestedColumns.End)
+                    _coordinateSelection = coordinate with { RequestSerial = frame.RequestSerial };
+                else _coordinateSelection = null;
+            }
+        }
         _navigation = frame;
         _identity = frame is null ? _installedIdentity : frame.Ready == _installedIdentity ? frame.Ready : null;
         if (frame is not null && (_nativeColumns != frame.RequestedColumns || _columns != frame.RequestedColumns.Count + 1))
@@ -192,12 +277,24 @@ internal sealed class WindowsCsvGrid : IDisposable
         if (_bounds is { } bounds) Resize(bounds.X, bounds.Y, bounds.Width, bounds.Height);
         if (installation != _installation) return;
         HideLocalScrollbars();
+        if (_coordinateSelection is { RequestSerial: { } serial } target && frame is { Pending: false } && frame.RequestSerial == serial &&
+            _identity is not null && _grid is { } readyGrid && NativeCsvGrid.Row(readyGrid, target.Row) is { } targetRow &&
+            NativeCsvGrid.Cell(targetRow, target.Column) is { State: not GridValueState.Pending })
+        {
+            _coordinateSelection = null;
+            _row = _anchorRow = target.Row; _column = _anchorColumn = target.Column;
+            _selectionCleared = false; _wholeRows = false; _selectionDocument = target.Document;
+            SetNativeFocus(false);
+        }
         Win32.InvalidateRect(Handle, 0, false);
+        PublishAccessibility();
+        }
+        finally { if (installation == _installation) { _installing = false; PublishAccessibility(true); } }
     }
 
     private void RebuildSlots() => _slots = _navigation is { } frame
         ? NativeGridPlanner.Slots(_identity is null ? null : _grid, frame.RequestedRows, frame.Rows.Count)
-        : _grid?.Rows.Cast<GridRow?>().ToArray() ?? [];
+        : _grid is { } grid ? NativeGridPlanner.Slots(grid, grid.RequestedRows, grid.Extent.ExactRowCount ?? grid.RequestedRows.End) : [];
 
     private static void InstallAxis(nint handle, NativeGridScrollAxis? axis)
     {
@@ -224,20 +321,29 @@ internal sealed class WindowsCsvGrid : IDisposable
         var vertical = _navigation is null ? 0 : Math.Max(1, WindowsGridInterop.GetSystemMetrics(2));
         var horizontal = _navigation is null ? 0 : Math.Max(1, WindowsGridInterop.GetSystemMetrics(3));
         var bodyWidth = Math.Max(0, width - vertical);
-        var bodyHeight = Math.Max(0, height - horizontal);
-        Win32.MoveWindow(Handle, x, y, bodyWidth, bodyHeight, true);
-        Win32.MoveWindow(RowScroller, x + bodyWidth, y, vertical, bodyHeight, true);
-        Win32.MoveWindow(ColumnScroller, x, y + bodyHeight, bodyWidth, horizontal, true);
+        var footer = Math.Min(28, Math.Max(0, height));
+        var bodyHeight = Math.Max(0, height - horizontal - footer);
+        Win32.MoveWindow(_groupHandle, x, y, width, height, true);
+        Win32.MoveWindow(Handle, 0, 0, bodyWidth, bodyHeight, true);
+        Win32.MoveWindow(RowScroller, bodyWidth, 0, vertical, bodyHeight, true);
+        Win32.MoveWindow(ColumnScroller, 0, bodyHeight, bodyWidth, horizontal, true);
+        Win32.MoveWindow(_goToHandle, 0, height - footer, Math.Min(130, width), footer, true);
+        Win32.MoveWindow(_statusHandle, Math.Min(136, width), height - footer, Math.Max(0, width - 136), footer, true);
         HideLocalScrollbars();
         PublishGeometry();
+        PublishAccessibility(true);
     }
 
     /// <summary>Shows or hides table and logical scrollers together.</summary>
     internal void Show(bool visible)
     {
+        Win32.ShowWindow(_groupHandle, visible ? 5 : 0);
+        Win32.ShowWindow(_goToHandle, visible ? 5 : 0);
+        Win32.ShowWindow(_statusHandle, visible ? 5 : 0);
         Win32.ShowWindow(Handle, visible ? 5 : 0);
         Win32.ShowWindow(RowScroller, visible && _navigation is not null ? 5 : 0);
         Win32.ShowWindow(ColumnScroller, visible && _navigation is not null ? 5 : 0);
+        PublishAccessibility(true);
     }
 
     private void HideLocalScrollbars()
@@ -351,8 +457,8 @@ internal sealed class WindowsCsvGrid : IDisposable
     }
 
     /// <summary>Routes explicit shell Copy to exact cell/rectangle source semantics, not clipped labels.</summary>
-    internal void Copy() => Emit(_wholeRows ? NativeGridIntentKind.CopyRows :
-        _row == _anchorRow && _column == _anchorColumn ? NativeGridIntentKind.CopyValue : NativeGridIntentKind.CopyTsv);
+    internal void Copy() { if (_selectionCleared) return; Emit(_wholeRows ? NativeGridIntentKind.CopyRows :
+        _row == _anchorRow && _column == _anchorColumn ? NativeGridIntentKind.CopyValue : NativeGridIntentKind.CopyTsv); }
 
     /// <summary>Selects only delivered coordinates; never pretends to select a whole-file row mirror.</summary>
     internal void SelectAll()
@@ -366,15 +472,21 @@ internal sealed class WindowsCsvGrid : IDisposable
     /// <summary>Requests distant logical coordinates without synthesizing a whole-file native item count.</summary>
     internal void GoToCoordinate()
     {
+        if (_isCompositionActive()) return;
         if (_navigation is { } frame)
         {
             var gesture = Begin();
             if (gesture is null) return;
             var input = Win32TextPrompt.Show(_parent, "Go to CSV cell", "One-based row:column:", $"{_row + 1L}:{_column + 1L}");
+            if (!ReferenceEquals(_navigation, gesture.Frame)) return;
             var parts = input?.Split(':');
             if (parts is { Length: 2 } && int.TryParse(parts[0], out var row) && row > 0 &&
                 int.TryParse(parts[1], out var column) && column > 0)
+            {
+                _coordinateSelection = (gesture.Frame.Navigation.Document, gesture.Frame.RequestSerial, null, row - 1, column - 1);
                 GestureRequested?.Invoke(new(gesture.Id, NativeGridGesturePhase.Commit, row - 1, column - 1, NativeGridTargetKind.Cell));
+                if (_coordinateSelection is { RequestSerial: null }) _coordinateSelection = null;
+            }
             else GestureRequested?.Invoke(new(gesture.Id, NativeGridGesturePhase.Cancel, frame.Rows.First, frame.Columns.First));
             return;
         }
@@ -476,10 +588,10 @@ internal sealed class WindowsCsvGrid : IDisposable
         var draw = Marshal.PtrToStructure<WindowsGridInterop.Draw>(notification);
         if (draw.Stage == 1) return 0x20; // CDDS_PREPAINT -> notify item draw
         if (draw.Stage == 0x10001) return 0x20; // item prepaint -> notify subitems
-        if (draw.Stage != 0x30001 || _grid is not { } grid || draw.Item >= (nuint)_slots.Length || _slots[(int)draw.Item] is null) return 0;
-        var row = _slots[(int)draw.Item]!.Ordinal;
+        if (draw.Stage != 0x30001 || draw.Item >= (nuint)_slots.Length) return 0;
+        var row = (_navigation?.RequestedRows.Start ?? _grid?.RequestedRows.Start ?? 0) + (int)draw.Item;
         var column = Columns.Start + draw.Column - 1;
-        var selected = row >= Math.Min(_row, _anchorRow) && row <= Math.Max(_row, _anchorRow) &&
+        var selected = !_selectionCleared && row >= Math.Min(_row, _anchorRow) && row <= Math.Max(_row, _anchorRow) &&
             (_wholeRows || column >= Math.Min(_column, _anchorColumn) && column <= Math.Max(_column, _anchorColumn));
         draw.Foreground = Color(selected ? _theme.Palette.SelectionForeground : _theme.Palette.PreviewForeground);
         draw.Background = Color(selected ? _theme.Palette.SelectionBackground : _theme.Palette.PreviewBackground);
@@ -494,19 +606,41 @@ internal sealed class WindowsCsvGrid : IDisposable
         var self = GCHandle.FromIntPtr((nint)data).Target as WindowsCsvGrid;
         try
         {
+            if (self is not null && self._accessibilityEnabled && message == 0x003D && lParam == -25 &&
+                (window == self.RowScroller || window == self.ColumnScroller))
+                return (window == self.RowScroller ? self._accessibleRowScroller : self._accessibleColumnScroller).GetObject(wParam, lParam);
+            if (self is not null && self._accessibilityEnabled && window == self._statusHandle && message == 0x003D && lParam == -25)
+                return self._accessibleStatus.GetObject(wParam, lParam);
+            if (self is not null && window == self._groupHandle)
+            {
+                if (self._accessibilityEnabled && message == 0x003D && lParam == -25) return self._accessibleGroup.GetObject(wParam, lParam);
+                if (message == 0x0111 && lParam == self._goToHandle) { self.GoToCell(); return 0; }
+                if (message is 0x0114 or 0x0115) return Win32.SendMessageW(self._parent, (int)message, wParam, lParam);
+                if (message == Win32.WM_NOTIFY) return Win32.SendMessageW(self._parent, (int)message, wParam, lParam);
+                return Win32.DefSubclassProc(window, message, wParam, lParam);
+            }
             if (self is not null && window != self.Handle)
             {
                 if (message == 0x001F || message == 0x0215 ||
                     message == Win32.WM_KEYDOWN && wParam == 0x1B) self.CancelGesture();
-                return Win32.DefSubclassProc(window, message, wParam, lParam);
+                var nativeResult = Win32.DefSubclassProc(window, message, wParam, lParam);
+                if (message is 0x0007 or 0x0008) self.PublishAccessibility();
+                return nativeResult;
             }
+            if (self is not null && message == AccessibilityRequestMessage)
+            {
+                try { return (nint)(int)self.AdmitAccessibilityRequest((long)wParam); }
+                catch (Exception error) { self.Report(error); return (nint)(int)GridAccessibilityResult.Unavailable; }
+            }
+            if (self is not null && self._accessibilityEnabled && message == 0x003D && lParam == -25)
+                return self._uia.GetObject(wParam, lParam);
             if (self is not null && message == Win32.WM_NOTIFY &&
-                self.HandleNotify(lParam, out var notificationResult)) return notificationResult;
-            if (self is not null && self.Input(message, wParam, lParam)) return 0;
+                self.HandleNotify(lParam, out var notificationResult)) { self.PublishAccessibility(); return notificationResult; }
+            if (self is not null && self.Input(message, wParam, lParam)) { self.PublishAccessibility(); return 0; }
         }
         catch (Exception error) { self?.Report(error); }
         var result = Win32.DefSubclassProc(window, message, wParam, lParam);
-        try { self?.AfterScroll(message, wParam); }
+        try { self?.AfterScroll(message, wParam); if (message is 0x0007 or 0x0008 or 0x0005 or 0x0003) self?.PublishAccessibility(message is 0x0005 or 0x0003); }
         catch (Exception error) { self?.Report(error); }
         return result;
     }
@@ -609,8 +743,9 @@ internal sealed class WindowsCsvGrid : IDisposable
     private void Move(int rows, int columns, bool extend)
     {
         if (_grid is not { Rows.Count: > 0 } grid) return;
-        var row = Math.Max(0L, (long)_row + rows);
-        var column = Math.Max(0L, (long)_column + columns);
+        var origin = _accessibleFocusedCell ?? new GridCoordinate(_row, _column);
+        var row = Math.Max(0L, (long)origin.Row + rows);
+        var column = Math.Max(0L, (long)origin.Column + columns);
         if (row > int.MaxValue || column > int.MaxValue) return;
         if (_navigation is { } navigation &&
             (row < navigation.Rows.First || row >= (long)navigation.Rows.First + navigation.Rows.Page ||
@@ -634,6 +769,7 @@ internal sealed class WindowsCsvGrid : IDisposable
 
     private void Select(int row, int column, bool extend)
     {
+        _accessibleFocusedCell = null; _tableOnlyFocus = false;
         _row = row; _column = column;
         if (!extend) { _anchorRow = row; _anchorColumn = column; }
         SetNativeFocus(_navigation is null);
@@ -674,8 +810,12 @@ internal sealed class WindowsCsvGrid : IDisposable
     private void Emit(NativeGridIntentKind kind)
     {
         if (_identity is not { } identity || _grid is not { Rows.Count: > 0 }) return;
+        if (kind == NativeGridIntentKind.Select) _selectionCleared = false;
+        PublishAccessibility();
         var single = kind is NativeGridIntentKind.Reveal or NativeGridIntentKind.Replace or NativeGridIntentKind.CopyValue or NativeGridIntentKind.CopySource;
-        IntentRequested?.Invoke(single ? new NativeGridIntent(identity, kind, _row, _column) :
+        var commandCell = kind is NativeGridIntentKind.Reveal or NativeGridIntentKind.Replace ?
+            _accessibleFocusedCell ?? new GridCoordinate(_row, _column) : new GridCoordinate(_row, _column);
+        IntentRequested?.Invoke(single ? new NativeGridIntent(identity, kind, commandCell.Row, commandCell.Column) :
             new NativeGridIntent(identity, kind, _anchorRow, _anchorColumn, _row, _column, _wholeRows));
     }
 
@@ -684,7 +824,6 @@ internal sealed class WindowsCsvGrid : IDisposable
     {
         if (_identity is not { } identity || _grid is not { } grid) return;
         var navigationFrame = _navigation;
-        var navigationPage = MeasurePage();
         var frozen = new NativeGridIntent(identity, NativeGridIntentKind.Select,
             _anchorRow, _anchorColumn, _row, _column, _wholeRows);
         var active = new NativeGridIntent(identity, NativeGridIntentKind.Select, _row, _column);
@@ -707,21 +846,8 @@ internal sealed class WindowsCsvGrid : IDisposable
                 point.X, point.Y, 0, Handle, 0);
             if (command == 9)
             {
-                var navigationGesture = navigationFrame is null ? null : GestureBeginning?.Invoke(
-                    new(navigationFrame, navigationPage.Rows, navigationPage.Columns));
-                if (navigationFrame is not null && navigationGesture is null) return;
-                if (navigationGesture is null) CoordinatePrompt(identity, active.Row, active.Column, grid.Extent);
-                else
-                {
-                    var input = Win32TextPrompt.Show(_parent, "Go to CSV cell", "One-based row:column:", $"{active.Row + 1L}:{active.Column + 1L}");
-                    var parts = input?.Split(':');
-                    if (parts is { Length: 2 } && int.TryParse(parts[0], out var row) && row > 0 &&
-                        int.TryParse(parts[1], out var column) && column > 0)
-                        GestureRequested?.Invoke(new(navigationGesture.Id, NativeGridGesturePhase.Commit,
-                            row - 1, column - 1, NativeGridTargetKind.Cell));
-                    else GestureRequested?.Invoke(new(navigationGesture.Id, NativeGridGesturePhase.Cancel,
-                        navigationGesture.Frame.Rows.First, navigationGesture.Frame.Columns.First));
-                }
+                // The frozen menu navigation frame must still be current before opening its dialog.
+                if (ReferenceEquals(_navigation, navigationFrame)) GoToCoordinate();
                 return;
             }
             if (command == 10)
@@ -740,12 +866,221 @@ internal sealed class WindowsCsvGrid : IDisposable
             };
             if (kind is { } value)
             {
+                if (_selectionCleared && value is not (NativeGridIntentKind.Reveal or NativeGridIntentKind.Replace)) return;
                 var single = value is NativeGridIntentKind.Reveal or NativeGridIntentKind.Replace or NativeGridIntentKind.CopyValue or NativeGridIntentKind.CopySource;
                 IntentRequested?.Invoke((single ? active : frozen) with { Kind = value });
             }
         }
         finally { WindowsGridInterop.DestroyMenu(menu); }
     }
+
+    /// <summary>Publishes adapter-owned facts after native installation/selection is coherent.</summary>
+    private void PublishAccessibility(bool geometryChanged = false)
+    {
+        if (_installing || Handle == 0 || _uia is null) return;
+        var document = _navigation?.Navigation.Document ?? _installedIdentity?.Document;
+        if (document is null)
+        {
+            _accessibleFrame = null; _uia.Clear();
+            _accessibleRowScroller.Publish(null, false); _accessibleColumnScroller.Publish(null, false);
+            _accessibleFocusedCell = null; _tableOnlyFocus = false;
+            return;
+        }
+        var rows = _navigation is { } nav ? new GridRange(nav.RequestedRows.Start, _slots.Length) :
+            new GridRange(_grid?.RequestedRows.Start ?? 0, _slots.Length);
+        var previous = _accessibleFrame;
+        var retired = previous is null || previous.Id.Document != document || previous.Rows != rows ||
+            previous.Columns != Columns || previous.Ready != _identity || !ReferenceEquals(previous.Projection, _identity is null ? null : _grid);
+        var id = retired ? new GridAccessibilityId(document.Value, ++_accessibleSerial) : previous!.Id;
+        GridAccessibleSelection? selection = _selectionCleared || _selectionDocument != document ? null :
+            new(new(_anchorRow, _anchorColumn), new(_row, _column), _wholeRows);
+        GridCoordinate? focused = _tableOnlyFocus ? null : _accessibleFocusedCell ?? new GridCoordinate(_row, _column);
+        var hasFocus = WindowsGridInterop.GetFocus() == Handle;
+        var installation = _installation;
+        var frame = NativeGridAccessibility.Create(id, _navigation, _identity, _grid, rows, Columns, selection, focused, hasFocus);
+        if (frame.Rows.Count == 0) _selectionCleared = true;
+        _accessibleFrame = frame;
+        _accessibleGroup.Publish(frame.Status + "; F6/Shift+F6 cycles source, table, row navigation, column navigation, Go to CSV cell; Tab remains source editing");
+        _accessibleStatus.Publish(frame.Status);
+        WindowsGridInterop.SetWindowTextW(_statusHandle, "CSV grid status: " + frame.Status);
+        _accessibleRowScroller.Publish(_navigation, WindowsGridInterop.GetFocus() == RowScroller);
+        _accessibleColumnScroller.Publish(_navigation, WindowsGridInterop.GetFocus() == ColumnScroller);
+        WindowsGridInterop.SetWindowTextW(RowScroller, _navigation?.Rows.Kind == NativeGridExtentKind.Exact ? "File rows" : "Indexed prefix rows");
+        WindowsGridInterop.SetWindowTextW(ColumnScroller, _navigation?.Columns.Kind == NativeGridExtentKind.Exact ? "File columns" : "Known columns");
+        if (_accessibilityEnabled) _uia.Publish(frame, geometryChanged, () => installation == _installation && ReferenceEquals(_accessibleFrame, frame));
+    }
+
+    /// <summary>Exact full-retained selection admission, without source intent dispatch or focus theft.</summary>
+    public GridAccessibilityResult MutateSelection(GridAccessibilityId id, GridSelectionMutation mutation)
+    {
+        if (Environment.CurrentManagedThreadId != _uiThread) return SendAccessibilityRequest(id, mutation);
+        if (_installing) return GridAccessibilityResult.Stale;
+        if (_isCompositionActive()) return GridAccessibilityResult.CompositionBlocked;
+        if (_admittingAccessibilityRequest?.Expired == true) return GridAccessibilityResult.Unavailable;
+        var frame = _accessibleFrame;
+        if (frame is null || Handle == 0) return GridAccessibilityResult.Unavailable;
+        if (frame.Id != id) return GridAccessibilityResult.Stale;
+        var valid = mutation switch
+        {
+            GridSelectionMutation.ReplaceRectangle replace => frame.Contains(replace.Selection.Anchor) && frame.Contains(replace.Selection.Active),
+            GridSelectionMutation.AddCell add => frame.Contains(add.Cell),
+            GridSelectionMutation.RemoveCell remove => frame.Contains(remove.Cell),
+            GridSelectionMutation.Clear => true,
+            _ => false
+        };
+        if (!valid) return GridAccessibilityResult.InvalidCoordinate;
+        var result = NativeGridAccessibility.Mutate(frame.Selection, mutation, out var next);
+        if (result != GridAccessibilityResult.Applied) return result;
+        var request = _admittingAccessibilityRequest;
+        if (request is null) CommitAccessibleSelection(frame, next);
+        else
+        {
+            lock (request.Gate)
+            {
+                if (request.Expired) return GridAccessibilityResult.Unavailable;
+                CommitAccessibleSelection(frame, next);
+                request.Completed = GridAccessibilityResult.Applied;
+            }
+        }
+        // Cancel old Copy before native labels/events can pump a reentrant completion.
+        if (_accessibleFrame?.Id == id && _accessibleFrame.Selection == next && frame.Ready is { } ready)
+        {
+            var active = next?.Active ?? (frame.Rows.Count > 0 && frame.Columns.Count > 0 ? frame.Coordinate(0, 0) : (GridCoordinate?)null);
+            if (active is { } coordinate) IntentRequested?.Invoke(new NativeGridIntent(ready, NativeGridIntentKind.Select,
+                next?.Anchor.Row ?? coordinate.Row, next?.Anchor.Column ?? coordinate.Column,
+                coordinate.Row, coordinate.Column, next?.WholeRows ?? false));
+        }
+        if (_accessibleFrame?.Id != id || _accessibleFrame.Selection != next) return GridAccessibilityResult.Stale;
+        PublishAccessibility();
+        if (_accessibilityEnabled) _uia.NotifySelection(id);
+        if (_accessibleFrame?.Id != id || _accessibleFrame.Selection != next) return GridAccessibilityResult.Stale;
+        Win32.InvalidateRect(Handle, 0, false);
+        return GridAccessibilityResult.Applied;
+    }
+
+    /// <summary>Callback-free selection publication; timeout observes either cancellation or these complete facts.</summary>
+    private void CommitAccessibleSelection(GridAccessibilityFrame frame, GridAccessibleSelection? next)
+    {
+        if (next is { } selected)
+        {
+            _anchorRow = selected.Anchor.Row; _anchorColumn = selected.Anchor.Column;
+            _row = selected.Active.Row; _column = selected.Active.Column; _wholeRows = selected.WholeRows;
+        }
+        _selectionCleared = next is null; _selectionDocument = frame.Id.Document;
+        var focused = _tableOnlyFocus ? (GridCoordinate?)null : _accessibleFocusedCell ?? new GridCoordinate(_row, _column);
+        var publication = NativeGridAccessibility.Create(frame.Id, frame.Navigation, frame.Ready, frame.Projection,
+            frame.Rows, frame.Columns, next, focused, frame.HasTableFocus);
+        _accessibleFrame = publication;
+        _accessibleGroup.Publish(publication.Status + "; F6/Shift+F6 cycles CSV navigation panes; Tab remains source editing");
+        _accessibleStatus.Publish(publication.Status);
+        if (_accessibilityEnabled) _uia.Publish(publication, raiseEvents: false);
+    }
+
+    /// <summary>Focuses only this table, guarding composition and reentrant installation replacement.</summary>
+    public GridAccessibilityResult Focus(GridAccessibilityId id, GridCoordinate? cell)
+    {
+        if (Environment.CurrentManagedThreadId != _uiThread) return GridAccessibilityResult.Unsupported;
+        if (_installing) return GridAccessibilityResult.Stale;
+        if (_isCompositionActive()) return GridAccessibilityResult.CompositionBlocked;
+        if (_admittingAccessibilityRequest?.Expired == true) return GridAccessibilityResult.Unavailable;
+        var frame = _accessibleFrame;
+        if (frame is null || Handle == 0) return GridAccessibilityResult.Unavailable;
+        if (frame.Id != id) return GridAccessibilityResult.Stale;
+        if (cell is { } coordinate && !frame.Contains(coordinate)) return GridAccessibilityResult.InvalidCoordinate;
+        if (cell is { } pending && frame.Cell(pending).State == GridValueState.Pending) return GridAccessibilityResult.NotReady;
+        if (_admittingAccessibilityRequest?.Expired == true) return GridAccessibilityResult.Unavailable;
+        var unchanged = WindowsGridInterop.GetFocus() == Handle && frame.FocusedCell == cell;
+        Win32.SetFocus(Handle);
+        if (_accessibleFrame?.Id != id) return GridAccessibilityResult.Stale;
+        if (_admittingAccessibilityRequest?.Expired == true) return GridAccessibilityResult.Unavailable;
+        if (WindowsGridInterop.GetFocus() != Handle) return GridAccessibilityResult.Unavailable;
+        _accessibleFocusedCell = cell; _tableOnlyFocus = cell is null;
+        PublishAccessibility();
+        if (_accessibleFrame?.Id != id || _accessibleFrame.FocusedCell != cell || WindowsGridInterop.GetFocus() != Handle) return GridAccessibilityResult.Stale;
+        return unchanged ? GridAccessibilityResult.NoChange : GridAccessibilityResult.Applied;
+    }
+
+    /// <summary>Synchronously admits COM-thread actions on the HWND owner, bounded to 500 ms.</summary>
+    private GridAccessibilityResult SendAccessibilityRequest(GridAccessibilityId id, GridSelectionMutation mutation)
+    {
+        if (Interlocked.CompareExchange(ref _accessibleRequestActive, 1, 0) != 0) return GridAccessibilityResult.Unsupported;
+        var handle = Handle;
+        if (handle == 0) { Volatile.Write(ref _accessibleRequestActive, 0); return GridAccessibilityResult.Unavailable; }
+        var serial = Interlocked.Increment(ref _accessibleRequestSerial);
+        var request = new AccessibilityRequest(id, mutation, Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2);
+        _accessibleRequests[serial] = request;
+        try
+        {
+            var completed = WindowsGridInterop.SendMessageTimeoutW(handle, AccessibilityRequestMessage, (nuint)serial, 0,
+                0x0002 | 0x0020, 500, out var result); // ABORTIFHUNG | ERRORONEXIT; never block indefinitely.
+            if (completed != 0) return (GridAccessibilityResult)(int)result;
+            lock (request.Gate)
+            {
+                Volatile.Write(ref request.Cancelled, 1);
+                return request.Completed ?? GridAccessibilityResult.Unavailable;
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref request.Cancelled, 1);
+            _accessibleRequests.TryRemove(serial, out _);
+            Volatile.Write(ref _accessibleRequestActive, 0);
+        }
+    }
+
+    /// <summary>Late native dispatch cannot recover a timed-out token or mutate a stale installation.</summary>
+    private GridAccessibilityResult AdmitAccessibilityRequest(long serial)
+    {
+        if (!_accessibleRequests.TryGetValue(serial, out var request) || request.Expired) return GridAccessibilityResult.Unavailable;
+        var previous = _admittingAccessibilityRequest;
+        _admittingAccessibilityRequest = request;
+        try { return MutateSelection(request.Id, request.Mutation); }
+        finally { _admittingAccessibilityRequest = previous; }
+    }
+
+    /// <summary>Uses native subitem/header rectangles and clips them to the actual visible table client.</summary>
+    private UiaRect AccessibleBounds(int kind, int row, int column)
+    {
+        if (Handle == 0 || !WindowsGridInterop.IsWindowVisible(Handle) || !Win32.GetClientRect(Handle, out var client)) return default;
+        var table = ScreenRectangle(Handle, client);
+        if (kind == 0) return table;
+        Win32.Rect rectangle;
+        nint window = Handle;
+        if (kind == 3)
+        {
+            window = Win32.SendMessageW(Handle, WindowsGridInterop.First + 31, 0, 0);
+            rectangle = default;
+            unsafe
+            {
+                if (Win32.SendMessageW(window, 0x1207, (nuint)(column + 1), (nint)(&rectangle)) == 0) return default;
+            }
+        }
+        else
+        {
+            rectangle = new Win32.Rect { Top = kind == 2 ? 0 : column + 1, Left = 0 };
+            unsafe
+            {
+                if (Win32.SendMessageW(Handle, WindowsGridInterop.First + 56, (nuint)row, (nint)(&rectangle)) == 0) return default;
+            }
+            if (kind == 2) rectangle.Right = rectangle.Left + (int)Win32.SendMessageW(Handle, WindowsGridInterop.First + 29, 0, 0);
+        }
+        var bounds = ScreenRectangle(window, rectangle);
+        var left = Math.Max(table.Left, bounds.Left); var top = Math.Max(table.Top, bounds.Top);
+        var right = Math.Min(table.Left + table.Width, bounds.Left + bounds.Width);
+        var bottom = Math.Min(table.Top + table.Height, bounds.Top + bounds.Height);
+        return right <= left || bottom <= top ? default : new(left, top, right - left, bottom - top);
+    }
+
+    /// <summary>Converts HWND client coordinates without interpolating source offsets.</summary>
+    private static UiaRect ScreenRectangle(nint window, Win32.Rect rectangle)
+    {
+        var point = new Win32.Point { X = rectangle.Left, Y = rectangle.Top };
+        if (!WindowsGridInterop.ClientToScreen(window, ref point)) return default;
+        return new(point.X, point.Y, Math.Max(0, rectangle.Right - rectangle.Left), Math.Max(0, rectangle.Bottom - rectangle.Top));
+    }
+
+    /// <summary>Opens the actual coordinate command; navigation is requested, never reported as decoded readiness.</summary>
+    private void GoToCell() => GoToCoordinate();
 
     private static uint Color(ThemeColor color) => (uint)(color.Red | color.Green << 8 | color.Blue << 16);
     private void Report(Exception error) { try { Faulted?.Invoke(error); } catch { /* No exception may cross the native callback. */ } }
@@ -755,7 +1090,10 @@ internal sealed class WindowsCsvGrid : IDisposable
     /// <summary>Removes the native callback before releasing its root; no caller-owned buffer survives.</summary>
     public void Dispose()
     {
-        _gesture = null; _navigation = null;
+        foreach (var request in _accessibleRequests.Values) Volatile.Write(ref request.Cancelled, 1);
+        _accessibleRequests.Clear();
+        _uia?.Detach(); _accessibleGroup?.Detach(); _accessibleStatus?.Detach(); _accessibleRowScroller?.Detach(); _accessibleColumnScroller?.Detach(); _accessibleFrame = null;
+        _gesture = null; _navigation = null; _coordinateSelection = null;
         _identity = null; _installedIdentity = null; _selectionDocument = null; _grid = null;
         if (RowScroller != 0) Win32.DestroyWindow(RowScroller);
         if (ColumnScroller != 0) Win32.DestroyWindow(ColumnScroller);
@@ -766,6 +1104,9 @@ internal sealed class WindowsCsvGrid : IDisposable
             Win32.DestroyWindow(Handle);
             Handle = 0;
         }
+        if (_groupHandle != 0) Win32.DestroyWindow(_groupHandle);
+        _groupHandle = _goToHandle = _statusHandle = 0;
         if (_root.IsAllocated) _root.Free();
+        if (_ownsComApartment) { WindowsGridInterop.CoUninitialize(); _ownsComApartment = false; }
     }
 }

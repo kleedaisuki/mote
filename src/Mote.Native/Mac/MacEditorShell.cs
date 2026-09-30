@@ -1511,7 +1511,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             request => GridWindowRequested?.Invoke(request),
             begin => GridGestureBeginning?.Invoke(begin),
             action => GridGestureRequested?.Invoke(action),
-            (rows, columns) => GridGeometryChanged?.Invoke(rows, columns));
+            (rows, columns) => GridGeometryChanged?.Invoke(rows, columns),
+            () => IsTextComposing);
         if (_theme is not null) _csvGrid.SetTheme(_theme);
         var old = ActivePreviewPane;
         var frame = MacOnScreenCanvasNative.GetRect(old, ObjC.Sel("frame"));
