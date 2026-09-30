@@ -7,7 +7,9 @@ param(
     [switch] $CheckInventoryOnly,
     [switch] $ReadinessOnly,
     [switch] $DiagnosticTrace,
-    [switch] $KeepFailureArtifacts
+    [switch] $KeepFailureArtifacts,
+    [string] $FixturePath,
+    [string] $FixtureSha256
 )
 
 Set-StrictMode -Version Latest
@@ -40,7 +42,46 @@ function Assert-NoReparseAncestors {
 
 Assert-NoReparseAncestors $scratch
 Assert-NoReparseAncestors $resultRoot
+# External fixtures are an opt-in readiness-only adapter, never an edit/Save
+# route. Require owned repo-local ASCII bytes and an independent pinned digest.
+$externalFixture = -not [string]::IsNullOrWhiteSpace($FixturePath)
+$fixtureExtension = '.md'
+$sourcePrefix = 'STARTUP-MARKER # note'
+$externalPath = $null
+$externalSha = $null
+if ($externalFixture -or -not [string]::IsNullOrWhiteSpace($FixtureSha256)) {
+    if (-not $externalFixture -or $FixtureSha256 -cnotmatch '^[a-fA-F0-9]{64}$' -or -not $ReadinessOnly) {
+        throw 'External fixture requires FixturePath, pinned FixtureSha256, and ReadinessOnly.'
+    }
+    if ($DiagnosticTrace) {
+        throw 'External readiness pilot does not collect child traces; DiagnosticTrace is unsupported.'
+    }
+    $externalPath = [IO.Path]::GetFullPath($FixturePath)
+    $ownedTemp = [IO.Path]::GetFullPath((Join-Path $root '.temp'))
+    if (-not $externalPath.StartsWith($ownedTemp + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase)) { throw 'External fixture must remain below repository .temp.' }
+    Assert-NoReparseAncestors $externalPath
+    if (-not (Test-Path -LiteralPath $externalPath -PathType Leaf)) { throw 'External fixture is absent.' }
+    $fixtureExtension = [IO.Path]::GetExtension($externalPath).ToLowerInvariant()
+    if ($fixtureExtension -notin @('.json', '.csv', '.md')) { throw 'External fixture format is unsupported.' }
+    if ([IO.FileInfo]::new($externalPath).Length -ne [long]$SizeMiB * 1048576) {
+        throw 'External fixture must have the exact requested MiB size.'
+    }
+    $externalSha = (Get-FileHash -LiteralPath $externalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($externalSha -cne $FixtureSha256.ToLowerInvariant()) { throw 'External fixture SHA-256 differs from pinned digest.' }
+    $input = [IO.File]::OpenRead($externalPath)
+    try {
+        $prefixBytes = [byte[]]::new(20)
+        $count = $input.Read($prefixBytes, 0, $prefixBytes.Length)
+        if ($count -ne 20 -or @($prefixBytes | Where-Object { $_ -lt 32 -or $_ -gt 126 }).Count -ne 0) {
+            throw 'External fixture needs 20 printable ASCII bytes before its first line break for the source oracle.'
+        }
+        $sourcePrefix = [Text.Encoding]::ASCII.GetString($prefixBytes)
+    }
+    finally { $input.Dispose() }
+}
 $exe = [IO.Path]::GetFullPath($ExecutablePath)
+Assert-NoReparseAncestors $exe
 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Executable absent: $exe" }
 if ((Split-Path $exe -Leaf) -cne 'mote.exe') { throw 'Expected the one-file Windows mote.exe.' }
 $exeDir = Split-Path $exe
@@ -81,12 +122,19 @@ public static class MoteOrdinaryStartupWin32 {
     private static extern IntPtr SendTextTimeout(IntPtr window, uint message, UIntPtr wParam,
         StringBuilder lParam, uint flags, uint timeoutMs, out IntPtr result);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
-    public static IntPtr MainWindow(uint expectedPid) {
+    public static IntPtr MainWindow(uint expectedPid, bool requireEditorClass = false) {
         IntPtr found = IntPtr.Zero;
         EnumWindows((window, data) => {
             uint pid;
             GetWindowThreadProcessId(window, out pid);
-            if (pid == expectedPid && IsWindowVisible(window)) { found = window; return false; }
+            if (pid == expectedPid && IsWindowVisible(window)) {
+                if (requireEditorClass) {
+                    var name = new StringBuilder(64);
+                    GetClassName(window, name, name.Capacity);
+                    if (name.ToString() != "MoteNativeEditorWindow") return true;
+                }
+                found = window; return false;
+            }
             return true;
         }, IntPtr.Zero);
         return found;
@@ -195,9 +243,16 @@ try {
     for ($ordinal = 0; $ordinal -lt $Runs; $ordinal++) {
         # Fresh filenames avoid test-induced external replacement of a previously
         # opened path. All files have byte-for-byte identical synthetic contents.
-        $fixture = Join-Path $scratch "ordinary-$SizeMiB-$ordinal.md"
-        Write-Fixture $fixture $SizeMiB
-        if ($null -eq $expectedSha) { $expectedSha = Get-ExpectedSha256 $fixture }
+        $fixture = Join-Path $scratch "ordinary-$SizeMiB-$ordinal$fixtureExtension"
+        if ($externalFixture) {
+            Copy-Item -LiteralPath $externalPath -Destination $fixture
+            if ((Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant() -cne $externalSha) {
+                throw 'Copied external fixture differs from pinned digest.'
+            }
+        } else {
+            Write-Fixture $fixture $SizeMiB
+            if ($null -eq $expectedSha) { $expectedSha = Get-ExpectedSha256 $fixture }
+        }
         $originalLength = [IO.FileInfo]::new($fixture).Length
         $start = [Diagnostics.ProcessStartInfo]::new($exe)
         $start.UseShellExecute = $false
@@ -212,6 +267,14 @@ try {
             git_head = $gitHead
             executable_sha256 = $sha; executable_bytes = $exeBytes
             size_mib = $SizeMiB; ordinal = $ordinal
+            fixture_kind = if ($externalFixture) { 'external-pinned-readiness-only' } else { 'generated-markdown' }
+            fixture_format = $fixtureExtension.TrimStart('.')
+            original_fixture_sha256 = $externalSha
+            copied_fixture_sha256_after_probe = $null
+            input_fixture_sha256_after_probe = $null
+            configuration_ms = $null; child_open_to_editable_ms = $null
+            child_open_to_draw_submission_ms = $null
+            child_endpoint_status = 'not-collected by external driver; no child clock subtraction'
             measurement_mode = if ($ReadinessOnly) { 'source-readiness-and-selection' }
                 else { 'source-readiness-edit-and-exact-save' }
             diagnostic_trace = [bool]$DiagnosticTrace
@@ -221,6 +284,7 @@ try {
                 'fresh editor process; just-written unique file; same MOTE_HOME; OS cache not evicted'
             }
             process_create_return_ms = $null
+            child_process_id = $null
             window_visible_ms = $null; title_file_ms = $null
             source_bound_ms = $null; selection_ack_ms = $null
             edit_dirty_ack_ms = $null; save_exact_ms = $null
@@ -246,9 +310,10 @@ try {
             $process = [Diagnostics.Process]::Start($start)
             $sample.process_create_return_ms = $clock.Elapsed.TotalMilliseconds
             if ($null -eq $process) { throw 'Process.Start returned null.' }
+            $sample.child_process_id = $process.Id
             Wait-For {
                 if ($process.HasExited) { throw "Editor exited early: $($process.ExitCode)" }
-                $script:window = [MoteOrdinaryStartupWin32]::MainWindow([uint32]$process.Id)
+                $script:window = [MoteOrdinaryStartupWin32]::MainWindow([uint32]$process.Id, $externalFixture)
                 return $script:window -ne [IntPtr]::Zero
             } 'Visible ordinary main HWND not observed.' $timeout
             $sample.window_visible_ms = $clock.Elapsed.TotalMilliseconds
@@ -269,10 +334,11 @@ try {
                 $sample.editor_seen = $true
                 $text = [MoteOrdinaryStartupWin32]::ReadText($editor, 128)
                 $sample.source_probe_chars = $text.Length
-                return $text.StartsWith('STARTUP-MARKER # note')
+                return $text.StartsWith($sourcePrefix, [StringComparison]::Ordinal)
             } 'Expected source marker was not bound to the native input island.' $timeout
             $sample.source_bound_ms = $clock.Elapsed.TotalMilliseconds
-            $sample.source_prefix = 'STARTUP-MARKER # note'
+            # External bytes are compared in memory, never copied to the report.
+            $sample.source_prefix = if ($externalFixture) { 'pinned-20-byte-ASCII-prefix-verified' } else { $sourcePrefix }
             $sample.source_island_chars = [MoteOrdinaryStartupWin32]::Send($editor, 0x000E, 0, 0)
             if ($sample.source_island_chars -gt 16384 -or $sample.source_island_chars -le 0) {
                 throw "Unbounded or empty source island: $($sample.source_island_chars)"
@@ -317,6 +383,14 @@ try {
                 [long]$process.PeakWorkingSet64 } else { $null }
             $sample.peak_virtual_bytes = if ($process.PeakVirtualMemorySize64 -gt 0) {
                 [long]$process.PeakVirtualMemorySize64 } else { $null }
+            if ($externalFixture) {
+                $sample.copied_fixture_sha256_after_probe = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+                $sample.input_fixture_sha256_after_probe = (Get-FileHash -LiteralPath $externalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($sample.copied_fixture_sha256_after_probe -cne $externalSha -or
+                    $sample.input_fixture_sha256_after_probe -cne $externalSha) {
+                    throw 'Readiness-only probe changed fixture bytes.'
+                }
+            }
             $sample.status = 'passed'
         }
         catch {
