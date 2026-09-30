@@ -384,7 +384,7 @@ internal sealed class JsonIncrementalSession : IFormatSession
             bool harvest = kind == "array" && _depth == 1 && _snapshot.Length > FullTreeLimit;
             if (harvest) _arrayStart = start;
             var children = new List<SemanticNode>();
-            var names = kind == "object" ? new KeyTable(_snapshot, _ct, _work) : null;
+            var names = kind == "object" ? new KeyTable(_snapshot, _ct) : null;
             Space();
             int pageStart = _position, pageDiagnostics = _diagnosticCount, pageElements = 0;
             while (_position < Length && At(_position) != close)
@@ -455,7 +455,7 @@ internal sealed class JsonIncrementalSession : IFormatSession
                 ReadOnlySpan<char> raw = hasRaw
                     ? _chunk.Span.Slice(start + 1 - _chunkStart, _position - start - 2)
                     : default;
-                var unique = names.Add(_lastKeyHash, new TextSpan(start, _position - start), raw, hasRaw);
+                var unique = names.Add(_lastKeyHash, new TextSpan(start, _position - start), raw, hasRaw, _work);
                 if (unique is null) _uncertain = true;
                 else if (unique == false)
                 {
@@ -494,11 +494,11 @@ internal sealed class JsonIncrementalSession : IFormatSession
         /// <summary>Produces a bounded label for a visible duplicate without retaining a giant key.</summary>
         private string ReadKeyLabel(int start, int length)
         {
-            var reader = new KeyReader(_snapshot, new TextSpan(start, length), _work, _ct);
+            var reader = new KeyReader(_snapshot, new TextSpan(start, length));
             var chars = new char[Math.Min(256, length)];
             int count = 0;
-            while (count < chars.Length && reader.Next(out var ch)) chars[count++] = ch;
-            return new string(chars, 0, count) + (reader.Next(out _) ? "…" : "");
+            while (count < chars.Length && reader.Next(out var ch, _work)) chars[count++] = ch;
+            return new string(chars, 0, count) + (reader.Next(out _, _work) ? "…" : "");
         }
 
         private SemanticNode? StringValue(string kind = "string")
@@ -617,45 +617,43 @@ internal sealed class JsonIncrementalSession : IFormatSession
         {
             private readonly TextSnapshot _snapshot;
             private readonly int _end;
-            private readonly SourceWork? _work;
-            private readonly CancellationToken _ct;
             private int _position;
             private string _window = string.Empty;
             private int _windowStart = -1;
 
-            internal KeyReader(TextSnapshot snapshot, TextSpan span, SourceWork? work = null, CancellationToken ct = default)
+            internal KeyReader(TextSnapshot snapshot, TextSpan span)
             {
                 _snapshot = snapshot;
-                _work = work;
-                _ct = ct;
                 _position = span.Start + 1;
                 _end = span.End - 1;
             }
 
-            private char Read()
+            /// <summary>Allows the caller to enforce raw-source cancellation cadence without retained context.</summary>
+            internal int Position => _position;
+
+            private char Read(SourceWork? work)
             {
-                _work?.Visit();
+                work?.Visit();
                 if (_position < _windowStart || _position >= _windowStart + _window.Length)
                 {
-                    _ct.ThrowIfCancellationRequested();
                     _windowStart = _position;
                     int count = Math.Min(4096, _end - _position);
-                    _work?.Visit(count); // Charge bounded lookahead even when comparison stops early.
+                    work?.Visit(count); // Charge bounded lookahead even when comparison stops early.
                     _window = _snapshot.GetText(_position, count);
                 }
                 return _window[_position++ - _windowStart];
             }
 
-            internal bool Next(out char value)
+            internal bool Next(out char value, SourceWork? work = null)
             {
                 if (_position >= _end) { value = default; return false; }
-                value = Read();
+                value = Read(work);
                 if (value != '\\') return true;
-                char escape = Read();
+                char escape = Read(work);
                 if (escape == 'u')
                 {
                     int scalar = 0;
-                    for (int i = 0; i < 4; i++) scalar = (scalar << 4) | Hex(Read());
+                    for (int i = 0; i < 4; i++) scalar = (scalar << 4) | Hex(Read(work));
                     value = (char)scalar;
                     return true;
                 }
@@ -680,7 +678,6 @@ internal sealed class JsonIncrementalSession : IFormatSession
             private const int SmallPageTotal = PageSize - 4;
             private readonly TextSnapshot _snapshot;
             private readonly CancellationToken _ct;
-            private readonly SourceWork? _work;
             private readonly List<KeyEntry[]> _pages = [];
             private int[] _buckets = new int[8];
             private int _capacity;
@@ -689,28 +686,24 @@ internal sealed class JsonIncrementalSession : IFormatSession
             private ulong _hotHash;
             private string? _hotKey;
 
-            internal KeyTable(TextSnapshot snapshot, CancellationToken ct) : this(snapshot, ct, null) { }
-
-            /// <summary>Shares the turn's visit budget across exact duplicate comparisons.</summary>
-            internal KeyTable(TextSnapshot snapshot, CancellationToken ct, SourceWork? work)
+            internal KeyTable(TextSnapshot snapshot, CancellationToken ct)
             {
                 _snapshot = snapshot;
                 _ct = ct;
-                _work = work;
             }
 
             /// <summary>Collision-verification entry point when no borrowed raw span exists.</summary>
             internal bool? Add(ulong hash, TextSpan span) => Add(hash, span, default, false);
 
             /// <returns>True if new, false if an exact duplicate, null if the budget prevents proof.</returns>
-            internal bool? Add(ulong hash, TextSpan span, ReadOnlySpan<char> raw, bool hasRaw)
+            internal bool? Add(ulong hash, TextSpan span, ReadOnlySpan<char> raw, bool hasRaw, SourceWork? work = null)
             {
                 if (_abandoned) return null;
                 // Repeated short raw keys are common in tabular JSON. A single exact
                 // decoded hot key avoids two ranged source reads per duplicate.
                 if (hasRaw && _hotKey is not null && hash == _hotHash)
                 {
-                    _work?.Visit(Math.Min(raw.Length, _hotKey.Length));
+                    work?.Visit(Math.Min(raw.Length, _hotKey.Length));
                     if (raw.SequenceEqual(_hotKey)) return false;
                 }
                 if (_count >= MaxEntries)
@@ -723,7 +716,7 @@ internal sealed class JsonIncrementalSession : IFormatSession
                 {
                     if (probes >= MaxChain) { _abandoned = true; return null; }
                     var entry = Entry(current - 1);
-                    if (entry.Hash == hash && EqualsDecoded(new TextSpan(entry.Start, entry.Length), span))
+                    if (entry.Hash == hash && EqualsDecoded(new TextSpan(entry.Start, entry.Length), span, work))
                     {
                         if (hasRaw && raw.Length <= 64)
                         { _hotHash = hash; _hotKey = new string(raw); }
@@ -775,16 +768,24 @@ internal sealed class JsonIncrementalSession : IFormatSession
                 return true;
             }
 
-            private bool EqualsDecoded(TextSpan left, TextSpan right)
+            /// <summary>Checks exact decoded identity while charging revisits to the caller's turn.</summary>
+            private bool EqualsDecoded(TextSpan left, TextSpan right, SourceWork? work)
             {
-                var a = new KeyReader(_snapshot, left, _work, _ct);
-                var b = new KeyReader(_snapshot, right, _work, _ct);
-                int checkedChars = 0;
+                var a = new KeyReader(_snapshot, left);
+                var b = new KeyReader(_snapshot, right);
+                long nextCancellation = 0;
                 while (true)
                 {
-                    if ((checkedChars++ & 4095) == 0) _ct.ThrowIfCancellationRequested();
-                    bool hasA = a.Next(out var ca);
-                    bool hasB = b.Next(out var cb);
+                    // Escaped names consume up to twelve raw units per paired
+                    // decoded character; count positions, not decoded iterations.
+                    long position = (long)a.Position + b.Position;
+                    if (position >= nextCancellation)
+                    {
+                        _ct.ThrowIfCancellationRequested();
+                        nextCancellation = position + 4096;
+                    }
+                    bool hasA = a.Next(out var ca, work);
+                    bool hasB = b.Next(out var cb, work);
                     if (hasA != hasB) return false;
                     if (!hasA) return true;
                     if (ca != cb) return false;

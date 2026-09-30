@@ -60,7 +60,10 @@ key comparisons and bounded key-reader lookahead, not only interval lengths.
 Unbounded Full deliberately does **not** maintain a per-character accounting
 counter; `LastVisitedUnits` is null for those turns, not a claimed zero. This avoids
 an experimentally observed cold-path regression while retaining hard interactive
-limits. Full remains cancellable at grammar/key loop checkpoints. String
+limits. Exact-key budget context is passed call-locally rather than adding fields
+to every transient key table/reader; the enlarged-layout candidate also incurred a
+measured 6.3% cold allocation regression and was rejected. Full remains cancellable
+at grammar/key loop checkpoints. String
 cancellation uses position thresholds rather than exact modulo equality, because
 six-unit Unicode escapes can skip every modulo boundary.
 
@@ -78,7 +81,10 @@ not an unbounded displayed tree. Provisional never carries a stale exact total.
 The early counted-every-read candidate had a material 100 MiB cold Full regression:
 ordinary LF median 564.79 to 770.14 ms (+36.36%), CRLF 577.09 to 744.80 ms (+29.06%).
 Inlining reduced but did not eliminate it; paired medians still exceeded 5% on
-several corpora. Those candidates were rejected, not promoted as a performance win.
+several corpora. The first null-Full-counter specialization recovered 100 MiB
+latency (LF +0.45%, CRLF +1.40%, compact -2.48% median ratios), but enlarged transient
+key object layouts still added approximately 6.3% ordinary cold allocations. Those
+candidates were rejected, not promoted as a complete performance win.
 The final source specializes accounting to bounded interactive turns. Final matched
 source measurements, retained metadata and native acceptance remain independently
 reported in the linked evidence; no GUI latency follows from parser timings.
