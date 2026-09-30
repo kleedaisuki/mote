@@ -145,5 +145,21 @@ Thus keyboard delivery occurred, but not with the intended one-character
 semantics; the Enter/Space product verdict remains untested. A Command-like
 modifier is one hypothesis, not an established cause. The probe now records
 only numeric created/posted key flags and explicitly clears modifiers for
-Right Arrow, Return, and Space before posting; the next target run must
-confirm its effect before changing the product handler.
+Right Arrow, Return, and Space before posting.
+
+That harness-only correction passed **8/8** inspected scoped JSON reports in
+[run 36718845829](https://github.com/kleedaisuki/mote/actions/runs/36718845829)
+at `f2b86862ba3e13e0029d2c3d4d830fff9ca5e49a`: Continuous Return/pointer and
+LegacyPage Space/pointer on both published Mac RIDs. All four keyboard cases
+first moved the preview caret `9 -> 10`, with source selection still zero.
+Right Arrow was created with flags `548405248` (`0x20B00000`, including Command)
+but explicitly posted with zero flags; activation keys were posted with zero
+flags too. All eight cases returned source focus at offset 9 and preserved
+fixture hashes and clean state after Save/Undo shortcuts. This strongly
+supports inherited synthetic modifiers as the earlier harness fault, not a
+production activation defect; exact flags in the earlier run were not recorded.
+No product keyboard code changed for this correction. Evidence is retained in
+`.cache/mac-preview-navigation-run-36718845829/{osx-x64,osx-arm64}/`.
+The scope remains synthetic AX/Quartz navigation, not real keyboard/IME or
+VoiceOver acceptance. All eight `preview_read_only` observations remain `null`;
+they do not replace the separate in-process AppKit read-only assertion.

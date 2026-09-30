@@ -43,6 +43,21 @@ This is synthetic gesture
 coverage, not real Chinese IME, VoiceOver speech, or physical-paint timing.
 Quartz events are global and the frontmost-process guard cannot eliminate a
 focus race; run this only on an isolated desktop or disposable hosted runner.
+Every navigation key-down/up explicitly clears inherited CGEvent flags;
+Save/Undo explicitly uses Command instead. Numeric created/posted flags are
+retained for Right Arrow and activation keys. Fresh events on hosted macOS can
+inherit modifiers: run 36712114598 moved Right Arrow to word end rather than
+one character. With this harness-only correction,
+[run 36718845829](https://github.com/kleedaisuki/mote/actions/runs/36718845829)
+passed all eight Continuous Return/pointer and LegacyPage Space/pointer cases
+across published `osx-x64`/`osx-arm64`. All keyboard controls moved `9 -> 10`;
+their created Right-arrow flags were `0x20B00000` (including Command), whereas
+posted flags were zero. Source caret/focus, unchanged SHA-256 and clean state
+after Save/Undo were checked independently of job success. AXEditable remained
+unavailable (`preview_read_only: null`); this result is not physical-keyboard,
+IME, VoiceOver, or external read-only acceptance, nor proof the nonmutating
+Save/Undo handlers executed. See `docs/mac-preview-keyboard-diagnostics.md`
+for the retained negative observations and evidence limits.
 The file is intentionally not attached to automatically mutating system-input
 source state. The driver does not delete the scratch directory, so a failed
 target can be inspected without destructive cleanup.

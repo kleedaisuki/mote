@@ -1,5 +1,40 @@
 # macOS preview keyboard delivery investigation
 
+## Resolved synthetic-gesture result
+
+Published Native AOT run [36718845829](https://github.com/kleedaisuki/mote/actions/runs/36718845829)
+at `f2b86862ba3e13e0029d2c3d4d830fff9ca5e49a` passed **8/8** scoped
+preview-navigation reports: Continuous Return/pointer and LegacyPage
+Space/pointer on each of `osx-x64` and `osx-arm64`. The reports were inspected,
+not inferred from a green non-gating job. All eight observed source caret
+`0 -> 9`, returned source focus, unchanged fixture SHA-256, and no observed
+mutation/dirty state after Save and Undo shortcuts. The four keyboard reports
+first observed Right Arrow move the preview caret `9 -> 10` while source
+selection remained zero, then reset the preview caret before activation.
+
+All four Right-arrow key-down/up events were created with flags `548405248`
+(`0x20B00000`, including the Command bit), but posted with flags `0` after the
+probe explicitly cleared inherited modifiers. The activation events were also
+posted with flags `0`. This discriminating harness-only change corrected both
+the prior word-end movement and the blocked activation, strongly supporting
+inherited synthetic-event modifiers as the cause. The prior run did not record
+its flags, so its exact modifier state is not directly proven. No production
+keyboard handler was changed to obtain this result.
+
+Local evidence: `.cache/mac-preview-navigation-run-36718845829/{osx-x64,osx-arm64}/mac-preview-navigation-*.json`.
+Reproduction uses `tests/NativeMacPreviewNavigation.ps1` with the matching
+published executable, once per profile/gesture as documented in the probe
+README. This establishes bounded external AX/Quartz synthetic navigation only:
+it does not establish physical-keyboard input, real IME composition, VoiceOver
+speech, viewport/version state, or paint latency. `preview_read_only` is `null`
+in all eight reports because AXEditable is unavailable; the separate in-process
+AppKit `isEditable == false` assertion remains the read-only evidence. Save/Undo
+nonmutation observations do not independently prove their command handlers ran.
+
+The following sections retain the earlier negative evidence and escalation
+plan for future delivery failures; they are not current release blockers for
+this now-passing synthetic preview gesture.
+
 ## Evidence and scope
 
 Hosted `osx-x64` and `osx-arm64` run [36710621980](https://github.com/kleedaisuki/mote/actions/runs/36710621980)
