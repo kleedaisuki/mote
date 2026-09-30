@@ -82,7 +82,7 @@ Trace-on parent numbers are separate from the prior trace-off pilot: different
 binaries/runner instances/regimes cannot quantify tracing overhead. Configuration
 remains unavailable without a separately coordinated production phase contract.
 
-## Fresh-hosted non-gating CI command — target run pending
+## Fresh-hosted non-gating CI command and first result
 
 Generate `json-long-1` outside timing; use the root owner's fresh exact-checkout
 strict Native AOT publish and preserve its binary/provenance evidence:
@@ -131,7 +131,36 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 - Frozen hashes and independent review:
   [`NaturalCloseTraceReview.md`](../NativeStartup/NaturalCloseTraceReview.md).
 
-Actual target normal close/flush/draw availability is not yet validated. No
-configuration time, native timing/percentile, allocation/RSS improvement, Save
-behavior or physical presentation is claimed. Missing/censored hosted results
-must guide the next investigation instead of prompting speculative optimizations.
+## First hosted checkpoint
+
+[CI 36773769055](https://github.com/kleedaisuki/mote/actions/runs/36773769055)
+ran the non-gating variant in its fresh win-x64 strict single-binary Native AOT
+job at commit `818604d9a46503bbb36061eab27debad46201c1d`. The diagnostic and
+artifact-upload steps both succeeded. The retained `native-natural-close-win-x64`
+artifact was downloaded to `.cache/ci-36773769055-natural-close/`; it contains
+two synthetic corpus manifests (separate trace-off and trace-on preparation),
+the two-row parent JSONL, and the trace-on raw JSONL, manifest and causal summary.
+
+The trace-on row reports exact pinned fixture SHA-256
+`bae792983708d005e143e90cfcb3a2110554dd590dd299059fb0d842dc20b5dd`
+for original/copy/after-probe, published executable SHA-256
+`125b673978d230e104322ca9f0c794f72cf6b8aa254fa85104137e1968c06a46`,
+child PID 2816, `status=passed`, `termination=natural-close` and exit code 0.
+The independent causal summary reports `causal_integrity=pass`, no dropped
+records, one successful terminal `mote.session`, and no recorded edit or Save.
+All four requested child endpoints were individually successful in this one
+trace:
+
+| Child monotonic interval | One observed duration |
+| --- | ---: |
+| `mote.startup_to_editable` (after configuration) | 99.777 ms |
+| `document.open` | 10.896 ms |
+| `document.open_to_editable` | 25.270 ms |
+| `document.open_to_draw_submission` | 45.255 ms |
+
+The parent additionally observed a 1,001.7001 ms drawing opportunity and
+52.6275 ms from close request to exit; these are **not** child phase durations.
+Configuration is still `null/not-instrumented`. This establishes one bounded
+trace-on launch's normal exit, trace flush and causal draw-callback availability,
+**not** a cold-start distribution, input-to-screen/physical paint, user edit
+latency, 10/100 MiB behavior, overhead versus trace-off, or a performance SLA.
