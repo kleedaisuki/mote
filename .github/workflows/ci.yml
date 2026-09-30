@@ -968,3 +968,29 @@ jobs:
             .temp/ci-smoke/canvas-*.txt
             .temp/gui-workflow/**
           if-no-files-found: ignore
+
+  # The Windows Grid clipboard check is isolated from the ordinary suite and
+  # runs on a fresh disposable GitHub-hosted runner with its own approval gate.
+  native-grid-clipboard:
+    name: Native CSV Grid clipboard / disposable Windows
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify actual native CSV Grid clipboard roundtrip
+        shell: pwsh
+        run: '& ./tests/Invoke-NativeCsvGridClipboardWorkflow.ps1'
+      - name: Upload native clipboard acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-grid-clipboard-windows
+          path: |
+            .cache/native-grid-clipboard/report.json
+            .cache/native-grid-clipboard/clipboard.trx
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
