@@ -177,7 +177,7 @@ public sealed class CsvOversizedFieldTests
         var old = document.Snapshot;
         session.AnalyzeWindows(old, [], [new TextSpan(0, 1)], AnalysisScope.Full);
         var committed = session.CacheStatistics;
-        var current = document.Apply(new TextChange(10, 1, "y"));
+        var current = document.Apply(new TextChange(old.Length, 0, "\""));
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         Assert.Throws<OperationCanceledException>(() => session.AnalyzeWindows(current, [],
@@ -186,6 +186,11 @@ public sealed class CsvOversizedFieldTests
         var result = session.AnalyzeWindows(old, [], [new TextSpan(99_990, 1)], AnalysisScope.Visible);
         Assert.Equal(1, result.TotalDiagnosticCount);
         Assert.Equal(old.Version, result.Version);
+        Assert.Equal(AnalysisCompleteness.Complete, result.Completeness);
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("CSV001", diagnostic.Code);
+        Assert.Equal(new TextSpan(0, old.Length), diagnostic.Span);
+        Assert.Equal(new TextSpan(0, old.Length), Assert.Single(result.Tokens).Span);
         Assert.InRange(session.CacheStatistics.ScannedSourceUnits, 0, 1024);
     }
 
@@ -256,23 +261,65 @@ public sealed class CsvOversizedFieldTests
         AssertBudget(session);
     }
 
-    /// <summary>A canceled scan after it starts cannot replace the previous version's oversized facts.</summary>
-    [Fact]
-    public void Mid_scan_cancellation_preserves_old_giant_certificate()
+    /// <summary>A cancellation race either preserves the old commit or publishes complete new-version facts.</summary>
+    /// <remarks>A timer does not establish when cancellation occurs; controlled mid-scan coverage is not claimed.</remarks>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(Timeout.Infinite)]
+    public void Cancellation_race_preserves_transactional_giant_certificate(int cancellationDelay)
     {
         using var document = new Document("\"" + new string('x', 10 * 1024 * 1024));
         using var session = Session();
         var old = document.Snapshot;
         session.AnalyzeWindows(old, [], [new TextSpan(0, 1)], AnalysisScope.Full);
         var committed = session.CacheStatistics;
-        var current = document.Apply(new TextChange(100, 1, "y"));
+        // Closing the field distinguishes the new semantic truth from the old CSV001 certificate.
+        var current = document.Apply(new TextChange(old.Length, 0, "\""));
         using var cancellation = new CancellationTokenSource();
-        cancellation.CancelAfter(1);
-        Assert.Throws<OperationCanceledException>(() => session.AnalyzeWindows(current, [],
-            [new TextSpan(0, 1)], AnalysisScope.Full, cancellation.Token));
-        Assert.Equal(committed, session.CacheStatistics);
-        Assert.Equal(1, session.AnalyzeWindows(old, [], [new TextSpan(old.Length - 2, 1)],
-            AnalysisScope.Visible).TotalDiagnosticCount);
+        cancellation.CancelAfter(cancellationDelay);
+        WindowedAnalysis? result = null;
+        OperationCanceledException? canceled = null;
+        try
+        {
+            result = session.AnalyzeWindows(current, [], [new TextSpan(0, 1)],
+                AnalysisScope.Full, cancellation.Token);
+        }
+        catch (OperationCanceledException exception)
+        {
+            canceled = exception;
+        }
+
+        if (canceled is not null)
+        {
+            Assert.NotEqual(Timeout.Infinite, cancellationDelay);
+            Assert.True(cancellation.IsCancellationRequested);
+            Assert.Equal(cancellation.Token, canceled.CancellationToken);
+            Assert.Equal(committed, session.CacheStatistics);
+            var retained = session.AnalyzeWindows(old, [], [new TextSpan(old.Length - 2, 1)],
+                AnalysisScope.Visible);
+            Assert.Equal(old.Version, retained.Version);
+            Assert.Equal(AnalysisCompleteness.Complete, retained.Completeness);
+            Assert.Equal(1, retained.TotalDiagnosticCount);
+            var diagnostic = Assert.Single(retained.Diagnostics);
+            Assert.Equal("CSV001", diagnostic.Code);
+            Assert.Equal(new TextSpan(0, old.Length), diagnostic.Span);
+            Assert.Equal(new TextSpan(0, old.Length), Assert.Single(retained.Tokens).Span);
+            Assert.All(retained.Windows, window => Assert.True(window.SourceIndexed));
+            AssertBudget(session);
+            return;
+        }
+
+        Assert.NotNull(result);
+        Assert.Equal(current.Version, result.Version);
+        Assert.Equal(current.Version, session.CacheStatistics.Version);
+        Assert.Equal(AnalysisCompleteness.Complete, result.Completeness);
+        Assert.Equal(0, result.TotalDiagnosticCount);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(new TextSpan(0, current.Length), Assert.Single(result.Tokens).Span);
+        Assert.Equal(new TextSpan(0, current.Length), Assert.Single(result.Root.Children).Span);
+        Assert.All(result.Windows, window => Assert.True(window.SourceIndexed));
+        Assert.True(result.ProjectionTruncated);
+        AssertBudget(session);
     }
 
     /// <summary>Mirrors the public inclusive boundary ownership rule for source-coordinate oracles.</summary>
