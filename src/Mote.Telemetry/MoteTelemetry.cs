@@ -125,6 +125,19 @@ public static class MoteTelemetry
             ActivitySpanId.CreateRandom(), parent?.SpanId ?? sink.SessionSpanId);
     }
 
+    /// <summary>
+    /// Creates a distinct child interval with the parent's original monotonic
+    /// start. Use when one edit has both semantic and native-draw endpoints;
+    /// each interval then owns a unique span ID instead of completing a mark twice.
+    /// </summary>
+    public static TelemetryMark Fork(TelemetryMark parent)
+    {
+        var sink = Volatile.Read(ref _sink);
+        if (sink is null || sink.IsFaulted || !ReferenceEquals(sink, parent.Sink)) return default;
+        return new TelemetryMark(sink, parent.Timestamp, parent.TraceId,
+            ActivitySpanId.CreateRandom(), parent.SpanId);
+    }
+
     /// <summary>Ends a cross-callback interval without waiting for disk.</summary>
     public static void RecordElapsed(
         TelemetryOperation operation,
@@ -227,6 +240,9 @@ public static class MoteTelemetry
         TelemetryOperation.AnalysisPublish => "analysis.publish",
         TelemetryOperation.ViewLayout => "view.layout",
         TelemetryOperation.ViewPaint => "view.paint",
+        TelemetryOperation.StartupToEditable => "mote.startup_to_editable",
+        TelemetryOperation.EditToDrawSubmission => "document.edit_to_draw_submission",
+        TelemetryOperation.OpenToDrawSubmission => "document.open_to_draw_submission",
         _ => "unknown"
     };
 

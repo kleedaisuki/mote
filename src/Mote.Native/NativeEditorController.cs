@@ -76,10 +76,18 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     private CanvasFrame? _lastCanvasFrame;
     private CancellationTokenSource? _analysisCancellation;
     private long _analysisSerial;
+    /// <summary>One edit waiting for semantic installation; later edits cancel rather than steal its endpoint.</summary>
+    private TelemetryMark _presentationMark;
+    private TelemetryDimensions _presentationDimensions;
+    /// <summary>Starts after local tracing configuration; deliberately excludes process launch/configuration.</summary>
+    private TelemetryMark _startupMark;
     private int _pageStart;
     private int _pageLength;
     private int? _requestedCaretSource;
     private int _openSerial;
+    /// <summary>The current request's interval stays owned by the UI lifetime even while I/O runs.</summary>
+    private TelemetryMark _openMark;
+    private int _openTraceRequest;
     private long _formatSerial;
     private string _operationStatus = "";
     private bool _saving;
@@ -89,9 +97,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     /// <summary>Wires platform events to engine transactions and static format policies.</summary>
     public NativeEditorController(INativeEditorShell shell, MoteConfiguration configuration,
         IThemePolicy theme, string? startupPath,
-        EditorPresentationProfile? productProfile = null, Func<MoteConfiguration>? settingsLoader = null)
+        EditorPresentationProfile? productProfile = null, Func<MoteConfiguration>? settingsLoader = null,
+        TelemetryMark startupMark = default)
     {
         _shell = shell;
+        _startupMark = startupMark;
         _canvasShell = shell is INativeCanvasShell { CanvasEnabled: true } canvas
             ? canvas : null;
         bool? expectedCanvas = productProfile switch
@@ -165,6 +175,12 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     {
         if (_disposed) return;
         _disposed = true;
+        _shell.CancelSourceDrawTrace();
+        FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
+        FinishEditPresentation(TelemetryStatus.Cancelled);
+        MoteTelemetry.RecordElapsed(TelemetryOperation.StartupToEditable,
+            _startupMark, status: TelemetryStatus.Cancelled);
+        _startupMark = default;
         _settingsReload.Dispose();
         _shell.ReloadSettingsRequested -= RequestSettingsReload;
         _shell.AppearanceChanged -= AppearanceChanged;
@@ -191,6 +207,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         ApplyPendingTheme();
         if (_themeUnavailable || _settingsNotice is not null) UpdateThemeNotice();
         ShowDocument();
+        MoteTelemetry.RecordElapsed(TelemetryOperation.StartupToEditable,
+            _startupMark, Dimensions(_document.Snapshot));
+        _startupMark = default;
         if (_canvasShell is not null)
         {
             try { _canvasShell.SetCanvasAccessibility(_accessibleDocument!, this); }
@@ -462,27 +481,36 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     private void StartOpen(string path)
     {
+        FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
         var request = ++_openSerial;
         var previous = _document;
         var version = previous.Snapshot.Version;
         var openMark = MoteTelemetry.Mark();
+        _openMark = openMark;
+        _openTraceRequest = request;
         _ = Task.Run(async () =>
         {
             Document? opened = null;
             Exception? error = null;
-            try { opened = await Document.OpenAsync(path).ConfigureAwait(false); }
+            try
+            {
+                using var io = MoteTelemetry.StartChild(TelemetryOperation.DocumentOpen, openMark);
+                io?.SetStatus(TelemetryStatus.Failure);
+                opened = await Document.OpenAsync(path).ConfigureAwait(false);
+                io?.SetStatus(TelemetryStatus.Success);
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException) { error = ex; }
             Post(() =>
             {
                 if (_disposed || request != _openSerial)
                 {
                     opened?.Dispose();
+                    FinishOpen(request, TelemetryStatus.Cancelled);
                     return;
                 }
                 if (error is not null)
                 {
-                    MoteTelemetry.RecordElapsed(TelemetryOperation.OpenToEditable,
-                        openMark, status: TelemetryStatus.Failure);
+                    FinishOpen(request, TelemetryStatus.Failure);
                     _shell.ShowError($"Cannot open file: {error.Message}");
                     return;
                 }
@@ -490,15 +518,13 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 if (!SettleInputBeforeAsyncResult())
                 {
                     opened.Dispose();
-                    MoteTelemetry.RecordElapsed(TelemetryOperation.OpenToEditable,
-                        openMark, status: TelemetryStatus.Cancelled);
+                    FinishOpen(request, TelemetryStatus.Cancelled);
                     return;
                 }
                 if (_saving)
                 {
                     opened.Dispose();
-                    MoteTelemetry.RecordElapsed(TelemetryOperation.OpenToEditable,
-                        openMark, status: TelemetryStatus.Cancelled);
+                    FinishOpen(request, TelemetryStatus.Cancelled);
                     _shell.ShowError("Wait for the current save to finish before opening another file.");
                     return;
                 }
@@ -507,20 +533,19 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     if (!CanReplace())
                     {
                         opened.Dispose();
-                        MoteTelemetry.RecordElapsed(TelemetryOperation.OpenToEditable,
-                            openMark, status: TelemetryStatus.Cancelled);
+                        FinishOpen(request, TelemetryStatus.Cancelled);
                         return;
                     }
                 }
-                ReplaceDocument(opened);
-                MoteTelemetry.RecordElapsed(TelemetryOperation.OpenToEditable, openMark,
-                    Dimensions(opened.Snapshot));
+                ReplaceDocument(opened, MoteTelemetry.Fork(openMark), request);
+                FinishOpen(request, TelemetryStatus.Success, Dimensions(opened.Snapshot));
             });
         });
     }
 
-    private void ReplaceDocument(Document replacement)
+    private void ReplaceDocument(Document replacement, TelemetryMark drawMark = default, int openRequest = 0)
     {
+        if (openRequest == 0) FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
         ++_openSerial;
         CancelAnalysis();
         _idleFullAnalysis?.Dispose();
@@ -552,7 +577,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _pageStart = 0;
         _pageLength = 0;
         _requestedCaretSource = 0;
-        ShowDocument();
+        TraceSourceDraw(drawMark, TelemetryOperation.OpenToDrawSubmission);
+        ShowDocument(drawMark);
         ScheduleAnalysis();
     }
 
@@ -649,7 +675,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     change.InsertText)
                 : new TextChange(_pageStart + change.Start, change.DeleteLength,
                     change.InsertText);
-            _document.Apply(applied);
+            ApplyTraced(applied, mark);
+            TraceSourceDraw(MoteTelemetry.Fork(mark));
             var newCaret = applied.Start + applied.InsertText.Length;
             _navigation.MoveCaret(_document.Snapshot, newCaret);
             _nativeProjectsGlobalSelection = false;
@@ -659,7 +686,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 _pageStart = Math.Max(0, applied.Start - 1024);
                 _pageLength = 0;
                 _requestedCaretSource = newCaret;
-                ShowDocument();
+                ShowDocument(mark);
                 ScheduleAnalysis(mark);
                 return;
             }
@@ -682,7 +709,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             }
             MoteTelemetry.Record(TelemetryEvent.EditCommitted,
                 dimensions: Dimensions(_document.Snapshot));
-            ShowDocument();
+            ShowDocument(mark);
             ScheduleAnalysis(mark);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -695,26 +722,30 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     private void Undo()
     {
         if (!_shell.CommitPendingText()) return;
+        var mark = MoteTelemetry.Mark();
         if (_document.Undo())
         {
+            TraceSourceDraw(MoteTelemetry.Fork(mark));
             _pageLength = 0;
-            ShowDocument();
+            ShowDocument(mark);
             RevealSelection();
             ProjectSelection();
-            ScheduleAnalysis();
+            ScheduleAnalysis(mark);
         }
     }
 
     private void Redo()
     {
         if (!_shell.CommitPendingText()) return;
+        var mark = MoteTelemetry.Mark();
         if (_document.Redo())
         {
+            TraceSourceDraw(MoteTelemetry.Fork(mark));
             _pageLength = 0;
-            ShowDocument();
+            ShowDocument(mark);
             RevealSelection();
             ProjectSelection();
-            ScheduleAnalysis();
+            ScheduleAnalysis(mark);
         }
     }
 
@@ -774,16 +805,18 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     ShowDocument();
                     return;
                 }
+                var mark = MoteTelemetry.Mark();
                 if (changed && formatted is not null)
                 {
-                    _document.Apply(new TextChange(0, snapshot.Length, formatted));
+                    ApplyTraced(new TextChange(0, snapshot.Length, formatted), mark);
+                    TraceSourceDraw(MoteTelemetry.Fork(mark));
                     _navigation.MoveCaret(_document.Snapshot, 0);
                     _pageStart = 0;
                     _pageLength = 0;
                     _requestedCaretSource = 0;
                 }
-                ShowDocument();
-                if (changed) ScheduleAnalysis();
+                ShowDocument(mark);
+                if (changed) ScheduleAnalysis(mark);
             });
         });
     }
@@ -881,14 +914,15 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         try
         {
             var mark = MoteTelemetry.Mark();
-            _document.Apply(change);
+            ApplyTraced(change, mark);
+            TraceSourceDraw(MoteTelemetry.Fork(mark));
             var newCaret = change.Start + change.InsertText.Length;
             _navigation.MoveCaret(_document.Snapshot, newCaret);
             _canvas!.Reveal(newCaret);
             InvalidateFind();
             MoteTelemetry.Record(TelemetryEvent.EditCommitted,
                 dimensions: Dimensions(_document.Snapshot));
-            ShowDocument();
+            ShowDocument(mark);
             EnsureCanvasCaretVisible(newCaret);
             ScheduleAnalysis(mark);
         }
@@ -1202,7 +1236,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 if (cut)
                 {
                     InvalidateFind();
-                    try { _document.Apply(new TextChange(start, length, "")); }
+                    var mark = MoteTelemetry.Mark();
+                    try { ApplyTraced(new TextChange(start, length, ""), mark); }
                     catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
                     {
                         _shell.ShowError($"Cut could not safely change the selection: {ex.Message}");
@@ -1210,12 +1245,13 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         return;
                     }
                     _navigation.MoveCaret(_document.Snapshot, start);
+                    TraceSourceDraw(MoteTelemetry.Fork(mark));
                     _pageStart = Math.Max(0, start - 1024);
                     _pageLength = 0;
                     _requestedCaretSource = start;
-                    ShowDocument();
+                    ShowDocument(mark);
                     ProjectSelection();
-                    ScheduleAnalysis();
+                    ScheduleAnalysis(mark);
                 }
                 else ShowDocument();
             });
@@ -1291,8 +1327,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _nativeProjectsGlobalSelection = _navigation.SelectionLength > 0;
     }
 
-    private void ShowDocument()
+    private void ShowDocument(TelemetryMark traceParent = default)
     {
+        using var layout = MoteTelemetry.StartChild(TelemetryOperation.ViewLayout,
+            traceParent, Dimensions(_document.Snapshot));
+        layout?.SetStatus(TelemetryStatus.Failure);
         var snapshot = _document.Snapshot;
         var file = _document.FilePath is { } path ? Path.GetFileName(path) : "Untitled";
         var title = $"{file}{(_document.IsModified ? " •" : "")} — mote";
@@ -1309,6 +1348,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         if (_canvasShell is not null)
         {
             ShowCanvasDocument(snapshot, title, statusSuffix);
+            layout?.SetStatus(TelemetryStatus.Success);
             return;
         }
         _pageStart = Math.Min(_pageStart, snapshot.Length);
@@ -1326,6 +1366,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _shell.SetDocument(new NativeDocumentView(title, _projection.Display, _pageStart,
             snapshot.Length, _document.IsModified, pageStatus + statusSuffix,
             new NativeDocumentStamp(_canvasGeneration, snapshot.Version), focus));
+        layout?.SetStatus(TelemetryStatus.Success);
     }
 
     /// <summary>
@@ -1426,6 +1467,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     {
         var hadPreview = _presentedPreview is not null;
         CancelAnalysis();
+        _presentationMark = editMark;
+        _presentationDimensions = Dimensions(_document.Snapshot);
         _idleFullAnalysis?.Cancel();
         _visibleSessionAnalysis = null;
         var cancellation = new CancellationTokenSource();
@@ -1458,6 +1501,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 "Structure preview requires complete semantic analysis.",
                 "Large file: editable viewport; semantic analysis deferred",
                 new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
+            FinishEditPresentation(TelemetryStatus.Skipped);
             return;
         }
         _ = Task.Run(async () =>
@@ -1466,10 +1510,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             {
                 await Task.Delay(80, cancellation.Token).ConfigureAwait(false);
                 var text = full ? snapshot.GetText() : snapshot.GetText(pageStart, pageLength);
-                using var scope = MoteTelemetry.Start(TelemetryOperation.AnalysisParse, Dimensions(snapshot));
-                var analysis = policy.Analyze(text, cancellation.Token);
+                var analysis = AnalyzeTraced(policy, text, cancellation.Token, editMark, snapshot);
                 cancellation.Token.ThrowIfCancellationRequested();
-                Post(() =>
+                PostAnalysis(serial, () =>
                 {
                     if (_disposed || cancellation.IsCancellationRequested ||
                         serial != _analysisSerial || !ReferenceEquals(document, _document) ||
@@ -1478,8 +1521,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded);
                         return;
                     }
-                    using var present = MoteTelemetry.Start(TelemetryOperation.AnalysisToPresentation,
-                        Dimensions(snapshot));
+                    using var present = MoteTelemetry.StartChild(TelemetryOperation.AnalysisToPresentation,
+                        editMark, Dimensions(snapshot));
+                    present?.SetStatus(TelemetryStatus.Failure);
                     var visible = ProjectTokens(analysis.Tokens, full ? pageStart : 0,
                         pageLength, _projection!);
                     var diagnostics = full
@@ -1493,19 +1537,25 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         new NativeDocumentStamp(_canvasGeneration, snapshot.Version), preview.Spans));
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
                         dimensions: Dimensions(snapshot));
-                    MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation,
-                        editMark, Dimensions(snapshot));
+                    if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Success);
+                    present?.SetStatus(TelemetryStatus.Success);
                 });
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                Post(() => { if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Cancelled); });
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 Post(() =>
                 {
                     if (!_disposed && serial == _analysisSerial)
+                    {
+                        FinishEditPresentation(TelemetryStatus.Failure);
                         PresentAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
                             $"{policy.DisplayName}: {ex.Message}",
                             new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
+                    }
                 });
             }
         });
@@ -1532,13 +1582,11 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     _ => 80
                 } : 80;
                 await Task.Delay(delay, cancellation.Token).ConfigureAwait(false);
-                using var parse = MoteTelemetry.Start(TelemetryOperation.AnalysisParse,
-                    Dimensions(snapshot));
-                var presentation = await driver.AnalyzePresentationAsync(snapshot, request,
-                    cancellation.Token).ConfigureAwait(false);
+                var presentation = await AnalyzeSessionTraced(driver, snapshot, request,
+                    cancellation.Token, editMark).ConfigureAwait(false);
                 var result = presentation.Analysis;
                 cancellation.Token.ThrowIfCancellationRequested();
-                Post(() =>
+                PostAnalysis(serial, () =>
                 {
                     if (_disposed || cancellation.IsCancellationRequested ||
                         serial != _analysisSerial || !ReferenceEquals(document, _document) ||
@@ -1548,8 +1596,9 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded);
                         return;
                     }
-                    using var present = MoteTelemetry.Start(
-                        TelemetryOperation.AnalysisToPresentation, Dimensions(snapshot));
+                    using var present = MoteTelemetry.StartChild(
+                        TelemetryOperation.AnalysisToPresentation, editMark, Dimensions(snapshot));
+                    present?.SetStatus(TelemetryStatus.Failure);
                     var tokens = ProjectTokens(result.Tokens, pageStart, pageLength,
                         _projection!);
                     var diagnostics = SessionDiagnosticSummary(result, pageStart, pageLength);
@@ -1565,8 +1614,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         VisibleSourceDiagnostics(result.Diagnostics, pageStart, pageLength)));
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
                         dimensions: Dimensions(snapshot));
-                    MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation,
-                        editMark, Dimensions(snapshot));
+                    if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Success);
                     var idle = _idleFullAnalysis?.Offer(snapshot, result, request.VisibleRange);
                     if (idle is IdleFullOffer.MemoryLimited or IdleFullOffer.PolicyLimited)
                     {
@@ -1579,23 +1627,77 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                                 $"global diagnostics unknown · v{result.Version}"
                         });
                     }
+                    present?.SetStatus(TelemetryStatus.Success);
                 });
             }
-            catch (OperationCanceledException) { }
-            catch (ObjectDisposedException) { }
+            catch (OperationCanceledException)
+            {
+                Post(() => { if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Cancelled); });
+            }
+            catch (ObjectDisposedException)
+            {
+                Post(() => { if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Cancelled); });
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 Post(() =>
                 {
                     if (!_disposed && serial == _analysisSerial &&
                         ReferenceEquals(driver, _sessionDriver))
+                    {
+                        FinishEditPresentation(TelemetryStatus.Failure);
                         PresentAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
                             $"{policy.DisplayName}: {ex.Message}",
                             new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
+                    }
                 });
             }
         });
     }
+
+    /// <summary>Records actual parser outcome before disposing its causal child span.</summary>
+    private static FormatAnalysis AnalyzeTraced(IDocumentPolicy policy, string text,
+        CancellationToken token, TelemetryMark mark, TextSnapshot snapshot)
+    {
+        using var parse = MoteTelemetry.StartChild(TelemetryOperation.AnalysisParse, mark, Dimensions(snapshot));
+        try
+        {
+            var result = policy.Analyze(text, token);
+            token.ThrowIfCancellationRequested();
+            MoteTelemetry.RecordElapsed(TelemetryOperation.EditToAnalysis, MoteTelemetry.Fork(mark), Dimensions(snapshot));
+            return result;
+        }
+        catch (OperationCanceledException) { parse?.SetStatus(TelemetryStatus.Cancelled); throw; }
+        catch { parse?.SetStatus(TelemetryStatus.Failure); throw; }
+    }
+
+    /// <summary>Measures the serialized format turn, including its bounded render projection.</summary>
+    private static async Task<NativeFormatPresentation> AnalyzeSessionTraced(NativeFormatSessionDriver driver,
+        TextSnapshot snapshot, AnalysisRequest request, CancellationToken token, TelemetryMark mark)
+    {
+        using var parse = MoteTelemetry.StartChild(TelemetryOperation.AnalysisParse, mark, Dimensions(snapshot));
+        try
+        {
+            var result = await driver.AnalyzePresentationAsync(snapshot, request, token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            MoteTelemetry.RecordElapsed(TelemetryOperation.EditToAnalysis, MoteTelemetry.Fork(mark), Dimensions(snapshot));
+            return result;
+        }
+        catch (OperationCanceledException) { parse?.SetStatus(TelemetryStatus.Cancelled); throw; }
+        catch (ObjectDisposedException) { parse?.SetStatus(TelemetryStatus.Cancelled); throw; }
+        catch { parse?.SetStatus(TelemetryStatus.Failure); throw; }
+    }
+
+    /// <summary>Retains truthful failure status when native semantic installation throws on the UI thread.</summary>
+    private void PostAnalysis(long serial, Action action) => Post(() =>
+    {
+        try { action(); }
+        catch
+        {
+            if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Failure);
+            throw;
+        }
+    });
 
     /// <summary>
     /// Separates a certified document-wide count from diagnostics actually visible
@@ -1805,12 +1907,48 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     private void CancelAnalysis()
     {
+        FinishEditPresentation(TelemetryStatus.Cancelled);
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
         _analysisCancellation = null;
         // A still-painted old preview may remain visible until the next result,
         // but it must not navigate after its source map has been invalidated.
         _presentedPreview = null;
+    }
+
+    /// <summary>Arms drawing only for an accepted engine revision, before native installation can draw it.</summary>
+    private void TraceSourceDraw(TelemetryMark mark,
+        TelemetryOperation operation = TelemetryOperation.EditToDrawSubmission) =>
+        _shell.TraceSourceDraw(new NativeDocumentStamp(_canvasGeneration, _document.Snapshot.Version),
+            mark, Dimensions(_document.Snapshot), operation);
+
+    /// <summary>Separates synchronous canonical engine mutation from later layout/analysis/drawing.</summary>
+    private void ApplyTraced(TextChange change, TelemetryMark mark)
+    {
+        using var edit = MoteTelemetry.StartChild(TelemetryOperation.DocumentEdit, mark,
+            Dimensions(_document.Snapshot));
+        edit?.SetStatus(TelemetryStatus.Failure);
+        _document.Apply(change);
+        edit?.SetStatus(TelemetryStatus.Success);
+    }
+
+    /// <summary>Completes each cross-callback semantic parent exactly once, including replacement/close.</summary>
+    private void FinishEditPresentation(TelemetryStatus status)
+    {
+        var mark = _presentationMark;
+        _presentationMark = default;
+        MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation, mark,
+            _presentationDimensions, status);
+    }
+
+    /// <summary>Terminates a request-owned open interval once; late I/O cannot finish a newer request.</summary>
+    private void FinishOpen(int request, TelemetryStatus status, TelemetryDimensions dimensions = default)
+    {
+        if (request == 0 || request != _openTraceRequest) return;
+        var mark = _openMark;
+        _openMark = default;
+        _openTraceRequest = 0;
+        MoteTelemetry.RecordElapsed(TelemetryOperation.OpenToEditable, mark, dimensions, status);
     }
 
     /// <summary>Publishes one analysis and retains its exact navigation map.</summary>

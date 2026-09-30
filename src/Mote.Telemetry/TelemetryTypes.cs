@@ -17,7 +17,13 @@ public enum TelemetryOperation
     AnalysisSemantic,
     AnalysisPublish,
     ViewLayout,
-    ViewPaint
+    ViewPaint,
+    /// <summary>Instrumented startup through the first installed editable source view, not process launch.</summary>
+    StartupToEditable,
+    /// <summary>Accepted source edit through return from the first matching native source draw callback.</summary>
+    EditToDrawSubmission,
+    /// <summary>Open request through return from the first matching native source draw callback.</summary>
+    OpenToDrawSubmission
 }
 
 /// <summary>Fixed, low-cardinality instantaneous event names.</summary>

@@ -8,6 +8,7 @@ using Mote.Native.Mac.Accessibility;
 using Mote.Native.Mac.Canvas;
 using Mote.Native.Viewport;
 using Mote.Themes;
+using Mote.Telemetry;
 
 namespace Mote.Native.Mac;
 
@@ -19,6 +20,10 @@ namespace Mote.Native.Mac;
 [SupportedOSPlatform("macos")]
 internal sealed unsafe class MacEditorShell : INativeCanvasShell
 {
+    /// <summary>One source-only endpoint; preview and status draws never complete it.</summary>
+    private readonly NativeDrawTrace _sourceDrawTrace = new();
+    /// <summary>Assigned only after a complete, nondeferred legacy source installation.</summary>
+    private NativeDocumentStamp? _sourceDrawStamp;
     private const nuint WindowStyle = 1 | 2 | 4 | 8;
     private const nuint ResizeWidthAndHeight = 2 | 16;
     private const string EditorAppearanceClass = "MoteDefaultEditorAppearanceView";
@@ -33,6 +38,10 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     [DllImport(ObjcRuntime, EntryPoint = "objc_msgSendSuper")]
     private static extern void SendSuperEvent(ref MacOnScreenCanvasNative.Super receiver,
         nint selector, nint nativeEvent);
+    /// <summary>Calls NSTextView's original drawRect: with its by-value native rectangle.</summary>
+    [DllImport(ObjcRuntime, EntryPoint = "objc_msgSendSuper")]
+    private static extern void SendSuperDraw(ref MacOnScreenCanvasNative.Super receiver,
+        nint selector, ObjC.Rect dirty);
     private readonly bool _experimentalCanvas;
     private readonly ConcurrentQueue<Action> _posted = new();
     private nint _application;
@@ -293,6 +302,21 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public void SetDocument(NativeDocumentView view)
     {
+        if (!_experimentalCanvas)
+        {
+            _sourceDrawTrace.ObserveDocument(view.Stamp.Generation, view.Stamp.Version);
+            _sourceDrawStamp = null;
+        }
+        SetDocumentCore(view);
+        if (!_experimentalCanvas && _editor != 0 && !_deferredDocument &&
+            ReferenceEquals(_pendingDocument, view) &&
+            string.Equals(_visibleText, view.Text, StringComparison.Ordinal))
+            _sourceDrawStamp = view.Stamp;
+    }
+
+    /// <summary>Keeps partial and IME-deferred installations ineligible for draw completion.</summary>
+    private void SetDocumentCore(NativeDocumentView view)
+    {
         if (_pendingDocument is { } previous &&
             (previous.Stamp != view.Stamp || previous.PageStart != view.PageStart))
             ClearAnalysisPreview();
@@ -336,6 +360,14 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         }
         finally { _settingText = false; }
     }
+
+    /// <inheritdoc />
+    public void TraceSourceDraw(NativeDocumentStamp stamp, TelemetryMark mark,
+        TelemetryDimensions dimensions, TelemetryOperation operation = TelemetryOperation.EditToDrawSubmission) =>
+        _sourceDrawTrace.Arm(operation, mark, stamp.Generation, stamp.Version, dimensions);
+
+    /// <inheritdoc />
+    public void CancelSourceDrawTrace() => _sourceDrawTrace.Cancel();
 
     /// <inheritdoc />
     public void SetAnalysis(NativeAnalysisView view)
@@ -469,6 +501,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public void SetCanvasBinding(NativeCanvasBinding binding)
     {
         if (!_experimentalCanvas) throw new InvalidOperationException("Canvas mode is disabled.");
+        _sourceDrawTrace.ObserveDocument(binding.DocumentGeneration, binding.BaseVersion);
         var changedSource = !ReferenceEquals(_presentedCanvasSnapshot, binding.Snapshot);
         _pendingCanvasBinding = binding;
         _pendingCanvasUnavailable = null;
@@ -1129,7 +1162,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 {
                     if (_probeCaptureCanvasErrors) _probeCanvasError = message;
                     else Post(() => ShowError(message));
-                });
+                }, _sourceDrawTrace);
             _canvas.EffectiveAppearanceChanged += ObserveAppearanceChanged;
             _canvas.ViewGeometryChanged += () =>
             {
@@ -1581,6 +1614,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         Add(cls, "viewDidChangeEffectiveAppearance",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&EditorAppearanceChanged,
             "v@:");
+        Add(cls, "drawRect:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Rect, void>)&DrawEditorSource,
+            "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
         ObjC.RegisterClassPair(cls);
         return EditorAppearanceClass;
     }
@@ -1729,6 +1765,25 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             s_current?.ObserveAppearanceChanged();
         }
         catch { /* An AppKit IMP must never unwind a managed exception. */ }
+    }
+
+    /// <summary>Times only a real source draw after NSTextView has returned, not compositor presentation.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void DrawEditorSource(nint self, nint selector, ObjC.Rect dirty)
+    {
+        try
+        {
+            var shell = s_current;
+            var stamp = shell?._sourceDrawStamp;
+            var ticket = shell is not null && self == shell._editor && !shell._settingText &&
+                dirty.Size.Width > 0 && dirty.Size.Height > 0 && stamp is { } installed
+                ? shell._sourceDrawTrace.BeginDraw(installed.Generation, installed.Version) : 0;
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTextView"));
+            SendSuperDraw(ref superclass, selector, dirty);
+            if (ticket != 0 && shell!._sourceDrawStamp == stamp && stamp is { } drawn)
+                shell._sourceDrawTrace.CompleteDraw(ticket, drawn.Generation, drawn.Version);
+        }
+        catch { /* Tracing and drawing callbacks must never unwind into AppKit. */ }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

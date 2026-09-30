@@ -1,5 +1,6 @@
 using Mote.Formats;
 using Mote.Themes;
+using Mote.Telemetry;
 
 namespace Mote.Native;
 
@@ -160,6 +161,14 @@ internal interface INativeEditorShell
     void Run();
     /// <summary>Replaces the editor's bounded text page after an engine transition.</summary>
     void SetDocument(NativeDocumentView view);
+    /// <summary>
+    /// Arms an opt-in source draw interval before this exact revision is installed.
+    /// Preview/chrome paint is not an endpoint; unsupported diagnostic shells are inert.
+    /// </summary>
+    void TraceSourceDraw(NativeDocumentStamp stamp, TelemetryMark mark,
+        TelemetryDimensions dimensions, TelemetryOperation operation = TelemetryOperation.EditToDrawSubmission) { }
+    /// <summary>Cancels a pending source draw when the controller closes.</summary>
+    void CancelSourceDrawTrace() { }
     /// <summary>Updates semantic decoration without altering text or selection.</summary>
     void SetAnalysis(NativeAnalysisView view);
     /// <summary>

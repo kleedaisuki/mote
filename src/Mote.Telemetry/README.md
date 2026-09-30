@@ -48,8 +48,8 @@ keeping an `Activity` ambient across unrelated events:
 
 ```csharp
 var editMark = MoteTelemetry.Mark();
-// Commit the edit; let the UI render in a later callback.
-MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPaint, editMark,
+// Complete an adapter-verified native source draw; not physical display paint.
+MoteTelemetry.RecordElapsed(TelemetryOperation.EditToDrawSubmission, editMark,
     new TelemetryDimensions(Version: version));
 ```
 
@@ -64,6 +64,15 @@ using var parse = MoteTelemetry.StartChild(TelemetryOperation.AnalysisParse, edi
 // that compositor output reached the display.
 MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation, editMark);
 ```
+
+For multiple endpoints, `MoteTelemetry.Fork(editMark)` makes a distinct child
+span retaining the original timestamp. The native adapters use a bounded
+`NativeDrawTrace` to match source generation/version, reject stale/reentrant
+draw tickets and terminate replaced/closing intervals as cancelled. See
+[end-to-end native tracing](../../docs/end-to-end-tracing.md) for precise endpoint
+boundaries. `EditToPaint` is retained for compatibility but **is not emitted by
+the native editor**: neither `WM_PAINT` nor AppKit `drawRect:` proves compositor
+presentation or physical display visibility.
 
 `Mark`, `Start`, `Record`, and `RecordElapsed` are cheap no-ops when disabled.
 The native Save failure path additionally calls `RecordSaveFailure` for

@@ -7,6 +7,7 @@ using Mote.Themes;
 using Mote.Native.Viewport;
 using Mote.Native.Windows.Canvas;
 using Mote.Engine;
+using Mote.Telemetry;
 using Mote.Native.Accessibility;
 using Mote.Native.Windows.Accessibility;
 
@@ -24,6 +25,10 @@ namespace Mote.Native.Windows;
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsEditorShell : INativeCanvasShell
 {
+    /// <summary>One opt-in source draw interval; preview and status never complete it.</summary>
+    private readonly NativeDrawTrace _sourceDrawTrace = new();
+    /// <summary>Assigned only after a complete legacy source installation returns.</summary>
+    private NativeDocumentStamp? _sourceDrawStamp;
     private const string WindowClassName = "MoteNativeEditorWindow";
     private const int EditorId = 101;
     private const int PreviewId = 102;
@@ -305,6 +310,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_canvasIsland?.IsComposing == true)
             throw new InvalidOperationException("An active IME composition cannot be rebound.");
         var stamp = new NativeDocumentStamp(binding.DocumentGeneration, binding.BaseVersion);
+        _sourceDrawTrace.ObserveDocument(stamp.Generation, stamp.Version);
         if (_window != 0)
         {
             Win32.SetWindowTextW(_window, binding.Title);
@@ -375,6 +381,20 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public void SetDocument(NativeDocumentView view)
     {
+        if (!_experimentalCanvas)
+        {
+            _sourceDrawTrace.ObserveDocument(view.Stamp.Generation, view.Stamp.Version);
+            _sourceDrawStamp = null;
+        }
+        SetDocumentCore(view);
+        if (!_experimentalCanvas && _editor != 0 && ReferenceEquals(_document, view) &&
+            string.Equals(_visibleText, view.Text, StringComparison.Ordinal))
+            _sourceDrawStamp = view.Stamp;
+    }
+
+    /// <summary>Installs source state without allowing reentrant paints to certify a partial install.</summary>
+    private void SetDocumentCore(NativeDocumentView view)
+    {
         ArgumentNullException.ThrowIfNull(view);
         if (_experimentalCanvas)
         {
@@ -432,6 +452,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             _settingText = false;
         }
     }
+
+    /// <inheritdoc />
+    public void TraceSourceDraw(NativeDocumentStamp stamp, TelemetryMark mark,
+        TelemetryDimensions dimensions, TelemetryOperation operation = TelemetryOperation.EditToDrawSubmission) =>
+        _sourceDrawTrace.Arm(operation, mark, stamp.Generation, stamp.Version, dimensions);
+
+    /// <inheritdoc />
+    public void CancelSourceDrawTrace() => _sourceDrawTrace.Cancel();
 
     /// <inheritdoc />
     public void SetAnalysis(NativeAnalysisView view)
@@ -928,7 +956,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         {
             Win32.ShowWindow(_editor, 0);
             _canvasIsland = new WindowsRichEditIsland(_window, _theme,
-                _uiaFragmentExperimental);
+                _uiaFragmentExperimental, _sourceDrawTrace);
             _canvasIsland.EditCommitted += edit => CanvasEditCommitted?.Invoke(edit);
             _canvasIsland.ScrollRequested += delta => CanvasScrollRequested?.Invoke(delta);
             _canvasIsland.HorizontalAnchorRequested += PublishHorizontalRequest;
@@ -1119,7 +1147,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             shell._imeComposing = true;
             shell._imeSettling = false;
         }
+        var drawStamp = shell._sourceDrawStamp;
+        var drawTicket = message == Win32.WM_PAINT && shell._sourceDrawTrace.IsPending && drawStamp is { } installed &&
+            !shell._settingText && Win32.GetUpdateRect(window, out var dirty, false) &&
+            dirty.Right > dirty.Left && dirty.Bottom > dirty.Top
+            ? shell._sourceDrawTrace.BeginDraw(installed.Generation, installed.Version) : 0;
         var result = Win32.DefSubclassProc(window, message, wParam, lParam);
+        if (drawTicket != 0 && shell._sourceDrawStamp == drawStamp && drawStamp is { } drawn)
+            shell._sourceDrawTrace.CompleteDraw(drawTicket, drawn.Generation, drawn.Version);
         if (message == Win32.WM_IME_ENDCOMPOSITION)
         {
             shell._imeComposing = false;

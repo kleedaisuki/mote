@@ -8,6 +8,7 @@ using Mote.Native.Accessibility;
 using Mote.Native.Windows.Accessibility;
 using Mote.Native.Viewport;
 using Mote.Themes;
+using Mote.Telemetry;
 
 namespace Mote.Native.Windows.Canvas;
 
@@ -24,6 +25,8 @@ namespace Mote.Native.Windows.Canvas;
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsRichEditIsland : IDisposable
 {
+    /// <summary>Optional source-only endpoint shared with the containing shell.</summary>
+    private readonly NativeDrawTrace? _drawTrace;
     private const string ClassName = "MoteInteractiveCanvas";
     private const int InputId = 301;
     /// <summary>Maximum safe single-line RichEdit projection before native layout limits.</summary>
@@ -94,8 +97,9 @@ internal sealed class WindowsRichEditIsland : IDisposable
 
     /// <summary>Creates a child canvas inside the existing native editor window.</summary>
     internal WindowsRichEditIsland(nint parent, IThemePolicy theme,
-        bool fragmentExperiment = false)
+        bool fragmentExperiment = false, NativeDrawTrace? drawTrace = null)
     {
+        _drawTrace = drawTrace;
         if (parent == 0) throw new ArgumentOutOfRangeException(nameof(parent));
         ArgumentNullException.ThrowIfNull(theme);
         _parent = parent;
@@ -1179,6 +1183,11 @@ internal sealed class WindowsRichEditIsland : IDisposable
 
     private void Paint()
     {
+        var binding = _binding;
+        var frameAtEntry = _frame;
+        var drawTicket = !_settingText && BodyHeight > 0 && binding is not null &&
+            frameAtEntry?.Version == binding.BaseVersion && _snapshot?.Version == binding.BaseVersion
+            ? _drawTrace?.BeginDraw(binding.DocumentGeneration, binding.BaseVersion) ?? 0 : 0;
         var dc = CanvasWin32.BeginPaint(_window, out var paint);
         if (dc == 0) throw new Win32Exception(Marshal.GetLastPInvokeError(), "BeginPaint failed.");
         try
@@ -1211,6 +1220,8 @@ internal sealed class WindowsRichEditIsland : IDisposable
                 throw new Win32Exception(Marshal.GetLastPInvokeError(), "BitBlt failed.");
         }
         finally { CanvasWin32.EndPaint(_window, ref paint); }
+        if (drawTicket != 0 && ReferenceEquals(binding, _binding) && ReferenceEquals(frameAtEntry, _frame))
+            _drawTrace?.CompleteDraw(drawTicket, binding!.DocumentGeneration, binding.BaseVersion);
     }
 
     /// <summary>Overpaints the reserved ribbon with a single Direct2D glyph renderer.</summary>

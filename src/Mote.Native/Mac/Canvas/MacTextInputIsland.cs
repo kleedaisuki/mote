@@ -6,6 +6,7 @@ using Mote.Engine;
 using Mote.Formats;
 using Mote.Native.Viewport;
 using Mote.Themes;
+using Mote.Telemetry;
 
 namespace Mote.Native.Mac.Canvas;
 
@@ -16,6 +17,8 @@ namespace Mote.Native.Mac.Canvas;
 [SupportedOSPlatform("macos")]
 internal sealed unsafe class MacTextInputIsland
 {
+    /// <summary>Optional source endpoint shared with the containing shell.</summary>
+    private readonly NativeDrawTrace? _drawTrace;
     private const string ViewClass = "MoteInteractiveCanvasView";
     private const string InputClass = "MoteInteractiveCanvasInputView";
     private const string HostScrollClass = "MoteInteractiveCanvasHostScrollView";
@@ -95,8 +98,9 @@ internal sealed unsafe class MacTextInputIsland
     /// <summary>Creates callbacks that keep document mutations in the controller.</summary>
     internal MacTextInputIsland(Action<CanvasCommittedEdit> edit, Action<double> scroll,
         Action<CanvasHorizontalAnchorRequest> horizontal, Action<double> resize,
-        Action<int, int> selection, Action<string> error)
+        Action<int, int> selection, Action<string> error, NativeDrawTrace? drawTrace = null)
     {
+        _drawTrace = drawTrace;
         _edit = edit;
         _scroll = scroll;
         _horizontal = horizontal;
@@ -821,6 +825,12 @@ internal sealed unsafe class MacTextInputIsland
 
     private void Draw()
     {
+        var bindingAtEntry = _binding;
+        var frameAtEntry = _frame;
+        var ticket = !_setting && bindingAtEntry is not null &&
+            frameAtEntry?.Version == bindingAtEntry.BaseVersion &&
+            _snapshot?.Version == bindingAtEntry.BaseVersion
+            ? _drawTrace?.BeginDraw(bindingAtEntry.DocumentGeneration, bindingAtEntry.BaseVersion) ?? 0 : 0;
         var context = ObjC.Send(ObjC.Send(ObjC.Class("NSGraphicsContext"),
             ObjC.Sel("currentContext")), ObjC.Sel("CGContext"));
         if (context == 0) return;
@@ -897,6 +907,8 @@ internal sealed unsafe class MacTextInputIsland
           }
         }
         finally { MacOnScreenCanvasNative.RestoreState(context); }
+        if (ticket != 0 && ReferenceEquals(bindingAtEntry, _binding) && ReferenceEquals(frameAtEntry, _frame))
+            _drawTrace?.CompleteDraw(ticket, bindingAtEntry!.DocumentGeneration, bindingAtEntry.BaseVersion);
     }
 
     private void DrawSemantic(nint context, nint line, ViewportSlice slice,

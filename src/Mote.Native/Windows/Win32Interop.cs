@@ -5,6 +5,12 @@ namespace Mote.Native.Windows;
 /// <summary>Win32 and RichEdit declarations used by the Windows-only single-binary shell.</summary>
 internal static class Win32
 {
+    internal const uint WM_PAINT = 0x000F;
+    /// <summary>Rejects internal WM_PAINT messages without an actual invalidated client region.</summary>
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetUpdateRect(nint window, out Rect rect,
+        [MarshalAs(UnmanagedType.Bool)] bool erase);
     internal const int CW_USEDEFAULT = unchecked((int)0x80000000);
     internal const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     internal const uint WS_CHILD = 0x40000000;

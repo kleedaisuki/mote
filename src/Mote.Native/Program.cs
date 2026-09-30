@@ -143,11 +143,13 @@ internal static class Program
         }
 
         var selectedLaunch = launch!;
+        var startupMark = MoteTelemetry.Mark();
         INativeEditorShell shell = NativeShellFactory.Create(selectedLaunch);
         var theme = ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark);
         using var app = new NativeEditorController(shell, config, theme,
             selectedLaunch.Path,
-            selectedLaunch is NativeLaunchRoute.Product product ? product.Profile : null);
+            selectedLaunch is NativeLaunchRoute.Product product ? product.Profile : null,
+            startupMark: startupMark);
         if (!selectedLaunch.Smoke && themeWarning is not null)
         {
             // The status bar counts warnings but cannot display their details.
@@ -171,6 +173,7 @@ internal static class Program
             };
         }
         app.Run();
+        app.Dispose(); // Close pending intervals before draining the process-local writer.
         MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
         return 0;
     }
