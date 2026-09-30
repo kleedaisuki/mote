@@ -470,3 +470,425 @@ materialization and other session work do not consume this counter. Do not
 advertise the mask budget as a bound on all parser calls, all scanned units or
 whole-process memory. Those broader controls remain independent implementation
 and measurement obligations.
+
+## Third iteration: scratch construction, interned templates and one ledger
+
+Reviewed the proposed representation/work-control design on 2026-10-01; this is
+not an inspection of a third-iteration implementation or a new experiment.
+**Qualified approval: no new semantic whitespace lemma is needed.** The proposal
+is a representation refinement of the already approved transform, provided the
+following invariants hold.
+
+### Scratch/template refinement proof
+
+Let `T` be the exact narrower transform above. During a line scan, maintain a
+scratch output length `v`, an atom-descriptor count `a`, and original cursor `p`.
+The loop invariant is:
+
+```text
+scratch[0..v] = T(original[0..p]) on completed tokens;
+descriptor[0..a] lists exactly the completed atoms in source order,
+with their original/skeleton starts and unchanged complete lengths.
+```
+
+Appending a space or ATX prefix verbatim preserves the invariant; consuming one
+maximal outside alphanumeric run and appending one `X` preserves it; copying one
+validated full atom verbatim and recording its endpoints preserves it. These are
+the same steps as the existing constructor, implemented into reusable storage.
+At termination the active scratch span is exactly the formerly materialized
+skeleton string, so exact comparison with an admitted template gives identical
+certificate inputs. The narrower skeleton lemma and exhaustive presence proof
+apply without modification.
+
+The transform never increases source length. A 4,096-character scratch buffer
+and 32 **value** descriptors therefore suffice after the original limits are
+checked, with capacity checks before writes. Reuse the storage once per build,
+not a `stackalloc` inside an unbounded owner loop. Reset active lengths/counts
+for every line. Hash/equality must examine only the active prefix, never stale
+tail characters or descriptors from the preceding line. A hash match alone
+does not establish template identity.
+
+Every cache hit must still validate original source grammar, label lengths,
+atom separation, block-start/boundaries and original resource limits. Avoiding
+key-string allocations does not permit dropping text-key reads: the scanner can
+compare normalized raw-label spans against at most four representatives using
+ASCII streaming trim/collapse/case comparison and fixed storage. A hit's exact
+raw-atom identity also establishes equality of its normalized key set, but any
+attempt to rely on that fact rather than a pre-lookup key-cap check must state
+the reordered admission contract explicitly. No truncation or partial key set
+is allowed.
+
+Scratch spans and descriptor storage are ephemeral, not retained owner data.
+Neither an owner, geometry entry, template nor published state may retain a
+`Memory<char>` alias to the scratch array or a label view whose underlying
+buffer is overwritten by the next line. A miss may copy the active prefix into
+one immutable retained template string after reservations succeed. A hit needs
+no new skeleton string/key strings/atom-record objects, but it can still require
+owner storage or a previously unseen geometry: **this is not a general claim
+of zero allocation on every cache hit**. The .NET
+[Span documentation](https://learn.microsoft.com/en-us/dotnet/api/system.span-1?view=net-10.0)
+distinguishes a view from the storage it refers to; stack-only span syntax does
+not make a reusable managed backing array immutable.
+
+### Compact owner and declaration state
+
+An owner can store its original `(start, length)`, an immutable `TemplateId`, and
+a `GeometryId` (or an explicit default geometry) rather than a duplicated
+certificate. A template owns the skeleton atom starts/lengths, normalized key
+IDs, candidate reads and certified target multiplicities. A geometry owns the
+original local atom-start sequence. Its identity must include the template
+interpretation/atom count and exact offset sequence, not just a geometry hash
+or warning total. Shared geometry is copied once from descriptors and is then
+immutable; it must never alias the reusable descriptor buffer.
+
+The abstraction back to the previously reviewed representation is explicit:
+
+```text
+expanded owner atom i:
+  Start = owner.Start + geometry.OriginalLocalStart[i]
+  Length/TextKey/TargetKey = template.Atom[i]'s values
+
+inside-atom coordinate transfer:
+  owner.Start + geometry.OriginalLocalStart[i]
+              + (templateOffset - template.Atom[i].SkeletonStart)
+```
+
+Validate ordered intervals, count equality and
+`0 <= localStart[i]` / `localStart[i] + atomLength[i] <= owner.Length` before
+publication; reject overflow. Original owner length is separate from skeleton
+length even when geometries are shared. This abstraction preserves the key
+reads, counts and atom ranges of the old certificate, so sharing introduces no
+new semantic assumption. Real projected nodes still come from original
+snapshot text, not an expanded virtual skeleton tree.
+
+Likewise a real declaration can store original span plus `KeyId`; a separate
+effective-winner record can store winning declaration identity, decoded URL,
+safety and epoch. This is a storage refinement only if all real declarations
+and source order survive, key IDs have the admitted normalization, and each
+winner/payload belongs to the same snapshot/version as the count. An unused or
+nonwinning unsafe declaration still contributes no warning. Deletion/promotion
+must obtain the next winner's payload from its real declaration source.
+Materialization should retrieve the admitted winning raw line from the snapshot;
+serializing a decoded URL back into Markdown needs a separate escaping argument.
+No per-consumer copied URL or retained sentinel AST is needed.
+
+### Ledger: guarantees that can actually be stated
+
+One `AdmissionLedger` can provide a coherent refusal/publication gate while
+tracking several **different** quantities. Its counters should not be conflated:
+
+| Quantity | Valid guarantee | Not established by that counter |
+| --- | --- | --- |
+| Retained accounting bytes | Sum of declared charges for distinct templates, geometries, keys, owners, declarations, winners and index capacities stays under its cap before publication. | Actual managed heap size, fragmentation or process RSS. |
+| Construction/descriptor work units | Explicitly charged source reads, transform writes, key comparisons, hashes, collision comparisons and descriptor operations stay within the declared work model. | Wall-clock latency or an uncharged traversal's cost. |
+| Parser context units/calls | Reserved source units and call counts are within their caps before every permitted parser invocation. | Parser-internal allocated bytes or all work outside that call scope. |
+| Estimated allocation charge | Pre-operation estimates stay within their declared cap. | A hard actual-allocation bound unless estimates are separately proven upper bounds. |
+| Observed thread allocation | Measured cumulative managed allocation delta for this thread is checked at specified checkpoints. | Live retained bytes, other-thread allocation, native allocation or process memory. |
+
+Retained charging must cover container backing **capacity**, headers/alignment
+allowances and growth, not just logical entries or character payload. Shared
+objects are counted once by stable identity. The model must say whether it
+counts only the new staged index or also the simultaneously reachable previous
+committed index, scratch buffers and temporary construction structures. A
+new-index-only cap cannot be marketed as a peak-memory cap during staged rebuild.
+Final array conversion, dictionaries and commit-time structures need reservation
+before construction too; a final retained-byte report is not a preflight gate.
+
+Use nonnegative amounts and checked/subtraction-based reservation arithmetic,
+charge before the controlled operation, and distinguish work/memory refusals
+from intrinsic source grammar rejection. Geometry/template interning must be
+transactional within the private stage; reused committed objects cannot be
+mutated to install IDs, payloads or counters. Budget refusal/cancellation must
+not publish partial owner/key/winner/count state. Ordinary diagnostic evidence
+may record the failed attempt separately without changing committed semantics.
+
+### Observed-allocation overshoot: precise wording
+
+[GC.GetAllocatedBytesForCurrentThread](https://learn.microsoft.com/en-us/dotnet/api/system.gc.getallocatedbytesforcurrentthread?view=net-10.0)
+counts cumulative managed allocations on the current thread, not objects that
+survive collection, and excludes native allocations. Take the baseline before
+the work to be measured, require synchronous thread-affine execution (or a
+separate correctly aggregated design), and check again immediately before
+publication. Thread switching cannot reuse a previous thread's baseline.
+
+If the implementation checks the observed counter immediately before and after
+**every** opaque allocation-bearing step, it can state:
+
+> The observed guard aborts at the first checked step that exceeds the configured
+> cumulative thread-allocation threshold. A parser call already in progress may
+> overshoot; its input remains independently source-bounded, and no further
+> parser call or publication follows a detected overrun.
+
+Calling this "at most one bounded parser-call overshoot" additionally requires
+that parser calls are the only unpolled allocation-bearing steps, or that other
+steps are separately bounded/polled and described. Constructing a context,
+growing a collection, decoding a definition, assembling final arrays, or invoking
+an allocating hook between checks otherwise widens the overshoot interval.
+Charge/observe checks around an entire multi-call declaration path cannot justify
+the word **one**. Error/exception paths must also avoid subsequent unchecked
+work or publication.
+
+There is no justified numeric claim `actual allocated bytes <= budget` from
+post-call observation. If a permitted step's managed allocation had a proven
+bound `A_max`, one could derive `observed <= threshold + A_max` before abort;
+the source cap alone does not supply an established `A_max` in bytes for this
+runtime/parser. A call can fail with OOM before its post-check, and observed
+allocation is not a live-heap limit in any event. Estimated charges plus observed
+guards are useful complementary controls, not a managed-heap sandbox.
+
+### Next implementation check
+
+The informative verification targets are active-prefix scratch identity and
+descriptor reset, exact hash/geometry collision resolution, no scratch alias
+escaping publication, original-limit rejection on hits, offset expansion at
+head/tail and with varied outside-run lengths, missing-read retention, and
+reservation/observed-guard failure immediately around parser/final-array steps.
+Use independent original-source link/count oracles. This review authorizes the
+representation direction and calibrated guarantee wording, not a claim that
+the proposed allocation savings or every ledger charge has been implemented or
+measured.
+
+## Third-iteration implementation inspection and one publication defect
+
+**Current status:** the publication defect identified in this historical
+inspection is repaired by the targeted follow-up below; retain this trace to
+show the failure mechanism and the reason for the final gate ordering.
+
+Inspected `SkeletonScratch.cs`, `BoundedAdmissionLedger.cs`,
+`BoundedReferenceSession.cs`, and the ledger-aware `Certificate.Admit` call site
+on 2026-10-01. No experiments were rerun; the reported 100 MiB measurements are
+parent-provided observations, not independently reproduced evidence here.
+
+### Concrete defect: the final hook can invalidate the stale-version check
+
+In the inspected `Build`, the sequence is:
+
+```text
+Check("before-commit");
+reject if Current.Version > requested Version;
+state = stage.Publish();
+Check("publish-arrays");       // invokes caller hook
+Current = state;
+```
+
+This admits a deterministic stale-publication counterexample without threads:
+start an outer build for snapshot A/version 1; its `publish-arrays` hook invokes
+the same session's `Build(B/version 2)` with no hook. The nested build can finish
+and publish B. The outer build then resumes and publishes A, because its stale
+check ran before that hook. `Project(B)` becomes incomplete while `Project(A)`
+can be complete. The hook is an actual parameter of the experimental API, so
+this is a control-flow counterexample, not hypothetical unsynchronized runtime
+behavior.
+
+Move the stale/publication identity check after the final hook/cancellation/
+allocation check, immediately before assignment, or explicitly prevent
+reentrant builds. A multi-threaded calling contract would additionally need
+serialization or an atomic compare/publication protocol; relocation alone
+addresses the shown synchronous hook counterexample. Same-version foreign
+snapshots/document generations are not rejected by the current numeric check;
+the caller must define whether a session may be rebound to another document.
+Do not describe the current numeric check as enforcing generation identity.
+
+### Scratch, template categories and geometry
+
+The rest of the inspected representation follows the approved refinement:
+
+- `SkeletonScratch.Describe` rejects original length/atom/key violations before
+  lookup. Its fixed-storage `AddKey` implements ASCII trim/collapse/case folding,
+  preserves nonempty keys, and includes both text and targets. Spaces, prefix
+  and full atoms are copied unchanged; only outside maximal alphanumeric runs
+  become `X`.
+- `Stage.Line` looks up only `_scratch.AsSpan(0, described.Length)`, so stale
+  scratch tails do not affect identity. Original offset storage is a fresh
+  bounded value span in each `Line` invocation; it is not stack-allocated inside
+  a single long-lived unbounded scan frame. New geometries copy it with
+  `ToArray`; published structures do not retain a scratch alias.
+- Template buckets distinguish skeleton category 1, exact independent category
+  0 and opaque-fence category 2. Exact span equality follows hash selection.
+  The opaque marker text therefore cannot collide semantically with a real
+  paragraph containing the same literal marker string.
+- Geometry cache identity is `(template ID, hash)` followed by complete offset-
+  sequence equality. Template atom structure comes from exactly matching raw
+  skeleton text, while offsets come from the validating original scanner; the
+  ordered/range invariants follow construction. Geometry is currently summary
+  data only: projection parses original snapshot spans rather than synthesizing
+  nodes or coordinates from it.
+- Declaration rows retain every admitted raw source span/key. Rows arrive in
+  physical source order; `_firstDeclarations.TryAdd` records the first row for
+  each normalized key, independent of later dictionary iteration order.
+  `Resolve` retrieves that row's raw text from the staged snapshot and obtains
+  decoded value/safety through the actual projection. The winner table thus
+  does not need retained duplicate URL payloads.
+
+### Grammar isolation and the combined source-order prefix
+
+I found no grammar-isolation counterexample under the inspected fixed pipeline
+and scanner. Outside fences, consecutive nonempty physical lines are rejected;
+only genuinely empty lines reset `_previous`. The fence path admits the exact
+opening ` ```json ` marker (without the illustrative spaces) and exact closing
+` ``` `, enforces a 65,536-unit owner bound, and requires one full-span real
+`FencedCodeBlock`. An earlier meaningful close/extra rendered block/export would
+fail that AST check. Fence completion leaves `_previous` true, so a following
+nonempty owner still needs an empty separator.
+
+The independent-rich route requires absence of literal `[` and a real local
+parse with exactly one paragraph/heading. The default reference parser cannot
+open a reference without `[`, and entity/backslash decoding does not reparse
+decoded characters as new Markdown openers. Unmatched emphasis/backticks stay
+owner-local because inline processing is per block. Autolinks and other local
+unsafe constructs have their warnings counted through the actual policy; these
+are constant facts under the document definition environment. This is a new
+explicit independent grammar route, not evidence that the ASCII-reference
+skeleton accepts rich inline syntax.
+
+Rows are appended in source order, including fence rows at their opening start;
+there are no independently emitted rows inside an active fence. `Project` visits
+one unified row stream, prechecks cumulative context units, and measures the
+complete real owner's descendant node/value count plus local token/diagnostic
+counts before appending any of that owner's output. On the first refusal it
+breaks rather than skipping to later cheaper owners. Therefore combined output
+is an owner-atomic source-order prefix of the intersecting admitted rows, not a
+consumer prefix followed by late declaration insertion. Typed real-owner
+selection excludes synthetic groups; declaration leaves are selected from an
+isolated real declaration parse. The pinned definition/group projection emits
+no synthetic tokens/diagnostics, so source-start filtering of those two lists
+does not introduce a synthetic suffix fact in this inspected pipeline.
+
+`Project` requires `ReferenceEquals(requestedSnapshot, state.Snapshot)`; it
+does not label an old committed certificate complete for a different requested
+snapshot. That check is correct but does not repair the `Build` publication
+ordering defect above.
+
+### Ledger and publication wording: verified scope and remaining gaps
+
+All **admission** parser calls found in this path use `ledger.Parse`: presence
+masks, real declarations, independent-block syntax and projection analyses,
+fences and winner-payload analyses. The ledger checks observed allocation and
+reserves call/source/work charges before the call, then polls allocation after
+successful return. A throwing parser does not publish state; post-call polling
+is not in a `finally`, so do not claim a successful allocation measurement on
+every exceptional path. Requested viewport `Project` calls use their separate
+context/output caps, not the admission ledger; "all calls" must be qualified
+accordingly.
+
+Resource refusal and cancellation during scan/resolve or the final array check
+leave `Current` untouched. Staged rows/templates/geometries/winners are private,
+with no mutation of committed objects. Final `Publish` array allocation is
+observed before assignment. The reentrant stale-publication defect is the
+remaining exception to a blanket publication-safety approval.
+
+The proposed third-iteration **estimated allocation counter is not implemented**
+in the inspected ledger. `Keep` uses fixed modeled charges; `Publish` does not
+make a distinct final-array reservation. Those charges may intentionally include
+container capacities/final arrays, but no per-type/capacity accounting derivation
+is documented here. Treat `RetainedCharge` as its declared accounting-model
+total, not a proved managed-memory upper bound. Similarly `Visit` is a weighted
+work model; the scanner's fixed `2 * source.Length + 256` charge is not an exact
+count of every normalized-key comparison or machine instruction.
+
+Observed allocation is polled around non-parser allocation batches too, but not
+every individual allocation: examples include declaration label conversions,
+template/certificate construction and the multi-array `Publish`. Consequently
+the calibrated statement is **one in-progress checked step may overshoot**, not
+that the only possible overshoot is one parser call. A successful final check
+also precedes allocation of the `Attempt` report after assignment. None of this
+invalidates semantic admission, but an actual-byte/no-overshoot guarantee would
+be false. The prior distinctions between accounting, cumulative thread
+allocation, live heap, old/new staged memory and native/RSS remain necessary.
+
+The planned independent whole-document oracle and over-budget-edit/cancellation
+tests are useful next evidence. Add the synchronous final-hook reentrancy case
+or reject reentrancy explicitly. No test or performance result is substituted
+for the source-level publication defect identified here.
+
+## Targeted follow-up: stale-publication fix verified
+
+Inspected only the revised `BoundedReferenceSession.Build` publication block and
+the directly corresponding regression source/recorded result, without rerunning
+tests or revalidating unaffected scratch/cache/grammar work.
+
+The final ordering is now:
+
+```text
+state = stage.Publish();
+Check("publish-arrays");       // last caller hook/cancellation check
+result = new Attempt(...);     // successful report is allocated privately
+ledger.Poll();                 // includes the report's allocation
+reject if Current.Version > requested Version;
+Current = state;
+LastAttempt = result;          // assignments only, no callback or allocation
+```
+
+**This fixes the demonstrated synchronous reentrant newer-version overwrite.**
+A newer state published by the final hook is now observed by the immediately
+preceding stale gate, and the outer stage returns `stale-version` without
+overwriting it. Successful report construction also precedes the final observed-
+allocation gate, superseding the previous note about report allocation occurring
+after commit. The `Attempt.Allocated` value itself is sampled during report
+construction, before that report object's allocation; the authoritative final
+admission guard is the subsequent `Poll`, not that earlier metric sample.
+
+`BoundedProbe.cs` contains the deterministic nested-build regression: an older
+snapshot's `publish-arrays` hook builds the newer snapshot, then checks that the
+outer build fails, the newer snapshot remains current, and projecting the older
+snapshot is incomplete. The recorded `bounded-reentrant-stale-publication`
+entry in `bounded-results.jsonl` reports requested version 0, published/current
+version 1, `Complete: false`, and `Failure: stale-version`. This is inspected
+recorded evidence, not an independently rerun result.
+
+The approval assumes the explicitly scoped private serialized session, not
+concurrent calls from multiple threads; equal numeric versions across foreign
+document generations are still outside the numeric stale gate's guarantee.
+The ledger now intentionally claims retained **accounting**, weighted work and
+all-admission-parser limits, plus a separate observed-thread-allocation guard;
+it does not claim an estimated-allocation upper bound. The earlier caveats
+about modeled bytes versus real heap/RSS, non-parser checked-step overshoot,
+and separate viewport context/output budgets remain valid. Under this scope,
+no blocking issue remains from this implementation inspection.
+
+## Narrow final refinements: key charge, canonical references and empty windows
+
+Inspected only the changed `SkeletonScratch.AddKey` charge,
+`Stage.Canonical`/its call site, `Project` range/empty-window checks and their
+directly relevant new regression source/recorded results. No unaffected work
+was rerun or fully rereviewed. **No new blocking issue was found.**
+
+- `AddKey` now reserves `6 * raw.Length + 4` work units before normalizing a
+  valid-size label and comparing against up to four fixed representatives. This
+  supersedes the previous observation that normalization/comparison work had
+  only the top-level `2 * source.Length + 256` charge: those per-label passes are
+  now explicitly charged in addition to it. The counter remains a declared
+  weighted work model, not an exact count of CPU instructions or elapsed time.
+- `Canonical` maps every already-normalized certificate key to the corresponding
+  globally interned key string, then creates new atom records/multiplicity keys
+  using those references. Ordinal string values, atom starts/lengths, key order
+  and multiplicity integers are unchanged. The earlier certificate guarantees
+  every text/target/multiplicity key occurs in `certificate.Keys`, so its value-
+  based `Array.IndexOf` lookup is defined. This is storage canonicalization, not
+  a second normalization rule, and does not alter the skeleton proof or mutate
+  the validated input certificate. It runs only on a template miss.
+- `Project` rejects negative/out-of-snapshot ranges using subtraction-based
+  bounds before traversal, avoiding end arithmetic overflow. For the matching
+  certified snapshot, a zero-length range returns empty node/token/diagnostic
+  lists with zero parsed units and the unchanged global warning total. Snapshot
+  identity is still checked first, so an empty window cannot confer completeness
+  on an uncertified snapshot.
+
+The inspected geometry regression builds three owners with identical exact
+skeleton text but different original atom offsets, requires one shared template
+and three geometries, compares stored offsets against the earlier scalar source-
+mapped constructor, and applies the whole-source projection oracle. It also
+checks that a zero-length viewport inside an owner returns no owner. Recorded
+`bounded-template-geometry-sharing` evidence reports one template, three
+geometries and zero mismatches.
+
+The inspected real-edit regression inserts a growing geometry sequence into
+one document, tests cancellation and retained-budget refusal preserving the old
+state, then performs Undo and fresh whole-oracle validation after repair. Its
+recorded refusal is `retained-accounting` with the prior version still published;
+the repaired version completes. The separate
+`bounded-oracle-16-mixed.jsonl` record reports a fresh whole-source oracle check
+of 4,235 owners and 4,207 global warnings with zero mismatches for the 16 MiB
+mixed fixture. These are inspected finite regression records, not independently
+rerun experiments or a general-Markdown completeness proof. They strengthen
+the implementation evidence while retaining all existing domain/budget scope.

@@ -454,7 +454,311 @@ isolated Release `-warnaserror` build: zero warnings/errors. Production remains
 unchanged and gated; this iteration establishes a sound sharing lemma and a
 bounded parser-work mechanism, not complete native product acceptance.
 
-## Production path and remaining gates
+## Third iteration: scratch-only hits, declaration spans and one admission ledger
+
+Completed 2026-10-01. This iteration addresses the second iteration's concrete
+48 MB/10 MiB space-ballast allocation, rather than weakening the space-preserving
+lemma. The prototype remains isolated; **production changes require root
+authorization**. Relevant files are `SkeletonScratch.cs`,
+`BoundedAdmissionLedger.cs`, `BoundedReferenceSession.cs` and `BoundedProbe.cs`.
+The previous implementations and negative artifacts are preserved.
+
+### Representation refinement, not a new Markdown language theorem
+
+One build reuses a 4,096-character skeleton buffer and a 32-offset value buffer.
+The original physical line is streamed through the same admitted transform.
+Its active scratch prefix is compared exactly to an interned template string;
+cache hits create neither a skeleton string nor per-owner normalized key/atom
+objects. Four candidate keys are normalized/compared in fixed stack buffers.
+Hashing and equality read only the active prefix, never a previous long owner's
+scratch tail. Original lexical/length/atom/key checks still precede lookup.
+
+An owner retains its own source span, a template ID, and a geometry ID. Geometry
+identity is `(template ID, complete local atom offset sequence)` with exact
+equality after hashing. Repeated equal geometry shares one immutable-by-convention
+array; different original prefixes do not accidentally reuse skeleton offsets.
+The regression uses one skeleton with three distinct original prefix lengths:
+one template, three verified geometries, all matching independently described
+source offsets. Normalized key references inside templates are interned rather
+than repeatedly retained. Production should encode these values as compact
+readonly structs/immutable arrays, not expose mutable prototype arrays.
+
+The independent [third-iteration review](reviews/markdown-presence-certificate-review.md)
+recognizes this as a representation refinement of the already proved transform:
+expanding each row/template/geometry reconstructs the second iteration's source
+certificate. No additional whitespace contraction rule is used. Real projection
+still parses the original snapshot and actual winner context.
+
+The private prototype additionally admits parser-checked single-line paragraphs
+or headings **without any `[`**, retaining their exact independent warning count.
+Such lines cannot read/export reference definitions. It also admits bounded
+exact ` ```json ` fences with exact triple-backtick closers; actual bounded
+Markdig parsing must produce one `FencedCodeBlock`. Definition-looking code is
+opaque. Other containers, nonisolated paragraphs, other unsupported fence shapes,
+reference grammar outside the established domain and malformed inputs remain
+unsupported. This is realistic mixed content, not a claim to certify arbitrary
+Markdown.
+
+### Declarations and shared output: eliminate two special cases
+
+Every real declaration is an ordered row `(Start, Length, KeyId)`, including
+duplicates and unused unsafe destinations. **No raw declaration line is retained.**
+Only the first physical declaration for each key retains its decoded URL/safety
+payload, derived from that snapshot through the exact existing projection.
+Promotion after deletion is re-resolved in a private new stage. Requested context
+materializes winning declaration source directly from its span in the Engine
+snapshot; declaration-only output reparses the real isolated source line and
+returns its actual leaf. No synthetic wrapper or offscreen declaration escapes.
+
+Rendered owners and declarations occupy **one sorted `Row[]` stream**, not
+separate consumer-first/declaration-second lists. A viewport begins with binary
+search and consumes this source order. Each owner atomically consumes shared
+descendant-node, token, diagnostic, value-length and parsed-context budgets.
+The default probe caps are 512 descendant nodes, 512 tokens, 128 visible
+diagnostics, 131,072 value units and 262,144 parsed source/context units. These
+are experimental caps, not a public product-setting change. A rejected next
+owner truncates the common source prefix; it cannot let an earlier declaration
+appear after already truncated later consumers. Global warning count remains
+the committed full-document count, distinct from the bounded visible list.
+
+Small regressions exercise node, token, diagnostic, value and source-context
+exhaustion separately, compare the expected owner-atomic ordered prefix, and
+check an empty viewport. An exact snapshot-identity mismatch returns incomplete
+empty output, preventing an old certificate from masquerading as Complete for
+a newer over-budget/unsupported edit.
+
+### One explicit policy, with honest meanings for its quantities
+
+`AdmissionLimits` is the single per-build policy; `BoundedAdmissionLedger` charges
+all phases of the private stage:
+
+| Dimension | Default | Charged categories / guarantee |
+| --- | ---: | --- |
+| Retained accounting bytes | 8 MiB | Fixed scratch allowance, ordered-row/container growth allowance, templates/keys, geometry arrays, declaration metadata, winner payloads; refuse before next modeled retention |
+| Observed current-thread allocation | 32 MiB | Poll around scratch/template/definition/fence/payload batches and every opaque parser call; final success-report allocation and frozen arrays also precede the publication poll |
+| Weighted work units | 1 Gi unit | Source chunk scan, original/skeleton scan, label normalization/comparison, hashing/exact equality, geometry, row/aggregate work, and `32 * input units` per parser call |
+| All admission parser calls | 4,096 | Masks, definition recognition, independent block checks, real fence checks, winner safety projection—no mask-only exception |
+| All parser source units | 4 Mi UTF-16 units | Inputs of all charged calls, including synthetic context |
+
+The explicit retained charge model includes 16,384 initial bytes; 96 per ordered
+row, allowing builder capacity/final array duplication; bounded template text
+bytes plus template/certificate/key charges; 256 plus four bytes per geometry
+offset; 256 plus key/payload character storage per interned key/winner. Charges
+for parser-produced transient objects are observed rather than falsely modeled
+as exact heap sizes. The ledger is an **accounting/work admission policy**, not
+a portable managed-heap or process-memory allocator. Staging can retain both
+old and new states; the 8 MiB charge refers to each new stage, not their sum.
+
+Source work is charged before bounded loops. Label handling additionally charges
+`6 * raw label length + 4` for normalization/up-to-four comparisons/copy; hashing
+and each exact collision comparison are separately charged. These are declared
+algorithmic cost units, not a count of CPU instructions or a wall-clock bound.
+They prevent unbounded descriptor/cache-collision work from bypassing the
+parser counter, while preserving the 100 MiB admitted corpus below the policy.
+
+[`.NET GetAllocatedBytesForCurrentThread`](https://learn.microsoft.com/en-us/dotnet/api/system.gc.getallocatedbytesforcurrentthread?view=net-10.0)
+measures cumulative managed allocation, not surviving heap or native allocation.
+The first checked step that exceeds 32 MiB aborts; one in-progress bounded parser
+call **or non-parser allocation batch** may already have exceeded the threshold.
+There is no proved per-step maximum overshoot in bytes, and allocation can fail
+before a post-check. This is detection/fail-closed publication, **not a hard
+no-overshoot/OOM/RSS guarantee**. No other admission parse or publication follows
+an observed refusal. Final report objects/arrays are privately allocated and
+polled before committing. The report's metric sample is slightly earlier than
+the report object's own allocation; the final poll is the authoritative guard.
+
+### Publication proof, refusal and a discovered reentrancy defect
+
+The private stage owns all new rows/templates/geometries/winners/counts. Every
+complete output requires all source owners to be admitted and the final ledger
+and cancellation gates to succeed. Intrinsic grammar failure, resource refusal,
+cancellation and stale version are distinct outcomes. None mutates the committed
+state; none resource outcome becomes a permanently bad source line. `Project`
+requires the exact committed snapshot object, so preserving the prior state
+does not confer Complete on an unsupported newer version.
+
+Independent review found a real synchronous counterexample in the initial
+publication ordering: the final test hook could reenter `Build(newerSnapshot)`,
+commit the newer state, then the outer older build overwrote it. The correction
+allocates arrays and successful report privately, runs the **last** hook and
+allocation poll, then places the stale-version gate immediately before assignment:
+
+```text
+build/freeze candidate
+last caller hook + cancellation check
+allocate successful report; poll allocation
+reject if committed version is newer than requested
+assign Current and LastAttempt (no callback/allocation between gate and assignment)
+```
+
+The deterministic regression records outer requested v0, published/current v1,
+`Complete=false`, `stale-version`; newer output remains current. Review preserves
+the original negative trace and explicitly supersedes it after checking the fix.
+The contract is a private **serialized one-document session**, matching existing
+`IFormatSession` call serialization; it is not a concurrency or cross-document
+generation theorem. Production must carry its existing Engine/session identity
+in addition to numeric versions and enforce immutable shared state.
+
+All five budget categories were independently forced to refuse. A real version-1
+edit with 512 growing source-prefix geometries crossed a 65,536-byte retained
+charge: refusal stopped at 65,324 charged bytes/131 private rows and kept committed
+v0. Cancellation at the 32nd visited line of that same owner sequence likewise
+kept v0 and returned no complete projection for v1. Undo repair committed v2.
+Six other cancellation gates include scan-line, presence-mask, winner-payload,
+aggregation, before-commit and frozen-array publication. Full retry succeeded.
+The 64-call hostile-template budget refused after 64 calls/5,408 source units,
+without publishing its four private rows.
+
+### Independent oracle and fresh-process 100 MiB measurements
+
+The actual mixed corpus contains references before/after ordered safe/unsafe
+duplicates, headings, emphasis, inline code, an HTTPS autolink and JSON fences
+containing fake definitions. At **16 MiB**, fresh whole-document precise Markdig
+and the independently typed-group-normalized projection compared every real
+owner, recursive IR, token/diagnostic source provenance and global count:
+**4,235 owners / 4,207 warnings / zero mismatches**. That validation took about
+1.78 s in the recorded process, outside cold timing. Its GC live-difference
+sample was negative due to unrelated lifetime/collection noise; it is not
+interpreted as negative index memory or used to claim a bound.
+
+At 100 MiB, each of the following three trials ran in a fresh process, with file
+creation and Engine opening excluded from cold admission timing. Both corpora
+are admitted Complete under the default ledger. No full 100 MiB whole-parser
+oracle was run; small/16 MiB whole-oracle evidence and requested-owner checks are
+distinct from the 100 MiB index/count workload.
+
+| 100 MiB corpus | Cold ms, 3 processes | Cold allocated bytes, 3 processes | Rows / templates / geometries | All parser calls / source units |
+| --- | --- | --- | --- | --- |
+| Hostile outside-space ballast | 455.11 / 450.55 / 452.26 | 2,143,784 / 2,156,120 / 2,143,784 | 26,298 / 1 / 1 | 22 / 64,916 |
+| Mixed references + rich blocks + fences | 338.96 / 344.61 / 353.83 | 2,093,296 / 2,099,488 / 2,099,488 | 26,449 / 4 / 2 | 76 / 4,939 |
+
+The mixed source has 104,859,666 UTF-16 units, 26,292 consumers, 102 rich blocks
+and 51 fences; global warning count is exactly 26,292. The space source has
+104,860,593 units and 26,294 consumers/warnings. Charges are respectively
+2,562,440 / 2,553,006 retained-model bytes and 328,551,960 / 537,633,993 work units.
+All source and raw declaration copies retained are zero. Winning decoded URL
+payloads and bounded template cache keys remain intentionally retained.
+
+Measured 100 MiB live-index deltas after GC range **251,208–583,072 B** across
+these fresh processes, with source-only Engine live memory about 211 MB and
+process RSS around 249 MiB. [`.NET GetTotalMemory`](https://learn.microsoft.com/en-us/dotnet/api/system.gc.gettotalmemory?view=net-10.0)
+is an approximate heap measurement with collection/lifetime noise, not a
+per-index allocator; the accounting charge is the reproducible policy quantity.
+Head+tail source-owner projection p50 across the mixed trials was
+0.0640–0.0703 ms, p95 0.0927–0.1360 ms; space trials p50 0.0647–0.0809 ms,
+p95 0.0855–0.1947 ms. Both allocated 66,584 B at median for the two windows.
+These timings include real original parser projection, not UI paint/input,
+Native AOT or file opening. Prior 48 MB/10 MiB and 549 MB/10 MiB negatives remain
+recorded; different corpus sizes are not used to manufacture a universal ratio.
+
+### Exact production proposal and acceptance decision
+
+**Recommendation to root: authorize a bounded production implementation of
+this model, not a wholesale copy of the prototype.** The reference-domain proof,
+representation refinement, fail-closed resource behavior and managed affordability
+are now supported. The following concrete internal change plan preserves
+established external contracts:
+
+1. Add internal Markdown-private readonly types for `ReferenceKeyId`,
+   `OwnerTemplateId`, `OwnerGeometryId`, `SourceOwnerRow`, `ReferenceDeclaration`,
+   `ReferenceWinner`, `MarkdownAdmissionLimits/Ledger` and an immutable
+   `MarkdownCertificate`. No Engine, Native, workspace or generic graph API is
+   required. Template/geometry caches remain policy-private and pipeline/version
+   scoped; raw source remains Engine-owned.
+2. Evolve the existing flat certificate into one certificate/run index with
+   ordinary owners, opaque fences, reference consumers and declaration leaves.
+   Empty environments/zero multiplicities are the normal no-reference case.
+   Preserve the existing run/suffix-shift mechanism and no-reference local edit
+   path, rather than introduce unrelated `_flatComplete`/`_referenceComplete`
+   special-case state machines. Keep existing small-file whole-Markdig analysis
+   and legacy definition-group topology unchanged.
+3. Extend `MarkdownIncrementalSession` internally: cold `Visible` must continue
+   returning bounded Provisional without a full scan; idle `Full` can call
+   `TryBuildCertificate`. Use an explicit `AdmissionFailureKind` distinguishing
+   unsupported grammar, budget, cancellation and missing/stale edit chains.
+   Only intrinsic unchanged-source obstructions may feed `_uncertifiedLine`;
+   missing definitions and resource failure cannot poison that cache.
+4. Publish via existing `DocumentAnalysis` contracts: absolute snapshot UTF-16
+   ranges, current Version, bounded source-owner Root, and exact non-null
+   `TotalDiagnosticCount` **only** for Complete. Refusal returns Provisional
+   current-version visible output with unknown global count. Do not change
+   `IFormatSession`, `IDocumentPolicy`, Engine ownership, existing executable
+   delivery or Native presentation contracts. Existing projection caps should
+   be preserved for old paths; common reference-path output budgets must not
+   silently reduce established visible output or claim unprojected nodes were
+   materialized.
+5. Implement the real contiguous versioned-edit transition, not the prototype's
+   whole staged rebuild for every edit. Local owner edits re-admit only that
+   owner and update summaries. Definition edits preserve ordered duplicates,
+   promote first winners, compare presence **and decoded value**, update
+   aggregated multiplicities/counts, lazily invalidate materialized consumers,
+   and shift source runs without consumer parsing. Unknown structural edits
+   safely recertify under the same ledger. Keep missing-key dependencies.
+6. Add focused managed tests for symbolic masks/mapped coordinates, mixed
+   boundaries, duplicate promotion/moves, unsupported repair, all resource
+   reasons, ordered shared output budgets, cancel/retry, stale publication,
+   disposal and generation identity. Then independent validator and four-RID
+   GitHub Native AOT jobs; keep large corpora/artifacts in repository caches.
+
+Suggested private integration signatures (design, not a public API change):
+
+```csharp
+// All successful certificates are immutable and tied to one document generation/version.
+private CertificateBuildResult TryBuildCertificate(TextSnapshot snapshot,
+    MarkdownAdmissionLimits limits, CancellationToken cancellationToken);
+
+// Unknown/gapped/structural changes produce a typed deferred result; they never return old Complete facts.
+private CertificateEditResult TryApplyReferenceEdit(TextSnapshot after,
+    VersionedEdit edit, MarkdownCertificate before, CancellationToken cancellationToken);
+
+// Shared source-owner order and all output caps; total count belongs to the whole current certificate.
+private DocumentAnalysis ProjectCertificate(TextSnapshot snapshot,
+    MarkdownCertificate certificate, AnalysisRequest request,
+    CancellationToken cancellationToken);
+```
+
+Result factories/closed variants should prevent `Complete` with a null certificate
+or unknown count. Source-owner factory methods should prevent declaration rows
+carrying a render template or rendered rows carrying an invalid definition ID.
+The serialized session owns generation identity; do not rely on equal numeric
+versions from different Engine documents. This is a bounded private policy model,
+not a new generic dependency framework.
+
+Proposed acceptance thresholds, to confirm rather than claim already met:
+
+| Gate | Threshold / meaning |
+| --- | --- |
+| Semantics | Zero fresh-whole-oracle mismatches on tractable mixed corpora and versioned edits; adjacent negative never Complete; unknown global count on all unsupported/resource outcomes |
+| Ownership/retention | Zero raw owner/declaration source copies retained; 8 MiB modeled next-state budget; measured index live increase ≤8 MiB on controlled 100 MiB four-RID runs |
+| Cold allocation | Complete accepted 100 MiB sparse/mixed/space corpora allocate ≤32 MiB on the format worker thread; observed guard detects excess and refuses without publication, with the documented checked-step overshoot caveat |
+| Cold full work | ≤4,096 all parser calls / ≤4 Mi source units / ≤1 Gi weighted work units; three fresh-process managed 100 MiB median ≤1 s as a provisional engineering target, Native AOT to verify independently |
+| Warm definition change | Arbitrary-length winner/nonwinner edit runs zero consumer parser calls; aggregate count exact; proposed 100 MiB p50 ≤5 ms / p95 ≤15 ms excluding source I/O, to be measured rather than inferred from this cold prototype |
+| Existing no-reference path | No demonstrated startup/local-edit/allocation regression; compare existing baselines under same process/runtime/workload and explain any meaningful change |
+| Window rendering | Common ordered owner-prefix budgets honored, bounded two-window work independent of total row count; separate actual UI/first-paint performance acceptance remains with Native team |
+
+The recommendation is conditional on production edit-state integration and
+independent validation. It does not mark the product goal, full Markdown grammar,
+cross-platform AOT behavior or end-to-end UI responsiveness complete.
+
+### Third-iteration reproduction
+
+```powershell
+dotnet build .temp/MarkdownPresenceCertificateProbe -c Release -warnaserror
+dotnet run --project .temp/MarkdownPresenceCertificateProbe -c Release --no-build -- bounded > .temp/MarkdownPresenceCertificateProbe/bounded-results.jsonl
+dotnet run --project .temp/MarkdownPresenceCertificateProbe -c Release --no-build -- bounded oracle > .temp/MarkdownPresenceCertificateProbe/bounded-oracle-16-mixed.jsonl
+foreach ($mode in 'spaces','mixed') {
+    foreach ($trial in 1,2,3) {
+        dotnet run --project .temp/MarkdownPresenceCertificateProbe -c Release --no-build -- bounded scale $mode > ".temp/MarkdownPresenceCertificateProbe/bounded-$mode-100-$trial.jsonl"
+    }
+}
+```
+
+`bounded-build.log` records zero warnings/errors. Independent review inspected
+source and recorded failure-specific evidence, did not rerun the tests, and
+preserved the stale-publication counterexample plus fix. No production edits or
+repository commits/pushes were performed in this iteration.
+
+## Earlier production path and remaining gates (prior to third iteration)
 
 1. Implement a Markdown-private certificate type, fixed parser/pipeline identity,
    keys/atom ranges/multiplicities and exact global source-boundary coverage.
