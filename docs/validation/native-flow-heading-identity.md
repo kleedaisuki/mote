@@ -33,4 +33,27 @@ Result: **34 passed, 0 failed, 0 skipped**, Release build with warnings as error
 - Real hidden Windows RichEdit installation checks Accent color and native bold for ordinary `Role=text` heading content in both default and light themes. No foreground, focus, clipboard or physical input side effects.
 - Existing Windows RTF, fallback Flow and preview-navigation tests included.
 
-macOS native color application consumes the same pure role resolver, but actual AppKit theme/composition probes require hosted macOS validation after integration. This document does **not** claim successful AppKit execution, real IME, physical paint, or complete theme/composition acceptance. Full headings made only of explicit inline roles intentionally do not have a flat `Kind=heading` run: block identity remains authoritative in `Flow.Paragraphs`, so general probes should use typed paragraphs rather than assume all headings contain ordinary text.
+macOS native color application consumes the same pure role resolver. The target
+AppKit result is recorded below; it does **not** establish a real IME, physical
+paint or complete theme/composition acceptance. Full headings made only of
+explicit inline roles intentionally do not have a flat `Kind=heading` run:
+block identity remains authoritative in `Flow.Paragraphs`, so general probes
+should use typed paragraphs rather than assume all headings contain ordinary text.
+
+## Hosted AppKit result (2026-10-01)
+
+[CI run 36756839425](https://github.com/kleedaisuki/mote/actions/runs/36756839425)
+at `7420d0b` passed all nine strict jobs. Root inspected the uploaded
+`native-theme-osx-{arm64,x64}` and `native-composition-theme-osx-{arm64,x64}`
+reports beneath repository `.cache/ci-36756839425-theme/`. Each report is
+`passed` for both default and canvas modes, for **eight mode/RID workflows**
+in all. The window-local dark→light→dark reports show exact heading RGBs,
+three appearance callbacks and unchanged generation/version/selection; the
+synthetic marked-text reports show deferred palette application during marked
+text, commit/cancel isolation, source hashes and Undo/Redo selection. This
+closes the prior stage-0 typed-Flow heading readiness failure on these hosted
+targets without bypassing the original probe checks.
+
+These probes use process-local AppKit appearance and synthetic marked text,
+not a global macOS Settings change or real Chinese IME candidate workflow.
+They do not establish VoiceOver, compositor presentation or latency percentiles.
