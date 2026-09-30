@@ -31,14 +31,24 @@ internal static class MacDrawTraceProbe
             try
             {
                 var shell = new MacEditorShell(experimentalCanvas: continuous);
-                shell.Shown += () => shell.Post(() =>
+                shell.Shown += () => PostAfter(shell, () =>
                 {
-                    try { CheckDraw(shell, continuous); }
-                    catch (Exception error) when (error is not OutOfMemoryException) { failure = error; }
-                    finally { shell.CancelSourceDrawTrace(); shell.Close(); }
+                    try
+                    {
+                        CheckDraw(shell, continuous);
+                        // displayIfNeeded is not a promise of immediate drawRect on every
+                        // AppKit view. Keep the matching revision alive for normal drawing.
+                        PostAfter(shell, () => { shell.CancelSourceDrawTrace(); shell.Close(); });
+                    }
+                    catch (Exception error) when (error is not OutOfMemoryException)
+                    {
+                        failure = error;
+                        shell.CancelSourceDrawTrace();
+                        shell.Close();
+                    }
                 });
                 shell.Run();
-                Require(failure is null, "native callback setup");
+                if (failure is not null) throw failure;
                 Require(!MoteTelemetry.Health.SinkFaulted && MoteTelemetry.Health.DroppedRecords == 0,
                     "healthy bounded trace sink");
             }
@@ -52,7 +62,8 @@ internal static class MacDrawTraceProbe
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            Console.Error.WriteLine($"Mac draw trace check failed: {error.GetType().Name}.");
+            var identifier = error is ProbeContractFailure contract ? contract.Identifier : error.GetType().Name;
+            Console.Error.WriteLine($"Mac draw trace check failed: {identifier}.");
             return 1;
         }
     }
@@ -60,6 +71,7 @@ internal static class MacDrawTraceProbe
     /// <summary>Installs a wrong-version source first, then accepts and installs the matching mutation.</summary>
     private static void CheckDraw(MacEditorShell shell, bool continuous)
     {
+        ObjC.Send(ObjC.Send(shell.ProbeWindow, ObjC.Sel("contentView")), ObjC.Sel("layoutSubtreeIfNeeded"));
         using var document = new Document("synthetic source\nsecond line\n");
         shell.SetTheme(ThemePolicies.Resolve(ThemePolicies.DarkId, true));
         Install(shell, document.Snapshot, continuous);
@@ -89,8 +101,11 @@ internal static class MacDrawTraceProbe
             return;
         }
         var frame = new CanvasInteraction(snapshot, 20, 400).Frame();
+        // The source canvas owns the complete immutable snapshot, while its
+        // native input island accepts only a bounded single-line source slice.
+        var firstLine = snapshot.GetText().Split('\n', 2)[0];
         shell.SetCanvasBinding(new NativeCanvasBinding(17, snapshot.Version, snapshot.Version + 1,
-            snapshot, frame, 0, snapshot.GetText(), 0, 0, "Draw audit", "", true));
+            snapshot, frame, 0, firstLine, 0, 0, "Draw audit", "", true));
         shell.ProbeCanvasPublishBodyHeight();
         Require(shell.ProbeCanvasStamp == new NativeDocumentStamp(17, snapshot.Version), "canvas installed stamp");
         Require(shell.ProbeCanvasBodyRect.Size.Height > 0, "positive canvas source body");
@@ -103,6 +118,17 @@ internal static class MacDrawTraceProbe
         Require(surface != 0, "owned native source view");
         ObjC.Send(surface, ObjC.Sel("setNeedsDisplay:"), (nint)1);
         ObjC.Send(surface, ObjC.Sel("displayIfNeeded"));
+        ObjC.Send(shell.ProbeWindow, ObjC.Sel("displayIfNeeded"));
+    }
+
+    /// <summary>Yields to AppKit rather than recursively consuming the shell's posted-action queue.</summary>
+    private static void PostAfter(MacEditorShell shell, Action action)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(250).ConfigureAwait(false);
+            shell.Post(action);
+        });
     }
 
     /// <summary>Restricts writes to a fresh directory below a nonsymlink repository .temp ancestry.</summary>
@@ -165,6 +191,13 @@ internal static class MacDrawTraceProbe
     /// <summary>Fails closed rather than reporting callback evidence that was not observed.</summary>
     private static void Require(bool condition, string contract)
     {
-        if (!condition) throw new InvalidOperationException(contract);
+        if (!condition) throw new ProbeContractFailure(contract.Replace(' ', '_'));
+    }
+
+    /// <summary>Contains only a fixed in-code assertion identifier, never native exception text.</summary>
+    private sealed class ProbeContractFailure(string identifier) : Exception
+    {
+        /// <summary>Allowlisted by construction at the private Require call sites.</summary>
+        internal string Identifier { get; } = identifier;
     }
 }

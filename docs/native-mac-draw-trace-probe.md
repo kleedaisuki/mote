@@ -65,6 +65,15 @@ The parent records are explicit synthetic causal anchors, not background parser
 completion evidence. A second source draw must not create a second successful
 interval. No return before the actual native hook can satisfy the record audit.
 
+The probe yields 250 ms after Shown before the stimulus and 250 ms after the
+stimulus before closing. It requests owned-window layout and source/window
+`displayIfNeeded`, but permits normal AppKit drawing during that second event-loop
+turn. The delay is not a fabricated latency measurement or proof that drawing
+occurred: only the existing callback's persisted successful record can satisfy
+the audit. Failed private assertions print a fixed in-code contract identifier;
+arbitrary native exception messages, document text and filesystem paths remain
+excluded. The hard deadline is unchanged.
+
 ## Verification state
 
 Windows developer host: Native Release `--no-restore -warnaserror` build passed
@@ -72,6 +81,37 @@ with zero warnings/errors. This is compilation evidence only: AppKit callbacks
 and published Native AOT execution remain unverified until target execution.
 Independent static safety review is required before wiring disposable macOS CI.
 No workflow was changed or dispatched by this assignment.
+
+## First target failure and narrow corrective hypothesis
+
+Run [36752189587](https://github.com/kleedaisuki/mote/actions/runs/36752189587),
+osx-arm64, failed both non-gating diagnostic steps with exit 1. A successful job
+with `continue-on-error` does not override these failures. Downloaded artifacts:
+`.cache/ci-36752189587-mac-draw-arm/` and
+`.cache/ci-36752189587-logs/osx-arm64.log`.
+
+- Legacy emitted five records, but the accepted version-1 draw interval was
+  **cancelled**, not successful. Its parent completed in approximately 762 µs and
+  the draw was cancelled in finally at approximately 763 µs. This proves the probe
+  closed without observing an eligible callback, not that production drew it.
+- Continuous emitted only the terminal session record on both ARM and x64,
+  proving failure before the first probe marks. Static inspection located a
+  definite contract violation: the probe passed its complete multiline snapshot
+  as `InputSourceText`, while `MacTextInputIsland.Bind` requires an exact
+  single-line slice and rejects CR/LF. The correction binds only the first line;
+  the full immutable snapshot remains the canvas's source. This is a probe bug,
+  not evidence that production binding or drawing is broken.
+- x64 Legacy passed with its exact success marker and five records including a
+  successful version-1 draw. Preserve this as a target control, not evidence for
+  ARM Legacy or either Continuous profile. It supports a race in the immediate
+  closing stimulus rather than a universally broken Legacy hook.
+
+The first implementation did all setup, direct display requests and closing
+within one posted-action drain. The narrow correction above allows actual
+AppKit layout/drawing turns before closing and provides fixed assertion IDs.
+The Continuous binding is corrected to satisfy the existing single-line contract.
+Neither production hook nor completion guards changed. Independent safety
+re-review and target re-execution are required; no Mac success is claimed yet.
 
 See [end-to-end tracing](end-to-end-tracing.md) for production endpoint,
 cancellation, content privacy and interpretation contracts.

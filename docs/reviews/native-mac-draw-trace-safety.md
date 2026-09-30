@@ -164,3 +164,87 @@ detached public health and final readable session/causal records. It no longer
 uses detached health as proof of durable flush. The public shutdown deadline and
 force-exit limitations above remain relevant; neither weakens the narrowly
 defined callback-wiring acceptance on a disposable runner.
+
+## Target-failure corrective delta review (2026-10-01)
+
+**Approve the reviewed corrective delta for the same two separate disposable
+GitHub-hosted macOS invocations. No substantive static safety or false-success
+blocker was found. This is permission to test, not target acceptance.** This
+section supersedes the prior probe/document byte ledger only; the original
+isolation, external timeout and evidence limits remain mandatory.
+
+### Evidence inspected
+
+- Run [36752189587](https://github.com/kleedaisuki/mote/actions/runs/36752189587),
+  retained logs `.cache/ci-36752189587-logs/osx-arm64.log` and `osx-x64.log`, and
+  JSONL artifacts `.cache/ci-36752189587-mac-draw-arm/` and
+  `.cache/ci-36752189587-mac-draw-x64/`.
+- ARM Legacy has five records but version-1 draw status `cancelled`; x64 Legacy
+  has five records, version-1 draw `success`, and the exact success marker.
+  Continuous on both targets has only its terminal session record and exit 1.
+  These non-gating failed diagnostic steps must not be represented as accepted
+  merely because their containing jobs succeeded.
+- Working-tree production probe/document delta, the shell's `Post`, posted-action
+  drain, owned-window lifetime, native binding validation, immutable snapshot
+  lifetime, and unchanged `NativeDrawTrace` ticket/completion guards.
+- No target probe was run, workflow dispatched, or duplicate build performed in
+  this review. No production source was edited, staged or committed.
+
+### Correctness and safety assessment
+
+1. **Continuous setup violation corrected.** The fixed synthetic document uses
+   LF-only lines. Taking its first line produces the exact bounded source slice
+   at offset zero, with no CR/LF, under `MaxBindingLength`, for both snapshots.
+   Full snapshot and frame remain installed for source drawing. This satisfies
+   `MacTextInputIsland.Bind` rather than weakening its production validation.
+   The old multiline binding fails before either causal mark; artifact shape
+   agrees with that failure path, although the old coarse exception output alone
+   cannot independently identify the exact throw site.
+2. **Deferred close is a justified experiment, not proof of the race.** Each
+   `PostAfter` asynchronously waits 250 ms and calls the existing thread-safe
+   shell posting API. AppKit layout, installation, drawing and closing still run
+   in the main-thread posted selector, not in the worker task. Layout is requested
+   outside a layout callback. Close is no longer enqueued immediately into the
+   same queue drain as the stimulus; deferred display can run while revision 1
+   remains installed. Apple's [layout contract](https://developer.apple.com/documentation/appkit/nsview/layoutsubtreeifneeded%28%29)
+   permits an explicit layout request, and its [display contract](https://developer.apple.com/documentation/appkit/nsview/displayifneeded%28%29)
+   performs native drawing as needed. The delay cannot guarantee a callback or
+   a particular number of event-loop iterations under load. A slow/starved runner
+   can still fail closed; do not call the ARM race resolved until target evidence
+   arrives. This diagnostic is not a latency benchmark.
+3. **Lifetimes remain valid.** `CheckDraw` disposes the synthetic document before
+   the deferred close, but its already-obtained immutable snapshots remain valid
+   by the Engine contract; shell bindings retain them. The two worker tasks post
+   only process-owned actions. External/manual closure is outside the idle hosted
+   execution envelope. A failed worker/post or stalled native selector cannot
+   manufacture acceptance and remains bounded by the 20-second exit-124 watchdog
+   plus external timeout. Abrupt exit still does not guarantee cleanup/flush.
+4. **Evidence gates unchanged.** Success still requires one exact terminal
+   session and four distinct causal records, exact statuses, numeric-only version
+   dimensions, and exact session/trace/parent linkage. Delayed cancellation after
+   an actual eligible draw is inert; absent that draw it emits `cancelled` and the
+   audit fails. Wrong-version/duplicate protection remains in production hooks;
+   this final ledger is not an independent timestamped rejection test. New
+   window display requests can trigger additional actual native callbacks but
+   cannot create an additional accepted interval or bypass its ticket guards.
+5. **No widened host mutation or content output.** New calls operate on the
+   owned content view/window; no clipboard, configuration, TCC, input-source,
+   external injection or network route was added. Output remains explicit and
+   bounded beneath the repository. Private assertion identifiers derive solely
+   from fixed in-code contracts; other failures print exception type names only,
+   not arbitrary exception messages, document text or filesystem paths. The
+   parent records remain synthetic anchors and success means source draw return,
+   not physical/compositor presentation.
+
+### Corrective frozen bytes
+
+| Source | SHA-256 |
+| --- | --- |
+| `src/Mote.Native/Mac/MacDrawTraceProbe.cs` | `7AC992ACC9AC59D8F86EAC5B52900110AB8B73808181FF1149591EB10FD7454A` |
+| `docs/native-mac-draw-trace-probe.md` | `425AA07CFEA1A2200A0CA1329E9AD517D2B11F211DD044C4A17E7EAE47B7793D` |
+
+Program and MacEditorShell hashes were independently checked and remain
+`A36098B5A62C160BF0B08101E9CD3C2772C8519EF727655DB8497F45788D1176` and
+`68D95BFED79AB7A218A7B0EFCAC29ED183DE17F3CD2FCF724C482430D6A27F7F`.
+The previous Grid/source-NUL early-route delta conclusions therefore remain
+unchanged. Any further approved-source change requires a corresponding review.
