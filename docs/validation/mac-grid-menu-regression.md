@@ -163,6 +163,91 @@ Independent static review found no substantive defect in this bounded bridge;
 its exact scope and target limitations are preserved in
 [the shown-menu review](../reviews/mac-grid-shown-menu-bridge-review.md).
 
+## Native lifecycle discriminator (2026-10-01)
+
+The shown-menu getter correction did not resolve external discovery in CI
+`36792454502`. Both native relation-marker/combined probes actually passed;
+both external clients passed 26 assertions through AXShowMenu, but neither
+found the exact coordinate-command title. The Table/application shown-menu
+attribute was absent (`-25205` ARM, `-25204` x64). ARM's action interval was
+about 0.21 ms, which does not support a prolonged synchronous tracking wait,
+but is not proof that an asynchronous popup occurred. See the independently
+audited [external record](mac-grid-external-ax.md) for the complete accounting.
+
+The next test deliberately adds **observations, not a display fallback**.
+`MOTE_NATIVE_GRID_MENU_DIAGNOSTIC=1` is effective only together with the
+existing Grid AX opt-in. One process-owned managed collector admits at most
+16 lifecycle events across all Grid attachments. Without both opt-ins the
+collector is null; normal menu callbacks do not allocate diagnostic data,
+inspect diagnostic native state or write output.
+
+The exact stdout protocol is:
+
+```text
+mote-grid-menu-v1 phase=show-enter seq=1 requests=1 opens=0 closes=0 open=0 result=-1 configured=1 items=12 coordinate=1 shown=0 key=1 first=0 active=1
+```
+
+- `phase` is one of `show-enter`, `native-return`, `will-open`, `did-close`.
+- `seq` is 1–16; `requests`, `opens`, `closes` are 0–16 observations.
+- `open` is the last observed delegate transition, **not** a visibility claim.
+- `result` is the exact returned BOOL as 0/1 only on `native-return`; otherwise -1.
+- `configured` records whether the physical Table's existing `menu` is non-nil.
+- `items` is the exact native item count 0–16 or -1 for an over-bound count;
+  `coordinate` is exact equality with the established coordinate-command title
+  within that bounded scan. No arbitrary title is written.
+- `shown` records only whether the physical current-menu getter is non-nil.
+- `key`, `first`, `active` record exact physical window/application state;
+  neither global desktop state nor another process is queried.
+
+Only fixed enums and invariant-culture ASCII numeric fields are output, with
+no source text, user path, document coordinates or PID. The separate harness
+drains editor streams asynchronously and retains only strictly whitelisted,
+bounded protocol rows; it does not preserve raw native output. Every diagnostic
+exception is contained inside the observation method, leaving the established
+menu action and frozen-intent capture unchanged.
+
+| Observed order | What it can distinguish | What it cannot establish |
+| --- | --- | --- |
+| enter → return, no open callback before external cleanup | No observed native delegate opening | Why AppKit did not call the delegate; paint/reader visibility |
+| enter → return → will-open | Deferred opening callback | A successful painted/readable menu |
+| enter → will-open → did-close → return | Menu delegate lifecycle completed before the external action returned | Which event closed it |
+| will-open without did-close, coordinate item exists natively but not externally | Callback-live configured menu vs external tree omission | Whether the actual popup is painted, another AX path exports it, or a reader can use it |
+
+Apple's
+[menuWillOpen](https://developer.apple.com/documentation/appkit/nsmenudelegate/menuwillopen(_:))
+and [menuDidClose](https://developer.apple.com/documentation/appkit/nsmenudelegate/menudidclose(_:))
+are the existing delegate observation seam. The action's documented
+[BOOL contract](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/accessibilityperformshowmenu())
+explicitly distinguishes triggering from successful completion. In addition,
+the inherited action previously used pointer-return `ObjC.Send`; it now uses
+an exact `byte`-return `objc_msgSend` declaration for the native BOOL. The same
+typed declaration reads the diagnostic native BOOL facts. This prevents
+unspecified upper-register bits from being interpreted as an affirmative
+result; it is ABI correctness, **not evidence that this caused the failure**.
+No selector, receiver, menu item or physical input implementation changed.
+
+Local portable tests pass **6/6** for ordered callback/return discrimination,
+success/failure not inventing transitions, unknown-phase and exhausted-budget
+refusal, invariant exact protocol, bounded item facts and the byte-return native
+declaration. They do not execute AppKit:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore `
+  --filter 'FullyQualifiedName~MacGridMenuDiagnostic' --verbosity minimal `
+  --logger 'trx;LogFileName=menu-lifecycle.trx' `
+  --results-directory .cache/mac-grid-menu-regression
+```
+
+Fresh hosted lifecycle rows plus the unchanged external assertion are required
+before choosing any menu-display fix. The original finite external budgets and
+exact-title predicate remain intact; neither budget inflation nor global input
+is an allowed substitute for evidence.
+
+The independent [lifecycle/BOOL review](../reviews/mac-grid-menu-lifecycle-review.md)
+found no demonstrated substantive defect in this bounded change. A possible
+inter-part static-initialization dependency was eliminated by declaring the
+diagnostic collector immediately after its accessibility gate in the same file.
+
 ### First forwarding native/external execution
 
 CI 36792454502 / `0b85a0e` actually runs the selector and enclosing native probe

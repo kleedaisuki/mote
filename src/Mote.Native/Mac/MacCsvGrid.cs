@@ -863,6 +863,7 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void MenuWillOpen(nint self, nint selector, nint menu)
     { try { if (Instances.TryGetValue(self, out var grid)) {
+            grid.TraceMenu(MacCsvGridMenuPhase.WillOpen);
             var page = grid.MeasurePage();
             grid._menuNavigation = grid._navigation is { } frame ? new(frame, page.Rows, page.Columns) : null;
             grid._menuSelection = grid.CaptureIntent(NativeGridIntentKind.Select);
@@ -873,7 +874,43 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
         } } catch { } }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void MenuDidClose(nint self, nint selector, nint menu) { }
+    private static void MenuDidClose(nint self, nint selector, nint menu)
+    {
+        if (MenuDiagnostic is null) return;
+        try
+        {
+            if (AccessibilityMainThread && Instances.TryGetValue(self, out var grid))
+                grid.TraceMenu(MacCsvGridMenuPhase.DidClose);
+        }
+        catch { /* Diagnostics cannot unwind into AppKit. */ }
+    }
+
+    /// <summary>Observes only existing native state; normal callbacks perform no diagnostic allocation or output.</summary>
+    private void TraceMenu(MacCsvGridMenuPhase phase, bool? result = null)
+    {
+        if (MenuDiagnostic is null) return;
+        try
+        {
+            if (!AccessibilityMainThread || !MenuDiagnostic.TryNext(phase, out var trace)) return;
+            var menu = ObjC.Send(_table, ObjC.Sel("menu"));
+            var count = ObjC.Send(menu, ObjC.Sel("numberOfItems"));
+            var items = count is >= 0 and <= MacCsvGridMenuDiagnostic.Limit ? (int)count : -1;
+            var coordinate = false;
+            for (var i = 0; i < items; i++)
+            {
+                var item = ObjC.Send(menu, ObjC.Sel("itemAtIndex:"), i);
+                if (ObjC.ManagedString(ObjC.Send(item, ObjC.Sel("title"))) == "Go to row:column…") coordinate = true;
+            }
+            var window = ObjC.Send(_table, ObjC.Sel("window"));
+            var facts = new MacCsvGridMenuFacts(menu != 0, items, coordinate,
+                ObjC.Send(_table, ObjC.Sel("accessibilityShownMenu")) != 0,
+                AccessibilityNativeBool(window, ObjC.Sel("isKeyWindow")) != 0,
+                _table != 0 && ObjC.Send(window, ObjC.Sel("firstResponder")) == _table,
+                AccessibilityNativeBool(ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication")), ObjC.Sel("isActive")) != 0);
+            Console.WriteLine(trace.Format(facts, result));
+        }
+        catch { /* Diagnostic faults must not alter native menu behavior or escape its delegate. */ }
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void MenuEnd(nint self, nint selector, nint item) => MenuNavigation(self, NativeGridTargetKind.End);

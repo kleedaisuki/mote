@@ -12,6 +12,9 @@ internal sealed unsafe partial class MacCsvGrid
     /// <summary>Experimental registration is separate from the established source provider.</summary>
     private static readonly bool AccessibilityEnabled =
         Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1";
+    /// <summary>Two independent opt-ins are required; declared after its gate without inter-part initialization ordering.</summary>
+    private static readonly MacCsvGridMenuDiagnostic? MenuDiagnostic = AccessibilityEnabled &&
+        Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_MENU_DIAGNOSTIC") == "1" ? new() : null;
     /// <summary>One statically registered Objective-C metadata class for all bounded windows.</summary>
     private const string AccessibilityNodeClass = "MoteCsvGridAccessibilityNode";
     /// <summary>Stable attachment root avoids NSTableView's externally synthesized row objects.</summary>
@@ -66,6 +69,9 @@ internal sealed unsafe partial class MacCsvGrid
     /// <summary>Real logical controls retain their native object-return point hit-test behavior.</summary>
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
     private static extern nint AccessibilityControlHit(nint receiver, nint selector, ObjC.Point point);
+    /// <summary>Native BOOL getters/actions return one byte, not a pointer with unspecified upper bits.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern byte AccessibilityNativeBool(nint receiver, nint selector);
 
     /// <summary>Publishes the Grid group without touching source hierarchy or input views.</summary>
     private void InitializeAccessibility()
@@ -543,7 +549,10 @@ internal sealed unsafe partial class MacCsvGrid
         try
         {
             if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g) || g._installing || g._accessibilityFrame is null) return 0;
-            return ObjC.Send(g._table, ObjC.Sel("accessibilityPerformShowMenu")) != 0 ? (byte)1 : (byte)0;
+            g.TraceMenu(MacCsvGridMenuPhase.ShowEnter);
+            var result = AccessibilityNativeBool(g._table, ObjC.Sel("accessibilityPerformShowMenu")) != 0;
+            g.TraceMenu(MacCsvGridMenuPhase.NativeReturn, result);
+            return result ? (byte)1 : (byte)0;
         }
         catch { return 0; }
     }
