@@ -12,6 +12,24 @@ Open reads into chunks rather than one whole-file string. A known UTF-8, UTF-16,
 
 The rope's balanced-tree structure follows the production lesson behind [VS Code's piece-tree buffer](https://code.visualstudio.com/blogs/2018/03/23/text-buffer-reimplementation): line arrays and whole-string replacement are poor foundations for large-file editing. Mote uses immutable nodes because snapshot retention and background semantic analysis are first-class; it is not a claim that this structure is universally faster than a mutable piece tree. Measure representative open, viewport, head/tail edit, and save workloads before tuning chunk size or allocator behavior.
 
+## Copy-free range iteration
+
+`TextSnapshot.GetChunks(start, length)` yields nonempty `ReadOnlyMemory<char>` slices
+of existing immutable leaf strings in source order. It validates the UTF-16 range
+immediately, including zero-length ranges at the end offset. A zero-length range
+yields no slices. Like `GetText(start, length)`, reads may split a surrogate pair or
+CRLF; streaming consumers must carry decoder or line-ending state between slices.
+The existing parameterless `GetChunks()` contract is unchanged.
+
+The range iterator seeks by cached subtree lengths, skipping the preceding leaves,
+then visits intersecting leaves with an explicit pending-subtree stack. For n
+leaves and k returned slices, traversal is O(log n + k), stack space is O(log n),
+and no source text is copied. The sequence captures its snapshot, not the mutable
+document; deferred enumeration and yielded memories survive later edits and
+document disposal. `EngineRangeChunksTests` verifies exact nested/edited-rope
+ranges, backing-string identity, boundary pairs, eager invalid-range rejection,
+and retained versions, with 150 deterministic additional random ranges.
+
 ## Recovery lifecycle
 
 `Document.GetSaveRecoveryPath(target)` identifies one fixed same-directory slot per normalized target name. An existing slot is neither adopted nor deleted. A commit error retains an owned stage even if the target disappeared (the documented Windows 1176/no-backup outcome); `PendingSaveRecovery` records its attempted version, not subsequent edits. Another Save cannot allocate a second stage until that recovery is explicitly resolved. `ExportSaveRecoveryAsync(newPath)` refuses the recorded attempted Save/Save As target even if it is now missing, creates a distinct new file without overwrite, verifies exact snapshot bytes, then removes the owned stage; it does not change saved state or FilePath. `DiscardSaveRecoveryAsync` removes only verified owned bytes or acknowledges a confirmed Missing slot; unknown/changed/incomplete bytes require manual handling. Dispose leaves bytes intact for recovery after restart. This same-directory content sidecar is a deliberate exception to the configured `~/.mote` data home: moving a possibly unique replacement across volumes/permissions on failure would introduce another unsafe destructive step. No automatic expiry, retry, in-place overwrite, crash-durability or metadata/ACL guarantee is added.

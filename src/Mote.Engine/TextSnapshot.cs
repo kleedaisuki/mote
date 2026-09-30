@@ -75,6 +75,25 @@ public sealed class TextSnapshot
         foreach (var chunk in RopeNode.Chunks(Root)) yield return chunk.AsMemory();
     }
 
+    /// <summary>Enumerates a UTF-16 range as slices of immutable leaf strings without copying text.</summary>
+    /// <param name="start">Zero-based UTF-16 offset; the end offset is valid for an empty range.</param>
+    /// <param name="length">Number of UTF-16 code units to enumerate.</param>
+    /// <returns>Nonempty memory slices in source order, or an empty sequence for a zero-length range.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The range is negative or exceeds this snapshot.</exception>
+    /// <remarks>
+    /// Validation occurs when this method is called, not when enumeration begins. Traversal costs
+    /// O(log n + k) for n rope leaves and k returned slices, with O(log n) traversal storage.
+    /// Boundaries are code-unit boundaries and may split CRLF or surrogate pairs. Consumers must
+    /// preserve decoder state across slices and must not rely on leaf sizes or boundaries.
+    /// The sequence and returned memories remain valid after later edits or document disposal.
+    /// </remarks>
+    /// <example><code>foreach (var chunk in document.Snapshot.GetChunks(start, length)) Process(chunk.Span);</code></example>
+    public IEnumerable<ReadOnlyMemory<char>> GetChunks(int start, int length)
+    {
+        ValidateRange(start, length);
+        return RopeNode.Chunks(Root, start, length);
+    }
+
     internal void ValidateRange(int start, int length)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(start);

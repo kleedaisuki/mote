@@ -105,6 +105,38 @@ internal sealed class RopeNode
         }
     }
 
+    /// <summary>Visits only intersecting leaves of an already validated range without copying text.</summary>
+    /// <remarks>The stack holds unvisited right subtrees; seeking skips entire prefixes by cached length.</remarks>
+    internal static IEnumerable<ReadOnlyMemory<char>> Chunks(RopeNode? root, int start, int length)
+    {
+        if (root is null || length == 0) yield break;
+        var stack = new Stack<RopeNode>();
+        var current = root;
+        while (true)
+        {
+            while (current.Text is null)
+            {
+                var left = current.Left!;
+                if (start < left.Length)
+                {
+                    stack.Push(current.Right!);
+                    current = left;
+                }
+                else
+                {
+                    start -= left.Length;
+                    current = current.Right!;
+                }
+            }
+            var count = Math.Min(length, current.Length - start);
+            yield return current.Text.AsMemory(start, count);
+            length -= count;
+            if (length == 0) yield break;
+            current = stack.Pop();
+            start = 0;
+        }
+    }
+
     internal static int BreaksBefore(RopeNode? node, int offset)
     {
         if (node is null || offset == 0) return 0;
