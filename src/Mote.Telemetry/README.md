@@ -66,6 +66,13 @@ MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation, editMark);
 ```
 
 `Mark`, `Start`, `Record`, and `RecordElapsed` are cheap no-ops when disabled.
+The native Save failure path additionally calls `RecordSaveFailure` for
+filesystem exceptions. It is inert without explicit tracing and emits only a
+fixed `save.failure.<phase>` operation and the original signed numeric
+`hresult` attribute. Unknown or untrusted phase text maps to
+`save.failure.unknown`; exception messages, paths, and other `Exception.Data`
+values are never serialized. This is diagnostic evidence, not an automatic
+retry or a claim that a localized error message identifies the Win32 cause.
 At normal process exit call `await MoteTelemetry.ShutdownAsync()`; its default
 two-second deadline is intentionally shorter than a user save. Inspect
 `MoteTelemetry.Health` for `SinkFaulted` and `DroppedRecords` and show a warning
@@ -80,7 +87,8 @@ Every JSONL line has `schema_version`, `utc_time`, `session_id`, `trace_id`,
 The final `mote.session` record is the root of a session's spans. UTC is for
 ordering; duration uses monotonic time. The only
 attributes are normalized format enum, coarse size bucket, document version,
-and a numeric count. There is no API field for document content, path, filename,
+a numeric count, and a signed numeric `hresult` only on filesystem Save failure.
+There is no API field for document content, path, filename,
 extension, parse message, arbitrary tag, or command-line argument. The same
 constraint applies to `ActivitySource` names: operation names are fixed enums.
 

@@ -463,6 +463,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 scope?.SetStatus(TelemetryStatus.Failure);
+                MoteTelemetry.RecordSaveFailure(ex);
                 error = ex;
             }
             Post(() =>

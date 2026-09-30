@@ -156,6 +156,24 @@ public static class MoteTelemetry
     }
 
     /// <summary>
+    /// Records a failed filesystem Save with its original numeric HResult and a
+    /// fixed engine phase. Exception text, paths, and arbitrary Data values are
+    /// never persisted; non-filesystem failures have no diagnostic code here.
+    /// </summary>
+    public static void RecordSaveFailure(Exception error)
+    {
+        var sink = Volatile.Read(ref _sink);
+        if (sink is null || sink.IsFaulted || error is not (IOException or UnauthorizedAccessException))
+            return;
+        var phase = error.Data["Mote.Engine.SavePhase"] as string;
+        var parent = Activity.Current;
+        sink.TryRecord(new TraceRecord(
+            DateTimeOffset.UtcNow, parent?.TraceId ?? sink.SessionTraceId,
+            ActivitySpanId.CreateRandom(), parent?.SpanId ?? sink.SessionSpanId,
+            SaveFailureName(phase), 0, TelemetryStatus.Failure, default, error.HResult));
+    }
+
+    /// <summary>
     /// Completes the queue, drains it, and flushes the current file. The caller
     /// may supply a short timeout to bound UI shutdown; timed-out writes may be
     /// lost, but a user document save is never blocked by tracing.
@@ -220,6 +238,19 @@ public static class MoteTelemetry
         TelemetryEvent.SaveCompleted => "save.completed",
         TelemetryEvent.DroppedEvents => "telemetry.dropped",
         _ => "unknown"
+    };
+
+    /// <summary>Never derives a trace operation from exception-provided text.</summary>
+    private static string SaveFailureName(string? phase) => phase switch
+    {
+        "TargetCheck" => "save.failure.target_check",
+        "TempWriteAndHash" => "save.failure.temp_write_and_hash",
+        "FinalTargetCheck" => "save.failure.final_target_check",
+        "Move" => "save.failure.move",
+        "Replace" => "save.failure.replace",
+        "Cleanup" => "save.failure.cleanup",
+        "SavedStamp" => "save.failure.saved_stamp",
+        _ => "save.failure.unknown"
     };
 }
 

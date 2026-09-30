@@ -37,3 +37,17 @@ These controls show that **simple pre-existing** no-Delete handles or read-only 
 3. Only after phase/error evidence, evaluate a bounded recovery design. Any retry must re-verify stamp **and SHA-256 immediately before each attempt** and never reinterpret a conflict as permission to overwrite. Keep a same-directory staged file available under a bounded, discoverable recovery policy if final replacement failed; avoid claiming crash durability or ACL preservation the platform cannot guarantee. Test original-bytes preservation, dirty state, external same-size/restored-time edits, read-only target, no-Delete handles, cleanup failures, and Save As approval. A UI action to explicitly retry/recover is safer than indefinite automatic retries.
 
 The strongest current conclusion is narrow: a real one-file ordinary path can fail at Windows replacement after successful editing, while correctly preserving the old file. The exact Win32 1175 cause and incidence are still open. The next useful evidence is the **actual managed HResult and file-system event sequence**, not another latency percentile or a broad retry loop.
+
+## Opt-in content-free Save failure trace
+
+The native Save catch now calls `MoteTelemetry.RecordSaveFailure` before showing
+the unchanged error UI. With `MOTE_TRACE=1` (and no tracing otherwise), a
+filesystem failure writes one `save.failure.<phase>` record with the original
+signed numeric `hresult`. The phase is mapped through a fixed allowlist from
+the engine's `Mote.Engine.SavePhase` exception annotation; arbitrary phase
+strings become `save.failure.unknown`. The trace does not serialize exception
+messages, paths, file contents, hashes, or arbitrary `Exception.Data` values.
+It adds no synchronous trace I/O, retry, or Save state transition. A healthy sink is required;
+bounded queue loss can still drop this record, so absence is not evidence of
+Save success. An opt-in trace can capture a future failure's managed HResult and
+phase; it does **not** retroactively establish the earlier 1175 inference.

@@ -19,6 +19,7 @@ public sealed class TelemetryTests
         MoteTelemetry.Configure(new TelemetryOptions { Enabled = false, OutputDirectory = temp.Path });
         using (MoteTelemetry.Start(TelemetryOperation.Startup)) { }
         MoteTelemetry.Record(TelemetryEvent.EditCommitted, 42);
+        MoteTelemetry.RecordSaveFailure(new IOException("private-source-name.txt", unchecked((int)0x80070497)));
         await MoteTelemetry.ShutdownAsync();
         Assert.False(MoteTelemetry.Health.Enabled);
         Assert.Empty(Directory.EnumerateFileSystemEntries(temp.Path));
@@ -59,7 +60,7 @@ public sealed class TelemetryTests
                 Assert.Equal(1, root.GetProperty("schema_version").GetInt32());
                 Assert.InRange(root.GetProperty("duration_us").GetInt64(), 0, long.MaxValue);
                 foreach (var attribute in root.GetProperty("attributes").EnumerateObject())
-                    Assert.Contains(attribute.Name, new[] { "format", "size_bucket", "version", "count" });
+                    Assert.Contains(attribute.Name, new[] { "format", "size_bucket", "version", "count", "hresult" });
             }
             var parent = records.Single(r => r.RootElement.GetProperty("operation").GetString() == "document.open_to_editable").RootElement;
             var child = records.Single(r => r.RootElement.GetProperty("operation").GetString() == "document.decode").RootElement;
@@ -71,6 +72,43 @@ public sealed class TelemetryTests
             Assert.Equal(parent.GetProperty("span_id").GetString(), delayed.GetProperty("parent_span_id").GetString());
             Assert.Equal("markdown", parent.GetProperty("attributes").GetProperty("format").GetString());
             Assert.Equal("1-4KiB", parent.GetProperty("attributes").GetProperty("size_bucket").GetString());
+        }
+        finally { foreach (var record in records) record.Dispose(); }
+    }
+
+    /// <summary>Only the allowlisted Save phase and numeric filesystem code enter JSONL.</summary>
+    [Fact]
+    public async Task Save_failure_trace_excludes_exception_message_and_arbitrary_data()
+    {
+        using var temp = new RepoTemp();
+        var output = temp.File("trace");
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = output });
+        try
+        {
+            var error = new IOException("SECRET-user-file-path.txt", unchecked((int)0x80070497));
+            error.Data["Mote.Engine.SavePhase"] = "Replace";
+            error.Data["private"] = "SECRET-document-content";
+            MoteTelemetry.RecordSaveFailure(error);
+
+            var unknown = new IOException("SECRET-other-path", unchecked((int)0x80070020));
+            unknown.Data["Mote.Engine.SavePhase"] = "SECRET-injected-phase";
+            MoteTelemetry.RecordSaveFailure(unknown);
+            MoteTelemetry.RecordSaveFailure(new InvalidOperationException("SECRET-nonfilesystem"));
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+
+        var json = string.Join("\n", await ReadLinesAsync(output));
+        Assert.DoesNotContain("SECRET", json, StringComparison.Ordinal);
+        using var replace = JsonDocument.Parse((await ReadLinesAsync(output)).Single(
+            line => line.Contains("\"operation\":\"save.failure.replace\"", StringComparison.Ordinal)));
+        Assert.Equal("failure", replace.RootElement.GetProperty("status").GetString());
+        Assert.Equal(unchecked((int)0x80070497),
+            replace.RootElement.GetProperty("attributes").GetProperty("hresult").GetInt32());
+        var records = (await ReadLinesAsync(output)).Select(line => JsonDocument.Parse(line)).ToArray();
+        try
+        {
+            Assert.Single(records, record => record.RootElement.GetProperty("operation").GetString() == "save.failure.unknown");
+            Assert.DoesNotContain(records, record => record.RootElement.GetProperty("operation").GetString() == "save.failure.SECRET-injected-phase");
         }
         finally { foreach (var record in records) record.Dispose(); }
     }
