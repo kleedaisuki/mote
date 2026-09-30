@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Text;
 using Mote.Configuration;
 using Mote.Engine;
 using Mote.Themes;
@@ -17,6 +18,7 @@ internal static class MacCanvasAccessibilityProbe
 {
     private const string Runtime = "/usr/lib/libobjc.A.dylib";
     private const string Marker = "AX_OFFSCREEN_MARKER";
+    private const string UnavailableStatus = "Accessibility provider unavailable";
 
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     private static extern ObjC.Range RangeForLine(nint receiver, nint selector, nint line);
@@ -121,6 +123,14 @@ internal static class MacCanvasAccessibilityProbe
         private nint _element;
         private int _stage;
         private bool _done;
+        private bool _faultRequestReturned;
+        private NativeDocumentStamp? _faultSourceStamp;
+        private int _faultSourceLength;
+        private byte[]? _faultSourceHash;
+        private NativeDocumentStamp? _lastHashedStamp;
+        private int _lastHashedLength = -1;
+        private bool _lastHashEquality;
+        private string? _lastFaultState;
 
         internal Workflow(MacEditorShell shell, string path, TextSnapshot source, int markerAt)
         {
@@ -146,7 +156,19 @@ internal static class MacCanvasAccessibilityProbe
         private void Tick()
         {
             if (_done) return;
-            if (DateTime.UtcNow >= _deadline) { Finish(false); return; }
+            if (DateTime.UtcNow >= _deadline)
+            {
+                try
+                {
+                    if (_stage == 3) RecordFaultState("deadline", force: true);
+                }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                {
+                    Console.Error.WriteLine($"Mac canvas AX deadline diagnostic: {error.GetType().Name}.");
+                }
+                finally { Finish(false); }
+                return;
+            }
             try
             {
                 var before = _stage;
@@ -183,27 +205,27 @@ internal static class MacCanvasAccessibilityProbe
                             ObjC.Send(_element, ObjC.Sel("accessibilityStringForRange:"),
                                 new ObjC.Range((nuint)_markerAt, (nuint)Marker.Length)) != 0)
                             throw new InvalidOperationException("Held AX element returned stale file content.");
+                        CaptureFaultSource();
                         _shell.ProbeCanvasAccessibilityFault();
+                        _faultRequestReturned = true;
                         _stage = 3;
+                        RecordFaultState("request-returned", force: true);
                         break;
                     case 3 when !_shell.ProbeCanvasAccessibilityAttached &&
-                        _shell.ProbeCanvasStatus.Contains("Accessibility provider unavailable",
-                            StringComparison.Ordinal):
+                        StatusMatches():
                         if (!_shell.ProbeCanvasInputEditable || !_shell.ProbeCanvasInputFocused)
                             throw new InvalidOperationException("AX fault disabled text editing.");
                         _shell.ProbeInsertAtEnd("N");
                         _stage = 4;
                         break;
                     case 4 when _shell.ProbeCanvasSnapshot?.GetText() == "N" &&
-                        _shell.ProbeCanvasStatus.Contains("Accessibility provider unavailable",
-                            StringComparison.Ordinal):
+                        StatusMatches():
                         _shell.ProbeApproveDiscardOnce();
                         _shell.ProbeInvokeMenu("moteNew:");
                         _stage = 5;
                         break;
                     case 5 when _shell.ProbeCanvasSnapshot?.Length == 0 &&
-                        _shell.ProbeCanvasStatus.Contains("Accessibility provider unavailable",
-                            StringComparison.Ordinal):
+                        StatusMatches():
                         _shell.ProbeInsertAtEnd("M");
                         _stage = 6;
                         break;
@@ -215,6 +237,7 @@ internal static class MacCanvasAccessibilityProbe
                         Finish(true);
                         return;
                 }
+                if (_stage == 3) RecordFaultState("poll");
                 if (_stage != before) Record($"stage-{before}-to-{_stage}");
             }
             catch (Exception error) when (error is not OutOfMemoryException)
@@ -224,6 +247,65 @@ internal static class MacCanvasAccessibilityProbe
                 return;
             }
             Schedule();
+        }
+
+        /// <summary>Captures the post-New canonical identity before injecting an AX-only fault.</summary>
+        private void CaptureFaultSource()
+        {
+            var snapshot = _shell.ProbeCanvasSnapshot ??
+                throw new InvalidOperationException("Canvas source was absent before AX fault.");
+            _faultSourceStamp = _shell.ProbeCanvasStamp;
+            _faultSourceLength = snapshot.Length;
+            _faultSourceHash = SHA256.HashData(Encoding.Unicode.GetBytes(snapshot.GetText()));
+        }
+
+        private bool StatusMatches() => _shell.ProbeCanvasStatus.Contains(
+            UnavailableStatus, StringComparison.Ordinal);
+
+        /// <summary>
+        /// Records only source identity, status-token presence, provider state and input
+        /// liveness. Request return is not evidence that AppKit ran the detach selector.
+        /// </summary>
+        private void RecordFaultState(string point, bool force = false)
+        {
+            var snapshot = _shell.ProbeCanvasSnapshot;
+            var stamp = _shell.ProbeCanvasStamp;
+            var generationMatches = stamp.HasValue && _faultSourceStamp.HasValue &&
+                stamp.Value.Generation == _faultSourceStamp.Value.Generation;
+            var versionMatches = stamp.HasValue && _faultSourceStamp.HasValue &&
+                stamp.Value.Version == _faultSourceStamp.Value.Version;
+            var lengthMatches = snapshot?.Length == _faultSourceLength;
+            // Snapshots are immutable. Rehash at injection/deadline or after a
+            // changed stamp/length, never on every 45 ms stage-3 poll.
+            var hashEquality = false;
+            if (snapshot is not null && lengthMatches && _faultSourceHash is not null)
+            {
+                if (force || stamp != _lastHashedStamp || snapshot.Length != _lastHashedLength)
+                {
+                    _lastHashEquality = SHA256.HashData(Encoding.Unicode.GetBytes(snapshot.GetText()))
+                        .AsSpan().SequenceEqual(_faultSourceHash);
+                    _lastHashedStamp = stamp;
+                    _lastHashedLength = snapshot.Length;
+                }
+                hashEquality = _lastHashEquality;
+            }
+            var state = $"fault_request_returned={_faultRequestReturned} " +
+                $"provider_attached={_shell.ProbeCanvasAccessibilityAttached} " +
+                $"status_match={StatusMatches()} " +
+                $"status_exact_suffix={_shell.ProbeCanvasStatus.EndsWith(" · " + UnavailableStatus, StringComparison.Ordinal)} " +
+                $"source_stamp_present={stamp.HasValue} " +
+                $"source_generation={stamp?.Generation ?? -1} " +
+                $"source_version={stamp?.Version ?? -1} " +
+                $"source_length={snapshot?.Length ?? -1} " +
+                $"source_generation_equal={generationMatches} " +
+                $"source_version_equal={versionMatches} " +
+                $"source_length_equal={lengthMatches} " +
+                $"source_hash_equal={hashEquality} " +
+                $"input_editable={_shell.ProbeCanvasInputEditable} " +
+                $"input_focused={_shell.ProbeCanvasInputFocused}";
+            if (!force && state == _lastFaultState) return;
+            _lastFaultState = state;
+            _metrics.Add($"ax-fault-{point} elapsed_ms={_clock.ElapsedMilliseconds} {state}");
         }
 
         private void CheckSourceSelectors()
