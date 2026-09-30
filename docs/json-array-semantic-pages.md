@@ -1,7 +1,11 @@
 # JSON root-array semantic pages: the next large-file slice
 
-Decision proposal, 2026-10-01. **Not implemented.** The small partition experiment
-below is executed evidence, not evidence of incremental production performance.
+Decision design, 2026-10-01. **Implemented scoped production path**; see
+[production contract](json-array-pages-production.md),
+[directed/seeded validation](validation/json-array-semantic-pages-tests.md) and
+[matched-source measurements](json-array-pages-performance.md). The original small
+partition experiment below remains premise evidence, not production performance.
+The design's Native AOT/input-to-draw promotion criteria remain separate.
 Scope: a 100 MiB JSON export with a root array and ordinarily bounded elements.
 This is the next concrete slice of [semantic ownership](semantic-ir-evolution.md),
 not a replacement parser, a universal IR, JSON Lines support, or a generic roadmap.

@@ -1,16 +1,17 @@
 using System.Text.Json;
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using Mote.Engine;
 
 namespace Mote.Formats;
 
 /// <summary>
-/// Streaming JSON semantic session. The authoritative snapshot is reparsed on every call;
-/// no edit checkpoint is assumed safe across an unterminated string or changed delimiter.
+/// Source-backed JSON session with independently certified root-array owners.
+/// Hard parser seams, not delimiter guesses, establish reuse after local edits.
 /// </summary>
 /// <remarks>
-/// The whole snapshot is scanned while large-document trees, tokens, and diagnostics
-/// are projected to the requested range. Depth limits and error recovery that skip
+/// Full scans harvest source-sized root-array owners while output is viewport-bounded.
+/// Local edits repair strict owners without trusting unchanged suffix hashes. Depth limits and error recovery that skip
 /// unknown structure return Provisional rather than asserting an exact global count.
 /// A small Full request preserves the legacy tree. No whole-snapshot string is materialized.
 /// </remarks>
@@ -19,7 +20,23 @@ internal sealed class JsonIncrementalSession : IFormatSession
     private const int FullTreeLimit = 1024 * 1024;
     private const int MaxProjection = 256 * 1024;
     private bool _disposed;
+    private bool _analyzing;
     private readonly ulong _hashSeed = NewHashSeed();
+    private JsonArrayCertificate? _array;
+    private WeakReference<TextSnapshot>? _currentSnapshot;
+
+    /// <summary>Actual interactive parser/key-comparison visits; null for unbounded authoritative Full.</summary>
+    internal long? LastVisitedUnits { get; private set; }
+    /// <summary>Bounded metadata instrumentation; neither property retains source.</summary>
+    internal int ArrayPageCount => _array?.Pages.Length ?? 0;
+    /// <summary>Owners still requiring strict local repair.</summary>
+    internal int ArrayDirtyPageCount => _array?.Pages.Count(page => page.Dirty) ?? 0;
+    /// <summary>Version of the committed candidate, including provisional dirty candidates.</summary>
+    internal long? ArrayCertificateVersion => _array?.Version;
+    /// <summary>Test-only interval snapshot; normal analysis never calls this allocating accessor.</summary>
+    internal IReadOnlyList<TextSpan> ArrayPageSpans => _array?.Pages.Select(page => page.Span).ToArray() ?? [];
+    /// <summary>Deterministic internal validation seam; never configured by production callers.</summary>
+    internal Action<string>? AnalysisHook { get; set; }
 
     /// <summary>Seeds object-key hashing independently for each document session.</summary>
     private static ulong NewHashSeed()
@@ -43,18 +60,155 @@ internal sealed class JsonIncrementalSession : IFormatSession
         if (request.Scope is not (AnalysisScope.Visible or AnalysisScope.Full))
             throw new ArgumentOutOfRangeException(nameof(request));
 
-        var captureAll = request.Scope == AnalysisScope.Full && snapshot.Length <= FullTreeLimit;
-        // A caller may request the entire 100 MiB file as its "viewport". Keep the
-        // semantic scan global, but bound retained nodes/tokens to the leading window.
-        var projectedRange = new TextSpan(range.Start, Math.Min(range.Length, MaxProjection));
-        var parser = new Parser(snapshot, projectedRange, captureAll, _hashSeed, cancellationToken);
+        if (_analyzing) throw new InvalidOperationException("JSON session calls must be serialized and non-reentrant.");
+        _analyzing = true;
+        try { return AnalyzeCore(snapshot, changesSinceCommittedState, request, cancellationToken); }
+        finally { _analyzing = false; }
+    }
+
+    /// <summary>Stages all mapping, validation and projection before one cancellation-gated publication.</summary>
+    private DocumentAnalysis AnalyzeCore(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> edits,
+        AnalysisRequest request, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var visible = new TextSpan(request.VisibleRange.Start, Math.Min(request.VisibleRange.Length, MaxProjection));
+        var work = new SourceWork(request.Scope == AnalysisScope.Visible && snapshot.Length > FullTreeLimit
+            ? 512 * 1024 : long.MaxValue, ct);
+        JsonArrayCertificate? candidate = null;
+        if (snapshot.Length > FullTreeLimit && _array is not null)
+        {
+            bool sameSource = _currentSnapshot?.TryGetTarget(out var previous) == true && ReferenceEquals(previous, snapshot);
+            candidate = _array.Map(snapshot, edits, sameSource, ct);
+            if (candidate is not null)
+            {
+                var projection = ProjectArray(snapshot, candidate, visible, work, ct, out candidate);
+                if (projection.Completeness == AnalysisCompleteness.Complete || request.Scope == AnalysisScope.Visible)
+                    return Publish(snapshot, candidate, projection, work, ct);
+            }
+        }
+        // Small files and explicit Full keep the established authoritative recovery domain.
+        // Cold large Visible cannot synchronously validate an arbitrarily large suffix.
+        bool bounded = request.Scope == AnalysisScope.Visible && snapshot.Length > FullTreeLimit;
+        work = new SourceWork(bounded ? MaxProjection : long.MaxValue, ct);
+        var parser = new Parser(snapshot, visible, request.Scope == AnalysisScope.Full && snapshot.Length <= FullTreeLimit,
+            _hashSeed, ct, work);
         var result = parser.Parse();
-        cancellationToken.ThrowIfCancellationRequested();
+        if (bounded && work.Exhausted)
+            result = Provisional(snapshot, visible, result.Root, result.Diagnostics, result.Tokens);
+        candidate = parser.Certificate;
+        return Publish(snapshot, candidate, result, work, ct);
+    }
+
+    /// <summary>Revalidates only dirty owners and projects independently certified intersecting owners.</summary>
+    private DocumentAnalysis ProjectArray(TextSnapshot snapshot, JsonArrayCertificate mapped, TextSpan visible,
+        SourceWork work, CancellationToken ct, out JsonArrayCertificate candidate)
+    {
+        var pages = (JsonArrayPage[])mapped.Pages.Clone();
+        var parsed = new Dictionary<int, Parser.PageResult>();
+        bool dirty = false;
+        for (int i = 0; i < pages.Length; i++)
+        {
+            if (!pages[i].Dirty) continue;
+            AnalysisHook?.Invoke("page");
+            ct.ThrowIfCancellationRequested();
+            var parser = new Parser(snapshot, visible, false, _hashSeed, ct, work, pages[i].Span);
+            var local = parser.ParsePage(i == pages.Length - 1);
+            parsed[i] = local;
+            if (local.Valid)
+                pages[i] = pages[i] with { DiagnosticCount = local.DiagnosticCount, ElementCount = local.ElementCount, Dirty = false };
+            else dirty = true;
+            if (work.Exhausted) break;
+        }
+        dirty |= pages.Any(page => page.Dirty);
+        candidate = mapped with { Pages = pages };
+        var children = new List<SemanticNode>();
+        var diagnostics = new List<Diagnostic>();
+        var tokens = new List<SemanticToken>();
+        for (int i = 0; i < pages.Length; i++)
+        {
+            var page = pages[i];
+            if (!Intersects(page.Span, visible)) continue;
+            if (!parsed.TryGetValue(i, out var local))
+            {
+                if (work.Exhausted) break;
+                AnalysisHook?.Invoke("page");
+                ct.ThrowIfCancellationRequested();
+                var parser = new Parser(snapshot, visible, false, _hashSeed, ct, work, page.Span);
+                local = parser.ParsePage(i == pages.Length - 1);
+                // Unchanged pages were proved at their exact mapped source. Refusal to
+                // project a giant owner does not invalidate the global certificate.
+            }
+            children.AddRange(local.Children);
+            diagnostics.AddRange(local.Diagnostics);
+            tokens.AddRange(local.Tokens);
+        }
+        var arraySpan = new TextSpan(candidate.ArrayStart, candidate.ArrayEnd - candidate.ArrayStart);
+        var array = new SemanticNode("array", arraySpan, children: children);
+        var root = new SemanticNode("document", new TextSpan(0, snapshot.Length),
+            children: Intersects(arraySpan, visible) ? [array] : []);
+        if (dirty) return Provisional(snapshot, visible, root, diagnostics, tokens);
+        return new DocumentAnalysis(snapshot.Version, new TextSpan(0, snapshot.Length), AnalysisCompleteness.Complete,
+            root, diagnostics, tokens, pages.Sum(page => page.DiagnosticCount));
+    }
+
+    /// <summary>Uses the existing half-open projection convention, including zero-length cursor windows.</summary>
+    private static bool Intersects(TextSpan owner, TextSpan visible) => owner.Length == 0
+        ? owner.Start >= visible.Start && owner.Start <= visible.End
+        : owner.Start < visible.End && owner.End > visible.Start;
+
+    /// <summary>Partial output never carries a stale exact global diagnostic count.</summary>
+    private static DocumentAnalysis Provisional(TextSnapshot snapshot, TextSpan visible, SemanticNode root,
+        IReadOnlyList<Diagnostic> diagnostics, IReadOnlyList<SemanticToken> tokens) =>
+        new(snapshot.Version, visible, AnalysisCompleteness.Provisional, root, diagnostics, tokens, null);
+
+    /// <summary>A canceled stage cannot mutate committed owner spans, version, count or instrumentation.</summary>
+    private DocumentAnalysis Publish(TextSnapshot snapshot, JsonArrayCertificate? candidate,
+        DocumentAnalysis result, SourceWork work, CancellationToken ct)
+    {
+        AnalysisHook?.Invoke("before-commit");
+        ct.ThrowIfCancellationRequested();
+        _array = candidate;
+        _currentSnapshot = new WeakReference<TextSnapshot>(snapshot);
+        LastVisitedUnits = work.Limited ? work.Visited : null;
         return result;
     }
 
     /// <inheritdoc />
-    public void Dispose() => _disposed = true;
+    public void Dispose()
+    {
+        _disposed = true;
+        _array = null;
+        _currentSnapshot = null;
+        AnalysisHook = null;
+    }
+
+    /// <summary>Counts every grammar or exact-key source visit, with a hard interactive ceiling.</summary>
+    private sealed class SourceWork(long limit, CancellationToken ct)
+    {
+        internal bool Limited => limit != long.MaxValue;
+        internal long Visited { get; private set; }
+        internal bool Exhausted { get; private set; }
+
+        /// <summary>The common read path stays inline; grammar loops own periodic cancellation.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void Visit(int count = 1)
+        {
+            if (count > limit - Visited) Refuse();
+            Visited += count;
+        }
+
+        /// <summary>Cold refusal is kept out of the per-character source cursor.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void Refuse()
+        {
+            ct.ThrowIfCancellationRequested();
+            Exhausted = true;
+            throw new SourceBudgetException();
+        }
+    }
+
+    /// <summary>Internal control flow only; cancellation is never translated into syntax failure.</summary>
+    private sealed class SourceBudgetException : Exception;
 
     /// <summary>Range-backed recursive descent, deliberately matching legacy recovery and diagnostic ordering.</summary>
     private sealed class Parser
@@ -65,6 +219,14 @@ internal sealed class JsonIncrementalSession : IFormatSession
         private readonly ulong _hashSeed;
         private readonly CancellationToken _ct;
         private readonly IEnumerator<ReadOnlyMemory<char>> _chunks;
+        private readonly SourceWork? _work;
+        private readonly int _end;
+        private bool _syntaxError;
+        private readonly List<JsonArrayPage> _pages = [];
+        private bool _indexAbandoned;
+        private int _arrayStart = -1;
+        private int _arrayEnd;
+        internal JsonArrayCertificate? Certificate { get; private set; }
         private readonly List<Diagnostic> _diagnostics = [];
         private readonly List<SemanticToken> _tokens = [];
         private ReadOnlyMemory<char> _chunk;
@@ -77,21 +239,27 @@ internal sealed class JsonIncrementalSession : IFormatSession
         private bool _lastKeyValid;
         private bool _lastKeyEscaped;
 
-        internal Parser(TextSnapshot snapshot, TextSpan visible, bool captureAll, ulong hashSeed, CancellationToken ct)
+        internal Parser(TextSnapshot snapshot, TextSpan visible, bool captureAll, ulong hashSeed, CancellationToken ct, SourceWork work, TextSpan? sourceRange = null)
         {
             _snapshot = snapshot;
             _visible = visible;
             _captureAll = captureAll;
             _hashSeed = hashSeed;
             _ct = ct;
-            _chunks = snapshot.GetChunks().GetEnumerator();
+            _work = work.Limited ? work : null;
+            _position = sourceRange?.Start ?? 0;
+            _chunkStart = _position;
+            _end = sourceRange?.End ?? snapshot.Length;
+            _chunks = snapshot.GetChunks(_position, _end - _position).GetEnumerator();
         }
 
-        private int Length => _snapshot.Length;
+        private int Length => _end;
 
         /// <summary>Reads immutable rope chunks directly; grammar access is forward-only.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private char At(int position)
         {
+            _work?.Visit();
             while (position >= _chunkStart + _chunk.Length)
             {
                 _chunkStart += _chunk.Length;
@@ -106,7 +274,12 @@ internal sealed class JsonIncrementalSession : IFormatSession
             (length == 0 ? start >= _visible.Start && start <= _visible.End :
                 start < _visible.End && start + length > _visible.Start);
 
-        private string Slice(int start, int length) => _snapshot.GetText(start, length);
+        /// <summary>Projection decoding also visits source and shares the same interactive ceiling.</summary>
+        private string Slice(int start, int length)
+        {
+            _work?.Visit(length);
+            return _snapshot.GetText(start, length);
+        }
 
         internal DocumentAnalysis Parse()
         {
@@ -122,14 +295,57 @@ internal sealed class JsonIncrementalSession : IFormatSession
                     // inspecting its nested structure or duplicate bindings.
                     _uncertain = true;
                 }
+                if (!_syntaxError && !_uncertain && !_indexAbandoned && _arrayStart >= 0)
+                    Certificate = new JsonArrayCertificate(_snapshot.Version, _snapshot.Length, _arrayStart, _arrayEnd, _pages.ToArray());
                 var root = new SemanticNode("document", new TextSpan(0, Length), children: value is null ? [] : [value]);
                 return new DocumentAnalysis(_snapshot.Version,
                     _uncertain ? _visible : new TextSpan(0, Length),
                     _uncertain ? AnalysisCompleteness.Provisional : AnalysisCompleteness.Complete,
                     root, _diagnostics, _tokens, _uncertain ? null : _diagnosticCount);
             }
+            catch (SourceBudgetException)
+            {
+                return Provisional(_snapshot, _visible,
+                    new SemanticNode("document", new TextSpan(0, _snapshot.Length)), _diagnostics, _tokens);
+            }
             finally { _chunks.Dispose(); }
         }
+
+        /// <summary>Parses the exact array-owner grammar with the same value/depth/key routines.</summary>
+        internal PageResult ParsePage(bool final)
+        {
+            var children = new List<SemanticNode>();
+            int elements = 0;
+            _depth = 1; // The omitted root array still contributes one level.
+            bool boundary = false;
+            try
+            {
+                while (_position < Length)
+                {
+                    int before = _position;
+                    var value = Value();
+                    if (value is not null) children.Add(value);
+                    elements++;
+                    Space();
+                    if (_position == Length) { boundary = final; break; }
+                    if (At(_position) != ',' || _position == before) break;
+                    _position++;
+                    Space();
+                    if (_position == Length) { boundary = !final; break; }
+                }
+                return new PageResult(boundary && !_syntaxError && !_uncertain && elements > 0,
+                    elements, _diagnosticCount, children, _diagnostics, _tokens);
+            }
+            catch (SourceBudgetException)
+            {
+                return new PageResult(false, elements, _diagnosticCount, children, _diagnostics, _tokens);
+            }
+            finally { _chunks.Dispose(); }
+        }
+
+        /// <summary>Call-local output only; retained page metadata never stores this tree or key data.</summary>
+        internal sealed record PageResult(bool Valid, int ElementCount, int DiagnosticCount,
+            IReadOnlyList<SemanticNode> Children, IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<SemanticToken> Tokens);
 
         private SemanticNode? Value()
         {
@@ -165,15 +381,19 @@ internal sealed class JsonIncrementalSession : IFormatSession
         {
             int start = _position++;
             _depth++;
+            bool harvest = kind == "array" && _depth == 1 && _snapshot.Length > FullTreeLimit;
+            if (harvest) _arrayStart = start;
             var children = new List<SemanticNode>();
-            var names = kind == "object" ? new KeyTable(_snapshot, _ct) : null;
+            var names = kind == "object" ? new KeyTable(_snapshot, _ct, _work) : null;
             Space();
+            int pageStart = _position, pageDiagnostics = _diagnosticCount, pageElements = 0;
             while (_position < Length && At(_position) != close)
             {
                 _ct.ThrowIfCancellationRequested();
                 int before = _position;
                 var child = kind == "object" ? Property(names!) : Value();
                 if (child is not null) children.Add(child);
+                if (harvest) pageElements++;
                 Space();
                 if (_position < Length && At(_position) == ',')
                 {
@@ -188,13 +408,32 @@ internal sealed class JsonIncrementalSession : IFormatSession
                     Recover(close);
                 }
                 if (_position == before) _position++;
+                if (harvest && !_indexAbandoned && _position - pageStart >= JsonArrayCertificate.TargetPageLength &&
+                    _position < Length && At(_position) != close)
+                {
+                    AddPage(pageStart, _position, pageElements, _diagnosticCount - pageDiagnostics);
+                    pageStart = _position;
+                    pageDiagnostics = _diagnosticCount;
+                    pageElements = 0;
+                }
             }
+            if (harvest && pageElements > 0 && !_indexAbandoned)
+                AddPage(pageStart, _position, pageElements, _diagnosticCount - pageDiagnostics);
             if (_position < Length && At(_position) == close) _position++;
             else Error("JSON_UNCLOSED", $"Expected '{close}'.", _position, 0);
             _depth--;
+            if (harvest) _arrayEnd = _position;
             return Hits(start, _position - start)
                 ? new SemanticNode(kind, new TextSpan(start, _position - start), children: children)
                 : null;
+        }
+
+        /// <summary>Source-sized owner admission; index refusal never weakens authoritative Full.</summary>
+        private void AddPage(int start, int end, int elements, int diagnosticCount)
+        {
+            if (_pages.Count == JsonArrayCertificate.MaxPages)
+            { _pages.Clear(); _indexAbandoned = true; return; }
+            _pages.Add(new JsonArrayPage(start, end, elements, diagnosticCount, false));
         }
 
         private SemanticNode? Property(KeyTable names)
@@ -255,7 +494,7 @@ internal sealed class JsonIncrementalSession : IFormatSession
         /// <summary>Produces a bounded label for a visible duplicate without retaining a giant key.</summary>
         private string ReadKeyLabel(int start, int length)
         {
-            var reader = new KeyReader(_snapshot, new TextSpan(start, length));
+            var reader = new KeyReader(_snapshot, new TextSpan(start, length), _work, _ct);
             var chars = new char[Math.Min(256, length)];
             int count = 0;
             while (count < chars.Length && reader.Next(out var ch)) chars[count++] = ch;
@@ -268,9 +507,16 @@ internal sealed class JsonIncrementalSession : IFormatSession
             bool closed = false, escaped = false, invalid = false;
             bool pendingHigh = false, invalidSurrogate = false;
             ulong keyHash = 14695981039346656037UL ^ _hashSeed;
+            int nextCancellation = _position;
             while (_position < Length)
             {
-                if ((_position & 4095) == 0) _ct.ThrowIfCancellationRequested();
+                // Escapes advance by several units and can skip every exact modulo
+                // boundary; threshold checks remain periodic for arbitrary strings.
+                if (_position >= nextCancellation)
+                {
+                    _ct.ThrowIfCancellationRequested();
+                    nextCancellation = (int)Math.Min((long)_position + 4096, int.MaxValue);
+                }
                 char ch = At(_position++);
                 if (ch == '"') { closed = true; break; }
                 if (ch < 0x20) { Error("JSON_CONTROL", "Unescaped control character in string.", _position - 1, 1); invalid = true; }
@@ -371,23 +617,31 @@ internal sealed class JsonIncrementalSession : IFormatSession
         {
             private readonly TextSnapshot _snapshot;
             private readonly int _end;
+            private readonly SourceWork? _work;
+            private readonly CancellationToken _ct;
             private int _position;
             private string _window = string.Empty;
             private int _windowStart = -1;
 
-            internal KeyReader(TextSnapshot snapshot, TextSpan span)
+            internal KeyReader(TextSnapshot snapshot, TextSpan span, SourceWork? work = null, CancellationToken ct = default)
             {
                 _snapshot = snapshot;
+                _work = work;
+                _ct = ct;
                 _position = span.Start + 1;
                 _end = span.End - 1;
             }
 
             private char Read()
             {
+                _work?.Visit();
                 if (_position < _windowStart || _position >= _windowStart + _window.Length)
                 {
+                    _ct.ThrowIfCancellationRequested();
                     _windowStart = _position;
-                    _window = _snapshot.GetText(_position, Math.Min(4096, _end - _position));
+                    int count = Math.Min(4096, _end - _position);
+                    _work?.Visit(count); // Charge bounded lookahead even when comparison stops early.
+                    _window = _snapshot.GetText(_position, count);
                 }
                 return _window[_position++ - _windowStart];
             }
@@ -426,6 +680,7 @@ internal sealed class JsonIncrementalSession : IFormatSession
             private const int SmallPageTotal = PageSize - 4;
             private readonly TextSnapshot _snapshot;
             private readonly CancellationToken _ct;
+            private readonly SourceWork? _work;
             private readonly List<KeyEntry[]> _pages = [];
             private int[] _buckets = new int[8];
             private int _capacity;
@@ -434,10 +689,14 @@ internal sealed class JsonIncrementalSession : IFormatSession
             private ulong _hotHash;
             private string? _hotKey;
 
-            internal KeyTable(TextSnapshot snapshot, CancellationToken ct)
+            internal KeyTable(TextSnapshot snapshot, CancellationToken ct) : this(snapshot, ct, null) { }
+
+            /// <summary>Shares the turn's visit budget across exact duplicate comparisons.</summary>
+            internal KeyTable(TextSnapshot snapshot, CancellationToken ct, SourceWork? work)
             {
                 _snapshot = snapshot;
                 _ct = ct;
+                _work = work;
             }
 
             /// <summary>Collision-verification entry point when no borrowed raw span exists.</summary>
@@ -449,8 +708,11 @@ internal sealed class JsonIncrementalSession : IFormatSession
                 if (_abandoned) return null;
                 // Repeated short raw keys are common in tabular JSON. A single exact
                 // decoded hot key avoids two ranged source reads per duplicate.
-                if (hasRaw && _hotKey is not null && hash == _hotHash && raw.SequenceEqual(_hotKey))
-                    return false;
+                if (hasRaw && _hotKey is not null && hash == _hotHash)
+                {
+                    _work?.Visit(Math.Min(raw.Length, _hotKey.Length));
+                    if (raw.SequenceEqual(_hotKey)) return false;
+                }
                 if (_count >= MaxEntries)
                 { _abandoned = true; return null; }
                 if (_count >= _buckets.Length * 2 && !Grow())
@@ -515,8 +777,8 @@ internal sealed class JsonIncrementalSession : IFormatSession
 
             private bool EqualsDecoded(TextSpan left, TextSpan right)
             {
-                var a = new KeyReader(_snapshot, left);
-                var b = new KeyReader(_snapshot, right);
+                var a = new KeyReader(_snapshot, left, _work, _ct);
+                var b = new KeyReader(_snapshot, right, _work, _ct);
                 int checkedChars = 0;
                 while (true)
                 {
@@ -614,6 +876,7 @@ internal sealed class JsonIncrementalSession : IFormatSession
 
         private void Error(string code, string message, int start, int length)
         {
+            _syntaxError = true;
             _diagnosticCount++;
             if (Hits(start, length))
                 _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error, code, message, new TextSpan(start, length)));
