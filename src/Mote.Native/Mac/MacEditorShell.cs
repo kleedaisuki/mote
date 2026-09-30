@@ -1068,8 +1068,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         }
     }
 
-    /// <summary>Controller-visible canvas status for AX fault-recovery probes.</summary>
-    internal string ProbeCanvasStatus => _statusText;
+    /// <summary>Reads the actual native status field for in-process AX fault-recovery probes.</summary>
+    internal string ProbeCanvasStatus => _status == 0 ? EffectiveStatus :
+        ObjC.ManagedString(ObjC.Send(_status, ObjC.Sel("stringValue")));
 
     /// <summary>Whether the optional AX provider is currently attached.</summary>
     internal bool ProbeCanvasAccessibilityAttached => _accessibility is not null;
@@ -1584,12 +1585,14 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         RenderStatus();
     }
 
+    /// <summary>The same composed status observed by native chrome and AX diagnostics.</summary>
+    private string EffectiveStatus => _statusNotice is null ? _statusText :
+        $"{_statusText}  ·  {_statusNotice}";
+
     private void RenderStatus()
     {
         if (_status == 0) return;
-        var text = _statusNotice is null ? _statusText :
-            $"{_statusText}  ·  {_statusNotice}";
-        ObjC.Send(_status, ObjC.Sel("setStringValue:"), ObjC.String(text));
+        ObjC.Send(_status, ObjC.Sel("setStringValue:"), ObjC.String(EffectiveStatus));
     }
 
     private void ReplayDeferredAnalysis()

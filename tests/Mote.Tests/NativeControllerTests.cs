@@ -1310,7 +1310,7 @@ public sealed partial class NativeControllerTests
 
         Assert.Null(shell.CanvasAccessibilityDocument);
         Assert.Contains("Accessibility provider unavailable", shell.CanvasStatus);
-        Assert.Contains("continuous canvas (experimental)", shell.CanvasStatus);
+        Assert.Contains("Accessibility provider unavailable", shell.StatusNotice);
         Assert.DoesNotContain(path, shell.CanvasStatus, StringComparison.Ordinal);
         Assert.DoesNotContain("private source marker", shell.CanvasStatus, StringComparison.Ordinal);
         Assert.Empty(shell.Errors);
@@ -1485,8 +1485,11 @@ public sealed partial class NativeControllerTests
         public bool RejectAccessibilityAttach { get; set; }
         /// <summary>An explicit fake OS glyph-geometry oracle; null means visibility is unproven.</summary>
         public Func<CanvasFrame, int, CanvasCaretGeometry?>? CanvasGeometryProbe { get; set; }
-        /// <summary>The latest canvas chrome status, including recoverable AX failure.</summary>
-        public string? CanvasStatus { get; private set; }
+        /// <summary>Effective native status: analysis replaces chrome, but persistent notices survive.</summary>
+        public string? CanvasStatus => StatusNotice is null ? _statusText :
+            $"{_statusText}  ·  {StatusNotice}";
+        /// <summary>Ordinary status, replaced by chrome and semantic analysis just like AppKit.</summary>
+        private string? _statusText;
         /// <summary>A recoverable reason for withholding an unsafe input binding.</summary>
         public string? CanvasInputError { get; private set; }
         /// <summary>All presentations, for stale-result assertions.</summary>
@@ -1544,6 +1547,7 @@ public sealed partial class NativeControllerTests
         public void SetDocument(NativeDocumentView view)
         {
             Document = view;
+            _statusText = view.Status;
             DocumentSetCount++;
         }
         /// <inheritdoc />
@@ -1563,7 +1567,7 @@ public sealed partial class NativeControllerTests
             CanvasInputError = reason;
         }
         /// <inheritdoc />
-        public void SetCanvasChrome(string title, string status, bool isModified) => CanvasStatus = status;
+        public void SetCanvasChrome(string title, string status, bool isModified) => _statusText = status;
         /// <inheritdoc />
         public void SetCanvasSemantics(NativeCanvasSemantics semantics) => CanvasSemantics = semantics;
         /// <inheritdoc />
@@ -1591,6 +1595,8 @@ public sealed partial class NativeControllerTests
         public void SetAnalysis(NativeAnalysisView view)
         {
             Analysis = view;
+            _statusText = string.IsNullOrEmpty(view.DiagnosticsSummary) ? view.Status :
+                $"{view.Status}  ·  {view.DiagnosticsSummary}";
             Analyses.Add(view);
             DuringAnalysisApply?.Invoke(view);
         }

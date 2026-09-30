@@ -119,10 +119,11 @@ public sealed partial class NativeControllerTests
     private static void AssertProductAccessibilityNotice(
         FakeShell shell, string privatePath, string privateText)
     {
-        Assert.StartsWith("AX unavailable: save, restart --legacy-page",
+        Assert.Contains("AX unavailable: save, restart --legacy-page",
             shell.CanvasStatus);
         Assert.Contains("--legacy-page", shell.CanvasStatus);
-        Assert.Contains("continuous canvas", shell.CanvasStatus);
+        Assert.Contains("AX unavailable: save, restart --legacy-page", shell.StatusNotice);
+        Assert.Single(shell.CanvasStatus!.Split("AX unavailable: save, restart --legacy-page").Skip(1));
         Assert.DoesNotContain("(experimental)", shell.CanvasStatus);
         Assert.DoesNotContain("Accessibility provider unavailable", shell.CanvasStatus);
         Assert.DoesNotContain(privatePath, shell.CanvasStatus, StringComparison.Ordinal);

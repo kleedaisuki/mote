@@ -218,7 +218,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         catch (Exception) { ReportThemeFailure(); }
         _shown = true;
         ApplyPendingTheme();
-        if (_themeUnavailable || _settingsNotice is not null) UpdateThemeNotice();
+        if (_themeUnavailable || _settingsNotice is not null) UpdateStatusNotice();
         ShowDocument();
         MoteTelemetry.RecordElapsed(TelemetryOperation.StartupToEditable,
             _startupMark, Dimensions(_document.Snapshot));
@@ -231,6 +231,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 // AX is not allowed to make the opt-in editor itself unusable.
                 // Keep the failure visible, but do not disclose paths or text.
                 _accessibilityUnavailable = true;
+                UpdateStatusNotice();
                 ShowDocument();
             }
         }
@@ -279,7 +280,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         {
             ApplyPendingSettings();
             ApplyPendingTheme();
-            UpdateThemeNotice();
+            UpdateStatusNotice();
         }
         catch (Exception) { ReportThemeFailure(); }
     }
@@ -302,7 +303,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             if (_presentedPreview is { } presented) PresentAnalysis(presented);
             _theme = next;
             _themeUnavailable = false;
-            UpdateThemeNotice();
+            UpdateStatusNotice();
         }
         catch (NativeThemeDeferredException)
         {
@@ -351,19 +352,22 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _themeUnavailable = true;
         try
         {
-            TryPost(UpdateThemeNotice);
+            TryPost(UpdateStatusNotice);
         }
         catch (Exception) { /* A failed status refresh must not escape an OS callback. */ }
     }
 
-    /// <summary>Updates only native status chrome after preedit has ended.</summary>
-    private void UpdateThemeNotice()
+    /// <summary>Composes session health and settings notices once, after preedit has ended.</summary>
+    private void UpdateStatusNotice()
     {
         if (_disposed || !_shown || _shell.IsTextComposing) return;
         try
         {
             var notice = string.Join(" ", new[]
             {
+                _accessibilityUnavailable ? (_productProfile == EditorPresentationProfile.Continuous
+                    ? "AX unavailable: save, restart --legacy-page"
+                    : "Accessibility provider unavailable") : null,
                 _themeUnavailable ? "Theme update unavailable; editing remains available." : null,
                 _reloadFailureNotice, _previewFailureNotice, _settingsNotice
             }.Where(item => !string.IsNullOrEmpty(item)));
@@ -389,7 +393,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             _reloadFailureNotice = config is null
                 ? "Settings reload failed; previous settings retained."
                 : "Settings reload rejected; previous settings retained. " + SettingsNotice(config, []);
-            UpdateThemeNotice();
+            UpdateStatusNotice();
             return;
         }
         _pendingSettings = Program.ValidateThemeId(config, out _);
@@ -438,7 +442,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 { _previewFailureNotice += " Native preview rollback unavailable."; }
             }
         }
-        UpdateThemeNotice();
+        UpdateStatusNotice();
     }
 
     /// <summary>OS transitions always recompose requested data; invalid contrast uses the newly selected base.</summary>
@@ -452,7 +456,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         if (_settingsRestartRequired) _settingsNotice += " Writer/path changes apply on next launch.";
         _pendingTheme = ThemeEffectiveValues.Capture(resolved) == ThemeEffectiveValues.Capture(_theme)
             ? null : resolved;
-        UpdateThemeNotice();
+        UpdateStatusNotice();
     }
 
     /// <summary>Bounded persistent, nonmodal settings details; no content or palette text enters telemetry.</summary>
@@ -1039,7 +1043,12 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     {
         if (_disposed) return;
         _accessibilityUnavailable = true;
-        Post(() => { if (!_disposed) ShowDocument(); });
+        Post(() =>
+        {
+            if (_disposed) return;
+            UpdateStatusNotice();
+            ShowDocument();
+        });
     }
 
     /// <summary>
@@ -1360,10 +1369,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         var health = MoteTelemetry.Health;
         var traceWarning = health.SinkFaulted || health.DroppedRecords > 0
             ? " · Trace degraded" : "";
-        var accessibilityWarning = _accessibilityUnavailable &&
-            _productProfile != EditorPresentationProfile.Continuous
-                ? " · Accessibility provider unavailable" : "";
-        var statusSuffix = warnings + traceWarning + accessibilityWarning +
+        var statusSuffix = warnings + traceWarning +
             (_operationStatus.Length == 0 ? "" : " · " + _operationStatus);
         if (_canvasShell is not null)
         {
@@ -1422,8 +1428,6 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         var presentation = _productProfile == EditorPresentationProfile.Continuous
             ? "continuous canvas" : "continuous canvas (experimental)";
         var status = $"Line {line:N0} / {snapshot.LineCount:N0} · {presentation}" + statusSuffix;
-        if (_accessibilityUnavailable && _productProfile == EditorPresentationProfile.Continuous)
-            status = "AX unavailable: save, restart --legacy-page · " + status;
         var needsBinding = _canvasBoundGeneration != _canvasGeneration ||
             _canvasBoundVersion != snapshot.Version ||
             (_navigation.Active != _canvasBoundActive &&
