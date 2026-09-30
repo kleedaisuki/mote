@@ -147,3 +147,100 @@ Exact helper attribution was verified using Python `subprocess.check_output` on
 JSON parsing of both reports. Raw log checkout/publish/pins, wrapper exit and
 cleanup handling were cross-checked against the tested commit. No native rerun,
 production edit, helper edit, staging, commit or push was performed for this audit.
+
+## Second hosted target: bounded metadata discrimination (2026-10-01)
+
+[Run 36787947202](https://github.com/kleedaisuki/mote/actions/runs/36787947202),
+checkout `5977250330fd47a633b95692b5a3ed8e1c988495`, retains the original Row 1
+predicate and adds only bounded content-free first-row/first-column attribute
+observations. This is a new native experiment, not a rerun-until-pass claim.
+
+Evidence:
+
+- `.cache/ci-36787947202-mac-grid-ax/arm-artifact/mac-grid-ax-external.json`
+- `.cache/ci-36787947202-mac-grid-ax/x64-artifact/mac-grid-ax-external.json`
+- `.cache/ci-36787947202-mac-grid-ax/osx-arm64.log`
+- `.cache/ci-36787947202-mac-grid-ax/osx-x64.log`
+
+The auditor downloaded the two complete job logs with `gh run view 36787947202
+--job 110133758823 --log` (ARM) and `--job 110133758767 --log` (x64), writing only
+inside this evidence directory. Logs verify exact checkout, fresh matching-RID
+AOT publish, strict inventory and helper pins. Python raw-byte `git show 5977250:...`
+hashing verifies the Swift helper
+`A65E460046E0AA72B88F5E4289CAA0915A4EE15E1C24984B9C40DC6FD1227B8C`
+and unchanged driver
+`0A867687F62795790989B20A347A70EBEB93888923A666157DB45F5F5F816CEA`
+against both reports and log pins. The tested helper's classification code compares
+exact expected role/ordinal and parses bounded custom wrapper identifier shape;
+it does not record raw strings or reinterpret a local index as an absolute label.
+As in the first audit, binary attribution uses the hosted chain and hashes;
+no executable was downloaded/rehashed or run on the Windows audit host.
+
+| Fact | osx-arm64 | osx-x64 |
+| --- | --- | --- |
+| Report SHA-256 | `5F740742E4075BEE5986269477718B2C735D0A465AD9FDC574F64743597224DE` | `9C84412B5971C9316AAE487544AD2F52C60B03092DB0589DED92BEF615D8469E` |
+| AOT SHA-256 | `21A6D32444F52F3FEC9C7E78AB4F3EA1DE3578166543291A89EB35D6DCA3CF7D` | `84D4A00CB483F72011D2FBF701C3B0A847E85C26B9E4032CCD4940A0B2C69A38` |
+| Binary bytes | 16370776 | 16727360 |
+| Editor / client PID | 6990 / 6991 | 9072 / 9073 |
+| Swift typecheck / trust | true / true | true / true |
+| Passed checks / first failure | same 8 / first-record-is-data | same 8 / first-record-is-data |
+| Admission count | 2282 | 1904 |
+| Client exit / last phase | 1 / origin-window | 1 / origin-window |
+| Probe close / normal exit / forced cleanup | false / null / true | false / null / true |
+| Fixture unchanged / cleanup error | true / empty | true / empty |
+
+Both fixtures retain the same expected hash, 1100 records, maximum 24 columns and
+263760 UTF-16 units as the first run. OS/architectures remain macOS 26.6.2 Arm64
+and macOS 15.7.9 X64. Raw diagnostic exits remain 1 despite non-gating job success.
+
+### New external observations
+
+Python JSON comparison finds the complete **16-observation arrays identical**
+across RIDs, not merely the same final check name. Each node was queried for eight
+fixed attributes. The following is observed, not inferred:
+
+| Attribute | First AXRows node | First AXColumns node |
+| --- | --- | --- |
+| AXRole | success; exact AXRow, UTF-16 length 5 | success; exact AXColumn, length 8 |
+| AXRoleDescription | success; unclassified string, length 9 | success; exact generic axis-role string, length 6 |
+| AXDescription | absent; error -25205 | success; exact Column 1, length 8 |
+| AXTitle | absent; error -25205 | absent; error -25212 |
+| AXIndex | success; bounded numeric index 0 | success; bounded numeric index 0 |
+| AXIdentifier | absent; error -25212 | success; expected-window-axis-identifier, length 29 |
+| AXValue | absent; error -25205 | absent; error -25212 |
+| AXHelp | absent; error -25205 | success; unclassified string, length 52 |
+
+The tested source's custom row/column callbacks share the label, identifier and
+help machinery. In particular, the row callback should provide `Row 1`, a custom
+`mote.csv.window...row.0.-1` identity and help; the custom column callback should
+provide `Column 1` and corresponding column identity. The column exposes the
+expected custom-wrapper shape externally, whereas the row exposes only role and
+local index with none of those custom semantic attributes.
+
+**Strongly supported mechanism inference:** native `NSTableView`/AppKit AX row
+transport is substituting a native row (or otherwise bypassing the custom row
+wrapper), while custom column wrappers survive. This is substantially better
+supported than the first-run generic label-precedence hypothesis: here neither
+row Description nor Title contains any string, so a nonnil generic Description
+cannot be shadowing a correct Title in this run. The local index 0 also gives no
+evidence for a Row 2 label or CSV header consumption.
+
+**Not direct proof:** the external report does not expose internal object/class
+identity, trace callback entry or the exact AppKit bridge path. Attribute omission
+could still arise from a row-specific bridge policy rather than literal object
+replacement. Treat native-row substitution as a high-confidence diagnostic
+hypothesis, not a demonstrated private-framework implementation detail. The
+experiment does establish a product-visible semantic contract failure: the first
+externally enumerated row lacks the required absolute Row 1 identity, irrespective
+of whether arithmetic inside the custom callback is correct.
+
+The next discriminating investigation is row transport/custom identity and a
+bounded native adaptation that preserves the existing Table, source/input island
+and local-index semantics. Do not accept AXIndex=0 as a substitute for Row 1, relax
+the helper predicate, invent raw row-label content from length 9, or claim the
+working custom column establishes all row/cell behavior.
+
+No later selection, logical navigation, retained-element retirement or normal-close
+checks executed. VoiceOver, IME, geometry, event delivery and performance remain
+unverified. This second audit changed only this document; no production/helper
+editing, staging, commit or push was performed.

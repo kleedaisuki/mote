@@ -1,8 +1,8 @@
 # macOS CSV Grid external AX acceptance harness
 
 Date: 2026-10-01. Status: **first native Swift/cross-process execution obtained on
-both Mac RIDs; partial external evidence with the same origin-row falsifier,
-not external acceptance**. This does not change production
+both Mac RIDs; classified external row-metadata bridge failure, not external
+acceptance**. This does not change production
 accessibility defaults or certify VoiceOver/IME/release readiness.
 
 ## Purpose and ownership
@@ -149,7 +149,7 @@ a stale object or an actual shifted ordinal. Do not relax the ordinal oracle or
 change production based on this hypothesis alone. The independent first-target audit
 is maintained in `mac-grid-external-ax-first-target.md` by the parent validator.
 
-The next recheck changes no assertion or product source. Immediately before the
+The discriminator recheck changed no assertion or product source. Immediately before the
 unchanged first-row predicate, the helper observes only **two nodes** (first AXRows
 and first AXColumns) and eight fixed metadata attributes per node: `AXRole`,
 `AXRoleDescription`, `AXDescription`, `AXTitle`, `AXIndex`, `AXIdentifier`, `AXValue`,
@@ -164,7 +164,67 @@ Interpretation after native recheck: an expected ordinal in AXTitle with a gener
 empty AXDescription establishes a client extraction issue; a parsed different ordinal
 requires investigating actual window origin; a native/default role or missing custom
 identifier motivates a node-merging investigation. A missing/timeout value is not
-proof of any of these. The discriminator itself has not yet executed on macOS.
+proof of any of these. The second hosted execution below supplied this discriminator on both targets.
+
+## Classified second hosted result: row bridge failure, not a weakened oracle
+
+[CI run 36787947202](https://github.com/kleedaisuki/mote/actions/runs/36787947202)
+built commit `5977250330fd47a633b95692b5a3ed8e1c988495`. The unchanged fixture and
+original `first-record-is-data` predicate again failed on **both Mac RIDs**. Both
+Swift clients typechecked and ran with AX trust; both retained the same preceding
+eight successful source/Table/count assertions. The reviewed classifier helper was
+`A65E460046E0AA72B88F5E4289CAA0915A4EE15E1C24984B9C40DC6FD1227B8C`; driver remained
+`0A867687F62795790989B20A347A70EBEB93888923A666157DB45F5F5F816CEA`.
+
+| RID / actual hosted OS | Strict published binary size | Binary SHA-256 |
+| --- | ---: | --- |
+| osx-x64 / macOS 15.7.9 | 16,727,360 bytes | `84D4A00CB483F72011D2FBF701C3B0A847E85C26B9E4032CCD4940A0B2C69A38` |
+| osx-arm64 / macOS 26.6.2 | 16,370,776 bytes | `21A6D32444F52F3FEC9C7E78AB4F3EA1DE3578166543291A89EB35D6DCA3CF7D` |
+
+The fixed metadata observations are identical on both architectures:
+
+| External attribute | `AXRows[0]` | `AXColumns[0]` |
+| --- | --- | --- |
+| AXRole | Success; expected AXRow classification | Success; expected AXColumn classification |
+| AXIndex | Success; numeric local index 0 | Success; numeric local index 0 |
+| AXDescription | `-25205` / unsupported; absent | Success; exact expected Column 1, ordinal 1 |
+| AXTitle | `-25205` / unsupported; absent | `-25212` / no value; absent |
+| AXIdentifier | `-25212` / no value; absent | Success; expected custom window-axis identifier topology |
+| AXHelp | `-25205` / unsupported; absent | Success; bounded string length 52, no raw help captured |
+| AXValue | `-25205` / unsupported; absent | `-25212` / no value; absent |
+
+This **rules out repairing the failure by merely reversing the helper's
+Description/Title precedence**: neither candidate row label exists externally.
+The column provides a positive control for custom metadata transport and the exact
+same editor PID/client/framework route. The row exposes the axis role/local index
+but none of the custom ordinal/identifier/help contract. These are terminal
+unsupported/no-value responses, not indeterminate messaging timeouts or denied AX
+trust. The production provider therefore fails its external absolute-row metadata
+contract, regardless of the UI's visible first record. It is not an assertion that
+CSV parsing skipped a header or that the true window origin shifted.
+
+**Mechanism inference, not directly observed object identity:** AppKit's external
+NSTableView bridge appears to expose a native row representation rather than the
+custom metadata row returned by the in-process `accessibilityRows` selector. The
+AX report does not reveal the Objective-C class/pointer or prove which private
+framework dispatch path substituted it. The row/column asymmetry justifies a
+narrow production provider investigation; it does not yet justify an unbounded
+proxy rewrite or bypassing the row oracle. Root and the Grid implementation owner
+coordinate any legacy/modern bridge or provider replacement change. Harness
+assertions and the opted-in/default boundary remain unchanged.
+
+Raw reports (downloaded unchanged into repository cache):
+
+- `.cache/ci-36787947202-mac-grid-ax/x64-artifact/mac-grid-ax-external.json`, report
+  SHA-256 `9C84412B5971C9316AAE487544AD2F52C60B03092DB0589DED92BEF615D8469E`.
+- `.cache/ci-36787947202-mac-grid-ax/arm-artifact/mac-grid-ax-external.json`, report
+  SHA-256 `5F740742E4075BEE5986269477718B2C735D0A465AD9FDC574F64743597224DE`.
+
+Both report Swift exit 1, phase `origin-window`, unchanged fixture SHA, forced editor
+cleanup, and no normal-close result. x64/ARM64 editor/client PIDs were 9072/9073
+and 6990/6991 respectively. Selection, shifted-window navigation, retired-node
+lifetime, normal close, VoiceOver, IME and geometry remain unexecuted in these
+runs. The green overall/non-gating job conclusion is not external acceptance.
 
 ## Primary references
 
