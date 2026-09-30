@@ -266,9 +266,36 @@ public sealed class EngineTests
         using var document = await Document.OpenAsync(path);
         document.Apply(new TextChange(5, 0, " local"));
         await System.IO.File.WriteAllTextAsync(path, "changed externally");
-        await Assert.ThrowsAsync<IOException>(() => document.SaveAsync());
+        var exception = await Assert.ThrowsAsync<IOException>(() => document.SaveAsync());
+        Assert.Equal("TargetCheck", exception.Data["Mote.Engine.SavePhase"]);
         Assert.Equal("changed externally", await System.IO.File.ReadAllTextAsync(path));
         Assert.True(document.IsModified);
+    }
+
+    /// <summary>A held Windows target distinguishes replacement failure from verification without changing the original bytes.</summary>
+    [Fact]
+    public async Task Held_target_reports_replace_phase_without_losing_original()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var temp = new RepoTemp();
+        var path = temp.File("held-target.txt");
+        const string original = "original content";
+        await File.WriteAllTextAsync(path, original);
+        using var document = await Document.OpenAsync(path);
+        document.Apply(new TextChange(original.Length, 0, " changed"));
+
+        // Reads remain allowed for the final fingerprint, but replacement needs delete sharing.
+        using (var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            var exception = await Assert.ThrowsAsync<IOException>(() => document.SaveAsync());
+            Assert.Equal(unchecked((int)0x80070020), exception.HResult);
+            Assert.Equal("Replace", exception.Data["Mote.Engine.SavePhase"]);
+            Assert.Equal(original, await File.ReadAllTextAsync(path));
+            Assert.True(document.IsModified);
+        }
+
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, ".held-target.txt.*.tmp"));
     }
 
     /// <summary>Save As cannot silently overwrite a different existing file.</summary>
@@ -279,7 +306,8 @@ public sealed class EngineTests
         var target = temp.File("target.txt");
         await File.WriteAllTextAsync(target, "existing user data");
         using var document = new Document("new document");
-        await Assert.ThrowsAsync<IOException>(() => document.SaveAsync(target));
+        var exception = await Assert.ThrowsAsync<IOException>(() => document.SaveAsync(target));
+        Assert.Equal("TargetCheck", exception.Data["Mote.Engine.SavePhase"]);
         Assert.Equal("existing user data", await File.ReadAllTextAsync(target));
         Assert.Null(document.FilePath);
         Assert.True(document.IsModified);

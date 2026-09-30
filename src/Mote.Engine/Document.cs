@@ -17,6 +17,9 @@ namespace Mote.Engine;
 /// </remarks>
 public sealed class Document : IDisposable
 {
+    private const string SavePhaseDataKey = "Mote.Engine.SavePhase";
+    private enum SavePhase { TargetCheck, TempWriteAndHash, FinalTargetCheck, Move, Replace, Cleanup, SavedStamp }
+
     private const int DefaultHistoryBudget = 32 * 1024 * 1024;
     private const int DefaultHistoryCount = 512;
     private readonly object _gate = new();
@@ -315,30 +318,63 @@ public sealed class Document : IDisposable
             expectedStamp = null;
             expectedHash = null;
         }
-        if (expectedStamp is not null)
+        try
         {
-            if (FileStamp.ReadOrNull(path) != expectedStamp)
-                throw new IOException("The target changed outside mote; refusing to overwrite it.");
+            if (expectedStamp is not null)
+            {
+                if (FileStamp.ReadOrNull(path) != expectedStamp)
+                    throw new IOException("The target changed outside mote; refusing to overwrite it.");
+            }
+            else if (File.Exists(path))
+            {
+                throw new IOException("The Save As target already exists; explicit overwrite approval is required.");
+            }
         }
-        else if (File.Exists(path))
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            throw new IOException("The Save As target already exists; explicit overwrite approval is required.");
+            AnnotateSaveFailure(exception, SavePhase.TargetCheck);
+            throw;
         }
         var directory = Path.GetDirectoryName(path)!;
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         byte[] savedHash;
         try
         {
-            savedHash = await WriteTempAsync(snapshot, tempPath, encoding, hasBom, cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                savedHash = await WriteTempAsync(snapshot, tempPath, encoding, hasBom, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                AnnotateSaveFailure(exception, SavePhase.TempWriteAndHash);
+                throw;
+            }
             await CommitTempAsync(tempPath, path, expectedStamp, expectedHash, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
         {
-            if (File.Exists(tempPath)) File.Delete(tempPath);
+            try
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                AnnotateSaveFailure(exception, SavePhase.Cleanup);
+                throw;
+            }
         }
-        var savedStamp = FileStamp.Read(path);
+        FileStamp savedStamp;
+        try
+        {
+            savedStamp = FileStamp.Read(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            AnnotateSaveFailure(exception, SavePhase.SavedStamp);
+            throw;
+        }
         lock (_gate)
         {
             if (_disposed) return;
@@ -376,14 +412,42 @@ public sealed class Document : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         if (expectedStamp is null)
         {
-            File.Move(tempPath, path);
+            try
+            {
+                File.Move(tempPath, path);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                AnnotateSaveFailure(exception, SavePhase.Move);
+                throw;
+            }
             return;
         }
         if (expectedHash is null) throw new InvalidOperationException("An opened document lacks a content fingerprint.");
-        await VerifyOriginalContentAsync(path, expectedStamp.Value, expectedHash, cancellationToken)
-            .ConfigureAwait(false);
-        File.Replace(tempPath, path, null, ignoreMetadataErrors: false);
+        try
+        {
+            await VerifyOriginalContentAsync(path, expectedStamp.Value, expectedHash, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            AnnotateSaveFailure(exception, SavePhase.FinalTargetCheck);
+            throw;
+        }
+        try
+        {
+            File.Replace(tempPath, path, null, ignoreMetadataErrors: false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            AnnotateSaveFailure(exception, SavePhase.Replace);
+            throw;
+        }
     }
+
+    /// <summary>Attaches a bounded, content-free stage to the original filesystem exception.</summary>
+    private static void AnnotateSaveFailure(Exception exception, SavePhase phase) =>
+        exception.Data[SavePhaseDataKey] = phase.ToString();
 
     /// <summary>Ends the document lifetime. Snapshots already handed out remain readable.</summary>
     public void Dispose()

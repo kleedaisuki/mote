@@ -23,7 +23,8 @@ public sealed class ReviewRegressionTests
         await File.WriteAllTextAsync(path, "BBBB", new UTF8Encoding(false));
         File.SetLastWriteTimeUtc(path, originalTime);
 
-        await Assert.ThrowsAsync<IOException>(() => document.SaveAsync());
+        var exception = await Assert.ThrowsAsync<IOException>(() => document.SaveAsync());
+        Assert.Equal("FinalTargetCheck", exception.Data["Mote.Engine.SavePhase"]);
         Assert.Equal("BBBB", await File.ReadAllTextAsync(path));
         Assert.True(document.IsModified);
     }
