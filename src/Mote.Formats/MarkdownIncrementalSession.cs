@@ -266,6 +266,9 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
         badLine = null;
         if (snapshot.LineCount > MaxFlatBlocks * 3 + 1) return false;
         var blocks = new List<FlatBlock>();
+        using var reader = new SnapshotTextReader(snapshot, 0, snapshot.Length, ct);
+        var buffer = new char[4096];
+        var verifier = new FlatBlockVerifier();
         var separated = true;
         var fenceStart = -1;
         string? fenceMarker = null;
@@ -280,12 +283,16 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
                 badLine = new TextSpan(start, rawLength);
                 return false;
             }
-            var raw = snapshot.GetText(start, rawLength);
+            if (rawLength > buffer.Length)
+                buffer = new char[Math.Max(rawLength, Math.Min(MaxExactLineLength + 2, buffer.Length * 2))];
+            var raw = buffer.AsSpan(0, rawLength);
+            if (reader.Read(raw) != rawLength)
+                throw new InvalidOperationException("Snapshot chunks ended before their declared line range.");
             var bodyLength = rawLength;
             if (line + 1 < snapshot.LineCount)
             {
                 if (raw.EndsWith("\r\n", StringComparison.Ordinal)) bodyLength -= 2;
-                else if (raw.EndsWith('\n')) bodyLength--;
+                else if (raw.EndsWith("\n", StringComparison.Ordinal)) bodyLength--;
                 else { badLine = new TextSpan(start, rawLength); return false; }
             }
             if (fenceStart >= 0)
@@ -295,7 +302,7 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
                     badLine = new TextSpan(fenceStart, end - fenceStart);
                     return false;
                 }
-                if (raw.AsSpan(0, bodyLength).SequenceEqual(fenceMarker))
+                if (raw[..bodyLength].SequenceEqual(fenceMarker))
                 {
                     var length = start + bodyLength - fenceStart;
                     if (length > MaxExactLineLength)
@@ -320,14 +327,14 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
             // A count-budget failure is not an intrinsic defect of this line:
             // deleting earlier blocks may make the same line admissible.
             if (blocks.Count == MaxFlatBlocks) return false;
-            if (separated && TryFenceOpener(raw.AsSpan(0, bodyLength), out var marker))
+            if (separated && TryFenceOpener(raw[..bodyLength], out var marker))
             {
                 fenceStart = start;
                 fenceMarker = marker;
                 separated = false;
                 continue;
             }
-            if (!IsVerifiedFlatBlock(raw[..bodyLength], out var level))
+            if (!verifier.Verify(raw[..bodyLength], out var level))
             {
                 var obstructionStart = separated ? start : blocks[^1].Start;
                 badLine = new TextSpan(obstructionStart, end - obstructionStart);
@@ -416,7 +423,7 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
         return true;
     }
 
-    /// <summary>Uses Markdig to check every certified block, even outside the viewport.</summary>
+    /// <summary>Checks one candidate's exact kind and source span with the production Markdig pipeline.</summary>
     private static bool IsVerifiedFlatBlock(string source, out int level)
     {
         if (!IsFlatBlock(source, out level)) return false;
@@ -425,6 +432,38 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
             parsed[0].Span.End + 1 == source.Length &&
             (level == 0 ? parsed[0] is ParagraphBlock :
                 parsed[0] is HeadingBlock heading && heading.Level == level);
+    }
+
+    /// <summary>
+    /// Reuses only an ordinally identical parser-verified source within one private
+    /// certification stage. The grammar forbids reference dependencies; adjacency
+    /// is still checked per physical owner. Two bounded entries avoid reparsing
+    /// repeated paragraphs/headings without retaining source in committed state.
+    /// </summary>
+    private sealed class FlatBlockVerifier
+    {
+        /// <summary>Last independently verified paragraph source, at most 64 Ki UTF-16 units.</summary>
+        private string? _paragraph;
+        /// <summary>Last independently verified heading source, at most 64 Ki UTF-16 units.</summary>
+        private string? _heading;
+        /// <summary>The exact parser-certified ATX level associated with the heading entry.</summary>
+        private int _headingLevel;
+
+        /// <summary>Checks exact source equality before reusing the local parser's kind and span facts.</summary>
+        internal bool Verify(ReadOnlySpan<char> source, out int level)
+        {
+            var heading = source[0] == '#';
+            if (source.SequenceEqual(heading ? _heading : _paragraph))
+            {
+                level = heading ? _headingLevel : 0;
+                return true;
+            }
+            var text = source.ToString();
+            if (!IsVerifiedFlatBlock(text, out level)) return false;
+            if (heading) { _heading = text; _headingLevel = level; }
+            else _paragraph = text;
+            return true;
+        }
     }
 
     /// <summary>Accepts only a column-zero opener with a small ASCII info word.</summary>
