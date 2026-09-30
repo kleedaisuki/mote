@@ -153,11 +153,30 @@ function Convert-HexToColorRef([string] $Color) {
     return [uint32]($red -bor ($green -shl 8) -bor ($blue -shl 16))
 }
 
-function Capture-EditorWindow([IntPtr] $Window, [string] $Path) {
+function Capture-EditorWindow([IntPtr] $Window, [IntPtr] $Status,
+    [string] $Path, [bool] $CheckCaption) {
     $rect = [MoteThemeProbeNative+Rect]::new()
     if (-not [MoteThemeProbeNative]::GetWindowRect($Window, [ref]$rect) -or
         $rect.Width -lt 100 -or $rect.Height -lt 100) {
         throw 'Editor window geometry is unavailable.'
+    }
+    $statusRect = [MoteThemeProbeNative+Rect]::new()
+    if (-not [MoteThemeProbeNative]::GetWindowRect($Status, [ref]$statusRect) -or
+        $statusRect.Width -lt 100 -or $statusRect.Height -lt 12) {
+        throw 'Status HWND geometry is unavailable.'
+    }
+    # Only sample the target PrintWindow bitmap. Translate the rightmost blank
+    # status surface from its physical HWND rectangle into bitmap coordinates.
+    $statusX = $statusRect.Left - $rect.Left + $statusRect.Width - 16
+    $statusY = $statusRect.Top - $rect.Top + [int][Math]::Floor($statusRect.Height / 2)
+    if ($statusX -lt 0 -or $statusX -ge $rect.Width -or
+        $statusY -lt 0 -or $statusY -ge $rect.Height) {
+        throw 'Status sample escaped the editor bitmap.'
+    }
+    $captionX = [int][Math]::Floor($rect.Width / 2)
+    $captionY = 15
+    if ($CheckCaption -and ($captionX -lt 120 -or $captionY -ge $rect.Height)) {
+        throw 'Window is too small for a blank title sample.'
     }
     $bitmap = [Drawing.Bitmap]::new($rect.Width, $rect.Height)
     try {
@@ -172,16 +191,31 @@ function Capture-EditorWindow([IntPtr] $Window, [string] $Path) {
             finally { $graphics.ReleaseHdc($dc) }
         }
         finally { $graphics.Dispose() }
+        $statusPixel = $bitmap.GetPixel($statusX, $statusY)
+        $statusRgb = '#{0:X2}{1:X2}{2:X2}' -f $statusPixel.R, $statusPixel.G, $statusPixel.B
+        $captionRgb = $null
+        if ($CheckCaption) {
+            $captionPixel = $bitmap.GetPixel($captionX, $captionY)
+            $captionRgb = '#{0:X2}{1:X2}{2:X2}' -f
+                $captionPixel.R, $captionPixel.G, $captionPixel.B
+        }
         $bitmap.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
+        return [pscustomobject]@{
+            StatusRgb = $statusRgb; StatusX = $statusX; StatusY = $statusY
+            CaptionRgb = $captionRgb
+            CaptionX = if ($CheckCaption) { $captionX } else { $null }
+            CaptionY = if ($CheckCaption) { $captionY } else { $null }
+        }
     }
     finally { $bitmap.Dispose() }
 }
 
-function Assert-NearColor([string] $Observed, [string] $Expected, [string] $Label) {
+function Assert-NearColor([string] $Observed, [string] $Expected, [string] $Label,
+    [int] $Tolerance = 20) {
     for ($part = 1; $part -le 5; $part += 2) {
         $actual = [Convert]::ToInt32($Observed.Substring($part, 2), 16)
         $wanted = [Convert]::ToInt32($Expected.Substring($part, 2), 16)
-        if ([Math]::Abs($actual - $wanted) -gt 20) {
+        if ([Math]::Abs($actual - $wanted) -gt $Tolerance) {
             throw "$Label color $Observed differs from expected $Expected."
         }
     }
@@ -203,6 +237,7 @@ $report = [ordered]@{
     registry_original_kind = $null; registry_restored = $false
     source_sha256_unchanged = $false; cases = @(); error = $null
     scope = 'published Win32 HWND; synthetic HKCU app preference; no IME or physical-present assertion'
+    windows_build = [Environment]::OSVersion.Version.Build
 }
 $process = $null
 $registryParent = $null
@@ -279,9 +314,9 @@ try {
     if ($selection.Item1 -ne 1 -or $selection.Item2 -ne 3) { throw 'Synthetic RichEdit selection was not established.' }
 
     foreach ($case in @(
-        @{ Name = 'dark-before'; Value = 0; Background = '#1F2023'; Foreground = '#D8DADF' },
-        @{ Name = 'light'; Value = 1; Background = '#FFFFFF'; Foreground = '#26282E' },
-        @{ Name = 'dark-after'; Value = 0; Background = '#1F2023'; Foreground = '#D8DADF' }
+        @{ Name = 'dark-before'; Value = 0; Background = '#1F2023'; Foreground = '#D8DADF'; Panel = '#27292D' },
+        @{ Name = 'light'; Value = 1; Background = '#FFFFFF'; Foreground = '#26282E'; Panel = '#F6F7F9' },
+        @{ Name = 'dark-after'; Value = 0; Background = '#1F2023'; Foreground = '#D8DADF'; Panel = '#27292D' }
     )) {
         $report.stage = $case.Name
         $registryKey.SetValue('AppsUseLightTheme', [int]$case.Value,
@@ -308,10 +343,20 @@ try {
             throw 'The published adapter reported an unavailable palette.'
         }
         $png = Join-Path $output "$($case.Name).png"
-        Capture-EditorWindow $window $png
+        $checkCaption = [Environment]::OSVersion.Version.Build -ge 22000
+        $surface = Capture-EditorWindow $window $status $png $checkCaption
+        Assert-NearColor $surface.StatusRgb $case.Panel 'Status chrome background' 1
+        if ($checkCaption) {
+            Assert-NearColor $surface.CaptionRgb $case.Panel 'Win11 title background' 1
+        }
         $report.cases += [ordered]@{
             name = $case.Name; background = $background
             expected_text_foreground = $case.Foreground; text_foreground_pixel_count = $textPixelCount
+            status_background = $surface.StatusRgb
+            status_sample_x = $surface.StatusX; status_sample_y = $surface.StatusY
+            caption_background = $surface.CaptionRgb
+            caption_sample_x = $surface.CaptionX; caption_sample_y = $surface.CaptionY
+            caption_status = if ($checkCaption) { 'verified-win11-pixel' } else { 'unsupported-os-build' }
             selection_start = $currentSelection.Item1; selection_end = $currentSelection.Item2
             text_utf16_units = $sourceText.Length; status_notice = $false
             png = [IO.Path]::GetFileName($png)
