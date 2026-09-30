@@ -51,4 +51,70 @@ public sealed class YamlStreamDifferentialTests
         Assert.Contains(actual.Diagnostics, d => d.Code == "yaml.key-equality-unsupported");
         Assert.DoesNotContain(actual.Diagnostics, d => d.Code == "yaml.duplicate-key");
     }
+
+    /// <summary>
+    /// An unbound alias in a complex key prevents a proof of key uniqueness. The event
+    /// stream may continue, but a missing duplicate must not be reported as complete.
+    /// </summary>
+    [Theory]
+    [InlineData("? *missing\n: first\n? *missing\n: second\n")]
+    [InlineData("? [*missing]\n: first\n? [*missing]\n: second\n")]
+    [InlineData("? {a: *missing}\n: first\n? {a: *missing}\n: second\n")]
+    public void Large_streamed_unbound_alias_keys_are_provisional(string tail)
+    {
+        var source = "# " + new string('p', 300 * 1024) + "\n" + tail;
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 16), AnalysisScope.Full));
+
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        Assert.Contains(actual.Diagnostics, d => d.Code == "yaml.undefined-alias");
+        Assert.Contains(actual.Diagnostics, d => d.Code == "yaml.key-equality-unsupported");
+        Assert.DoesNotContain(actual.Diagnostics, d => d.Code == "yaml.duplicate-key");
+    }
+
+    /// <summary>Offscreen key recovery remains honest beyond the small-document threshold.</summary>
+    [Fact]
+    public void Multi_megabyte_unbound_alias_key_does_not_claim_complete()
+    {
+        var source = string.Concat(Enumerable.Repeat("# " + new string('p', 16 * 1024) + "\n", 192)) +
+            "? *missing\n: value\n";
+        Assert.True(source.Length > 2 * 1024 * 1024);
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 16), AnalysisScope.Full));
+
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        var aliasStart = source.IndexOf("*missing", StringComparison.Ordinal);
+        Assert.True(aliasStart > 2 * 1024 * 1024);
+        Assert.Contains(actual.Diagnostics, d => d.Code == "yaml.undefined-alias" &&
+            d.Span.Start == aliasStart && d.Span.Length == "*missing".Length);
+        Assert.Contains(actual.Diagnostics, d => d.Code == "yaml.key-equality-unsupported" &&
+            d.Span.Start == aliasStart && d.Span.Length == "*missing".Length);
+    }
+
+    /// <summary>An anchor used by a later key must carry an unresolved child alias as uncertainty.</summary>
+    [Fact]
+    public void Anchored_value_with_unbound_child_alias_cannot_certify_later_alias_key()
+    {
+        var tail = "data: &a [*missing]\n? *a\n: first\n? *a\n: second\n";
+        var source = "# " + new string('p', 300 * 1024) + "\n" + tail;
+        using var document = new Document(source);
+        using var session = ((IIncrementalDocumentPolicy)DocumentPolicies.ForKind(DocumentKind.Yaml)).CreateSession();
+        var actual = session.Analyze(document.Snapshot, [],
+            new AnalysisRequest(new TextSpan(0, 16), AnalysisScope.Full));
+
+        Assert.Equal(AnalysisCompleteness.Provisional, actual.Completeness);
+        Assert.Null(actual.TotalDiagnosticCount);
+        var missing = source.IndexOf("*missing", StringComparison.Ordinal);
+        Assert.Contains(actual.Diagnostics, d => d.Code == "yaml.undefined-alias" &&
+            d.Span.Start == missing && d.Span.Length == "*missing".Length);
+        Assert.Contains(actual.Diagnostics, d => d.Code == "yaml.key-equality-unsupported" &&
+            d.Span.Start == missing && d.Span.Length == "*missing".Length);
+        Assert.DoesNotContain(actual.Diagnostics, d => d.Code == "yaml.duplicate-key");
+    }
 }

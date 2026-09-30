@@ -401,6 +401,10 @@ internal sealed class YamlIncrementalSession : IFormatSession
                 if (!_anchors.TryGetValue(alias.Value, out var target))
                 {
                     AddDiagnostic(DiagnosticSeverity.Error, "yaml.undefined-alias", $"Alias '*{alias.Value}' has no preceding anchor.", alias.Start, alias.End);
+                    // A missing alias used inside a mapping key also makes equality with
+                    // later keys undecidable. The syntax error alone cannot certify that
+                    // every duplicate was found, even though the stream can continue.
+                    if (needsCanonical) Unsupported(alias.Start, alias.End, "unbound alias in canonical key or anchor");
                     return null;
                 }
                 if (!needsCanonical) return null;
