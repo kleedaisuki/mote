@@ -381,3 +381,101 @@ foreign-global-focus classification remains blocked when ownership is absent;
 this local x64 pass does not replace that hosted ARM64 observation or prove
 reader speech, physical IME, off-owner SetFocus, RangeValue writes, large-file
 memory teardown, or release/default enablement readiness.
+
+## Independent strengthened hosted result: 2026-10-01, run 36791254056
+
+The strengthened client actually executed on both Windows RIDs at commit
+`f657c003c8bb2d52fd94ea632335a356c2f3d445`. Both reports pass the declared
+bounded diagnostic subset, closing the hosted child-identity and exact-selection
+assertion gaps above. This is **not** a default-enablement or release verdict.
+The workflow step is non-gating; this finding uses downloaded JSON and actual
+client exit, not its green Actions conclusion.
+
+Artifacts are `.cache/ci-36791254056-grid-win-x64/` and
+`.cache/ci-36791254056-grid-win-arm64/`; each contains `inventory.json`,
+`report.json`, `build.log`, and the separately downloaded `native-inventory`
+artifact in `publish-inventory/`. The independent audit script is
+`.cache/ci-36791254056-grid-win-x64/audit.py`.
+
+### Attribution and independent verification
+
+Both driver inventories identify the exact commit/run/RID, strengthened client
+CRLF SHA256 `C6894B4EDCF931BAA322B878AF8965759AC7E44EFC10291200737A18C1AD5509`,
+and project CRLF SHA256
+`6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4`.
+Hashing the current reviewed LF source yields
+`A1B87971E4975786D67909209E1B2133432C6894710D623F2CD24ECD948940D4`;
+deterministic LF-to-CRLF conversion reproduces the hosted source pin. Independent
+1100-by-32 fixture reconstruction again yields
+`86796C9AF5EADC2DB5A0B8FBE3F14245DF7AB2F0456E6EE5189ED6987819E0B4`.
+
+| Observed fact | win-x64 | win-arm64 |
+| --- | --- | --- |
+| Binary SHA256, driver/report equal | `2F951114F588E274BE76DD1220C9529D3E4ECCF30E0AFA328CA24484D6584E31` | `0F52705A9B8F312C81ECAC67D6898B338D55414445459084AC297C41328F9C94` |
+| Client architecture / Windows build | X64 / 10.0.26100.0 | Arm64 / 10.0.26200.0 |
+| Actual client exit / timeout / classification | 0 / false / pass | 0 / false / pass |
+| Errors / Inconclusive | empty / empty | empty / empty |
+| Published single mote.exe bytes | 7,070,720 | 7,208,960 |
+| Client build warnings / errors | 0 / 0 | 0 / 0 |
+| Raw, Control, Content child counts, each | 1104 | 1104 |
+| Unique AutomationIds / runtime IDs, each view | 1104 / 1104 | 1104 / 1104 |
+| Duplicate IDs and unexpected children | all empty | all empty |
+
+The publish inventories contain one executable, no companion payload or bundled
+native library, and no unexpected static imports. They do not contain executable
+SHA256 and the executable was not downloaded/rehashed by this audit; matching
+driver/client hashes plus the workflow's exact published path are the attribution
+basis. Architecture is the client-reported process architecture, not independent
+inspection of an editor PE header.
+
+Independent assertions checked the above fields, raw-source pins, reconstructed
+fixture, exact selected snapshots, range/navigation facts, and ownership-aware
+focus facts. Reproduction commands are:
+
+```powershell
+gh run download 36791254056 -n windows-grid-accessibility-ci-win-x64 -D .cache/ci-36791254056-grid-win-x64
+gh run download 36791254056 -n windows-grid-accessibility-ci-win-arm64 -D .cache/ci-36791254056-grid-win-arm64
+gh run download 36791254056 -n native-inventory-win-x64 -D .cache/ci-36791254056-grid-win-x64/publish-inventory
+gh run download 36791254056 -n native-inventory-win-arm64 -D .cache/ci-36791254056-grid-win-arm64/publish-inventory
+python .cache/ci-36791254056-grid-win-x64/audit.py
+```
+
+Both RID audits passed. No new editor execution or previously completed suite was
+repeated locally.
+
+### Stronger tested semantics and remaining boundaries
+
+All three view traversals executed exact-count, nonempty unique identity, and
+cross-view identity-set equality checks in the pinned source. The JSON serializes
+counts and duplicate lists, but not all 1104 identities; cross-view set equality
+is supported by the executed pinned assertion and empty Errors, rather than an
+independent reconstruction of those unrecorded sets. No full cross-view
+identity-to-coordinate mapping claim follows.
+
+Both serialized selection sequences independently confirm one exact cell after
+Select, then the same exact two-cell set after rectangular Add and after rejected
+sparse union. Cells have local coordinates (0,0)/(0,1), absolute headers Row 1 and
+Columns 1/2, values R1C1/R1C2, IDs `Mote.CsvGrid.1.0.0` / `.1.0.1`, and distinct
+nonempty runtime IDs stable across these three live-window snapshots. This closes
+the earlier count-only weakness; it does not prove arbitrary rectangle geometry.
+
+Both runs retain Go-to readback `1001:17`, absolute first cell R1001C17,
+row/column origins 1000/16, four read-only range snapshots, and all five exact
+owned synthetic F6 HWND transitions. The pinned distant local (0,0) and original
+retained-cell ElementNotAvailable checks completed with empty Errors; JSON does
+not independently serialize those two assertion outcomes.
+
+The foreground distinction persists: x64's five global semantic samples are
+target-owned and focused; ARM64's five are explicitly **blocked**, with no foreign
+semantic name or focus metadata inspected. ARM64 owned HWND transitions and
+row/column native focus are tested, but foreground semantic-focus acceptance is
+not passed. On x64 the table HWND-derived element is not focused while its
+selected DataItem is; do not conflate physical and semantic focus.
+
+Off-owner cell SetFocus is safely refused/blocked on both RIDs. No RangeValue
+write, screen-reader speech, physical IME, repeated cross-RID reliability,
+100 MiB memory teardown, or multi-monitor acceptance was exercised. The one-run
+1000-query totals (278.3314 ms x64, 212.0145 ms ARM64) include different runners
+and UIA overhead and are not an architecture comparison, startup/edit benchmark,
+percentile, or regression conclusion. No product failure is demonstrated within
+the strengthened bounded subset; the remaining release gates are unchanged.
