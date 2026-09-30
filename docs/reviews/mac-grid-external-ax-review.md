@@ -68,3 +68,13 @@ Final frozen reviewed hashes:
 - Test-Fixture.ps1 unchanged: `54CF150FF270DF6EF27CBFAD86307B0DA360130C2DADA5CFDB0DDC5747EF930C`
 
 All prior target-evidence limitations remain. No repeat of already-completed fixture validation was needed for these process-cleanup/refusal-only changes.
+
+### Hosted ordinal-transport diagnostic follow-up
+
+Reviewed the exact Probe.swift delta adding `OrdinalObservation` after the hosted first-record label falsifier. The first-record assertion and all acceptance predicates remain unchanged. The observation surface is fixed at two already-admitted exact-PID axis nodes and eight named attributes each (16 entries), immediately after count validation; each read uses the existing admission/deadline/per-node timeout path.
+
+Output retains only fixed node/attribute labels, AX error codes, value type class, UTF-16 length, fixed allowlisted equality/topology classifications, and bounded numeric ordinals. It never serializes raw attribute strings, fixture values, identifier serials, paths, global-tree content, or a source dump. `known-role-` concatenation is restricted to six literal role strings. Numeric suffix parsing requires ASCII digits and at most ten characters; NSNumber output is limited to 0...256. Wrapper-identifier classification reports structural facts only, not proof of provider identity.
+
+Swift static type review: all Report initializers supply the new observations field; the Codable observation fields are concrete/optional primitives, AXError rawValue is Int32, and String/Substring equality and Character ASCII comparisons are consistent with the existing Foundation/Swift surface. No new throwing short-circuit scope issue found. No remaining substantive blocker in this diagnostic-only delta; target Swift typecheck/execution remains required. No fixture/driver validation was repeated because they are unchanged.
+
+Reviewed Probe.swift SHA-256 for this follow-up: `A65E460046E0AA72B88F5E4289CAA0915A4EE15E1C24984B9C40DC6FD1227B8C`.

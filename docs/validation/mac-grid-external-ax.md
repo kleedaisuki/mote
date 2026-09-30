@@ -1,7 +1,8 @@
 # macOS CSV Grid external AX acceptance harness
 
-Date: 2026-10-01. Status: **implemented portable preflight; native Swift typecheck
-and cross-process execution not yet performed**. This does not change production
+Date: 2026-10-01. Status: **first native Swift/cross-process execution obtained on
+both Mac RIDs; partial external evidence with the same origin-row falsifier,
+not external acceptance**. This does not change production
 accessibility defaults or certify VoiceOver/IME/release readiness.
 
 ## Purpose and ownership
@@ -125,7 +126,45 @@ application/document/caption content or clipboard snapshot is collected.
 Possible native statuses: `passed`, `failed`, `probe-error`, or
 `external-accessibility-unavailable`. Portable-only status: `fixture-preflight-passed`.
 A green `continue-on-error` job is not native acceptance: inspect the JSON and raw
-step exit. **No hosted result has yet been obtained for this new harness.**
+step exit. The first hosted run is documented below; it failed the bounded origin-row gate,
+not the entire product or the external protocol's later gates.
+
+## First hosted result and bounded discriminator
+
+[CI run 36786762929](https://github.com/kleedaisuki/mote/actions/runs/36786762929)
+at commit `1448ce4` ran the separately compiled Swift client on freshly published
+strict one-file binaries for **osx-x64 and osx-arm64**. Both typechecked, had AX trust,
+and passed separate-PID, one opt-in Table/no default duplicate, source Document
+coexistence/full source count/readable selection/offscreen exact string, and bounded
+axis-count/array agreement. Both stopped at **`first-record-is-data`**, phase
+`origin-window`, Swift exit 1. Both fixtures remained unchanged; editor cleanup was
+forced, so neither normal close nor any subsequent selection/navigation/lifetime
+assertion was executed. A non-gating job's green conclusion is not this probe's pass.
+
+The reports capture the failed predicate, not the failing row's label attributes.
+The client currently prefers any nonnil `AXDescription` over `AXTitle`; production
+provides `accessibilityLabel` with the intended one-based row label. Existing evidence
+does **not** distinguish an AX label-transport mismatch, a default/native row object,
+a stale object or an actual shifted ordinal. Do not relax the ordinal oracle or
+change production based on this hypothesis alone. The independent first-target audit
+is maintained in `mac-grid-external-ax-first-target.md` by the parent validator.
+
+The next recheck changes no assertion or product source. Immediately before the
+unchanged first-row predicate, the helper observes only **two nodes** (first AXRows
+and first AXColumns) and eight fixed metadata attributes per node: `AXRole`,
+`AXRoleDescription`, `AXDescription`, `AXTitle`, `AXIndex`, `AXIdentifier`, `AXValue`,
+`AXHelp`. An additive `observations` array retains AX error/type, UTF-16 length and
+fixed classification. Exact expected ordinal/role, recognized role, generic axis
+role, empty/missing string and expected custom wrapper topology are enums; a
+syntactically bounded decimal ordinal is an integer. No raw string/help/source value,
+attribute-name dump, desktop or unrelated process data is returned. This preserves
+the current refusal/timeout budgets and stops at the same assertion if it still fails.
+
+Interpretation after native recheck: an expected ordinal in AXTitle with a generic/
+empty AXDescription establishes a client extraction issue; a parsed different ordinal
+requires investigating actual window origin; a native/default role or missing custom
+identifier motivates a node-merging investigation. A missing/timeout value is not
+proof of any of these. The discriminator itself has not yet executed on macOS.
 
 ## Primary references
 

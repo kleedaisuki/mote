@@ -4,10 +4,15 @@ import Foundation
 
 /// Each assertion retains its result even when a later gate fails.
 struct Check: Codable { let name: String; let passed: Bool; let detail: String }
+/// Content-free metadata facts distinguish label transport from ordinal semantics.
+struct OrdinalObservation: Codable {
+    let node: String; let attribute: String; let axError: Int32
+    let kind: String; let utf16Length: Int?; let classification: String; let ordinal: Int?
+}
 /// Synthetic-only evidence; does not certify VoiceOver, IME, paint or performance.
 struct Report: Codable {
     let status: String; let phase: String; let editorPID: Int32; let clientPID: Int32
-    let trusted: Bool; let closedByProbe: Bool; let admissionCount: Int; let checks: [Check]; let note: String
+    let trusted: Bool; let closedByProbe: Bool; let admissionCount: Int; let checks: [Check]; let observations: [OrdinalObservation]; let note: String
 }
 /// Fail-closed termination with an intentionally content-free reason.
 struct GateFailure: Error { let reason: String }
@@ -18,6 +23,8 @@ final class Probe {
     let app: AXUIElement
     let expected: NSString
     var checks: [Check] = []
+    /// Fixed two-node/eight-attribute diagnostic, never a source or desktop dump.
+    var observations: [OrdinalObservation] = []
     var phase = "preconditions"
     var closed = false
     var queries = 0
@@ -74,6 +81,50 @@ final class Probe {
     func label(_ node: AXUIElement) throws -> String? {
         if let name = try text(node, "AXDescription") { return name }
         return try text(node, "AXTitle")
+    }
+    /// Retain only type/error, fixed equality classes and parsed bounded ordinal numbers.
+    /// The original label predicate is intentionally unchanged pending native evidence.
+    func observeOrdinal(_ node: AXUIElement, category: String, axis: String, expected: Int) throws {
+        for name in ["AXRole", "AXRoleDescription", "AXDescription", "AXTitle", "AXIndex", "AXIdentifier", "AXValue", "AXHelp"] {
+            let (error, raw) = try attribute(node, name)
+            var kind = raw == nil ? "absent" : "other"
+            var length: Int? = nil
+            var classification = "unclassified"
+            var ordinal: Int? = nil
+            if let value = raw as? String {
+                kind = "string"; length = value.utf16.count
+                if value.isEmpty { classification = "empty" }
+                else if value == "\(axis) \(expected)" { classification = "expected-ordinal"; ordinal = expected }
+                else if value == "AX\(axis)" { classification = "expected-role" }
+                else if ["AXRow", "AXColumn", "AXCell", "AXStaticText", "AXTextField", "AXGroup"].contains(value) {
+                    classification = "known-role-" + value
+                }
+                else if value == axis.lowercased() { classification = "generic-axis-role" }
+                else if value.utf16.count <= 160 {
+                    let prefix = axis + " "
+                    if value.hasPrefix(prefix) {
+                        let suffix = value.dropFirst(prefix.count)
+                        if !suffix.isEmpty && suffix.count <= 10 && suffix.allSatisfy({ $0 >= "0" && $0 <= "9" }) {
+                            ordinal = Int(suffix); classification = "other-ordinal"
+                        }
+                    }
+                    if value.hasPrefix("mote.csv.window.") {
+                        classification = "window-wrapper-identifier"
+                        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+                        let nodeKind = axis.lowercased()
+                        if parts.count == 7 && parts[4] == nodeKind && parts[5] == (axis == "Row" ? "0" : "-1") &&
+                            parts[6] == (axis == "Row" ? "-1" : "0") {
+                            classification = "expected-window-axis-identifier"
+                        }
+                    }
+                } else { classification = "over-diagnostic-string-bound" }
+            } else if let value = raw as? NSNumber {
+                kind = "number"
+                if value.intValue >= 0 && value.intValue <= 256 { ordinal = value.intValue; classification = "bounded-numeric-index" }
+            }
+            observations.append(OrdinalObservation(node: category, attribute: name, axError: error.rawValue,
+                kind: kind, utf16Length: length, classification: classification, ordinal: ordinal))
+        }
     }
     /// Persist the first falsifier before aborting dependent actions.
     func require(_ name: String, _ passed: Bool, _ detail: String = "") throws {
@@ -217,6 +268,11 @@ final class Probe {
             let rowCount = try attribute(table, "AXRowCount").1 as? NSNumber
             let colCount = try attribute(table, "AXColumnCount").1 as? NSNumber
             try require("bounded-counts-match-arrays", rows.count >= 3 && columns.count >= 3 && rowCount?.intValue == rows.count && colCount?.intValue == columns.count)
+            // The first hosted run failed this predicate without observing which
+            // label attribute AppKit transported. Preserve the original assertion
+            // while collecting the smallest content-free discriminating facts.
+            try observeOrdinal(rows[0], category: "first-row", axis: "Row", expected: 1)
+            try observeOrdinal(columns[0], category: "first-column", axis: "Column", expected: 1)
             try require("first-record-is-data", try label(rows[0]) == "Row 1")
             let rowHeaders = try elements(table, "AXRowHeaderUIElements", limit: 256)
             let columnHeaders = try elements(table, "AXColumnHeaderUIElements", limit: 64)
@@ -354,16 +410,16 @@ final class Probe {
     }
     /// Preserve prior checks without promoting a partial run to acceptance.
     func report(_ status: String, _ trusted: Bool, _ note: String) -> Report {
-        Report(status: status, phase: phase, editorPID: pid, clientPID: getpid(), trusted: trusted, closedByProbe: closed, admissionCount: queries, checks: checks, note: note)
+        Report(status: status, phase: phase, editorPID: pid, clientPID: getpid(), trusted: trusted, closedByProbe: closed, admissionCount: queries, checks: checks, observations: observations, note: note)
     }
 }
 
 var result: Report
 if CommandLine.arguments.count == 3, let pid = Int32(CommandLine.arguments[1]), pid > 0 {
     do { result = try Probe(pid: pid, fixture: CommandLine.arguments[2]).run() }
-    catch { result = Report(status: "probe-error", phase: "fixture", editorPID: pid, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, checks: [], note: "synthetic fixture unavailable") }
+    catch { result = Report(status: "probe-error", phase: "fixture", editorPID: pid, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, checks: [], observations: [], note: "synthetic fixture unavailable") }
 } else {
-    result = Report(status: "probe-error", phase: "arguments", editorPID: 0, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, checks: [], note: "expected editor PID and synthetic CSV")
+    result = Report(status: "probe-error", phase: "arguments", editorPID: 0, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, checks: [], observations: [], note: "expected editor PID and synthetic CSV")
 }
 let encoder = JSONEncoder()
 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
