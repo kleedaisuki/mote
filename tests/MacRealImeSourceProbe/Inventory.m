@@ -42,12 +42,13 @@ int main(void) {
                 @"id": sourceID,
                 @"mode_id": modeID,
                 @"enabled": boolProperty(source, kTISPropertyInputSourceIsEnabled),
+                @"enable_capable": boolProperty(source, kTISPropertyInputSourceIsEnableCapable),
                 @"select_capable": boolProperty(source, kTISPropertyInputSourceIsSelectCapable),
                 @"selected": boolProperty(source, kTISPropertyInputSourceIsSelected)
             }];
         }
         NSDictionary *report = @{
-            @"schema": @"mote.mac-real-ime-source-inventory.v1",
+            @"schema": @"mote.mac-real-ime-source-inventory.v2",
             @"os_version": [NSProcessInfo processInfo].operatingSystemVersionString,
             @"current_source_id": currentID,
             @"installed_source_count": @(count),

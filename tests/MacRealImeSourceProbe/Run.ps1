@@ -55,7 +55,7 @@ try {
 } finally { $probe.Dispose() }
 
 $data = $json | ConvertFrom-Json -ErrorAction Stop
-if ($data.schema -cne 'mote.mac-real-ime-source-inventory.v1' -or
+if ($data.schema -cne 'mote.mac-real-ime-source-inventory.v2' -or
     $data.real_ime_tested -ne $false) {
     throw 'Inventory schema invalid or mislabeled as a real IME pass.'
 }
