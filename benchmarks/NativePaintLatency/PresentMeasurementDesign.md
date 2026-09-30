@@ -352,6 +352,13 @@ OS desktop timestamp (DXGI `LastPresentTime` or ETW) on a disposable foreground
 host before admitting any numeric edit-to-compositor release gate. The
 ordinary 100 MiB WGC case remains implemented but unmeasured at this milestone.
 
+The follow-up [WGC timestamp-order investigation](WgcTimestampOrdering.md)
+adds same-CPU, delayed-readback and global DWM cadence controls. On the local
+240 Hz host, metadata exactly matched DWM compose/vblank marks in 15/18 normal
+transitions and still lay after completed color readback in 10/18. This rejects
+simple unit/cross-core/GPU-readiness explanations without establishing a first
+desktop-present endpoint. No offset correction or release timing gate follows.
+
 ## Sources
 
 * Microsoft, [WGC `Direct3D11CaptureFrame.SystemRelativeTime`](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.direct3d11captureframe.systemrelativetime?view=winrt-28000), [`IGraphicsCaptureItemInterop::CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow), and [`CreateFreeThreaded`](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.direct3d11captureframepool.createfreethreaded?view=winrt-26100).

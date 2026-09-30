@@ -8,6 +8,12 @@ callback arrival and the target was not foreground. It therefore makes **no
 edit-to-present latency or release-SLA claim**. The GDI probe below remains a
 first sampled screen-change observation, not a compositor timestamp.
 
+The follow-up [`WgcTimestampOrdering.md`](WgcTimestampOrdering.md) local clock
+controls correlate the future metadata with DWM compose/vblank marks, including
+single-CPU and delayed-readback controls. They resolve several false clock/GPU
+explanations, **not** first desktop presentation or a product p95. The associated
+`Measure-WgcTimestampOrder.ps1` captures only a self-painted synthetic HWND.
+
 ## Endpoint contract
 
 The existing `document.edit_to_presentation` trace ends when the native shell

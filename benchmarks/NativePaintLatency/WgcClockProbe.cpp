@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dwmapi.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <winrt/Windows.Foundation.h>
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <vector>
+#include <string>
 
 using namespace winrt;
 namespace capture = winrt::Windows::Graphics::Capture;
@@ -40,8 +42,14 @@ struct toggle {
 struct frame_mark {
     int color; ///< -1 means the center pixel was neither synthetic color.
     int64_t system_100ns; ///< WGC compositor frame metadata.
-    int64_t arrival_qpc; ///< QPC at frame callback receipt.
+    int64_t arrival_qpc; ///< QPC immediately after frame dequeue, not callback entry.
     int64_t processed_qpc; ///< QPC after the one-pixel GPU readback.
+    int64_t metadata_before{}; ///< Same-thread bracket before reading frame metadata.
+    int64_t metadata_after{}; ///< Same-thread bracket after reading frame metadata.
+    int64_t timing_before{}; ///< Bracket before optional global DWM timing query.
+    int64_t timing_after{}; ///< Bracket after optional global DWM timing query.
+    DWM_TIMING_INFO timing{}; ///< Global composition cadence, not source-frame identity.
+    HRESULT timing_result{E_NOTIMPL}; ///< Availability of the optional DWM query.
 };
 
 std::atomic<int> painted_color{0}; ///< UI thread's current synthetic color.
@@ -125,7 +133,8 @@ void pump_for(DWORD milliseconds)
 class clock_capture {
 public:
     /// Start capture on the synthetic window, not the desktop or mote.
-    explicit clock_capture(HWND hwnd)
+    explicit clock_capture(HWND hwnd, bool extended = false, DWORD readback_delay = 0)
+        : extended_(extended), readback_delay_(readback_delay)
     {
         if (!capture::GraphicsCaptureSession::IsSupported())
             throw std::runtime_error("WGC unsupported");
@@ -154,11 +163,23 @@ public:
     /// Revoke callback and wait for any in-flight readback before destruction.
     ~clock_capture()
     {
+        stop();
+    }
+
+    /// Stop capture while its HWND is still alive; safe to call again on destruction.
+    void stop()
+    {
         if (pool_) {
+            if (extended_) std::fprintf(stderr, "STAGE,capture-stop\n");
+            stopping_.store(true);
             pool_.FrameArrived(token_);
+            // Let already-running readback finish, but never hold this lock
+            // across Close: WinRT may wait for an event worker to return.
+            { std::lock_guard lock(callback_mutex_); }
             session_.Close();
             pool_.Close();
-            std::lock_guard lock(callback_mutex_);
+            pool_ = nullptr;
+            if (extended_) std::fprintf(stderr, "STAGE,capture-stopped\n");
         }
     }
 
@@ -181,9 +202,22 @@ private:
     void on_frame(capture::Direct3D11CaptureFramePool const& pool) noexcept
     {
         std::lock_guard callback_lock(callback_mutex_);
+        if (stopping_.load()) return;
         try {
-            while (auto frame = pool.TryGetNextFrame()) {
-                frame_mark mark{-1, frame.SystemRelativeTime().count(), qpc(), 0};
+            // A delayed reader can perpetually refill the pool. Bound each callback
+            // to its configured capacity rather than starving teardown and the UI.
+            for (unsigned drained = 0; drained < 3; ++drained) {
+                if (stopping_.load()) break;
+                auto frame = pool.TryGetNextFrame();
+                if (!frame) break;
+                frame_mark mark{};
+                mark.color = -1;
+                mark.arrival_qpc = qpc();
+                mark.metadata_before = qpc();
+                mark.system_100ns = frame.SystemRelativeTime().count();
+                mark.metadata_after = qpc();
+                // A delayed observer must not change an already acquired frame's timestamp.
+                if (readback_delay_) Sleep(readback_delay_);
                 auto access = frame.Surface().as<
                     ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                 com_ptr<ID3D11Texture2D> source;
@@ -203,6 +237,12 @@ private:
                 if (bgra[0] > 200 && bgra[2] < 70) mark.color = 1;
                 context_->Unmap(pixel_.get(), 0);
                 mark.processed_qpc = qpc();
+                if (extended_) {
+                    mark.timing.cbSize = sizeof(mark.timing);
+                    mark.timing_before = qpc();
+                    mark.timing_result = DwmGetCompositionTimingInfo(nullptr, &mark.timing);
+                    mark.timing_after = qpc();
+                }
                 std::lock_guard lock(mutex_);
                 if (marks_.size() == 128) ++overflow_;
                 else marks_.push_back(mark);
@@ -211,6 +251,9 @@ private:
     }
 
     bool warp_{}; ///< Software D3D fallback, if required.
+    bool extended_{}; ///< Include optional numeric DWM metadata for clock diagnosis.
+    DWORD readback_delay_{}; ///< Controlled observer delay after metadata acquisition.
+    std::atomic<bool> stopping_{false}; ///< Reject new callback work before closing pool resources.
     com_ptr<ID3D11Device> device_; ///< Capture device.
     com_ptr<ID3D11DeviceContext> context_; ///< GPU copy context.
     com_ptr<ID3D11Texture2D> pixel_; ///< Reused one-pixel staging texture.
@@ -227,10 +270,26 @@ private:
 } // namespace
 
 /// Paint six deterministic color flips and print QPC/WGC ordering diagnostics.
-int wmain()
+int wmain(int argc, wchar_t** argv)
 {
     HWND hwnd{};
     try {
+        bool extended{};
+        bool same_cpu{};
+        DWORD readback_delay{};
+        for (int i = 1; i < argc; ++i) {
+            std::wstring arg{argv[i]};
+            if (arg == L"--timestamp-order") extended = true;
+            else if (arg == L"--same-cpu") same_cpu = true;
+            else if (arg == L"--delay-readback-20ms") readback_delay = 20;
+            else throw std::runtime_error("unknown calibration argument");
+        }
+        if (same_cpu) {
+            DWORD_PTR process_mask{}, system_mask{};
+            if (!GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask) ||
+                !SetProcessAffinityMask(GetCurrentProcess(), process_mask & (~process_mask + 1)))
+                throw std::runtime_error("same-CPU process affinity unavailable");
+        }
         if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
             throw std::runtime_error("PMv2 DPI context unavailable");
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -246,7 +305,8 @@ int wmain()
         UpdateWindow(hwnd);
         LARGE_INTEGER frequency{};
         if (!QueryPerformanceFrequency(&frequency)) throw std::runtime_error("QPC frequency unavailable");
-        clock_capture capture(hwnd);
+        clock_capture capture(hwnd, extended, readback_delay);
+        if (extended) std::fprintf(stderr, "STAGE,capture-started\n");
         pump_for(250);
         std::vector<toggle> toggles;
         for (int i = 0; i < 6; ++i) {
@@ -258,8 +318,11 @@ int wmain()
             auto const after = qpc();
             toggles.push_back({color, before, after});
             pump_for(140);
+            if (extended) std::fprintf(stderr, "STAGE,toggle-%d\n", i);
         }
+        if (extended) std::fprintf(stderr, "STAGE,read-marks\n");
         auto frames = capture.marks();
+        if (extended) std::fprintf(stderr, "STAGE,marks-read\n");
         std::printf("META,%lld,%d,%u,%u,%zu\n",
             static_cast<long long>(frequency.QuadPart), capture.warp() ? 1 : 0,
             capture.overflow(), capture.errors(), frames.size());
@@ -275,8 +338,22 @@ int wmain()
                 static_cast<long long>(mark.system_100ns),
                 static_cast<long long>(mark.arrival_qpc),
                 static_cast<long long>(mark.processed_qpc));
+            if (extended) {
+                std::printf("ORDER,%zu,%lld,%lld,%lld,%lld,%08x,%llu,%llu,%llu,%llu,%llu\n",
+                    i, static_cast<long long>(mark.metadata_before),
+                    static_cast<long long>(mark.metadata_after),
+                    static_cast<long long>(mark.timing_before),
+                    static_cast<long long>(mark.timing_after),
+                    static_cast<unsigned>(mark.timing_result),
+                    mark.timing.qpcCompose, mark.timing.qpcVBlank,
+                    mark.timing.qpcFrameComplete, mark.timing.qpcFrameDisplayed,
+                    mark.timing.qpcRefreshPeriod);
+            }
         }
+        std::fflush(stdout);
+        capture.stop();
         DestroyWindow(hwnd);
+        if (extended) std::fprintf(stderr, "STAGE,window-destroyed\n");
         return capture.errors() || capture.overflow() ? 5 : 0;
     } catch (winrt::hresult_error const& e) {
         std::fprintf(stderr, "WGC HRESULT 0x%08x\n", static_cast<unsigned>(e.code()));
