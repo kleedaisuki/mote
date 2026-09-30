@@ -4,7 +4,16 @@ using Mote.Native;
 
 namespace Mote.Tests;
 
+/// <summary>
+/// Keeps virtual-clock scheduler assertions independent of unrelated parallel
+/// parser and large-file workloads; wall-clock waits are deadlock guards, not
+/// an editor-latency contract.
+/// </summary>
+[CollectionDefinition("Native idle scheduler", DisableParallelization = true)]
+public sealed class NativeIdleSchedulerCollection;
+
 /// <summary>Deterministic scheduling tests for opportunistic, versioned full analysis.</summary>
+[Collection("Native idle scheduler")]
 public sealed class NativeIdleAnalysisTests
 {
     /// <summary>Repeated visible offers coalesce into one Full pass for one version.</summary>
@@ -31,8 +40,7 @@ public sealed class NativeIdleAnalysisTests
         if (winner == faulted.Task)
             throw new Xunit.Sdk.XunitException($"Idle Full worker failed: {await faulted.Task}");
         Assert.True(winner == published.Task,
-            $"Expected one idle Full callback; full calls={policy.FullCalls}, " +
-            $"timer={delay.Requests[0].Task.Status}.");
+            $"Expected one idle Full callback; {TimeoutDiagnostics(policy, delay)}");
         var result = await published.Task;
         Assert.Equal(snapshot.Version, result.Version);
         Assert.Equal(AnalysisCompleteness.Complete, result.Completeness);
@@ -72,8 +80,7 @@ public sealed class NativeIdleAnalysisTests
         if (winner == faulted.Task)
             throw new Xunit.Sdk.XunitException($"Idle Full worker failed: {await faulted.Task}");
         Assert.True(winner == published.Task,
-            $"Expected one idle Full callback; full calls={policy.FullCalls}, " +
-            $"old timer={delay.Requests[0].Task.Status}, new timer={delay.Requests[1].Task.Status}.");
+            $"Expected one idle Full callback; {TimeoutDiagnostics(policy, delay)}");
         Assert.Equal(next.Version, await published.Task);
         lock (versions) Assert.Equal(new[] { next.Version }, versions);
         Assert.Equal(1, policy.FullCalls);
@@ -88,13 +95,20 @@ public sealed class NativeIdleAnalysisTests
         using var driver = new NativeFormatSessionDriver(policy);
         var delay = new ControlledDelay();
         var published = new TaskCompletionSource<DocumentAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var idle = new NativeIdleFullAnalysis(driver, policy.Kind,
-            (_, result, _) => published.TrySetResult(result), delay: delay.WaitAsync);
+            (_, result, _) => published.TrySetResult(result),
+            onError: (_, error) => faulted.TrySetResult(error), delay: delay.WaitAsync);
         var snapshot = document.Snapshot;
         Assert.Equal(IdleFullOffer.Scheduled, idle.Offer(snapshot, Visible(snapshot),
             new TextSpan(0, snapshot.Length)));
         delay.Complete(0);
-        var result = await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var winner = await Task.WhenAny(published.Task, faulted.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        if (winner == faulted.Task)
+            throw new Xunit.Sdk.XunitException($"Idle Full worker failed: {await faulted.Task}");
+        Assert.True(winner == published.Task,
+            $"Expected one idle Full callback; {TimeoutDiagnostics(policy, delay)}");
+        var result = await published.Task;
         Assert.Equal(AnalysisCompleteness.Provisional, result.Completeness);
         Assert.Null(result.TotalDiagnosticCount);
         Assert.Equal(1, policy.FullCalls);
@@ -138,8 +152,10 @@ public sealed class NativeIdleAnalysisTests
         var delay = new ControlledDelay();
         var published = new TaskCompletionSource<DocumentAnalysis>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var idle = new NativeIdleFullAnalysis(driver, policy.Kind,
-            (_, result, _) => published.TrySetResult(result), delay: delay.WaitAsync);
+            (_, result, _) => published.TrySetResult(result),
+            onError: (_, error) => faulted.TrySetResult(error), delay: delay.WaitAsync);
         var snapshot = document.Snapshot;
         var range = new TextSpan(snapshot.Length / 2, 64);
         Assert.Equal(IdleFullOffer.Scheduled, idle.Offer(snapshot, Visible(snapshot), range));
@@ -147,7 +163,12 @@ public sealed class NativeIdleAnalysisTests
         Assert.Equal(0, policy.FullCalls); // Offering cannot parse on the UI thread.
 
         delay.Complete(0);
-        var result = await published.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var winner = await Task.WhenAny(published.Task, faulted.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        if (winner == faulted.Task)
+            throw new Xunit.Sdk.XunitException($"Idle Full worker failed: {await faulted.Task}");
+        Assert.True(winner == published.Task,
+            $"Expected one idle Full callback; {TimeoutDiagnostics(policy, delay)}");
+        var result = await published.Task;
         Assert.Equal(snapshot.Version, result.Version);
         Assert.Equal(fullClaim, result.Completeness);
         Assert.Equal(fullClaim == AnalysisCompleteness.Complete ? 0 : null,
@@ -161,6 +182,17 @@ public sealed class NativeIdleAnalysisTests
     private static DocumentAnalysis Visible(TextSnapshot snapshot) => new(snapshot.Version,
         new TextSpan(0, snapshot.Length), AnalysisCompleteness.Provisional,
         new SemanticNode("document", new TextSpan(0, snapshot.Length)), [], [], null);
+
+    /// <summary>Describes an unobserved worker without changing scheduler state.</summary>
+    private static string TimeoutDiagnostics(ProbePolicy policy, ControlledDelay delay)
+    {
+        ThreadPool.GetAvailableThreads(out var availableWorkers, out _);
+        ThreadPool.GetMaxThreads(out var maxWorkers, out _);
+        return $"full calls={policy.FullCalls}, timers=" +
+            $"[{string.Join(",", delay.Requests.Select(request => request.Task.Status))}], " +
+            $"worker threads={ThreadPool.ThreadCount}, available={availableWorkers}/{maxWorkers}, " +
+            $"queued={ThreadPool.PendingWorkItemCount}.";
+    }
 
     /// <summary>Captures requested delays and completes them only when the test chooses.</summary>
     private sealed class ControlledDelay
