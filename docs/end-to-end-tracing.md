@@ -165,6 +165,15 @@ endpoint. No new launch route/workflow is introduced in this change.
 
 ## External basis and remaining useful experiments
 
+The integrated [CI run 36736928170](https://github.com/kleedaisuki/mote/actions/runs/36736928170)
+at `6f990ed` passed all six strict jobs: Windows/macOS solution tests and
+single-binary Native AOT on win-x64, win-arm64, osx-x64 and osx-arm64. This
+confirms cross-platform compilation/test compatibility of the new hooks and
+published binary inventory, **not** that the macOS draw callback was actually
+triggered in a target process. The Windows managed hidden-window draw tests and
+their synthetic `UpdateWindow` stimulus remain the only runtime hook evidence
+for this change. The proposed target-safe Mac probe above remains unimplemented.
+
 Microsoft's [WM_PAINT contract](https://learn.microsoft.com/en-us/windows/win32/gdi/wm-paint)
 allows internal paint messages without an update region, motivating the explicit
 source-region check. Apple's [displayIfNeeded contract](https://developer.apple.com/documentation/appkit/nsview/displayifneeded%28%29)
