@@ -201,6 +201,7 @@ try {
             $sources[0].value_is_read_only -ne $false -or
             -not $previews[0].has_text_pattern -or
             -not $previews[0].has_value_pattern -or
+            $previews[0].accessible_name -cne 'Mote preview' -or
             $previews[0].text_is_read_only -ne $true -or
             $previews[0].value_is_read_only -ne $true) {
             throw "Ordinary UIA $view is not exactly one editable source and one read-only preview."
