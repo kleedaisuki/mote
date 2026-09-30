@@ -254,7 +254,7 @@ native draw callback, not the physical display compositor or global OS theme.
 `--check-native-mac-composition-theme` is a separate, non-gating published-binary
 diagnostic for a process-local window appearance change **during** marked text.
 It creates a small synthetic Markdown fixture under repository `.temp` and
-stores JSON and three AppKit view rasters under an empty `.cache` child. The
+stores JSON and up to five AppKit view rasters under an empty `.cache` child. The
 default and experimental canvas modes run in separate processes. The probe
 calls `NSTextView`'s `setMarkedText:selectedRange:replacementRange:` with a
 synthetic candidate, switches only its window from dark to light, and requires
@@ -274,9 +274,11 @@ Apple cautions that [`NSTextInputClient` methods](https://developer.apple.com/do
 are primarily for the text-input system and generally unsuitable for unrelated
 programmatic editing. This diagnostic is explicitly synthetic: a passing run
 would not validate a physical keyboard, a real Chinese input method, candidate
-window geometry, or cancellation. A cancellation path will be added only if a
-separate AppKit sequence can prove an unmarked native host, original source,
-and **no extra engine version**; `unmarkText` is not a cancellation mechanism.
+window geometry, or real input-method cancellation. The follow-up synthetic
+cancellation phase first clears the provisional marked range and asks `NSTextInputContext` to
+discard its conversion session, then requires an unmarked restored native
+host and **no extra engine version**. Its target-host outcome is reported
+below; `unmarkText` is not a cancellation mechanism.
 
 [Hosted run 36680070533](https://github.com/kleedaisuki/mote/actions/runs/36680070533)
 passed this non-gating **commit-only** diagnostic on published `osx-arm64`
@@ -293,6 +295,18 @@ source and caret positions (38→39 default; 20→21 canvas), while the on-disk
 fixture hash remained unchanged. The three retained PNGs per mode are
 inspectable but are not used as a semantic-pixel or compositor oracle.
 No real CJK input method or cancellation was exercised.
+
+The follow-up synthetic cancellation extension has **not** passed yet.
+[Run 36682437200](https://github.com/kleedaisuki/mote/actions/runs/36682437200)
+passed the strict jobs, but its non-gating composition diagnostic failed in
+both Mac RIDs and both editor modes at `stage 7 check cancelled-dark` after
+capturing `dark-marked`. The committed candidate remained at generation 2,
+version 1 in that captured phase; three appearance callbacks and two
+composition-settled callbacks were observed by the failing probe. The stage-7
+check originally combined canonical source, native host, selection, and preview
+assertions, so this evidence does **not** identify which property failed. A
+content-free check-code rerun is pending. This is a synthetic AppKit protocol
+result, not evidence about an actual Chinese input method or its cancellation.
 
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release

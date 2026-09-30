@@ -277,14 +277,17 @@ internal static class MacCompositionThemeProbe
                     case 7 when !_shell.ProbeHasMarkedText && !_shell.IsTextComposing &&
                         _shell.ProbeThemeId == ThemePolicies.DarkId &&
                         _settledCallbacks > _beforeSettled && AnalysisReady():
-                        _check = "cancelled-dark";
+                        _check = "cancelled-dark-canonical";
                         CheckCancellationIsolation();
+                        _check = "cancelled-dark-native-host";
                         if (_shell.ProbeNativeText != _hostBeforeCancellation)
                             throw new InvalidOperationException("Cancelled candidate remains in native host.");
+                        _check = "cancelled-dark-selection";
                         CheckSelection(_insertionOffset + Candidate.Length);
                         _cancelVersionUnchanged = CurrentStamp().Version == _committedVersion;
                         _cancelSelectionPreserved = true;
                         _cancelIsolated = true;
+                        _check = "cancelled-dark-preview";
                         Capture("dark-cancelled", ThemePolicies.DarkId);
                         _shell.ProbeInvokeMenu("moteUndo:");
                         _stage = 8;
@@ -315,6 +318,7 @@ internal static class MacCompositionThemeProbe
             {
                 Console.Error.WriteLine($"Mac composition-theme stage {_stage} check {_check}: " +
                     $"{error.GetType().Name}.");
+                if (_stage == 7) ReportCancellationState();
                 Finish(false);
                 return;
             }
@@ -361,6 +365,27 @@ internal static class MacCompositionThemeProbe
                 CurrentStamp().Version != _committedVersion ||
                 CurrentSource() != _committedSource || !SameInput())
                 throw new InvalidOperationException("Cancelled text escaped into canonical source.");
+        }
+
+        /// <summary>Reports only bounded equality and length evidence for a failed synthetic cancel.</summary>
+        private void ReportCancellationState()
+        {
+            try
+            {
+                var source = CurrentSource();
+                var host = _shell.ProbeNativeText;
+                var stamp = CurrentStamp();
+                var selection = Selection();
+                var caret = _insertionOffset + Candidate.Length;
+                Console.Error.WriteLine("Mac composition-theme cancel state: " +
+                    $"generation-eq={stamp.Generation == _baseStamp.Generation};" +
+                    $"version-eq={stamp.Version == _committedVersion};" +
+                    $"source-eq={source == _committedSource};source-length={source.Length};" +
+                    $"input-eq={SameInput()};host-eq={host == _hostBeforeCancellation};" +
+                    $"host-length={host.Length};expected-host-length={_hostBeforeCancellation.Length};" +
+                    $"selection-eq={selection == (caret, caret)};analysis-ready={AnalysisReady()};");
+            }
+            catch (Exception) { /* A diagnostic cannot replace the original failure. */ }
         }
 
         /// <summary>
