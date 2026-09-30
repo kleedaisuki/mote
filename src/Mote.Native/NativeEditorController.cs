@@ -13,7 +13,7 @@ namespace Mote.Native;
 /// Composes the canonical document engine with one bounded native text viewport.
 /// The platform shell never owns persistence state or a second document model.
 /// </summary>
-internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
+internal sealed partial class NativeEditorController : IDisposable, IAccessibleViewport
 {
     internal const int PageSize = 64 * 1024;
     internal const int PageSlack = 8 * 1024;
@@ -136,6 +136,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         shell.TextChanged += Edited;
         shell.SelectionChanged += SelectionChanged;
         shell.PreviewActivated += PreviewActivated;
+        shell.GridIntentRequested += GridIntentRequested;
+        shell.GridWindowRequested += GridWindowRequested;
         shell.NewRequested += New;
         shell.OpenRequested += Open;
         shell.SaveRequested += Save;
@@ -175,6 +177,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     {
         if (_disposed) return;
         _disposed = true;
+        CancelGridCopy();
         _shell.CancelSourceDrawTrace();
         FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
         FinishEditPresentation(TelemetryStatus.Cancelled);
@@ -186,6 +189,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _shell.AppearanceChanged -= AppearanceChanged;
         _shell.CompositionSettled -= CompositionSettled;
         _shell.PreviewActivated -= PreviewActivated;
+        _shell.GridIntentRequested -= GridIntentRequested;
+        _shell.GridWindowRequested -= GridWindowRequested;
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
         _idleFullAnalysis?.Dispose();
@@ -545,6 +550,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     private void ReplaceDocument(Document replacement, TelemetryMark drawMark = default, int openRequest = 0)
     {
+        ResetGridInterest();
         if (openRequest == 0) FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
         ++_openSerial;
         CancelAnalysis();
@@ -1574,6 +1580,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     {
         var scope = snapshot.Length <= FullAnalysisLimit ? AnalysisScope.Full : AnalysisScope.Visible;
         var request = new AnalysisRequest(new Mote.Formats.TextSpan(pageStart, pageLength), scope);
+        var gridRequest = policy.Kind == DocumentKind.Csv && PreviewVisible()
+            ? CreateGridRequest(snapshot, request) : null;
         _ = Task.Run(async () =>
         {
             try
@@ -1589,7 +1597,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 } : 80;
                 await Task.Delay(delay, cancellation.Token).ConfigureAwait(false);
                 var presentation = await AnalyzeSessionTraced(driver, snapshot, request,
-                    cancellation.Token, editMark).ConfigureAwait(false);
+                    cancellation.Token, editMark, gridRequest).ConfigureAwait(false);
                 var result = presentation.Analysis;
                 cancellation.Token.ThrowIfCancellationRequested();
                 PostAnalysis(serial, () =>
@@ -1612,7 +1620,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     _visibleSessionAnalysis = new NativeAnalysisView(tokens, diagnostics,
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
                         new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans,
-                        Flow: preview.Flow);
+                        Flow: preview.Flow, Grid: presentation.Grid);
                     PresentAnalysis(_visibleSessionAnalysis);
                     _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
                         result.Completeness, result.Coverage,
@@ -1679,12 +1687,13 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     /// <summary>Measures the serialized format turn, including its bounded render projection.</summary>
     private static async Task<NativeFormatPresentation> AnalyzeSessionTraced(NativeFormatSessionDriver driver,
-        TextSnapshot snapshot, AnalysisRequest request, CancellationToken token, TelemetryMark mark)
+        TextSnapshot snapshot, AnalysisRequest request, CancellationToken token, TelemetryMark mark,
+        CsvGridRequest? gridRequest = null)
     {
         using var parse = MoteTelemetry.StartChild(TelemetryOperation.AnalysisParse, mark, Dimensions(snapshot));
         try
         {
-            var result = await driver.AnalyzePresentationAsync(snapshot, request, token).ConfigureAwait(false);
+            var result = await driver.AnalyzePresentationAsync(snapshot, request, token, gridRequest).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             MoteTelemetry.RecordElapsed(TelemetryOperation.EditToAnalysis, MoteTelemetry.Fork(mark), Dimensions(snapshot));
             return result;
@@ -1732,6 +1741,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
 
     private void DocumentChanged(object? sender, DocumentChangedRangeEventArgs change)
     {
+        ResetGridInterest();
         _sessionDriver?.Record(change);
         _navigation.ApplyChange(change.Change, change.After);
         _canvas?.ApplyEdit(change.After, change.Change);
@@ -1808,6 +1818,14 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             return;
         }
 
+        if (policy.Kind == DocumentKind.Csv && PreviewVisible())
+        {
+            // Idle indexing has committed the same session's coordinate facts.
+            // Query the latest bounded interest rather than replacing Grid with Flow.
+            ScheduleAnalysis();
+            return;
+        }
+
         using var present = MoteTelemetry.Start(TelemetryOperation.AnalysisToPresentation,
             Dimensions(snapshot));
         var tokens = ProjectTokens(result.Tokens, _pageStart, _pageLength, _projection!);
@@ -1827,6 +1845,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     private void SelectPolicy(IDocumentPolicy policy)
     {
         if (ReferenceEquals(policy, _policy)) return;
+        ResetGridInterest();
         ++_formatSerial;
         CancelAnalysis();
         _idleFullAnalysis?.Dispose();

@@ -26,6 +26,20 @@ internal static class Program
             if (result == 0) Console.WriteLine("mote-native-mac-flow-rendering-ready");
             return result;
         }
+        if (args.Length == 1 && args[0] == "--check-native-mac-csv-grid")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            var result = Mac.MacCsvGridProbe.Run();
+            if (result == 0) Console.WriteLine("mote-native-mac-csv-grid-ready");
+            return result;
+        }
+        if (args.Length == 1 && args[0] == "--check-native-mac-source-nul")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            var result = Mac.MacSourceNulProbe.Run();
+            if (result == 0) Console.WriteLine("mote-native-mac-source-nul-ready");
+            return result;
+        }
         if (args.Length == 1 && args[0] == "--check-native-mac-theme-overrides")
         {
             if (!OperatingSystem.IsMacOS()) return 3;

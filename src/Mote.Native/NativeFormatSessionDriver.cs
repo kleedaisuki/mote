@@ -4,7 +4,8 @@ using Mote.Formats;
 namespace Mote.Native;
 
 /// <summary>Semantic truth and its bounded presentation from one serialized policy turn.</summary>
-internal sealed record NativeFormatPresentation(DocumentAnalysis Analysis, NativePreview Preview);
+internal sealed record NativeFormatPresentation(DocumentAnalysis Analysis, NativePreview Preview,
+    GridRenderProjection? Grid = null);
 
 /// <summary>
 /// Owns one format session and transports ordered document edits from the UI thread
@@ -100,13 +101,15 @@ internal sealed class NativeFormatSessionDriver : IDisposable
     /// <summary>
     /// Produces semantic and rendering data without allowing another version's
     /// analysis to interleave between them. Native installation remains UI-owned.
+    /// A CSV Grid request shares its single policy update with source decoration;
+    /// unsupported sessions retain their ordinary Flow presentation.
     /// </summary>
     public Task<NativeFormatPresentation> AnalyzePresentationAsync(TextSnapshot snapshot,
-        AnalysisRequest request, CancellationToken cancellationToken) =>
-        QueueAnalysis(snapshot, request, cancellationToken, render: true);
+        AnalysisRequest request, CancellationToken cancellationToken, CsvGridRequest? gridRequest = null) =>
+        QueueAnalysis(snapshot, request, cancellationToken, render: true, gridRequest);
 
     private Task<NativeFormatPresentation> QueueAnalysis(TextSnapshot snapshot, AnalysisRequest request,
-        CancellationToken cancellationToken, bool render)
+        CancellationToken cancellationToken, bool render, CsvGridRequest? gridRequest = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         lock (_gate)
@@ -114,11 +117,11 @@ internal sealed class NativeFormatSessionDriver : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             ++_pendingAnalyses;
         }
-        return Task.Run(() => AnalyzeCoreAsync(snapshot, request, cancellationToken, render));
+        return Task.Run(() => AnalyzeCoreAsync(snapshot, request, cancellationToken, render, gridRequest));
     }
 
     private async Task<NativeFormatPresentation> AnalyzeCoreAsync(TextSnapshot snapshot,
-        AnalysisRequest request, CancellationToken cancellationToken, bool render)
+        AnalysisRequest request, CancellationToken cancellationToken, bool render, CsvGridRequest? gridRequest)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
             _lifetime.Token);
@@ -140,9 +143,24 @@ internal sealed class NativeFormatSessionDriver : IDisposable
             if (rebuild) RebuildSession();
             linked.Token.ThrowIfCancellationRequested();
             DocumentAnalysis result;
+            GridRenderProjection? grid = null;
             try
             {
-                result = _session!.Analyze(snapshot, changes, request, linked.Token);
+                if (render && gridRequest is not null && _session is ICsvGridFormatSession gridSession)
+                {
+                    var bundle = gridSession.AnalyzeGrid(snapshot, changes, gridRequest, linked.Token);
+                    var source = bundle.Source;
+                    // The legacy source contract certifies one interval, never
+                    // the convex hull of independent source interests.
+                    var coverage = source.CertifiedCoverage.Count == 0
+                        ? new TextSpan(0, 0) : source.CertifiedCoverage[0];
+                    result = new DocumentAnalysis(source.Version, coverage, source.Completeness,
+                        source.Root, source.Diagnostics, source.Tokens, source.TotalDiagnosticCount);
+                    grid = bundle.Grid;
+                    if (grid.Version != snapshot.Version || grid.SourceLength != snapshot.Length)
+                        throw new InvalidOperationException("The Grid projection returned a different snapshot identity.");
+                }
+                else result = _session!.Analyze(snapshot, changes, request, linked.Token);
                 if (result.Version != snapshot.Version)
                     throw new InvalidOperationException("The format session returned a different snapshot version.");
             }
@@ -166,7 +184,7 @@ internal sealed class NativeFormatSessionDriver : IDisposable
                 DropCommittedEdits(snapshot.Version);
             }
             NativePreview preview;
-            if (!render) preview = new NativePreview("", []);
+            if (!render || grid is not null) preview = new NativePreview("", []);
             else if (_session is IRenderFormatSession renderer)
             {
                 var flow = renderer.Render(snapshot, result, request, linked.Token);
@@ -178,7 +196,7 @@ internal sealed class NativeFormatSessionDriver : IDisposable
             else
                 preview = NativePreviewBuilder.BuildFlow(result, _policy.Kind, snapshot,
                     request.VisibleRange.Start, request.VisibleRange.Length);
-            return new NativeFormatPresentation(result, preview);
+            return new NativeFormatPresentation(result, preview, grid);
         }
         finally
         {

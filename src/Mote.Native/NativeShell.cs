@@ -67,7 +67,8 @@ internal sealed record NativeAnalysisView(
     IReadOnlyList<NativePreviewSpan>? PreviewSpans = null,
     long PresentationSequence = 0,
     FlowRenderProjection? Flow = null,
-    bool ShowPreview = true)
+    bool ShowPreview = true,
+    GridRenderProjection? Grid = null)
 {
     /// <summary>Identity of this immutable text, style and source-map bundle.</summary>
     public NativePresentationId Identity => new(Stamp, PresentationSequence);
@@ -120,6 +121,10 @@ internal interface INativeEditorShell
     event Action<int, int>? SelectionChanged;
     /// <summary>Raised for pointer or keyboard activation of displayed preview text.</summary>
     event Action<NativePreviewActivation>? PreviewActivated;
+    /// <summary>Raises an identity-bound table selection or explicit source-backed command.</summary>
+    event Action<NativeGridIntent>? GridIntentRequested { add { } remove { } }
+    /// <summary>Raises bounded logical table interests; callbacks never parse source.</summary>
+    event Action<NativeGridWindowRequest>? GridWindowRequested { add { } remove { } }
     /// <summary>Raised by the New command.</summary>
     event Action? NewRequested;
     /// <summary>Raised by the Open command.</summary>
@@ -194,6 +199,8 @@ internal interface INativeEditorShell
     void FocusSource();
     /// <summary>Prompts for a search term; null means cancel.</summary>
     string? PromptFind();
+    /// <summary>Edits a temporary decoded value; null cancels without any Engine mutation.</summary>
+    string? PromptGridReplacement(string currentValue) => null;
     /// <summary>Prompts for a one-based document line number; null means cancel.</summary>
     int? PromptGoToLine();
     /// <summary>Places an exact selected source string on the OS clipboard.</summary>

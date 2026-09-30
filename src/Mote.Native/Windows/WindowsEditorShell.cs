@@ -66,6 +66,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private nint _window;
     private nint _editor;
     private nint _preview;
+    /// <summary>Bounded CSV ready-cache table; never owns source text or a whole-file row mirror.</summary>
+    private WindowsCsvGrid? _grid;
     private WindowsPreviewAccessibleName? _previewAccessibleName;
     private nint _status;
     private nint _accelerators;
@@ -183,6 +185,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     /// <inheritdoc />
     public event Action<NativePreviewActivation>? PreviewActivated;
+    /// <inheritdoc />
+    public event Action<NativeGridIntent>? GridIntentRequested;
+    /// <inheritdoc />
+    public event Action<NativeGridWindowRequest>? GridWindowRequested;
 
     /// <inheritdoc />
     public void FocusSource()
@@ -500,13 +506,24 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_showPreview != view.ShowPreview)
         {
             _showPreview = view.ShowPreview;
-            Win32.ShowWindow(_preview, _showPreview ? 5 : 0);
             ResizeControls();
         }
         // Layout may synchronously publish a newer analysis through Canvas resize.
         // Never overwrite that nested install with this superseded presentation.
         if (!ReferenceEquals(_analysis, view)) return;
-        InstallPreview(view);
+        if (view.ShowPreview && view.Grid is not null) EnsureGrid();
+        if (!ReferenceEquals(_analysis, view)) return;
+        _grid?.Install(view.ShowPreview ? view.Grid : null, view.Identity);
+        if (!ReferenceEquals(_analysis, view)) return;
+        var showGrid = view.ShowPreview && view.Grid is not null;
+        if (_grid is not null) Win32.ShowWindow(_grid.Handle, showGrid ? 5 : 0);
+        // ShowWindow synchronously dispatches WM_SHOWWINDOW. A nested publish
+        // owns both visibility and content; an older outer call must stop here.
+        if (!ReferenceEquals(_analysis, view)) return;
+        Win32.ShowWindow(_preview, view.ShowPreview && !showGrid ? 5 : 0);
+        if (!ReferenceEquals(_analysis, view)) return;
+        if (!showGrid) InstallPreview(view);
+        if (!ReferenceEquals(_analysis, view)) return;
         UpdateStatus(view.Status.Length == 0 ? view.DiagnosticsSummary :
             view.Status + "  " + view.DiagnosticsSummary);
     }
@@ -697,9 +714,11 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             (nint)ColorRef(theme.Palette.EditorBackground));
         Win32.SendMessageW(_preview, Win32.EM_SETBKGNDCOLOR, 0,
             (nint)ColorRef(theme.Palette.PreviewBackground));
+        _grid?.SetTheme(theme);
         if (!updateFonts) return;
         Win32.SendMessageW(_editor, Win32.WM_SETFONT, (nuint)editorFont, (nint)1);
         Win32.SendMessageW(_preview, Win32.WM_SETFONT, (nuint)uiFont, (nint)1);
+        if (_grid is not null) Win32.SendMessageW(_grid.Handle, Win32.WM_SETFONT, (nuint)uiFont, 1);
         Win32.SendMessageW(_status, Win32.WM_SETFONT, (nuint)uiFont, (nint)1);
     }
 
@@ -714,6 +733,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         _lastFind = value;
         return value;
     }
+
+    /// <inheritdoc />
+    public string? PromptGridReplacement(string currentValue) =>
+        Win32TextPrompt.Show(_window, "Replace CSV cell", "Decoded value (Ctrl+Enter accepts):", currentValue, multiline: true);
 
     /// <inheritdoc />
     public int? PromptGoToLine()
@@ -890,6 +913,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 HandleCommand((int)(wParam & 0xFFFF));
                 return 0;
             case Win32.WM_NOTIFY:
+                if (_grid?.HandleNotify(lParam, out var gridResult) == true) return gridResult;
                 if (_editor != 0 && lParam != 0 && !_settingText && !_settingSelection)
                 {
                     var header = Marshal.PtrToStructure<Win32.NotificationHeader>(lParam);
@@ -935,6 +959,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 return 0;
             case Win32.WM_DESTROY:
                 Win32.KillTimer(window, StyleTimerId);
+                _grid?.Dispose();
+                _grid = null;
                 _previewAccessibleName?.Dispose();
                 _previewAccessibleName = null;
                 if (_statusBrush != 0)
@@ -1014,6 +1040,18 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_analysis is not null) SetAnalysis(_analysis);
     }
 
+    /// <summary>Plain and Flow startup never constructs an unused table; the first CSV view inherits current theme/layout.</summary>
+    private void EnsureGrid()
+    {
+        if (_grid is not null) return;
+        _grid = new WindowsCsvGrid(_window, 104, _theme);
+        _grid.IntentRequested += intent => GridIntentRequested?.Invoke(intent);
+        _grid.WindowRequested += request => GridWindowRequested?.Invoke(request);
+        _grid.Faulted += error => ReportCallbackFailure("CSV table", error);
+        if (_uiFont != 0) Win32.SendMessageW(_grid.Handle, Win32.WM_SETFONT, (nuint)_uiFont, 1);
+        ResizeControls();
+    }
+
     private void ResizeControls()
     {
         if (_editor == 0 || !Win32.GetClientRect(_window, out var rect)) return;
@@ -1025,6 +1063,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_experimentalCanvas) _canvasIsland?.Resize(editorWidth, bodyHeight);
         else Win32.MoveWindow(_editor, 0, 0, editorWidth, bodyHeight, true);
         Win32.MoveWindow(_preview, editorWidth, 0, width - editorWidth, bodyHeight, true);
+        if (_grid is not null) Win32.MoveWindow(_grid.Handle, editorWidth, 0,
+            width - editorWidth, bodyHeight, true);
         Win32.MoveWindow(_status, 4, bodyHeight, Math.Max(0, width - 8), statusHeight, true);
     }
 
@@ -1080,7 +1120,12 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     private void HandleCommand(int id)
     {
+        if (id == CopyId && _grid?.HasFocus == true) { _grid.Copy(); return; }
+        if (id == CutId && _grid?.HasFocus == true)
+        { SetStatusNotice("CSV table is read-only. Use Replace cell (F2) or edit source."); return; }
         if (id == CutId && (_sourceInputReadOnly || !_sourceMapInstalled || _canvasIsland?.IsInputReadOnly == true)) return;
+        if (id == SelectAllId && _grid?.HasFocus == true) { _grid.SelectAll(); return; }
+        if (id == GoToLineId && _grid?.HasFocus == true) { _grid.GoToCoordinate(); return; }
         if (id is CopyId or CutId or FindId or FindNextId or GoToLineId)
             FlushSelection();
         switch (id)
@@ -1461,6 +1506,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <summary>Removes the previous page's preview without touching editor text or focus.</summary>
     private void ClearPreview()
     {
+        _grid?.Install(null, default);
         _previewIdentity = null;
         _previewPress = null;
         _previewProjection = new NativeTextProjection("", NativeLineEndingMode.CrLf);

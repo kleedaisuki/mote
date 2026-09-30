@@ -877,6 +877,39 @@ jobs:
           if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-theme-overrides-ready')) {
             throw "AppKit theme override diagnostic failed (exit $code)."
           }
+      # In-memory owner-only AppKit table; no file, clipboard, input-source,
+      # TCC, network, or external event mutation. The window affects only the
+      # disposable hosted runner's foreground state.
+      - name: Diagnose native macOS CSV Grid (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-csv-grid 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-csv-grid-ready')) {
+            throw "AppKit CSV Grid diagnostic failed (exit $code)."
+          }
+      # Owned AppKit source probe for embedded NUL/literal-marker preservation.
+      # It edits only an unsaved in-memory document and touches no user state.
+      - name: Diagnose native macOS source NUL preservation (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-source-nul 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-source-nul-ready')) {
+            throw "AppKit source NUL diagnostic failed (exit $code)."
+          }
       - name: Upload external macOS workflow report
         if: always() && startsWith(matrix.rid, 'osx-')
         uses: actions/upload-artifact@v4

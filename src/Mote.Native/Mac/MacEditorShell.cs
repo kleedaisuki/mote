@@ -52,6 +52,10 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private nint _split;
     private nint _editorScroll;
     private nint _previewScroll;
+    /// <summary>Read-only bounded CSV table; source ownership remains in the controller.</summary>
+    private MacCsvGrid? _csvGrid;
+    private bool _gridShown;
+    private nint ActivePreviewPane => _gridShown ? _csvGrid?.View ?? _previewScroll : _previewScroll;
     private bool _previewShown = true;
     private bool _installingPreview;
     private double _splitFraction = 730d / 1120d;
@@ -116,6 +120,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <inheritdoc />
     public event Action<NativePreviewActivation>? PreviewActivated;
+    /// <inheritdoc />
+    public event Action<NativeGridIntent>? GridIntentRequested;
+    /// <inheritdoc />
+    public event Action<NativeGridWindowRequest>? GridWindowRequested;
+    /// <inheritdoc />
+    public string? PromptGridReplacement(string value) =>
+        MacGridReplacement.Prompt(value);
 
     /// <inheritdoc />
     public void FocusSource()
@@ -293,6 +304,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 _accessibility?.Dispose();
                 _accessibility = null;
                 _canvas?.Dispose();
+                _csvGrid?.Dispose();
+                _csvGrid = null;
                 ObjC.Send(pool, ObjC.Sel("release"));
             }
         }
@@ -319,7 +332,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         if (_pendingDocument is { } previous &&
             (previous.Stamp != view.Stamp || previous.PageStart != view.PageStart))
-            ClearAnalysisPreview();
+            ClearAnalysisPreview(preserveGridSelection: previous.Stamp == view.Stamp);
         _pendingDocument = view;
         _statusText = view.Status;
         if (_editor == 0) return;
@@ -896,7 +909,10 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <summary>Native split/source/preview handles, read only by the bounded target probe.</summary>
     internal (nint Split, nint Source, nint Preview) ProbeLayoutViews =>
-        (_split, _editorScroll, _previewScroll);
+        (_split, _editorScroll, ActivePreviewPane);
+
+    /// <summary>Actual AppKit table and identity for opt-in disposable target acceptance.</summary>
+    internal (nint Table, NativePresentationId? Identity) ProbeGrid => (_csvGrid?.Table ?? 0, _csvGrid?.Identity);
 
     /// <summary>Decorative bottom surface for the target-host pixel probe.</summary>
     internal nint ProbeStatusBackgroundView => _statusBackground;
@@ -1294,6 +1310,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(_editor, ObjC.Sel("setBackgroundColor:"), Color(palette.EditorBackground));
         ObjC.Send(_editor, ObjC.Sel("setTextColor:"), editorForeground);
         ObjC.Send(_editor, ObjC.Sel("setInsertionPointColor:"), Color(palette.Cursor));
+        _csvGrid?.SetTheme(_theme!);
         ObjC.Send(_preview, ObjC.Sel("setBackgroundColor:"), Color(palette.PreviewBackground));
         ObjC.Send(_preview, ObjC.Sel("setTextColor:"), Color(palette.PreviewForeground));
         ObjC.Send(_status, ObjC.Sel("setTextColor:"), Color(palette.MutedForeground));
@@ -1313,11 +1330,12 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// Removes previous-document or previous-page preview content immediately;
     /// analysis for the new presentation will repopulate it asynchronously.
     /// </summary>
-    private void ClearAnalysisPreview()
+    private void ClearAnalysisPreview(bool preserveGridSelection = false)
     {
         _pendingAnalysis = null;
         _appliedPreviewIdentity = null;
         _deferredAnalysisText = null;
+        _csvGrid?.Clear(preserveGridSelection);
         _previewText = string.Empty;
         if (_preview != 0)
             ObjC.Send(_preview, ObjC.Sel("setString:"), ObjC.String(string.Empty));
@@ -1346,11 +1364,17 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         // The event must identify exactly the analysis painted on screen, not
         // a newer pending analysis that may be deferred during source preedit.
         _appliedPreviewIdentity = null;
+        SwitchGrid(view.Grid is not null);
         SetPreviewVisibility(view.ShowPreview);
         // Split geometry can synchronously publish a new canvas viewport and
         // reenter SetAnalysis. The newest request, including its map, wins.
         if (!ReferenceEquals(_pendingAnalysis, view) ||
             !AnalysisMatchesCurrentDocument(view)) return;
+        if (view.Grid is { } grid)
+        {
+            _csvGrid!.Install(grid, view.Identity);
+            return;
+        }
         if (view.Flow is { } flow)
         {
             SetFlowPreview(view, flow);
@@ -1463,6 +1487,23 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     }
 
     /// <summary>Removes the redundant pane while retaining its control and user split proportion.</summary>
+    /// <summary>Swaps native rendering families without replacing either source or Flow controls.</summary>
+    private void SwitchGrid(bool show)
+    {
+        if (_split == 0 || show == _gridShown) return;
+        _csvGrid ??= new MacCsvGrid(
+            intent => GridIntentRequested?.Invoke(intent),
+            request => GridWindowRequested?.Invoke(request));
+        if (_theme is not null) _csvGrid.SetTheme(_theme);
+        var old = ActivePreviewPane;
+        var frame = MacOnScreenCanvasNative.GetRect(old, ObjC.Sel("frame"));
+        if (_previewShown) ObjC.Send(old, ObjC.Sel("removeFromSuperview"));
+        _gridShown = show;
+        ObjC.Send(ActivePreviewPane, ObjC.Sel("setFrame:"), frame);
+        if (_previewShown) ObjC.Send(_split, ObjC.Sel("addSubview:"), ActivePreviewPane);
+        ObjC.Send(_split, ObjC.Sel("adjustSubviews"));
+    }
+
     private void SetPreviewVisibility(bool show)
     {
         if (_split == 0 || show == _previewShown) return;
@@ -1473,12 +1514,12 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             if (width > 0) _splitFraction = Math.Clamp(sourceWidth / width, 0.1, 0.9);
             _previewShown = false;
             FocusSource();
-            ObjC.Send(_previewScroll, ObjC.Sel("removeFromSuperview"));
+            ObjC.Send(ActivePreviewPane, ObjC.Sel("removeFromSuperview"));
         }
         else
         {
             _previewShown = true;
-            ObjC.Send(_split, ObjC.Sel("addSubview:"), _previewScroll);
+            ObjC.Send(_split, ObjC.Sel("addSubview:"), ActivePreviewPane);
         }
         ObjC.Send(_split, ObjC.Sel("adjustSubviews"));
         if (show && _previewShown)
@@ -2124,13 +2165,29 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     { var shell = s_current; shell?.NotifyAfterComposition(shell.GoToLineRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SelectAll(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.NotifyAfterComposition(shell.SelectAllRequested); }
+    {
+        var shell = s_current;
+        if (shell?._gridShown == true && shell._csvGrid is { } grid &&
+            ObjC.Send(shell._window, ObjC.Sel("firstResponder")) == grid.Table) grid.SelectAllReady();
+        else shell?.NotifyAfterComposition(shell.SelectAllRequested);
+    }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Copy(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.NotifyAfterComposition(shell.CopyRequested); }
+    {
+        var shell = s_current;
+        if (shell?._gridShown == true && shell._csvGrid is { } grid &&
+            ObjC.Send(shell._window, ObjC.Sel("firstResponder")) == grid.Table)
+            grid.CopySelection();
+        else shell?.NotifyAfterComposition(shell.CopyRequested);
+    }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Cut(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.NotifyAfterComposition(shell.CutRequested); }
+    {
+        var shell = s_current;
+        if (shell?._gridShown == true && shell._csvGrid is { } grid &&
+            ObjC.Send(shell._window, ObjC.Sel("firstResponder")) == grid.Table) return;
+        shell?.NotifyAfterComposition(shell.CutRequested);
+    }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Quit(nint self, nint selector, nint sender)
     { var shell = s_current; shell?.Close(); }
