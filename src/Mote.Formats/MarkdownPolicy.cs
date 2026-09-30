@@ -12,8 +12,14 @@ namespace Mote.Formats;
 /// </summary>
 public sealed class MarkdownPolicy : IIncrementalDocumentPolicy
 {
-    /// <summary>Shared safe parser configuration for full and incremental projections.</summary>
-    internal static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().DisableHtml().Build();
+    /// <summary>
+    /// Shared safe parser configuration for full and incremental projections. Precise
+    /// locations are required for inline nodes: default Markdig offsets can otherwise
+    /// point to the document head instead of a reference's actual UTF-16 source range.
+    /// This changes coordinate tracking, not the admitted CommonMark grammar.
+    /// </summary>
+    internal static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .DisableHtml().UsePreciseSourceLocation().Build();
 
     /// <inheritdoc />
     public DocumentKind Kind => DocumentKind.Markdown;
