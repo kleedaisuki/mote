@@ -48,6 +48,8 @@ internal static class Win32
     internal const int DWMWA_COLOR_DEFAULT = -1;
     internal const int WM_KEYDOWN = 0x0100;
     internal const uint WM_CHAR = 0x0102;
+    internal const uint WM_LBUTTONDOWN = 0x0201;
+    internal const uint WM_LBUTTONUP = 0x0202;
     internal const uint WM_CUT = 0x0300;
     internal const uint WM_COPY = 0x0301;
     internal const uint WM_PASTE = 0x0302;
@@ -289,6 +291,8 @@ internal static class Win32
     internal static extern bool MoveWindow(nint window, int x, int y, int width, int height, bool repaint);
     [DllImport("user32.dll")]
     internal static extern nint SetFocus(nint window);
+    [DllImport("user32.dll")]
+    internal static extern short GetKeyState(int virtualKey);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern nint SendMessageW(nint window, int message, nuint wParam, nint lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

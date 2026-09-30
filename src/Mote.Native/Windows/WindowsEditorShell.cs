@@ -52,6 +52,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private const uint WmThemeChanged = 0x031A;
     private static readonly Win32.WindowProcedure WindowProcedure = Dispatch;
     private static readonly Win32.SubclassProcedure EditorSubclassProcedure = EditorSubclass;
+    private static readonly Win32.SubclassProcedure PreviewSubclassProcedure = PreviewSubclass;
     private static WindowsEditorShell? _creating;
     private static WindowsEditorShell? _active;
     private readonly ConcurrentQueue<Action> _posted = new();
@@ -72,6 +73,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private NativeTextProjection _previewProjection = new("", NativeLineEndingMode.CrLf);
     private NativeDocumentView? _document;
     private NativeAnalysisView? _analysis;
+    private NativeDocumentStamp? _previewStamp;
+    private (int X, int Y)? _previewPress;
     private bool _analysisPresentationDeferred;
     private NativeDocumentStamp? _canvasStamp;
     private IThemePolicy _theme = ThemePolicies.Get(ThemePolicies.DefaultId);
@@ -165,6 +168,16 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
 
     /// <inheritdoc />
     public event Action? CompositionSettled;
+
+    /// <inheritdoc />
+    public event Action<NativePreviewActivation>? PreviewActivated;
+
+    /// <inheritdoc />
+    public void FocusSource()
+    {
+        var source = _experimentalCanvas ? _canvasIsland?.InputHandle ?? 0 : _editor;
+        if (source != 0) Win32.SetFocus(source);
+    }
 
     /// <inheritdoc />
     public event Action<string>? TextChanged;
@@ -430,6 +443,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_window == 0) return;
         if (!_experimentalCanvas) ScheduleStyle();
         _settingText = true;
+        _previewStamp = null;
         try
         {
             _previewProjection = new NativeTextProjection(view.PreviewText, NativeLineEndingMode.CrLf);
@@ -442,6 +456,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             _settingText = false;
         }
         ApplyPreviewColors(view);
+        // This stamp describes bytes already installed in RichEdit, not a queued analysis.
+        _previewStamp = view.Stamp;
         UpdateStatus(view.Status.Length == 0 ? view.DiagnosticsSummary :
             view.Status + "  " + view.DiagnosticsSummary);
     }
@@ -933,6 +949,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             (nint)(Win32.ENM_CHANGE | Win32.ENM_SELCHANGE));
         if (!Win32.SetWindowSubclass(_editor, EditorSubclassProcedure, 1, 0))
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot protect RichEdit IME composition.");
+        if (!Win32.SetWindowSubclass(_preview, PreviewSubclassProcedure, 2, 0))
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot handle preview activation.");
         SetTheme(_theme);
         if (_document is not null)
         {
@@ -1109,6 +1127,64 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         return result;
     }
 
+    /// <summary>
+    /// Lets RichEdit finish ordinary selection/copy behavior before reporting a collapsed
+    /// preview caret. A drag is selection, never navigation; source mapping belongs to the
+    /// controller and must use the stamp attached to the installed preview.
+    /// </summary>
+    private static nint PreviewSubclass(nint window, uint message, nuint wParam,
+        nint lParam, nuint subclassId, nuint reference)
+    {
+        var shell = _active ?? _creating;
+        if (shell is null) return Win32.DefSubclassProc(window, message, wParam, lParam);
+        if (message == Win32.WM_LBUTTONDOWN)
+            shell._previewPress = MousePoint(lParam);
+        if (message == Win32.WM_KEYDOWN && (wParam == 0x0D || wParam == 0x20) &&
+            !PreviewModifierDown())
+        {
+            if (((long)lParam & (1L << 30)) == 0) shell.ActivatePreview();
+            return 0;
+        }
+        if (message == Win32.WM_CHAR && (wParam == 0x0D || wParam == 0x20) &&
+            !PreviewModifierDown())
+            return 0;
+        var result = Win32.DefSubclassProc(window, message, wParam, lParam);
+        if (message == Win32.WM_LBUTTONUP)
+        {
+            var press = shell._previewPress;
+            shell._previewPress = null;
+            var release = MousePoint(lParam);
+            if (press is { } point && Math.Abs(point.X - release.X) <= 4 &&
+                Math.Abs(point.Y - release.Y) <= 4)
+                shell.ActivatePreview();
+        }
+        if (message == Win32.WM_NCDESTROY)
+            Win32.RemoveWindowSubclass(window, PreviewSubclassProcedure, subclassId);
+        return result;
+    }
+
+    /// <summary>Publishes a preview-relative UTF-16 offset only for the installed version.</summary>
+    private void ActivatePreview()
+    {
+        if (_preview == 0 || _previewStamp is not { } stamp ||
+            _previewProjection.Source.Length == 0) return;
+        var selection = GetSelection(_preview);
+        if (selection.Min != selection.Max) return;
+        var offset = _previewProjection.ToSourceBoundary(selection.Min);
+        try { PreviewActivated?.Invoke(new NativePreviewActivation(stamp, offset)); }
+        catch (Exception ex) { ReportCallbackFailure("Preview navigation", ex); }
+    }
+
+    private static (int X, int Y) MousePoint(nint lParam)
+    {
+        var packed = (long)lParam;
+        return (unchecked((short)packed), unchecked((short)(packed >> 16)));
+    }
+
+    private static bool PreviewModifierDown() =>
+        Win32.GetKeyState(0x10) < 0 || Win32.GetKeyState(0x11) < 0 ||
+        Win32.GetKeyState(0x12) < 0;
+
     private void FlushSelection()
     {
         if (!_pendingSelection) return;
@@ -1239,6 +1315,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <summary>Removes the previous page's preview without touching editor text or focus.</summary>
     private void ClearPreview()
     {
+        _previewStamp = null;
+        _previewPress = null;
         _previewProjection = new NativeTextProjection("", NativeLineEndingMode.CrLf);
         _previewOffsets = new RichEditOffsetMap("");
         if (_preview == 0) return;

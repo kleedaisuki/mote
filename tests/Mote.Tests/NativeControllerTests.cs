@@ -717,6 +717,83 @@ public sealed partial class NativeControllerTests
         Assert.Equal(visible.Tokens, shell.Analysis.Tokens);
     }
 
+    /// <summary>Preview activation moves a global caret without committing IME text or changing source.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Controller_preview_navigation_is_versioned_and_nonmutating(bool canvas)
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("preview-navigation.md");
+        const string source = "# Top\n\n## Destination\n";
+        await File.WriteAllTextAsync(path, source);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = canvas };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.Analysis?.PreviewText.Contains("Destination") == true);
+        var view = shell.Analysis!;
+        var destination = view.PreviewText.IndexOf("Destination", StringComparison.Ordinal);
+        var expected = source.IndexOf("## Destination", StringComparison.Ordinal);
+        Assert.True(destination >= 0 && expected >= 0);
+        var beforeVersion = view.Stamp.Version;
+        var beforeCommitCalls = shell.CommitCalls;
+
+        shell.ActivatePreview(destination, view.Stamp with { Version = view.Stamp.Version + 1 });
+        Assert.Equal(0, shell.FocusSourceCount);
+        shell.IsTextComposing = true;
+        shell.ActivatePreview(destination);
+        Assert.Equal(0, shell.FocusSourceCount);
+        shell.IsTextComposing = false;
+        shell.ActivatePreview(destination);
+
+        Assert.Equal(1, shell.FocusSourceCount);
+        Assert.Equal(beforeCommitCalls, shell.CommitCalls);
+        Assert.Equal(beforeVersion, shell.Analysis!.Stamp.Version);
+        Assert.Equal(source, await File.ReadAllTextAsync(path));
+        if (canvas)
+            Assert.Equal(expected, shell.CanvasFrame!.SelectionActive);
+        else
+            Assert.Equal(expected, shell.DisplaySelection!.Value.Active + shell.Document!.PageStart);
+    }
+
+    /// <summary>A bounded preview item can reveal an off-page source location in both editor profiles.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Controller_preview_navigation_reveals_global_off_page_source(bool canvas)
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("preview-far.toml");
+        var source = "#" + new string('x', 80_000) + "\nneedle = 1\n";
+        await File.WriteAllTextAsync(path, source);
+        var shell = new FakeShell(NativeLineEndingMode.Preserve) { CanvasEnabled = canvas };
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.Analysis?.Status.Contains("TOML · Complete") == true);
+        var view = shell.Analysis!;
+        Assert.Contains("needle", view.PreviewText, StringComparison.Ordinal);
+        var expected = source.IndexOf("needle", StringComparison.Ordinal);
+        Assert.True(expected > NativeEditorController.PageSize);
+
+        shell.ActivatePreview(view.PreviewText.IndexOf("needle", StringComparison.Ordinal));
+
+        Assert.Equal(1, shell.FocusSourceCount);
+        Assert.Equal(source, await File.ReadAllTextAsync(path));
+        if (canvas)
+        {
+            Assert.Equal(expected, shell.CanvasFrame!.SelectionActive);
+            Assert.Contains(shell.CanvasFrame.Slices,
+                slice => expected >= slice.SourceStart &&
+                    expected <= slice.SourceStart + slice.SourceLength);
+        }
+        else
+        {
+            Assert.True(shell.Document!.PageStart > 0);
+            Assert.Equal(expected,
+                shell.Document.PageStart + shell.DisplaySelection!.Value.Active);
+        }
+    }
+
     /// <summary>Visible rows beyond a long-line gap never expand the analysis bridge into that gap.</summary>
     [Fact]
     public async Task Canvas_controller_bounds_bridge_even_when_visible_slices_span_huge_gap()
@@ -1340,6 +1417,8 @@ public sealed partial class NativeControllerTests
         /// <inheritdoc />
         public event Action<int, int>? SelectionChanged;
         /// <inheritdoc />
+        public event Action<NativePreviewActivation>? PreviewActivated;
+        /// <inheritdoc />
         public event Action? NewRequested;
         /// <inheritdoc />
         public event Action? OpenRequested;
@@ -1454,6 +1533,8 @@ public sealed partial class NativeControllerTests
         public List<string> CommittedTexts { get; } = [];
         /// <summary>Counts synchronous settle attempts at the native boundary.</summary>
         public int CommitCalls { get; private set; }
+        /// <summary>Accepted preview navigation transfers keyboard focus once.</summary>
+        public int FocusSourceCount { get; private set; }
 
         /// <inheritdoc />
         public void Run() => Shown?.Invoke();
@@ -1531,6 +1612,8 @@ public sealed partial class NativeControllerTests
         public void SetSelection(int displayAnchor, int displayActive) =>
             DisplaySelection = new NativeProjectedSelection(displayAnchor, displayActive);
         /// <inheritdoc />
+        public void FocusSource() => FocusSourceCount++;
+        /// <inheritdoc />
         public string? PromptFind() => SearchQuery;
         /// <inheritdoc />
         public int? PromptGoToLine() => LinePrompt;
@@ -1606,6 +1689,9 @@ public sealed partial class NativeControllerTests
             DisplaySelection = new NativeProjectedSelection(anchor, active);
             SelectionChanged?.Invoke(anchor, active);
         }
+        /// <summary>Raises a native preview gesture with an explicit displayed-analysis stamp.</summary>
+        public void ActivatePreview(int offset, NativeDocumentStamp? stamp = null) =>
+            PreviewActivated?.Invoke(new NativePreviewActivation(stamp ?? Analysis!.Stamp, offset));
         /// <summary>Raises a new global search.</summary>
         public void RequestFind() => FindRequested?.Invoke();
         /// <summary>Repeats the last global search.</summary>

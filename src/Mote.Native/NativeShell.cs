@@ -35,7 +35,16 @@ internal sealed record NativePreviewSpan(
     int Length,
     string Kind,
     TextSpan SourceSpan,
-    bool Emphasis = false);
+    bool Emphasis = false,
+    bool Navigable = true);
+
+/// <summary>
+/// A user activation in the already displayed, read-only native preview.
+/// PreviewOffset is a UTF-16 text offset; it is not a source offset. The
+/// controller resolves it only against the exact presented analysis stamp.
+/// </summary>
+internal readonly record struct NativePreviewActivation(
+    NativeDocumentStamp Stamp, int PreviewOffset);
 
 /// <summary>Version-matched semantic presentation for the current native text page.</summary>
 internal sealed record NativeAnalysisView(
@@ -91,6 +100,8 @@ internal interface INativeEditorShell
     event Action<string>? TextChanged;
     /// <summary>Raised for user-driven selection changes in visible page display offsets.</summary>
     event Action<int, int>? SelectionChanged;
+    /// <summary>Raised for pointer or keyboard activation of displayed preview text.</summary>
+    event Action<NativePreviewActivation>? PreviewActivated;
     /// <summary>Raised by the New command.</summary>
     event Action? NewRequested;
     /// <summary>Raised by the Open command.</summary>
@@ -151,6 +162,8 @@ internal interface INativeEditorShell
     bool CommitPendingText();
     /// <summary>Projects a global source selection into visible display positions.</summary>
     void SetSelection(int displayAnchor, int displayActive);
+    /// <summary>Focuses the source editor after an accepted preview navigation.</summary>
+    void FocusSource();
     /// <summary>Prompts for a search term; null means cancel.</summary>
     string? PromptFind();
     /// <summary>Prompts for a one-based document line number; null means cancel.</summary>

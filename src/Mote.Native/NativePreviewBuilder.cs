@@ -7,6 +7,32 @@ namespace Mote.Native;
 /// <summary>A bounded, source-mapped native presentation, not an HTML web view.</summary>
 internal sealed record NativePreview(string Text, IReadOnlyList<NativePreviewSpan> Spans);
 
+/// <summary>Resolves only explicit semantic preview runs, never inferred text positions.</summary>
+internal static class NativePreviewNavigation
+{
+    /// <summary>
+    /// Returns the originating source item's start for an exact displayed UTF-16
+    /// offset. Decorative banners, delimiters, blank lines, and clipped-away
+    /// text have no destination. The caller must also validate the view stamp.
+    /// </summary>
+    public static int? SourceStart(NativeAnalysisView view, int previewOffset, int sourceLength)
+    {
+        if (previewOffset < 0 || previewOffset >= view.PreviewText.Length) return null;
+        if (view.PreviewSpans is null) return null;
+        foreach (var span in view.PreviewSpans)
+        {
+            if (previewOffset < span.Start || previewOffset >= span.Start + span.Length)
+                continue;
+            if (!span.Navigable) continue;
+            if (span.SourceSpan.Length <= 0 ||
+                span.SourceSpan.Start < 0 || span.SourceSpan.End > sourceLength)
+                return null;
+            return span.SourceSpan.Start;
+        }
+        return null;
+    }
+}
+
 /// <summary>
 /// Projects policy semantic nodes into readable native text runs. The projection is
 /// intentionally bounded; parsing and diagnostics still use the policy's full tree.
@@ -21,7 +47,8 @@ internal static class NativePreviewBuilder
         int sourceBase, bool complete)
     {
         var output = new Builder(sourceBase);
-        if (!complete) output.Add("Viewport sample — incomplete context", "comment", analysis.Root.Span);
+        if (!complete) output.Add("Viewport sample — incomplete context", "comment",
+            analysis.Root.Span, navigable: false);
         switch (kind)
         {
             case DocumentKind.Markdown:
@@ -47,7 +74,7 @@ internal static class NativePreviewBuilder
         var output = new Builder(0);
         if (analysis.Completeness != AnalysisCompleteness.Complete)
             output.Add($"{analysis.Completeness} preview — incomplete context", "comment",
-                analysis.Coverage);
+                analysis.Coverage, navigable: false);
         switch (kind)
         {
             case DocumentKind.Markdown:
@@ -75,14 +102,15 @@ internal static class NativePreviewBuilder
 
         public NativePreview Finish()
         {
-            if (_text.Length == 0) Add("(empty document)", "comment", new TextSpan(0, 0));
+            if (_text.Length == 0)
+                Add("(empty document)", "comment", new TextSpan(0, 0), navigable: false);
             if (_text.Length >= MaxCharacters || _lines >= MaxLines)
                 _text.Append("… preview truncated …\n");
             return new NativePreview(_text.ToString(), _spans);
         }
 
         public void Add(string value, string kind, TextSpan source, int indent = 0,
-            bool emphasis = false, bool blankAfter = false)
+            bool emphasis = false, bool blankAfter = false, bool navigable = true)
         {
             if (_lines >= MaxLines || _text.Length >= MaxCharacters) return;
             if (indent > 0) _text.Append(' ', Math.Min(indent, 8) * 2);
@@ -93,7 +121,8 @@ internal static class NativePreviewBuilder
             _text.Append(value);
             if (value.Length > 0)
                 _spans.Add(new NativePreviewSpan(start, value.Length, kind,
-                    new TextSpan(sourceBase + source.Start, source.Length), emphasis));
+                    new TextSpan(sourceBase + source.Start, source.Length), emphasis,
+                    navigable && source.Length > 0));
             _text.Append('\n');
             _lines++;
             if (blankAfter && _lines < MaxLines && _text.Length < MaxCharacters)
@@ -106,11 +135,15 @@ internal static class NativePreviewBuilder
         public void Plain(string source, TextSpan span)
         {
             if (source.Length == 0) return;
-            var lines = source.Split(['\r', '\n'], StringSplitOptions.None);
-            foreach (var line in lines)
+            var start = 0;
+            while (start < source.Length && _lines < MaxLines && _text.Length < MaxCharacters)
             {
-                if (_lines >= MaxLines || _text.Length >= MaxCharacters) break;
-                Add(line, "paragraph", span);
+                var end = start;
+                while (end < source.Length && source[end] is not ('\r' or '\n')) end++;
+                Add(source[start..end], "paragraph", new TextSpan(span.Start + start, end - start));
+                start = end;
+                if (start < source.Length && source[start] == '\r') start++;
+                if (start < source.Length && source[start] == '\n') start++;
             }
         }
 
@@ -129,8 +162,8 @@ internal static class NativePreviewBuilder
                     break;
                 case "fenced-code" or "code-block":
                     foreach (var line in (node.Value ?? "").Split('\n'))
-                        Add(line.TrimEnd('\r'), "code", node.Span, depth + 1);
-                    Add("", "code", node.Span);
+                    Add(line.TrimEnd('\r'), "code", node.Span, depth + 1);
+                    Add("", "code", node.Span, navigable: false);
                     break;
                 case "list":
                     var number = 1;
@@ -143,7 +176,7 @@ internal static class NativePreviewBuilder
                         foreach (var nested in item.Children.Where(n => n.Kind == "list"))
                             Markdown(nested, depth + 1);
                     }
-                    Add("", "paragraph", node.Span);
+                    Add("", "paragraph", node.Span, navigable: false);
                     break;
                 case "quote":
                     foreach (var child in node.Children)
@@ -152,7 +185,7 @@ internal static class NativePreviewBuilder
                             Add("│ " + (child.Value ?? ""), "quote", child.Span, depth);
                         else Markdown(child, depth + 1);
                     }
-                    Add("", "quote", node.Span);
+                    Add("", "quote", node.Span, navigable: false);
                     break;
                 case "thematic-break":
                     Add("────────────────────", "comment", node.Span, blankAfter: true);
@@ -174,6 +207,7 @@ internal static class NativePreviewBuilder
                     widths[col] = Math.Max(widths[col], Math.Min(24, (row.Children[col].Value ?? "").Length));
             for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
             {
+                if (_lines >= MaxLines || _text.Length >= MaxCharacters) break;
                 var row = rows[rowIndex];
                 var cells = new string[columns];
                 for (var col = 0; col < columns; col++)
@@ -185,7 +219,22 @@ internal static class NativePreviewBuilder
                 }
                 var rowText = $"{rowIndex + 1,4}  │ " + string.Join(" │ ", cells);
                 if (row.Children.Count > columns) rowText += " │ …";
-                Add(rowText, "table-cell", row.Span);
+                var rowStart = _text.Length;
+                Add(rowText, "table-cell", row.Span, navigable: false);
+                var displayed = Math.Min(rowText.Length, Math.Max(0, MaxCharacters - rowStart));
+                var columnStart = 8; // Four-digit row ordinal plus the native column separator.
+                for (var col = 0; col < columns && columnStart < displayed; col++)
+                {
+                    if (col < row.Children.Count && row.Children[col].Span.Length > 0)
+                    {
+                        var visible = Math.Min(cells[col].TrimEnd().Length, displayed - columnStart);
+                        if (visible > 0)
+                            _spans.Add(new NativePreviewSpan(rowStart + columnStart, visible,
+                                "table-cell", new TextSpan(sourceBase + row.Children[col].Span.Start,
+                                    row.Children[col].Span.Length)));
+                    }
+                    columnStart += cells[col].Length + 3;
+                }
             }
         }
 

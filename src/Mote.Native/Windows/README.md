@@ -44,6 +44,15 @@ Measurements and alternatives are in `docs/native-richtext-performance.md`.
 
 ## Preview accessibility name
 
+The read-only RichEdit preview also reports an activation on a simple pointer click
+or Enter/Space when focused. It lets RichEdit complete pointer selection before
+reading the collapsed caret, maps RichEdit paragraph coordinates through its CRLF
+projection to a preview-relative UTF-16 offset, and attaches the exact analysis
+stamp installed in that control. A drag/selection is not an activation. The shell
+does not guess a source position; the controller resolves the stamped preview
+offset against source-map spans and only then transfers focus to the Canvas input
+island or legacy RichEdit source. Copy and selection remain native preview actions.
+
 The preview remains a separate **read-only** RichEdit/UIA Document; it is not a
 second editable source document. RichEdit otherwise exposes the generic UIA Name
 `RichEdit Control`, which does not distinguish the preview from the editor.

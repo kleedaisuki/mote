@@ -117,9 +117,13 @@ Preview labeling, reader speech and focus behavior remain separate gates.
 - Native preview is a bounded, source-mapped semantic rendering: Markdown
   headings, paragraphs, lists, quotes and code; CSV rows and columns; and
   structured JSON/TOML/YAML trees. It is not yet a full CommonMark or
-  HTML-equivalent preview, and preview click-to-source navigation is not
-  implemented. Platform adapters apply theme-provided colors and font styles
-  to preview runs without a WebView dependency.
+  HTML-equivalent preview. Pointer or Enter/Space activation of a mapped item
+  now navigates to its global source start without editing; stale maps and
+  active IME composition are inert. This has focused controller tests and
+  local Windows real-HWND evidence, but not published Mac x64/ARM acceptance
+  ([navigation contract](../../docs/native-preview-navigation.md)). Link and
+  image actions remain unsupported. Platform adapters apply theme-provided
+  colors and font styles to preview runs without a WebView dependency.
 - Configuration follows convention first, then `~/.mote/config.toml`
   overrides cache/data/trace destinations, theme, and trace opt-in. The
   `system` theme queries OS app appearance. Trace setup failure never blocks

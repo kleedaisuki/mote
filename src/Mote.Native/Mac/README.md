@@ -38,6 +38,15 @@ or application bundle is needed for this adapter.
   and the standard Paste menu invokes `pasteAsPlainText:`. The preview consumes
   source-mapped spans from the controller to style Markdown headings/code,
   structured scalars, and table headers without touching the editor caret.
+- The read-only preview remains a selectable `NSTextView` for native copy and
+  accessibility. Its subclass lets AppKit place the click selection first, then
+  emits that displayed UTF-16 offset with the stamp of the *applied* semantic
+  analysis; Enter/Space on a focused preview emits the current selection start.
+  The shell never interprets preview links or changes the source itself. The
+  controller resolves source spans, validates version/composition, and only
+  then calls `FocusSource`, which returns first responder to the existing source
+  view without rewriting text or selection. Command/Option/Control shortcuts
+  continue through AppKit. A stale or cleared preview cannot navigate.
 - `TextChanged` copies the entire *bounded page*, not the entire document. The
   controller must keep the page size bounded and reconcile page replacement
   against its immutable document snapshot.

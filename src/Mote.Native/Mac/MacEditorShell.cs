@@ -22,6 +22,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private const nuint WindowStyle = 1 | 2 | 4 | 8;
     private const nuint ResizeWidthAndHeight = 2 | 16;
     private const string EditorAppearanceClass = "MoteDefaultEditorAppearanceView";
+    private const string PreviewNavigationClass = "MotePreviewNavigationView";
     private const string StatusBackgroundClass = "MoteStatusBackgroundView";
     private const string ObjcRuntime = "/usr/lib/libobjc.A.dylib";
     private static MacEditorShell? s_current;
@@ -29,6 +30,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     [DllImport(ObjcRuntime, EntryPoint = "objc_msgSendSuper")]
     private static extern void SendSuperNoArgument(ref MacOnScreenCanvasNative.Super receiver,
         nint selector);
+    [DllImport(ObjcRuntime, EntryPoint = "objc_msgSendSuper")]
+    private static extern void SendSuperEvent(ref MacOnScreenCanvasNative.Super receiver,
+        nint selector, nint nativeEvent);
     private readonly bool _experimentalCanvas;
     private readonly ConcurrentQueue<Action> _posted = new();
     private nint _application;
@@ -79,6 +83,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private bool _probeCaptureCanvasErrors;
     private string? _probeCanvasError;
     private string? _previewText;
+    private NativeDocumentStamp? _appliedPreviewStamp;
     private bool? _lastAppearanceDark;
     private bool _appearanceNotificationsReady;
 
@@ -93,6 +98,16 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     /// <inheritdoc />
     public event Action? CompositionSettled;
+
+    /// <inheritdoc />
+    public event Action<NativePreviewActivation>? PreviewActivated;
+
+    /// <inheritdoc />
+    public void FocusSource()
+    {
+        if (_window != 0 && _editor != 0)
+            ObjC.Send(_window, ObjC.Sel("makeFirstResponder:"), _editor);
+    }
 
     /// <summary>Constructs the established editor or an explicit, opt-in canvas editor.</summary>
     internal MacEditorShell(bool experimentalCanvas = false) =>
@@ -1124,7 +1139,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         ObjC.Send(scroll, ObjC.Sel("setHasVerticalScroller:"), 1);
         ObjC.Send(scroll, ObjC.Sel("setAutohidesScrollers:"), 1);
         ObjC.Send(scroll, ObjC.Sel("setBorderType:"), 0);
-        var textClass = editable ? RegisterEditorAppearanceClass() : "NSTextView";
+        var textClass = editable ? RegisterEditorAppearanceClass() : RegisterPreviewNavigationClass();
         textView = ObjC.Send(ObjC.Send(ObjC.Class(textClass), ObjC.Sel("alloc")),
             ObjC.Sel("initWithFrame:"), new ObjC.Rect(0, 0, rect.Size.Width, rect.Size.Height));
         // NSText's range-specific color and font APIs require rich text. The
@@ -1230,6 +1245,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private void ClearAnalysisPreview()
     {
         _pendingAnalysis = null;
+        _appliedPreviewStamp = null;
         _deferredAnalysisText = null;
         _previewText = string.Empty;
         if (_preview != 0)
@@ -1238,6 +1254,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     private void SetPreview(NativeAnalysisView view, bool updateFonts = true)
     {
+        // The event must identify exactly the analysis painted on screen, not
+        // a newer pending analysis that may be deferred during source preedit.
+        _appliedPreviewStamp = null;
         var textChanged = !string.Equals(_previewText, view.PreviewText,
             StringComparison.Ordinal);
         if (textChanged)
@@ -1247,7 +1266,11 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         }
         updateFonts |= textChanged;
         var length = view.PreviewText.Length;
-        if (length == 0) return;
+        if (length == 0)
+        {
+            _appliedPreviewStamp = view.Stamp;
+            return;
+        }
         var palette = _theme?.Palette;
         var foreground = Color(palette?.PreviewForeground ?? new ThemeColor(225, 227, 231));
         var whole = new ObjC.Range(0, (nuint)length);
@@ -1290,6 +1313,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                         _theme?.Typography.UiFontSize ?? 12d));
             if (font != 0) ObjC.Send(_preview, ObjC.Sel("setFont:range:"), font, range);
         }
+        _appliedPreviewStamp = view.Stamp;
     }
 
     private ThemeColor PreviewColor(string kind)
@@ -1418,6 +1442,74 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             "v@:");
         ObjC.RegisterClassPair(cls);
         return EditorAppearanceClass;
+    }
+
+    /// <summary>
+    /// Preserves NSTextView's selection and copy behavior while adding an
+    /// explicit activation gesture. The preview remains noneditable.
+    /// </summary>
+    private static string RegisterPreviewNavigationClass()
+    {
+        var cls = ObjC.AllocateClassPair(ObjC.Class("NSTextView"), PreviewNavigationClass, 0);
+        if (cls == 0) return PreviewNavigationClass;
+        Add(cls, "mouseDown:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&PreviewMouseDown,
+            "v@:@");
+        Add(cls, "keyDown:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&PreviewKeyDown,
+            "v@:@");
+        ObjC.RegisterClassPair(cls);
+        return PreviewNavigationClass;
+    }
+
+    /// <summary>Emits a displayed UTF-16 preview position with its painted stamp.</summary>
+    private void ActivatePreview(nint view)
+    {
+        if (view != _preview || _appliedPreviewStamp is not { } stamp ||
+            _previewText is not { Length: > 0 } text ||
+            _pendingAnalysis?.Stamp != stamp ||
+            !AnalysisMatchesCurrentDocument(_pendingAnalysis)) return;
+        var selection = ObjC.SendRange(view, ObjC.Sel("selectedRange"));
+        // NSTextView's mouseDown: tracks a drag before returning. A selected
+        // preview range is copy/selection, not an activation gesture.
+        if (selection.Length != 0 || selection.Location >= (nuint)text.Length) return;
+        PreviewActivated?.Invoke(new NativePreviewActivation(stamp, (int)selection.Location));
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void PreviewMouseDown(nint self, nint selector, nint nativeEvent)
+    {
+        try
+        {
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTextView"));
+            SendSuperEvent(ref superclass, selector, nativeEvent);
+            s_current?.ActivatePreview(self);
+        }
+        catch { /* Native event handlers must not unwind through AppKit. */ }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void PreviewKeyDown(nint self, nint selector, nint nativeEvent)
+    {
+        try
+        {
+            var shell = s_current;
+            var key = ObjC.ManagedString(ObjC.Send(nativeEvent,
+                ObjC.Sel("charactersIgnoringModifiers")));
+            var modifiers = (nuint)ObjC.Send(nativeEvent, ObjC.Sel("modifierFlags"));
+            // Shift is harmless; Command/Option/Control combinations retain
+            // AppKit shortcuts and text navigation rather than activating.
+            const nuint commandOptionControl = (1u << 18) | (1u << 19) | (1u << 20);
+            if (shell?._preview == self && (modifiers & commandOptionControl) == 0 &&
+                key is " " or "\r" or "\n")
+            {
+                shell.ActivatePreview(self);
+                return;
+            }
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTextView"));
+            SendSuperEvent(ref superclass, selector, nativeEvent);
+        }
+        catch { /* Native event handlers must not unwind through AppKit. */ }
     }
 
     private static string RegisterStatusBackgroundClass()

@@ -56,6 +56,8 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     private NativeFormatSessionDriver? _sessionDriver;
     private NativeIdleFullAnalysis? _idleFullAnalysis;
     private NativeAnalysisView? _visibleSessionAnalysis;
+    /// <summary>The exact analysis currently offered to the native preview.</summary>
+    private NativeAnalysisView? _presentedPreview;
     private NativeTextProjection? _projection;
     private CanvasFrame? _lastCanvasFrame;
     private CancellationTokenSource? _analysisCancellation;
@@ -103,6 +105,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _document.ChangedRange += DocumentChanged;
         shell.TextChanged += Edited;
         shell.SelectionChanged += SelectionChanged;
+        shell.PreviewActivated += PreviewActivated;
         shell.NewRequested += New;
         shell.OpenRequested += Open;
         shell.SaveRequested += Save;
@@ -143,6 +146,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _disposed = true;
         _shell.AppearanceChanged -= AppearanceChanged;
         _shell.CompositionSettled -= CompositionSettled;
+        _shell.PreviewActivated -= PreviewActivated;
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
         _idleFullAnalysis?.Dispose();
@@ -824,6 +828,30 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
     }
 
     /// <summary>
+    /// Resolves a native preview gesture through the exact rendered semantic
+    /// span and current engine version; it never commits marked text or edits.
+    /// </summary>
+    private void PreviewActivated(NativePreviewActivation activation)
+    {
+        if (_disposed || _shell.IsTextComposing || _canvasShell?.IsCanvasComposing == true)
+            return;
+        var snapshot = _document.Snapshot;
+        var stamp = new NativeDocumentStamp(_canvasGeneration, snapshot.Version);
+        if (activation.Stamp != stamp || _presentedPreview is not { } presented ||
+            presented.Stamp != stamp) return;
+        var source = NativePreviewNavigation.SourceStart(presented,
+            activation.PreviewOffset, snapshot.Length);
+        if (source is not { } offset ||
+            SafeBoundary(snapshot, offset, backwards: true) != offset) return;
+        InvalidateFind();
+        _navigation.MoveCaret(snapshot, offset);
+        _nativeProjectsGlobalSelection = false;
+        RevealSelection();
+        ProjectSelection();
+        _shell.FocusSource();
+    }
+
+    /// <summary>
     /// Keeps a detached provider failure visible across subsequent Open/New
     /// without allowing an accessibility callback to unwind through the OS.
     /// </summary>
@@ -1284,7 +1312,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         var full = snapshot.Length <= FullAnalysisLimit;
         if (!full && policy.Kind is not (DocumentKind.PlainText or DocumentKind.Markdown or DocumentKind.Csv))
         {
-            _shell.SetAnalysis(new NativeAnalysisView([], "Global diagnostics deferred for large files.",
+            PresentAnalysis(new NativeAnalysisView([], "Global diagnostics deferred for large files.",
                 "Structure preview requires complete semantic analysis.",
                 "Large file: editable viewport; semantic analysis deferred",
                 new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
@@ -1317,7 +1345,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         : "Partial viewport analysis only; global diagnostics unavailable.";
                     var preview = NativePreviewBuilder.Build(analysis, policy.Kind,
                         full ? 0 : pageStart, full);
-                    _shell.SetAnalysis(new NativeAnalysisView(visible, diagnostics, preview.Text,
+                    PresentAnalysis(new NativeAnalysisView(visible, diagnostics, preview.Text,
                         full ? $"{policy.DisplayName} semantic analysis · v{snapshot.Version}"
                              : $"{policy.DisplayName} sample · partial",
                         new NativeDocumentStamp(_canvasGeneration, snapshot.Version), preview.Spans));
@@ -1333,7 +1361,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 Post(() =>
                 {
                     if (!_disposed && serial == _analysisSerial)
-                        _shell.SetAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
+                        PresentAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
                             $"{policy.DisplayName}: {ex.Message}",
                             new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
                 });
@@ -1387,7 +1415,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     _visibleSessionAnalysis = new NativeAnalysisView(tokens, diagnostics,
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
                         new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans);
-                    _shell.SetAnalysis(_visibleSessionAnalysis);
+                    PresentAnalysis(_visibleSessionAnalysis);
                     _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
                         result.Completeness, result.Coverage,
                         VisibleSourceTokens(result.Tokens, pageStart, pageLength),
@@ -1402,7 +1430,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                         var reason = idle == IdleFullOffer.MemoryLimited
                             ? "memory pressure"
                             : "format work limit";
-                        _shell.SetAnalysis(_visibleSessionAnalysis with
+                        PresentAnalysis(_visibleSessionAnalysis with
                         {
                             Status = $"{policy.DisplayName} · Full pass deferred: {reason}; " +
                                 $"global diagnostics unknown · v{result.Version}"
@@ -1418,7 +1446,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                 {
                     if (!_disposed && serial == _analysisSerial &&
                         ReferenceEquals(driver, _sessionDriver))
-                        _shell.SetAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
+                        PresentAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
                             $"{policy.DisplayName}: {ex.Message}",
                             new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
                 });
@@ -1490,7 +1518,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
                     MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded,
                         dimensions: Dimensions(snapshot), status: TelemetryStatus.Failure);
                     if (_visibleSessionAnalysis is { } visible)
-                        _shell.SetAnalysis(visible with
+                        PresentAnalysis(visible with
                         {
                             Status = $"{policy.DisplayName} · Full pass failed; " +
                                 $"visible diagnostics retained · v{snapshot.Version}"
@@ -1521,7 +1549,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
             // The Full request did run, but the policy could not certify the
             // entire file. Keep visible facts and make the finite result clear.
             if (_visibleSessionAnalysis is { } visible)
-                _shell.SetAnalysis(visible with
+                PresentAnalysis(visible with
                 {
                     Status = $"{policy.DisplayName} · Full pass {result.Completeness}; " +
                         $"global diagnostics unknown · v{result.Version}"
@@ -1534,7 +1562,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         var tokens = ProjectTokens(result.Tokens, _pageStart, _pageLength, _projection!);
         var preview = NativePreviewBuilder.Build(result, policy.Kind, snapshot,
             _pageStart, _pageLength);
-        _shell.SetAnalysis(new NativeAnalysisView(tokens,
+        PresentAnalysis(new NativeAnalysisView(tokens,
             SessionDiagnosticSummary(result, _pageStart, _pageLength),
             preview.Text, $"{policy.DisplayName} · Complete · v{result.Version}",
             new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans));
@@ -1561,7 +1589,7 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         // Clear old-language facts before the new analyzer publishes, rather
         // than trying to encode policy identity into the input binding stamp.
         var stamp = new NativeDocumentStamp(_canvasGeneration, _document.Snapshot.Version);
-        _shell.SetAnalysis(new NativeAnalysisView([], "Format analysis pending; global diagnostics unknown.",
+        PresentAnalysis(new NativeAnalysisView([], "Format analysis pending; global diagnostics unknown.",
             "", $"{policy.DisplayName} · analyzing", stamp));
         _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(stamp.Version,
             AnalysisCompleteness.Provisional, new Mote.Formats.TextSpan(0, 0), [], []));
@@ -1638,6 +1666,16 @@ internal sealed class NativeEditorController : IDisposable, IAccessibleViewport
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
         _analysisCancellation = null;
+        // A still-painted old preview may remain visible until the next result,
+        // but it must not navigate after its source map has been invalidated.
+        _presentedPreview = null;
+    }
+
+    /// <summary>Publishes one analysis and retains its exact navigation map.</summary>
+    private void PresentAnalysis(NativeAnalysisView view)
+    {
+        _shell.SetAnalysis(view);
+        _presentedPreview = view;
     }
 
     private void InvalidateFind()
