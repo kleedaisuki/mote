@@ -33,6 +33,19 @@ $result = [ordered]@{
 }
 $pngMagic = [byte[]](137, 80, 78, 71, 13, 10, 26, 10)
 
+function Assert-NearThemeRgb([string] $Actual, [string] $Expected) {
+    if ($Actual -cnotmatch '^#[0-9A-Fa-f]{6}$') {
+        throw 'Native status background RGB is absent or malformed.'
+    }
+    for ($part = 1; $part -le 5; $part += 2) {
+        $measured = [Convert]::ToInt32($Actual.Substring($part, 2), 16)
+        $wanted = [Convert]::ToInt32($Expected.Substring($part, 2), 16)
+        if ([Math]::Abs($measured - $wanted) -gt 1) {
+            throw 'Native status background differs from the active window palette.'
+        }
+    }
+}
+
 foreach ($mode in @('default', 'canvas')) {
     $case = [ordered]@{
         mode = $mode; status = 'failed'; marker = $null; report = $null
@@ -91,6 +104,7 @@ foreach ($mode in @('default', 'canvas')) {
         $case.callback_count = $native.CallbackCount
         $expectedSteps = @('dark-before', 'light', 'dark-after')
         $expectedIds = @('mote-dark', 'mote-light', 'mote-dark')
+        $expectedStatusBackgrounds = @('#202124', '#F1F2F4', '#202124')
         $first = $native.States[0]
         for ($index = 0; $index -lt 3; $index++) {
             $state = $native.States[$index]
@@ -111,6 +125,7 @@ foreach ($mode in @('default', 'canvas')) {
                 ($mode -eq 'canvas' -and $null -ne $state.EditorHeadingRgb)) {
                 throw 'Native heading foreground was not represented for the active editor mode.'
             }
+            Assert-NearThemeRgb $state.StatusBackgroundRgb $expectedStatusBackgrounds[$index]
             $expectedImage = "theme-$mode-$($expectedSteps[$index]).png"
             if ($state.Image -cne $expectedImage) { throw 'Theme PNG filename escaped the fixed contract.' }
             $image = Join-Path $output $state.Image
@@ -138,6 +153,7 @@ foreach ($mode in @('default', 'canvas')) {
                 selection_active = $state.SelectionActive
                 preview_heading_rgb = $state.PreviewHeadingRgb
                 editor_heading_rgb = $state.EditorHeadingRgb
+                status_background_rgb = $state.StatusBackgroundRgb
                 image = $state.Image; image_sha256 = $hash
             }
         }

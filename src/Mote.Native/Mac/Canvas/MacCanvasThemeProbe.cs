@@ -330,6 +330,18 @@ internal static class MacCanvasThemeProbe
             if (bitmap == 0) throw new IOException("AppKit did not allocate a theme raster.");
             MacOnScreenCanvasNative.Send(view,
                 ObjC.Sel("cacheDisplayInRect:toBitmapImageRep:"), rect, bitmap);
+            _check = $"{step}-status-background-pixel";
+            var width = checked((int)ObjC.Send(bitmap, ObjC.Sel("pixelsWide")));
+            var height = checked((int)ObjC.Send(bitmap, ObjC.Sel("pixelsHigh")));
+            if (width < 16 || height < 32)
+                throw new InvalidOperationException("Theme raster is too small for status sampling.");
+            // NSBitmapImageRep pixel coordinates start at the bitmap's top;
+            // center X / penultimate bottom row avoids the status text and borders.
+            var nativePixel = ObjC.Send(bitmap, ObjC.Sel("colorAtX:y:"),
+                (nint)(width / 2), (nint)(height - 3));
+            var statusBackground = Rgb(nativePixel);
+            RequireColor(statusBackground, policy.Palette.WindowBackground, _check);
+            _check = $"{step}-raster-encode";
             var png = ObjC.Send(bitmap, ObjC.Sel("representationUsingType:properties:"),
                 4, ObjC.Send(ObjC.Class("NSDictionary"), ObjC.Sel("dictionary")));
             var imagePath = Path.Combine(_output, imageName);
@@ -342,7 +354,8 @@ internal static class MacCanvasThemeProbe
                 throw new IOException("Theme raster is not PNG.");
             _states.Add(new ThemeState(step, expectedId, _callbackCount,
                 CurrentStamp().Generation, CurrentVersion(), _selection.Anchor,
-                _selection.Active, preview.ToHex(), editor?.ToHex(), marker?.ToHex(), imageName,
+                _selection.Active, preview.ToHex(), editor?.ToHex(), marker?.ToHex(),
+                statusBackground.ToHex(), imageName,
                 Convert.ToHexString(SHA256.HashData(bytes))));
         }
 
@@ -358,13 +371,19 @@ internal static class MacCanvasThemeProbe
                 var color = ObjC.Send(storage, ObjC.Sel("attribute:atIndex:effectiveRange:"),
                     key, (nint)index, 0);
                 if (color == 0) throw new InvalidOperationException("Theme text foreground is absent.");
-                color = ObjC.Send(color, ObjC.Sel("colorUsingColorSpace:"),
-                    ObjC.Send(ObjC.Class("NSColorSpace"), ObjC.Sel("sRGBColorSpace")));
-                if (color == 0) throw new InvalidOperationException("Theme text color cannot convert to sRGB.");
-                return new ThemeColor(Channel(color, "redComponent"),
-                    Channel(color, "greenComponent"), Channel(color, "blueComponent"));
+                return Rgb(color);
             }
             finally { NativeLibrary.Free(handle); }
+        }
+
+        private static ThemeColor Rgb(nint color)
+        {
+            if (color == 0) throw new InvalidOperationException("Native theme color is absent.");
+            color = ObjC.Send(color, ObjC.Sel("colorUsingColorSpace:"),
+                ObjC.Send(ObjC.Class("NSColorSpace"), ObjC.Sel("sRGBColorSpace")));
+            if (color == 0) throw new InvalidOperationException("Native theme color cannot convert to sRGB.");
+            return new ThemeColor(Channel(color, "redComponent"),
+                Channel(color, "greenComponent"), Channel(color, "blueComponent"));
         }
 
         private static byte Channel(nint color, string selector) => checked((byte)Math.Clamp(
@@ -459,6 +478,7 @@ internal static class MacCanvasThemeProbe
                 if (state.EditorMarkerRgb is null)
                     writer.WriteNull("EditorMarkerRgb");
                 else writer.WriteString("EditorMarkerRgb", state.EditorMarkerRgb);
+                writer.WriteString("StatusBackgroundRgb", state.StatusBackgroundRgb);
                 writer.WriteString("Image", state.Image);
                 writer.WriteString("ImageSha256", state.ImageSha256);
                 writer.WriteEndObject();
@@ -472,7 +492,7 @@ internal static class MacCanvasThemeProbe
     private sealed record ThemeState(string Step, string ThemeId, int CallbackCount,
         long Generation, long Version, int SelectionAnchor, int SelectionActive,
         string PreviewHeadingRgb, string? EditorHeadingRgb, string? EditorMarkerRgb,
-        string Image,
+        string StatusBackgroundRgb, string Image,
         string ImageSha256);
 
     /// <summary>Bounded JSON result for the two-RID published-binary harness.</summary>

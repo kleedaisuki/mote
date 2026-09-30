@@ -1180,6 +1180,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         var palette = theme.Palette;
         var editorForeground = Color(palette.EditorForeground);
+        // The status field is transparent; the exposed bottom strip is the
+        // window background, not part of either text scroll view.
+        ObjC.Send(_window, ObjC.Sel("setBackgroundColor:"), Color(palette.WindowBackground));
         ObjC.Send(_editor, ObjC.Sel("setBackgroundColor:"), Color(palette.EditorBackground));
         ObjC.Send(_editor, ObjC.Sel("setTextColor:"), editorForeground);
         ObjC.Send(_editor, ObjC.Sel("setInsertionPointColor:"), Color(palette.Cursor));
