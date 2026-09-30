@@ -6,7 +6,8 @@ param(
     [ValidateSet('many-1', 'many-10', 'many-100', 'long-50')]
     [string[]] $Cases = @('many-1', 'many-10', 'many-100', 'long-50'),
     [ValidateRange(1, 30)][int] $Repetitions = 3,
-    [switch] $AllowLocal
+    [switch] $AllowLocal,
+    [switch] $LocalTopmost
 )
 
 Set-StrictMode -Version Latest
@@ -16,6 +17,9 @@ $hosted = $env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_OS -ceq 'Windows' -an
     $env:RUNNER_ENVIRONMENT -ceq 'github-hosted'
 if (-not $hosted -and -not $AllowLocal) {
     throw 'Run automatically only on GitHub-hosted Windows; use -AllowLocal for an explicit synthetic local run.'
+}
+if ($LocalTopmost -and (-not $AllowLocal -or $hosted)) {
+    throw '-LocalTopmost is permitted only for an explicit local synthetic run.'
 }
 
 # Check every existing path component, not only the lexical child path. A
@@ -171,6 +175,13 @@ function Invoke-Case {
         first_raw_changed_capture_ms = $null; first_raw_changed_pixels = $null
         settled_changed_pixels = $null
         max_capture_gap_ms = $null; median_capture_cost_ms = $null
+        median_owner_check_ms = $null; median_bitblt_ms = $null
+        median_readback_ms = $null; first_changed_capture_cost_ms = $null
+        first_changed_bitblt_ms = $null
+        copy_area_samples_each = $null; copy_area_full_median_ms = $null
+        copy_area_small_median_ms = $null
+        copy_area_full_bitblt_median_ms = $null
+        copy_area_small_bitblt_median_ms = $null
         source_unchanged_before_save = $false; disk_oracle_passed = $false
         undo_exact_oracle = $false; redo_exact_oracle = $false
         undo_screen_distinct = $false; redo_screen_match = $false
@@ -195,6 +206,9 @@ function Invoke-Case {
                 [MoteCanvasGuiProbe]::IsWindowVisible($script:input) -and
                 [MoteWindowsScreenObserver]::InputLengthBounded($script:input) -gt 0
         } 'The bounded input island was not ready.'
+        if ($LocalTopmost) {
+            [MoteWindowsScreenObserver]::MakeSyntheticTopmost($script:main)
+        }
         [void][MoteCanvasGuiProbe]::SetForegroundWindow($script:main)
         $script:stage = 'focus'
         Wait-Until { [MoteCanvasGuiProbe]::FocusedChild($script:main) -eq $script:input } `
@@ -249,6 +263,11 @@ function Invoke-Case {
         $result.baseline_ink_pixels = $edit.BaselineInkPixels
         $result.max_capture_gap_ms = $edit.MaxCaptureGapMs
         $result.median_capture_cost_ms = $edit.MedianCaptureCostMs
+        $result.median_owner_check_ms = $edit.MedianOwnerCheckMs
+        $result.median_bitblt_ms = $edit.MedianBitBltMs
+        $result.median_readback_ms = $edit.MedianReadbackMs
+        $result.first_changed_capture_cost_ms = $edit.FirstChangedCaptureCostMs
+        $result.first_changed_bitblt_ms = $edit.FirstChangedBitBltMs
         if (-not $edit.Changed) {
             throw 'No stable visible first-row screen change after one WM_CHAR.'
         }
@@ -315,6 +334,17 @@ function Invoke-Case {
         $result.redo_max_changed_pixels = $redoScreen.MaxDifferentPixels
         if (-not $result.redo_screen_match) { throw 'Redo screen does not match the timed candidate image.' }
         $result.source_specific_verified = $true
+
+        # Profile screen-copy area only after the timed edit and its exact
+        # source-state oracle. Eighty extra captures must not warm the primary
+        # first-edit path or make it incomparable with earlier observations.
+        $script:stage = 'observer-area-control'
+        $area = [MoteWindowsScreenObserver]::ProfileCopyArea($script:canvas, 20)
+        $result.copy_area_samples_each = $area.SamplesPerGeometry
+        $result.copy_area_full_median_ms = $area.FullMedianMs
+        $result.copy_area_small_median_ms = $area.SmallMedianMs
+        $result.copy_area_full_bitblt_median_ms = $area.FullBitBltMedianMs
+        $result.copy_area_small_bitblt_median_ms = $area.SmallBitBltMedianMs
         $script:stage = 'close'
         if (-not [MoteCanvasGuiProbe]::PostMessageW($script:main, 0x0010,
             [UIntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close mote.' }

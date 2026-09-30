@@ -223,6 +223,50 @@ a paired before/after comparison** and supports no regression claim. A
 version-tagged native draw-return hook plus DXGI frame metadata or a calibrated
 external observer is needed to resolve the distinction.
 
+### Observer-cost localization (instrumentation, not a product optimization)
+
+The observer already retains one DIB for the whole timed phase, so allocating
+a persistent bitmap again cannot explain or cure the hosted 17–28 ms cost.
+New JSONL fields divide each timed copy into `median_owner_check_ms` (five
+window-ownership points and pointer exclusion), `median_bitblt_ms` (screen DC
+to persistent DIB), and `median_readback_ms` (`Marshal.Copy` into an
+in-process array); `first_changed_capture_cost_ms` and
+`first_changed_bitblt_ms` describe the candidate frame itself. A separate
+**post-oracle** ABBA control alternates 40 full 256×32 and 40 small 64×16
+screen copies on the same already-verified synthetic window. It reports
+`copy_area_*` medians without writing pixel bytes. Running that control only
+after X/Undo/Redo verification avoids prewarming the primary first-edit
+measurement. The small ROI is a *cost control*, not yet an edit-latency
+observer: its source-state detection threshold and reliability have not been
+calibrated.
+
+A five-process local pilot of the phase split and area control is retained in
+`.cache/benchmarks/native-paint-latency/a228ccb34efc4331bc62087bf69745e4/screen-observations.jsonl`.
+It used the **older** AOT SHA above, the local Intel host, explicit
+`-AllowLocal -LocalTopmost`, and the same synthetic 1 MiB fixture. All five
+passed the exact X/Undo/Redo source oracle, but were labeled
+`passed-visible-background`; this does not simulate a physical key. Across
+their per-process medians, ownership checks cost **0.11–0.29 ms**, managed
+readback **0.007–0.008 ms**, and `BitBlt` **3.10–5.01 ms**. In the paired ABBA
+control, full-area medians were **4.26–5.63 ms**, small-area medians
+**4.03–4.32 ms**, and the five paired full-minus-small values had median
+**0.77 ms** (range **0.14–1.60 ms**). This supports a *local* mechanism:
+`BitBlt`, not `Marshal.Copy` or five-point checking, dominates the 4–6 ms
+copy cost; shrinking area alone had only a modest benefit. That pilot ran
+ABBA **before** the edit, whereas the corrected harness runs it **after** the
+source oracle; its primary edit timings must not be compared with the earlier
+or future first-edit workflow. The ABBA cost comparison is within each pilot
+process, not a hosted result or a proven improvement to mote.
+
+The discriminating next measurement is the same phase split and post-oracle
+area control on one current-source hosted win-x64 binary. If hosted `BitBlt`
+also dominates and reducing area barely helps, the 30.9 ms screen interval
+remains too observer-limited to blame on mote rendering; replacing the renderer
+would not be justified. If hosted `BitBlt` is fast but the
+capture-to-capture gap stays large, investigate scheduler/virtual-display
+cadence. If both are small while first changed pixels arrive late, add a
+version-tagged native draw-return hook before touching renderer architecture.
+
 ## Instrumentation architecture before optimizing product code
 
 1. Keep the current `EditToPresentation` operation and its privacy-safe

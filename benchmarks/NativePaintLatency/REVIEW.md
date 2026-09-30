@@ -1,5 +1,27 @@
 # Review: external Windows screen-latency probe
 
+## Phase-split instrumentation review (2026-09-30)
+
+The new observer measures `CheckOwner` → successful `BitBlt` → managed
+allocation/`Marshal.Copy` on one `Stopwatch` clock, then attaches the selected
+candidate's copy cost to the same screen-completion timestamp. The split does
+not move the timestamp to `WM_PAINT` or presentation. PowerShell parsing and
+`Add-Type` compilation pass. The exact X/original/X Save and Undo/Redo screen
+oracle, finite cross-process dispatch, cleanup guards, and five-point privacy
+disclosure remain intact in the inspected revision.
+
+**Resolved P2 measurement comparability concern:** the first revision ran an
+ABBA full/small profile (40+40 screen copies) *before* the timed `WM_CHAR`,
+which could warm GDI/DWM, CPU caches, or the virtual display and change the
+first-edit observation relative to the earlier workflow. The frozen revision
+now calls `ProfileCopyArea` only at `Measure-WindowsScreen.ps1:338-347`, after
+`source_specific_verified=true` and before Close. Its within-process area
+comparison remains valid without adding a new pre-edit warm-up. The local-only
+`-LocalTopmost` path requires explicit `-AllowLocal` and is rejected on hosted
+runners; the target child is killed/reaped during normal or failed cleanup.
+No other concrete phase-split defect was found in this static pass; a new
+target-host result is still needed to characterize observer overhead.
+
 ## Disposition after the 2026-09-30 corrections
 
 The four findings below describe the **initial draft**, not the present source.

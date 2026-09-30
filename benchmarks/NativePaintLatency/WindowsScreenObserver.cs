@@ -38,6 +38,66 @@ public static class MoteWindowsScreenObserver
         public int PrimaryHeight { get; set; }
     }
 
+    /// <summary>Alternating fixed-area screen-copy control on an unchanged source.</summary>
+    public sealed class CaptureProfile
+    {
+        /// <summary>Number of screen copies of each ROI geometry.</summary>
+        public int SamplesPerGeometry { get; set; }
+        /// <summary>Median full 256×32 capture cost in milliseconds.</summary>
+        public double FullMedianMs { get; set; }
+        /// <summary>Median small 64×16 capture cost in milliseconds.</summary>
+        public double SmallMedianMs { get; set; }
+        /// <summary>Median BitBlt component of the full capture.</summary>
+        public double FullBitBltMedianMs { get; set; }
+        /// <summary>Median BitBlt component of the small capture.</summary>
+        public double SmallBitBltMedianMs { get; set; }
+    }
+
+    /// <summary>
+    /// Alternates full and small screen copies (ABBA order) without input;
+    /// both DIBs stay allocated for all samples and pixels are discarded.
+    /// </summary>
+    public static CaptureProfile ProfileCopyArea(IntPtr canvas, int pairs = 20)
+    {
+        if (pairs is < 2 or > 100) throw new ArgumentOutOfRangeException(nameof(pairs));
+        var prior = SetThreadDpiAwarenessContext(new IntPtr(-4));
+        if (prior == IntPtr.Zero) throw new InvalidOperationException("PMv2 DPI context unavailable.");
+        try
+        {
+            using var full = new RegionCapture(canvas);
+            using var small = new RegionCapture(canvas, 64, 16);
+            var fullCosts = new List<double>(pairs * 2);
+            var smallCosts = new List<double>(pairs * 2);
+            var fullBlts = new List<double>(pairs * 2);
+            var smallBlts = new List<double>(pairs * 2);
+            for (var i = 0; i < pairs; i++)
+            {
+                Add(full, fullCosts, fullBlts);
+                Add(small, smallCosts, smallBlts);
+                Add(small, smallCosts, smallBlts);
+                Add(full, fullCosts, fullBlts);
+                Thread.Sleep(1);
+            }
+            fullCosts.Sort(); smallCosts.Sort(); fullBlts.Sort(); smallBlts.Sort();
+            return new CaptureProfile
+            {
+                SamplesPerGeometry = pairs * 2,
+                FullMedianMs = fullCosts[fullCosts.Count / 2],
+                SmallMedianMs = smallCosts[smallCosts.Count / 2],
+                FullBitBltMedianMs = fullBlts[fullBlts.Count / 2],
+                SmallBitBltMedianMs = smallBlts[smallBlts.Count / 2]
+            };
+        }
+        finally { SetThreadDpiAwarenessContext(prior); }
+
+        static void Add(RegionCapture capture, List<double> total, List<double> blt)
+        {
+            capture.Copy(out var cost);
+            total.Add(cost.TotalMs);
+            blt.Add(cost.BitBltMs);
+        }
+    }
+
     /// <summary>Reports geometry under the same PMv2 coordinate convention as capture.</summary>
     public static DisplayInfo Describe(IntPtr canvas)
     {
@@ -62,6 +122,17 @@ public static class MoteWindowsScreenObserver
     /// <summary>Requires that synthetic mote owns the foreground window.</summary>
     public static bool IsForeground(IntPtr editor) => GetForegroundWindow() == editor;
 
+    /// <summary>
+    /// Makes only the disposable synthetic editor topmost for an explicitly
+    /// opted-in local screen test; closing its process removes the state.
+    /// </summary>
+    public static void MakeSyntheticTopmost(IntPtr editor)
+    {
+        const uint noMoveNoSizeNoActivate = 0x0013;
+        if (!SetWindowPos(editor, new IntPtr(-1), 0, 0, 0, 0, noMoveNoSizeNoActivate))
+            throw new InvalidOperationException("Could not place the synthetic editor above local windows.");
+    }
+
     /// <summary>One bounded capture phase, including dispatch and sampler cadence.</summary>
     public sealed class PhaseResult
     {
@@ -85,6 +156,16 @@ public static class MoteWindowsScreenObserver
         public double MaxCaptureGapMs { get; set; }
         /// <summary>Median wall time spent in BitBlt plus readback per capture.</summary>
         public double MedianCaptureCostMs { get; set; }
+        /// <summary>Median cost of five target-ownership checks and pointer exclusion.</summary>
+        public double MedianOwnerCheckMs { get; set; }
+        /// <summary>Median cost of copying the screen ROI into the persistent DIB.</summary>
+        public double MedianBitBltMs { get; set; }
+        /// <summary>Median cost of copying the DIB bytes into managed memory.</summary>
+        public double MedianReadbackMs { get; set; }
+        /// <summary>Capture cost on the first source-state candidate frame.</summary>
+        public double FirstChangedCaptureCostMs { get; set; }
+        /// <summary>BitBlt component on the first source-state candidate frame.</summary>
+        public double FirstChangedBitBltMs { get; set; }
         /// <summary>Whether a later state read proved an actual changed pixel region.</summary>
         public bool Changed => FirstChangedCaptureMs.HasValue;
         /// <summary>Whether any sampled frame crossed the pixel threshold.</summary>
@@ -205,7 +286,10 @@ public static class MoteWindowsScreenObserver
             long sendTick = 0;
             Exception? observerError = null;
             var costs = new List<double>(256);
-            var changedFrames = new List<(long At, byte[] Pixels)>();
+            var ownerCosts = new List<double>(256);
+            var bltCosts = new List<double>(256);
+            var readbackCosts = new List<double>(256);
+            var changedFrames = new List<(long At, byte[] Pixels, CaptureCost Cost)>();
             using var ready = new ManualResetEventSlim();
             using var stop = new ManualResetEventSlim();
             var observer = new Thread(() =>
@@ -220,10 +304,13 @@ public static class MoteWindowsScreenObserver
                     while (!stop.IsSet)
                     {
                         var start = Stopwatch.GetTimestamp();
-                        var pixels = capture.Copy();
+                        var pixels = capture.Copy(out var cost);
                         var end = Stopwatch.GetTimestamp();
                         result.Captures++;
                         costs.Add(Ms(end - start));
+                        ownerCosts.Add(cost.OwnerMs);
+                        bltCosts.Add(cost.BitBltMs);
+                        readbackCosts.Add(cost.ReadbackMs);
                         result.MaxCaptureGapMs = Math.Max(result.MaxCaptureGapMs, Ms(end - last));
                         last = end;
                         var origin = Volatile.Read(ref sendTick);
@@ -232,7 +319,7 @@ public static class MoteWindowsScreenObserver
                             var changed = ChangedPixels(baseline, pixels);
                             if (changed >= ChangedPixelThreshold)
                             {
-                                changedFrames.Add((end, pixels));
+                                changedFrames.Add((end, pixels, cost));
                                 if (firstRawTick == 0)
                                 {
                                     firstRawTick = end;
@@ -285,12 +372,20 @@ public static class MoteWindowsScreenObserver
                     {
                         result.FirstChangedCaptureMs = Ms(candidate.At - sentAt);
                         result.ChangedPixels = ChangedPixels(baseline, candidate.Pixels);
+                        result.FirstChangedCaptureCostMs = candidate.Cost.TotalMs;
+                        result.FirstChangedBitBltMs = candidate.Cost.BitBltMs;
                         result.EditedPixels = candidate.Pixels;
                         break;
                     }
                 }
             costs.Sort();
+            ownerCosts.Sort();
+            bltCosts.Sort();
+            readbackCosts.Sort();
             result.MedianCaptureCostMs = costs.Count == 0 ? 0 : costs[costs.Count / 2];
+            result.MedianOwnerCheckMs = ownerCosts.Count == 0 ? 0 : ownerCosts[ownerCosts.Count / 2];
+            result.MedianBitBltMs = bltCosts.Count == 0 ? 0 : bltCosts[bltCosts.Count / 2];
+            result.MedianReadbackMs = readbackCosts.Count == 0 ? 0 : readbackCosts[readbackCosts.Count / 2];
             return result;
         }
         finally { SetThreadDpiAwarenessContext(prior); }
@@ -358,6 +453,14 @@ public static class MoteWindowsScreenObserver
         return background;
     }
 
+    /// <summary>One capture's internal costs on the same monotonic timer.</summary>
+    private readonly record struct CaptureCost(double OwnerMs, double BitBltMs,
+        double ReadbackMs)
+    {
+        /// <summary>Sum of the three measured capture phases.</summary>
+        internal double TotalMs => OwnerMs + BitBltMs + ReadbackMs;
+    }
+
     /// <summary>Returns a checked result or fails after a finite cross-process timeout.</summary>
     public static IntPtr SendBounded(IntPtr window, uint message, UIntPtr wParam, uint timeoutMs)
     {
@@ -410,12 +513,16 @@ public static class MoteWindowsScreenObserver
         private readonly IntPtr _canvas;
         private readonly int _x;
         private readonly int _y;
+        private readonly int _width;
+        private readonly int _height;
 
-        internal RegionCapture(IntPtr canvas)
+        internal RegionCapture(IntPtr canvas, int width = Width, int height = Height)
         {
             _canvas = canvas;
+            _width = width;
+            _height = height;
             if (!GetClientRect(canvas, out var rect) ||
-                rect.Right - rect.Left < 320 || rect.Bottom - rect.Top < 80)
+                rect.Right - rect.Left < _width + 64 || rect.Bottom - rect.Top < _height + 48)
                 throw new InvalidOperationException("Canvas is too small for the first-row screen ROI.");
             var origin = new Point();
             if (!ClientToScreen(canvas, ref origin))
@@ -432,8 +539,8 @@ public static class MoteWindowsScreenObserver
             {
                 Header = new BitmapInfoHeader
                 {
-                    Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(), Width = Width,
-                    Height = -Height, Planes = 1, BitCount = 32, Compression = BiRgb
+                    Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(), Width = _width,
+                    Height = -_height, Planes = 1, BitCount = 32, Compression = BiRgb
                 }
             };
             _bitmap = CreateDIBSection(_screen, ref info, DibRgbColors, out _bits,
@@ -444,26 +551,34 @@ public static class MoteWindowsScreenObserver
             if (_old == IntPtr.Zero) { Dispose(); throw new InvalidOperationException("DIB selection failed."); }
         }
 
-        internal byte[] Copy()
+        internal byte[] Copy() => Copy(out _);
+
+        internal byte[] Copy(out CaptureCost cost)
         {
+            var start = Stopwatch.GetTimestamp();
             CheckOwner();
-            if (!BitBlt(_memory, 0, 0, Width, Height, _screen, _x, _y, Srccopy))
+            var ownedAt = Stopwatch.GetTimestamp();
+            if (!BitBlt(_memory, 0, 0, _width, _height, _screen, _x, _y, Srccopy))
                 throw new InvalidOperationException("Desktop BitBlt failed.");
-            var pixels = new byte[Width * Height * 4];
+            var blittedAt = Stopwatch.GetTimestamp();
+            var pixels = new byte[_width * _height * 4];
             Marshal.Copy(_bits, pixels, 0, pixels.Length);
+            var copiedAt = Stopwatch.GetTimestamp();
+            cost = new CaptureCost(Ms(ownedAt - start), Ms(blittedAt - ownedAt),
+                Ms(copiedAt - blittedAt));
             return pixels;
         }
 
         private void CheckOwner()
         {
             CheckPoint(_x + 2, _y + 2);
-            CheckPoint(_x + Width - 3, _y + 2);
-            CheckPoint(_x + 2, _y + Height - 3);
-            CheckPoint(_x + Width - 3, _y + Height - 3);
-            CheckPoint(_x + Width / 2, _y + Height / 2);
+            CheckPoint(_x + _width - 3, _y + 2);
+            CheckPoint(_x + 2, _y + _height - 3);
+            CheckPoint(_x + _width - 3, _y + _height - 3);
+            CheckPoint(_x + _width / 2, _y + _height / 2);
             if (GetCursorPos(out var cursor) &&
-                cursor.X >= _x && cursor.X < _x + Width &&
-                cursor.Y >= _y && cursor.Y < _y + Height)
+                cursor.X >= _x && cursor.X < _x + _width &&
+                cursor.Y >= _y && cursor.Y < _y + _height)
                 throw new InvalidOperationException("Pointer overlaps the screen ROI.");
         }
 
@@ -501,6 +616,8 @@ public static class MoteWindowsScreenObserver
     [DllImport("user32.dll")] private static extern bool IsChild(IntPtr parent, IntPtr child);
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out Point point);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window,
+        IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr window);
