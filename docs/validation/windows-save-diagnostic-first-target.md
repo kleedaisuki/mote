@@ -197,8 +197,178 @@ and HResult `-2147024891`. Output is retained in
 `.temp/windows-save-first-target-audit/predicate-evidence.json`. This supplements,
 not repeats, the owner's broader self-test/compiler checks. It does not validate
 hosted dialog enumeration, button acknowledgement, orderly exit, or trace drain.
-At review time teardown PostMessage return values were still ignored: stages
-locate the attempted operation but do not prove its acknowledgement succeeded.
+At initial review teardown PostMessage return values were still ignored. The
+owner subsequently added `post_ack`/`main_close_posted` and closed reason
+`message-post-failed`; independent source review confirmed a false post result
+throws rather than advancing or retrying. This acknowledges successful message
+queue insertion, not proof that the button actually processed the message.
+
+## Second hosted target delta: failure narrowed to button lookup
+
+Run `36777561397` used HEAD `c38da1c4d52ce8916c44828bb7f6aac68e7d036c`,
+diagnostic directory `290525ea78ac434291220c29a542c2e4`, PID 3512, and executable
+SHA-256 `27934fb28a6247c86a496bfcd88d87022057bdff3274546f3bd451a2505ec408`
+(7,039,488 bytes). The retained artifact root is
+`.cache/ci-36777561397-save/` (unlike the first download, no `artifact/` segment).
+The instrumented script's CRLF source matches its recorded input pin
+`9b3170876f7a64431bf440cb419346ec302ea39fdfa374ca63b7bebbc351d1af`.
+
+| New observation | Consequence |
+| --- | --- |
+| `owned_match=true`, `title_is_mote=true`, `save_failure_prefix=true` | Failure modal identity/title/purpose guards all passed for this run. |
+| Static styles `[3,0]`, lengths `[0,443]`, aggregate 443, cap false | Icon-style Static contributed no text; text Static supplied the recognized prefix. No icon-prefix or truncation failure here. |
+| `close_error_stage=failure-ok-lookup`, `button_found=false`, `close_reason=button-missing` | The exact `GetDlgItem(modal,1)` lookup returned zero; no failure-button post occurred. |
+| Deepest captured RuntimeException/HResult -2146233087 | This is the script's explicit missing-button guard exception, not the editor's Save HRESULT. |
+| Elapsed 0.5834669 s, forced exit, empty traces | Still an immediate failed control teardown, not timed-out Save or complete drain. |
+
+The second finalized fixture and recovery files again compare byte-for-byte
+equal to original and X+original respectively; both trace copies are zero bytes.
+This was independently checked against the second archive, not inferred from
+the first result:
+
+```powershell
+python .temp/windows-save-first-target-audit/audit.py `
+  .cache/ci-36777561397-save `
+  .temp/windows-save-first-target-audit/second-evidence.json
+```
+
+### API contract versus observed window topology
+
+The parent investigator supplied checked primary Microsoft documentation:
+[GetDlgItem](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgitem)
+returns NULL when the specified child identifier is absent or the parent handle
+is invalid, and can be used for parent/child pairs outside dialog boxes.
+[MessageBoxW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw)
+specifies one OK button for MB_OK and IDOK=1 as a return result. Neither supplied
+contract establishes child creation timing or the hosted MessageBox descendant
+topology. In particular, a documented return result is not by itself proof of
+an immediate child having that control ID.
+
+The archived P/Invoke `IntPtr GetDlgItem(IntPtr h, int id)` matches HWND and int
+arguments and HWND result. No incorrect pointer width, CharSet-dependent text
+marshaling, or exception indicating an absent entry point is evident. It does
+not declare `SetLastError=true`, so a later managed last-error read would not be
+usable evidence; the current row contains no GetDlgItem-specific OS error.
+
+What is now ruled out for the second run: title/purpose guard rejection, an icon
+polluting the recognized prefix, text-cap truncation, failure-button PostMessage
+rejection, and any later recovery/discard warning mismatch. These do not
+retroactively identify the first run's unknown guard.
+
+What remains unresolved:
+
+- **Initialization race:** title and Static text may be ready before a discoverable
+  button; no successive lookup or button inventory exists. The sub-second time
+  is compatible with this, not proof of it.
+- **Nested descendant:** an ID1 button might be below an intermediate parent;
+  the immediate lookup alone does not inventory the descendant tree. The current
+  recursive Static enumeration proves only the presence of those Static nodes,
+  not any button's location.
+- **Different control ID/class:** the displayed MB_OK action might be implemented
+  using a different control identifier or class. MB_OK/IDOK return semantics do
+  not establish the implementation's child layout from these artifacts.
+- **Handle lifetime:** the modal might become invalid between recognition and
+  lookup. No post-lookup IsWindow/owned-modal recheck was recorded. There is no
+  positive evidence of this transition.
+
+### Minimal next probe, still fail-closed
+
+Before choosing a behavioral workaround, add a capped, content-free descendant
+inventory when expected-button lookup is zero. EnumChildWindows already provides
+the needed traversal. Record at most a small fixed number of descriptors with:
+
+- exact `Button` class match (boolean, not arbitrary class strings);
+- numeric GetDlgCtrlID, immediate-parent match, same-PID match;
+- visibility/enabled booleans and bounded button style;
+- total descriptor count, cap/ambiguity flag, expected-ID candidate count;
+- whether the modal still exists and still passes its exact PID/owner/title/purpose
+  validation after discovery.
+
+Do not serialize button captions, HWND values, text, paths, or screenshots. Do
+not select the first child, use localized `OK` captions, post WM_COMMAND(IDOK)
+directly to bypass discovery, or send global keyboard input.
+
+A short bounded observational retry, within the existing close budget, can
+distinguish `missing -> direct ID1 appears` from a stable missing lookup; retain
+initial and final classifications plus poll count. This is not a Save retry.
+If inventory proves a nested button, a prospective fallback must require one
+unique visible/enabled `Button` descendant with exact expected ID and same PID,
+an uncapped unambiguous inventory, and fresh validation of the same owned modal
+before clicking. No ID match, duplicates, unknown class, invalid modal, or unknown
+purpose remains a refusal. First collect topology evidence rather than claiming
+this fallback is already necessary or sufficient.
+
+Successful posting remains only an acknowledgement of queue insertion; dismissal
+and normal process exit must still be observed. The second run narrows the
+diagnostic defect, but does not yet establish numeric Save failure evidence or
+ordinary Save reliability.
+
+## Independent button-certification candidate validation
+
+The owner subsequently implemented `Select-DialogButton` and
+`Wait-CertifiedButton`, plus a 32-control native descendant inventory. The
+candidate inspected here has script SHA-256
+`5075c801c5094bd85649dac3c78c713336cc7436e442e83244ff9fca549beabc`.
+Only the pure selector was executed: the harness extracts that function through
+the PowerShell AST without invoking the driver body, native helper or GUI.
+
+```powershell
+pwsh -NoProfile -File .temp/windows-save-first-target-audit/buttons.ps1
+```
+
+The acceptance basis is the safety contract, not the old GetDlgItem assumption:
+one exact-ID, same-PID, real descendant, visible/enabled Button is required;
+overflow, ambiguity, and contradictory direct lookup cannot certify a click.
+An otherwise matching hidden duplicate is still ambiguous, not grounds to select
+the visible one. A wrong-ID or non-Button child cannot stand in for the action.
+
+| Independent fake snapshot | Expected and observed |
+| --- | --- |
+| Unique direct ID1; unique direct ID6 | Exact handle accepted as direct |
+| Unique nested ID1 with no direct result | Exact handle classified descendant |
+| Two exact Button IDs, including one hidden duplicate | Zero handle, ambiguous |
+| Wrong ID; non-Button; empty inventory | Zero handle, missing |
+| Foreign PID; not a descendant | Zero handle, unsafe |
+| Hidden; disabled | Zero handle, not-ready |
+| Direct result disagrees with unique inventoried Button | Zero handle, direct-invalid |
+| Overflow even with a valid direct candidate | Zero handle, overflow |
+| Unrelated other-ID/non-Button controls plus one valid direct candidate | Only valid direct handle accepted |
+
+All **15 cases passed**. Evidence is
+`.temp/windows-save-first-target-audit/button-selection-evidence.json`.
+The fake handles never enter an OS call. This is certification-policy coverage,
+not proof of the native inventory's actual hosted contents.
+
+Source review of the non-pure readiness wrapper separately confirmed:
+
+- Each polling attempt rechecks the same PID/owner-filtered dialog, exact title
+  and current purpose before inspecting buttons. Owner/title/purpose changes
+  cause refusal, not relaxed matching.
+- Overflow, ambiguity, unsafe ownership/ancestry, and contradictory direct
+  results refuse immediately.
+- Direct construction is allowed a grace interval: descendant acceptance requires
+  more than one attempt and at least 250 ms. Missing/not-ready observations can
+  be polled at 25 ms intervals without issuing any clicks.
+- Acceptance is checked again against the local 1,000 ms and child 38-second
+  limits. No candidate may be returned after those checks fail; expiration
+  marks the button missing and throws.
+- Serialized button metadata includes numeric IDs and bounded booleans, not
+  raw handles or captions. The inventory's 32-item cap causes fail-closed
+  selection. Button text is never read by the inventory.
+
+The 1-second local readiness budget is an acceptance deadline, **not** a hard
+wall-clock bound: preceding bounded cross-process text calls may consume time
+beyond it, and an in-flight call is not preempted by the local loop. The existing
+owned-child 45-second watchdog remains the independent lifetime safeguard.
+
+No material defect was found in this checked slice. In accordance with the
+request to execute only pure extraction, the owner/title/purpose transition
+branches and timeout branch were source-reviewed but **not executed** here.
+Actual native enumeration, modal lifetime between certification and posting,
+MessageBox readiness, successful dismissal and orderly tracing drain remain
+target-platform checks. The second artifact does not prove the fallback was
+needed: the next hosted inventory must distinguish direct-readiness recovery
+from a genuinely nested candidate or continued refusal.
 
 ## Local source references
 

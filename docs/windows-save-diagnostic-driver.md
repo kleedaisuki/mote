@@ -156,7 +156,7 @@ dialog refusal. It records content-free predicates to locate the next failure:
 
 - `close_error_stage`: one of the fixed owner/title/Static read, purpose guard,
   button lookup/post, failure dismissal, main-close or normal-exit stages.
-- `close_reason`: only owner/title/purpose mismatch, missing button/main HWND,
+- `close_reason`: only owner/title/purpose mismatch, missing/uncertifiable button/main HWND,
   message-post failure, incomplete normal exit, or API/runtime exception.
 - `close_predicates`: owner match, title-is-mote, exact/prefix purpose matches,
   bounded aggregate and per-Static text lengths, Static count and type bits,
@@ -181,3 +181,57 @@ text. The [Static-style documentation](https://learn.microsoft.com/en-us/windows
 also cautions that SS_TYPEMASK does not represent all styles: reported low type
 bits are diagnostic metadata only, not a complete style classification or a
 new authorization predicate.
+
+## Second hosted control: certified button readiness
+
+Run `36777561397` retained its failing row below
+`.cache/ci-36777561397-save/windows-save-diagnostic/` (see the independent
+audit [first-target validation](validation/windows-save-diagnostic-first-target.md)).
+The content-free follow-up localized the fault to `failure-ok-lookup`:
+owner/title/Save-prefix all matched; Static types were `[3, 0]`, lengths
+`[0, 443]`, and body length 443 with no cap hit. `GetDlgItem(modal, 1)` returned
+null, so the driver refused to post any button action and forced exit at total
+0.5834669 seconds. Target and recovery bytes were respectively exact original
+and X+original; trace remained zero/incomplete. This rejects the proposed
+Static/prefix explanation for **this run**, but does not establish whether the
+button was absent transiently, nested, or had another unsupported topology.
+
+The minimal follow-up adds a one-second, fail-closed readiness budget for the
+specified ID, shared by failure OK, retained-warning OK and discard Yes:
+This is a selection deadline, not a hard wall-clock guarantee: an in-progress
+500 ms bounded text call may finish after it, but the final elapsed-time check
+forbids returning a late button for posting.
+
+1. Recheck the **same** modal PID/owner/class, exact title and previously allowed
+   purpose on every attempt. A changed/unknown purpose aborts without dismissal.
+2. Inspect direct `GetDlgItem` and a capped snapshot of at most 32 descendants.
+   During the initial 250 milliseconds, and until at least a second observation,
+   only a certified direct button can be accepted; this permits ordinary child
+   initialization without assuming the first null is a stable layout.
+3. Thereafter accept a descendant only when there is **exactly one** `Button`
+   with the requested `GetDlgCtrlID` (IDOK=1 or IDYES=6), same PID, actual
+   `IsChild(modal, button)` ancestry, visible and enabled. Duplicate identities,
+   overflow, ownership/ancestry failures or inconsistent direct-handle identity
+   refuse selection immediately. Missing/disabled/hidden controls can become
+   ready only within the original finite budget.
+4. Never use a caption, first arbitrary Button, default-button assumption,
+   dialog-wide WM_COMMAND, global key press, or a different modal as fallback.
+   The original 45-second owned-child watchdog remains unchanged, and readiness
+   refuses actions at/after child second 38 to reserve normal-drain time.
+
+`button_lookup` contains requested ID, attempts, fixed selection mode, ready
+flag, elapsed readiness time on success, descendant IDs and bounded per-control
+class-is-Button/owned/ancestry/direct-parent/visible/enabled booleans. Handles and
+captions remain in memory only. No raw text is added to reports. A descendant
+selection is not proof that nesting caused the old row; the new mode and timing
+are precisely the evidence needed to discriminate that question.
+
+Microsoft's [GetDlgItem contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgitem)
+allows a null result for an invalid dialog or nonexistent control;
+[EnumChildWindows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumchildwindows)
+explicitly includes nested descendants but not controls created during that
+enumeration. [GetDlgCtrlID](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgctrlid)
+identifies actual child controls. These contracts support bounded reobservation
+and exact identity checks; they do not prove the old failure was an initialization
+race or authorize changing the expected ID. Local fake selection tests and C#
+compilation run without native calls; fresh hosted closing/drain remains unproven.

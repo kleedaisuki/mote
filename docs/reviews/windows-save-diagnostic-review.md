@@ -6,6 +6,52 @@ telemetry serialization/drain, and dedicated documentation when available.
 This is static and synthetic-oracle review, not GUI, Native AOT execution, or a
 reproduction of error 1175. No production or worker-owned files were modified.
 
+## Certified button readiness / descendant fallback review
+
+Reviewed the uncommitted follow-up to second hosted run `36777561397` from the
+actual source, not only its implementation summary. Driver SHA-256:
+`5075C801C5094BD85649DAC3C78C713336CC7436E442E83244FF9FCA549BEABC`.
+Dedicated driver documentation SHA-256 after archive-path correction:
+`B9E3837694744C73B9FF56D1CB1C9DCB30113246C01CFDB34184711C2DADCF6D`.
+Worker fake/parser/compiler evidence is
+`.cache/windows-save-diagnostic-validation/second-hosted-followup-evidence.json`.
+
+**No substantive implementation blocker found.** This remains a diagnostic
+driver repair candidate, not evidence that hosted normal close/drain works or
+that nesting/initialization caused the previous missing IDOK. The second
+archive narrowed its immediate failure to an absent direct ID1 lookup; it did
+not establish the topology needed for a successful fallback.
+
+| Review dimension | Source-level conclusion |
+| --- | --- |
+| Revalidation | Every readiness attempt finds the same visible `#32770` modal by exact child PID and main-window owner, requires identical HWND and exact title `mote`, and repeats the previously allowed purpose check. Save failure, exact fixture-specific retained warning, and exact discard text use the same helper. No different/unknown modal is substituted. |
+| Button identity | The capped 32-control snapshot supplies actual control ID, exact class-is-Button, same PID, `IsChild` ancestry, visibility and enabled state. Selection requires one exact-ID Button. Duplicates, overflow, foreign/non-descendant control, and inconsistent nonzero direct lookup are immediate refusals. A matching direct lookup is cross-checked against that certified descendant, rather than trusted alone. |
+| Fallback scope | Direct buttons may be accepted immediately. Descendant fallback requires at least two observations and 250 ms grace. Missing/disabled/invisible candidates can be reobserved, but never clicked unless certified within the finite deadline. No caption, arbitrary first child, ID change, dialog-wide WM_COMMAND, clipboard, or global input is introduced. |
+| Time and mutation | The loop admits work only before one second and child second 38, then checks both again before returning a selected handle. The polling helper contains no UI mutation. Read calls may finish after the nominal deadline; such a late-ready result is refused, not used for posting. These are decision deadlines, not hard real-time guarantees. Ordinary process scheduling/handle-lifetime races remain the existing controlled-runner assumption, not a claimed atomic cross-process certificate. |
+| No duplicates | Failure OK is posted once before disappearance wait. Retained-warning and discard flags are set only after successful posts and prevent repeat mutation. The helper polls identity/readiness only; it does not retry posting. The existing PostMessage result checks and disappearance/normal-exit requirements remain. |
+| Privacy and cleanup | Only bounded IDs, counts, fixed modes, booleans and successful readiness time enter `button_lookup`; HWNDs and labels remain in memory. No raw text is added. Failure still enters the existing guaranteed owned-child teardown and incomplete-forced-exit semantics. |
+
+Independent supplemental pure-selector tests extracted only `Select-DialogButton`
+through the PowerShell AST, without running the script entry point or native
+imports. Four cases absent from the worker's listed self-test passed: inconsistent
+direct handle refuses `direct-invalid`; invisible control stays `not-ready`;
+non-descendant refuses `unsafe`; ID1 cannot satisfy requested ID6 (`missing`).
+No GUI, publish, old executable, or completed helper suite was rerun.
+
+Microsoft's [IsChild contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-ischild)
+defines transitive parent/descendant membership; the explicit check is therefore
+appropriate for nested controls. [EnumChildWindows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumchildwindows)
+includes descendant windows but does not include controls created during its
+enumeration, supporting bounded reobservation without proving a timing race.
+
+One documentation-only correction was requested: the second archive is directly
+under `.cache/ci-36777561397-save/windows-save-diagnostic/`, not an `artifact/`
+subdirectory. The worker corrected this and the final documentation hash above
+pins the correction. This does not affect executable behavior or certification.
+The independent validator additionally reports 15/15 pure-selector cases,
+including hidden duplicates and unrelated IDs; these do not execute the native
+inspection or readiness loop. Real hosted normal close/drain remains unverified.
+
 ## Hosted-failure instrumentation delta review
 
 Reviewed after hosted run `36776080244` / job `110094208431`. The retained

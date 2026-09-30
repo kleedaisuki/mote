@@ -123,6 +123,65 @@ function Get-ExceptionCodes([Exception] $Exception) {
     return @{ type = $deepest.GetType().FullName; hresult = $deepest.HResult }
 }
 
+# Certify a unique exact-ID Button, never a label or the first arbitrary control.
+function Select-DialogButton($Snapshot, [int] $Id) {
+    if ($Snapshot.Overflow) { return @{ handle = [IntPtr]::Zero; mode = 'overflow' } }
+    $matches = @($Snapshot.Controls | Where-Object { $_.Id -eq $Id -and $_.ClassIsButton })
+    if ($matches.Count -gt 1) { return @{ handle = [IntPtr]::Zero; mode = 'ambiguous' } }
+    if ($matches.Count -eq 0) { return @{ handle = [IntPtr]::Zero; mode = 'missing' } }
+    $button = $matches[0]
+    if (-not $button.Owned -or -not $button.Descendant) { return @{ handle = [IntPtr]::Zero; mode = 'unsafe' } }
+    if ($Snapshot.Direct -ne [IntPtr]::Zero -and $Snapshot.Direct -ne $button.Handle) { return @{ handle = [IntPtr]::Zero; mode = 'direct-invalid' } }
+    if (-not $button.Visible -or -not $button.Enabled) { return @{ handle = [IntPtr]::Zero; mode = 'not-ready' } }
+    return @{ handle = $button.Handle; mode = $(if ($Snapshot.Direct -eq $button.Handle) { 'direct' } else { 'descendant' }) }
+}
+
+# Revalidate the same modal's purpose on every bounded readiness attempt.
+function Wait-CertifiedButton([IntPtr] $Dialog, [int] $Id,
+    [ValidateSet('save-failure', 'retained-warning', 'discard')][string] $Purpose, [hashtable] $Row) {
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $attempts = 0
+    $Row.button_lookup = @{ expected_id = $Id; attempts = 0; mode = 'not-observed'; ready = $false }
+    while ($timer.ElapsedMilliseconds -lt 1000 -and $childClock.Elapsed.TotalSeconds -lt 38) {
+        $attempts++
+        $same = [MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, '#32770', $window) -eq $Dialog
+        if (-not $same) { $Row.close_reason = 'owner-mismatch'; throw 'Modal changed during button readiness.' }
+        if ([MoteSaveDiagnosticWin32]::Text($Dialog) -cne 'mote') { $Row.close_reason = 'title-mismatch'; throw 'Modal title changed during button readiness.' }
+        $body = [MoteSaveDiagnosticWin32]::InspectDialog($Dialog).Text
+        $purposeMatch = switch ($Purpose) {
+            'save-failure' { Test-SaveFailureText $body }
+            'retained-warning' { Test-RetainedRecoveryText $body $fixture }
+            'discard' { $body -ceq 'Discard unsaved changes?' }
+        }
+        if (-not $purposeMatch) { $Row.close_reason = 'close-purpose-mismatch'; throw 'Modal purpose changed during button readiness.' }
+        $snapshot = [MoteSaveDiagnosticWin32]::InspectButtons($Dialog, [uint32]$process.Id, $Id)
+        $selected = Select-DialogButton $snapshot $Id
+        $Row.button_lookup = @{ expected_id = $Id; attempts = $attempts; mode = $selected.mode;
+            child_ids = @($snapshot.Controls | ForEach-Object { $_.Id }); overflow = $snapshot.Overflow;
+            direct_present = $snapshot.Direct -ne [IntPtr]::Zero; ready = $false;
+            controls = @($snapshot.Controls | ForEach-Object {
+                @{ id = $_.Id; is_button = $_.ClassIsButton; owned = $_.Owned; descendant = $_.Descendant;
+                    direct_child = $_.DirectChild; visible = $_.Visible; enabled = $_.Enabled }
+            }) }
+        if ($selected.mode -in @('overflow', 'ambiguous', 'unsafe', 'direct-invalid')) {
+            $Row.close_reason = 'button-uncertifiable'; throw 'Button identity could not be certified.'
+        }
+        # Give direct child construction a bounded grace before descendant fallback.
+        $ready = $selected.handle -ne [IntPtr]::Zero -and
+            ($selected.mode -eq 'direct' -or $attempts -gt 1 -and $timer.ElapsedMilliseconds -ge 250)
+        if ($ready -and $timer.ElapsedMilliseconds -lt 1000 -and $childClock.Elapsed.TotalSeconds -lt 38) {
+            if ($selected.mode -eq 'direct' -and $attempts -gt 1) { $Row.button_lookup.mode = 'direct-retry' }
+            $Row.button_lookup.ready = $true
+            $Row.button_lookup.readiness_ms = $timer.ElapsedMilliseconds
+            $Row.close_predicates.button_found = $true
+            return $selected.handle
+        }
+        Start-Sleep -Milliseconds 25
+    }
+    $Row.close_predicates.button_found = $false
+    $Row.close_reason = 'button-missing'; throw 'No certifiable button within readiness budget.'
+}
+
 if (-not $IsWindows) { throw 'Windows PowerShell 7 required.' }
 if ($SelfTest) {
     $dir = Assert-OwnedPath (Join-Path $root ('.temp/windows-save-diagnostic/selftest-' + [guid]::NewGuid().ToString('N')))
@@ -169,6 +228,21 @@ if ($SelfTest) {
     $wrapped = [Exception]::new('private outer text', [IO.IOException]::new('private inner text'))
     $codes = Get-ExceptionCodes $wrapped
     if ($codes.type -cne 'System.IO.IOException' -or ($codes | ConvertTo-Json).Contains('private')) { throw 'Exception code evidence failed.' }
+    $control = @{ Id = 1; ClassIsButton = $true; Owned = $true; Descendant = $true; Visible = $true; Enabled = $true; Handle = [IntPtr]101 }
+    $snapshot = @{ Direct = [IntPtr]101; Overflow = $false; Controls = @($control) }
+    if ((Select-DialogButton $snapshot 1).mode -ne 'direct') { throw 'Direct button selection failed.' }
+    $snapshot.Direct = [IntPtr]::Zero
+    if ((Select-DialogButton $snapshot 1).mode -ne 'descendant') { throw 'Nested exact button selection failed.' }
+    $snapshot.Controls = @($control, $control)
+    if ((Select-DialogButton $snapshot 1).mode -ne 'ambiguous') { throw 'Duplicate button accepted.' }
+    $snapshot.Controls = @($control); $control.Owned = $false
+    if ((Select-DialogButton $snapshot 1).mode -ne 'unsafe') { throw 'Foreign button accepted.' }
+    $control.Owned = $true; $control.Enabled = $false
+    if ((Select-DialogButton $snapshot 1).mode -ne 'not-ready') { throw 'Disabled button accepted.' }
+    $control.Enabled = $true; $control.ClassIsButton = $false
+    if ((Select-DialogButton $snapshot 1).mode -ne 'missing') { throw 'Non-Button accepted.' }
+    $control.ClassIsButton = $true; $snapshot.Overflow = $true
+    if ((Select-DialogButton $snapshot 1).mode -ne 'overflow') { throw 'Overflow snapshot accepted.' }
     Write-Output 'PASS: exact byte oracles and complete/incomplete trace controls; no GUI launch.'
     return
 }
@@ -232,6 +306,18 @@ public sealed class MoteSaveDialogObservation {
     public int[] StaticLengths;
     public bool AtTextCap;
 }
+/// <summary>Exact control identity metadata. Handles stay in memory, not reports.</summary>
+public sealed class MoteSaveButtonControl {
+    public IntPtr Handle;
+    public int Id;
+    public bool ClassIsButton, Owned, Descendant, DirectChild, Visible, Enabled;
+}
+/// <summary>At most 32 descendants, with overflow explicitly refusing selection.</summary>
+public sealed class MoteSaveButtonSnapshot {
+    public IntPtr Direct;
+    public MoteSaveButtonControl[] Controls;
+    public bool Overflow;
+}
 /// <summary>Bounded messages and exact PID/owner-filtered windows only.</summary>
 public static class MoteSaveDiagnosticWin32 {
     public delegate bool Callback(IntPtr h, IntPtr data);
@@ -239,6 +325,10 @@ public static class MoteSaveDiagnosticWin32 {
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr h, Callback callback, IntPtr data);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsChild(IntPtr parent, IntPtr child);
+    [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint command);
     [DllImport("user32.dll", EntryPoint="GetWindowLongW")] static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder text, int n);
@@ -275,6 +365,22 @@ public static class MoteSaveDiagnosticWin32 {
             return true; },IntPtr.Zero);
         return new MoteSaveDialogObservation { Text=text.ToString(), StaticCount=types.Count,
             StaticTypes=types.ToArray(), StaticLengths=lengths.ToArray(), AtTextCap=capped };
+    }
+    /// <summary>Enumerate exact IDs/classes/ancestry, without reading button labels.</summary>
+    public static MoteSaveButtonSnapshot InspectButtons(IntPtr dialog, uint expectedPid, int id) {
+        if (dialog==IntPtr.Zero) throw new ArgumentException("Null modal rejected");
+        var controls=new System.Collections.Generic.List<MoteSaveButtonControl>(); bool overflow=false;
+        EnumChildWindows(dialog,(child,d)=> {
+            if(controls.Count>=32) { overflow=true; return false; }
+            uint pid; GetWindowThreadProcessId(child,out pid);
+            var cls=new StringBuilder(64); GetClassName(child,cls,64);
+            controls.Add(new MoteSaveButtonControl { Handle=child, Id=GetDlgCtrlID(child),
+                ClassIsButton=cls.ToString()=="Button", Owned=pid==expectedPid,
+                Descendant=IsChild(dialog,child), DirectChild=GetParent(child)==dialog,
+                Visible=IsWindowVisible(child), Enabled=IsWindowEnabled(child) });
+            return true;
+        },IntPtr.Zero);
+        return new MoteSaveButtonSnapshot { Direct=GetDlgItem(dialog,id), Controls=controls.ToArray(), Overflow=overflow };
     }
     /// <summary>Acknowledge input synchronously with a half-second bound.</summary>
     public static long Send(IntPtr h, uint msg, long w, long l) {
@@ -395,9 +501,7 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
                     $row.close_error_stage = 'failure-purpose-guard'
                     if (-not $row.close_predicates.save_failure_prefix) { $row.close_reason = 'save-purpose-mismatch'; throw 'Unrecognized failure dialog.' }
                     $row.close_error_stage = 'failure-ok-lookup'
-                    $ok = [MoteSaveDiagnosticWin32]::GetDlgItem($modal, 1)
-                    $row.close_predicates.button_found = $ok -ne [IntPtr]::Zero
-                    if ($ok -eq [IntPtr]::Zero) { $row.close_reason = 'button-missing'; throw 'No failure OK button.' }
+                    $ok = Wait-CertifiedButton $modal 1 'save-failure' $row
                     $row.close_error_stage = 'failure-ok-post'
                     $row.close_predicates.post_ack = [MoteSaveDiagnosticWin32]::PostMessage($ok, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
                     if (-not $row.close_predicates.post_ack) { $row.close_reason = 'message-post-failed'; throw 'Failure OK post failed.' }
@@ -425,9 +529,7 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
                         if (Test-RetainedRecoveryText $text $fixture) {
                             if (-not $warningAck) {
                                 $row.close_error_stage = 'recovery-warning-ok-lookup'
-                                $ok = [MoteSaveDiagnosticWin32]::GetDlgItem($discard, 1)
-                                $row.close_predicates.button_found = $ok -ne [IntPtr]::Zero
-                                if ($ok -eq [IntPtr]::Zero) { $row.close_reason = 'button-missing'; throw 'No recovery warning OK button.' }
+                                $ok = Wait-CertifiedButton $discard 1 'retained-warning' $row
                                 $row.close_error_stage = 'recovery-warning-ok-post'
                                 $row.close_predicates.post_ack = [MoteSaveDiagnosticWin32]::PostMessage($ok, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
                                 if (-not $row.close_predicates.post_ack) { $row.close_reason = 'message-post-failed'; throw 'Recovery warning OK post failed.' }
@@ -437,9 +539,7 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
                         elseif ($text -ceq 'Discard unsaved changes?') {
                             if (-not $discardAck) {
                                 $row.close_error_stage = 'discard-yes-lookup'
-                                $yes = [MoteSaveDiagnosticWin32]::GetDlgItem($discard, 6)
-                                $row.close_predicates.button_found = $yes -ne [IntPtr]::Zero
-                                if ($yes -eq [IntPtr]::Zero) { $row.close_reason = 'button-missing'; throw 'No discard Yes button.' }
+                                $yes = Wait-CertifiedButton $discard 6 'discard' $row
                                 $row.close_error_stage = 'discard-yes-post'
                                 $row.close_predicates.post_ack = [MoteSaveDiagnosticWin32]::PostMessage($yes, 0xF5, [UIntPtr]::Zero, [IntPtr]::Zero)
                                 if (-not $row.close_predicates.post_ack) { $row.close_reason = 'message-post-failed'; throw 'Discard Yes post failed.' }
