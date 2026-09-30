@@ -595,8 +595,28 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
-      # Synthetic NSTextView marked text is committed with unmarkText while a
-      # window-local appearance switch is deferred; not a real CJK IME or cancel.
+      # Read-only input-source/TCC inventory does not select an input method,
+      # type text, or establish that a real Chinese IME workflow works.
+      - name: Diagnose macOS Chinese input-source availability (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/MacRealImeSourceProbe/Run.ps1 `
+            -ReportPath ".cache/ci-inventory/$rid/mac-real-ime-source.json"
+      - name: Upload macOS Chinese input-source inventory
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-real-ime-source-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-real-ime-source.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Synthetic NSTextView marked text is committed and then cancelled under
+      # window-local appearance switches; neither path is a real CJK IME test.
       - name: Diagnose macOS marked-text theme transition (non-gating)
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh

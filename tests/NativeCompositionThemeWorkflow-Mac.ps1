@@ -1,5 +1,5 @@
-# Diagnose published AppKit synthetic marked-text commit during a window-local theme change.
-# This is not an external keyboard, a real CJK candidate window, cancellation, or global OS theme.
+# Diagnose published AppKit synthetic marked-text commit and cancellation during
+# window-local theme changes; this is not a real CJK IME or global OS switch.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
     [Parameter(Mandatory)][ValidateSet('osx-x64', 'osx-arm64')][string] $RuntimeIdentifier
@@ -28,7 +28,7 @@ if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Published Mach-O
 $reportPath = Join-Path $inventory 'native-composition-theme-mac.json'
 $result = [ordered]@{
     status = 'failed'; rid = $RuntimeIdentifier
-    scope = 'synthetic AppKit marked-text unmark commit and window-local appearance; no real CJK/cancel/global OS'
+    scope = 'synthetic AppKit marked-text commit/cancel and window-local appearance; no real CJK IME/global OS'
     executable_sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
     input_sha256_unchanged = $false; cases = @(); error = $null
 }
@@ -39,6 +39,8 @@ foreach ($mode in @('default', 'canvas')) {
         mode = $mode; status = 'failed'; marker = $null
         output_directory = $null; appearance_callbacks = $null
         composition_settled_callbacks = $null; insertion_offset = $null
+        cancel_isolated = $null; cancel_version_unchanged = $null
+        cancel_selection_preserved = $null
         phases = @(); error = $null
     }
     $process = $null
@@ -86,12 +88,15 @@ foreach ($mode in @('default', 'canvas')) {
         $expectedSpace = if ($mode -eq 'canvas') { 'global-source' } else { 'native-text-view' }
         if ($native.Mode -cne $mode -or -not $native.Succeeded -or
             -not $native.PreeditIsolated -or -not $native.PolicyDeferred -or
+            -not $native.CancelIsolated -or
+            -not $native.CancelVersionUnchanged -or
+            -not $native.CancelSelectionPreserved -or
             -not $native.UndoRestored -or -not $native.RedoRestored -or
             -not $native.InputUnchanged -or $native.Scope -cne
             'synthetic-appkit-marked-text-window-appearance' -or
             $native.SelectionSpace -cne $expectedSpace -or
             $native.SourceHashEncoding -cne 'UTF-16LE-no-BOM' -or
-            $native.Phases.Count -ne 3 -or $native.AppearanceCallbacks -lt 1 -or
+            $native.Phases.Count -ne 5 -or $native.AppearanceCallbacks -lt 1 -or
             $native.CompositionSettledCallbacks -lt 1 -or
             $native.InsertionOffset -lt 0 -or $native.InsertionOffset -gt $content.Length) {
             throw 'Native marked-text isolation/deferred-policy/Undo or scope contract failed.'
@@ -99,6 +104,9 @@ foreach ($mode in @('default', 'canvas')) {
         $case.appearance_callbacks = $native.AppearanceCallbacks
         $case.composition_settled_callbacks = $native.CompositionSettledCallbacks
         $case.insertion_offset = $native.InsertionOffset
+        $case.cancel_isolated = $native.CancelIsolated
+        $case.cancel_version_unchanged = $native.CancelVersionUnchanged
+        $case.cancel_selection_preserved = $native.CancelSelectionPreserved
         $case.undo_selection = @($native.UndoSelectionAnchor, $native.UndoSelectionActive)
         $case.redo_selection = @($native.RedoSelectionAnchor, $native.RedoSelectionActive)
         if ($native.UndoSelectionAnchor -ne $native.InsertionOffset -or
@@ -110,14 +118,18 @@ foreach ($mode in @('default', 'canvas')) {
         $expectedCommitted = $content.Insert([int]$native.InsertionOffset, '候')
         $committedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
             [Text.Encoding]::Unicode.GetBytes($expectedCommitted)))
-        $expectedSteps = @('dark-before', 'light-marked', 'light-settled')
-        $expectedThemes = @('mote-dark', 'mote-dark', 'mote-light')
-        $expectedColors = @('#8DB9ED', '#8DB9ED', '#215FAD')
-        $expectedDark = @($true, $false, $false)
-        $expectedMarked = @($false, $true, $false)
-        $expectedHashes = @($initialSourceHash, $initialSourceHash, $committedHash)
+        $expectedSteps = @('dark-before', 'light-marked', 'light-settled',
+            'dark-marked', 'dark-cancelled')
+        $expectedThemes = @('mote-dark', 'mote-dark', 'mote-light',
+            'mote-light', 'mote-dark')
+        $expectedColors = @('#8DB9ED', '#8DB9ED', '#215FAD',
+            '#215FAD', '#8DB9ED')
+        $expectedDark = @($true, $false, $false, $true, $true)
+        $expectedMarked = @($false, $true, $false, $true, $false)
+        $expectedHashes = @($initialSourceHash, $initialSourceHash,
+            $committedHash, $committedHash, $committedHash)
         $first = $native.Phases[0]
-        for ($index = 0; $index -lt 3; $index++) {
+        for ($index = 0; $index -lt 5; $index++) {
             $phase = $native.Phases[$index]
             if ($phase.Step -cne $expectedSteps[$index] -or
                 $phase.AppliedThemeId -cne $expectedThemes[$index] -or
@@ -128,9 +140,10 @@ foreach ($mode in @('default', 'canvas')) {
                 $phase.PreviewHeadingRgb -cne $expectedColors[$index]) {
                 throw 'Composition phase changed source or palette at the wrong time.'
             }
-            if ($index -lt 2 -and $phase.Version -ne $first.Version -or
-                $index -eq 2 -and $phase.Version -le $first.Version) {
-                throw 'Marked preedit advanced source version or commit failed to advance it.'
+            if (($index -lt 2 -and $phase.Version -ne $first.Version) -or
+                ($index -eq 2 -and $phase.Version -le $first.Version) -or
+                ($index -gt 2 -and $phase.Version -ne $native.Phases[2].Version)) {
+                throw 'Commit/cancel advanced canonical source version at the wrong time.'
             }
             if ($index -eq 0 -and
                 $phase.SelectionAnchor -ne $phase.SelectionActive) {
@@ -138,6 +151,9 @@ foreach ($mode in @('default', 'canvas')) {
             }
             $expectedCaret = if ($index -eq 1 -and $mode -eq 'canvas') {
                 [int]$first.SelectionAnchor
+            }
+            elseif ($index -eq 3 -and $mode -eq 'default') {
+                [int]$native.InsertionOffset + 2
             }
             elseif ($index -gt 0) { [int]$native.InsertionOffset + 1 }
             else { [int]$first.SelectionAnchor }
@@ -183,8 +199,16 @@ foreach ($mode in @('default', 'canvas')) {
                 $native.Phases[0].CompositionSettledCallbacks -or
             $native.Phases[2].CompositionSettledCallbacks -le
                 $native.Phases[1].CompositionSettledCallbacks -or
+            $native.Phases[3].AppearanceCallbacks -le
+                $native.Phases[2].AppearanceCallbacks -or
+            $native.Phases[3].CompositionSettledCallbacks -ne
+                $native.Phases[2].CompositionSettledCallbacks -or
+            $native.Phases[4].CompositionSettledCallbacks -le
+                $native.Phases[3].CompositionSettledCallbacks -or
             $case.phases[0].image_sha256 -ceq $case.phases[1].image_sha256 -or
-            $case.phases[1].image_sha256 -ceq $case.phases[2].image_sha256) {
+            $case.phases[1].image_sha256 -ceq $case.phases[2].image_sha256 -or
+            $case.phases[2].image_sha256 -ceq $case.phases[3].image_sha256 -or
+            $case.phases[3].image_sha256 -ceq $case.phases[4].image_sha256) {
             throw 'Appearance/settlement callback or cached-raster transition was not observed.'
         }
         $case.status = 'passed'

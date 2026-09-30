@@ -19,6 +19,7 @@ internal static class MacCompositionThemeProbe
     private const string Heading = "MOTE_THEME_HEADING";
     private const string Body = "MOTE_THEME_BODY";
     private const string Candidate = "候";
+    private const string CancelCandidate = "消";
     private const string AppKit = "/System/Library/Frameworks/AppKit.framework/AppKit";
 
     /// <summary>
@@ -107,6 +108,7 @@ internal static class MacCompositionThemeProbe
         private NativeDocumentStamp _baseStamp;
         private string _initialSource = string.Empty;
         private string _committedSource = string.Empty;
+        private string _hostBeforeCancellation = string.Empty;
         private int _insertionOffset;
         private (int Anchor, int Active) _initialSelection;
         private (int Anchor, int Active) _undoSelection;
@@ -114,6 +116,9 @@ internal static class MacCompositionThemeProbe
         private ObjC.Range _markedSelection;
         private bool _preeditIsolated;
         private bool _policyDeferred;
+        private bool _cancelIsolated;
+        private bool _cancelVersionUnchanged;
+        private bool _cancelSelectionPreserved;
         private bool _undoRestored;
         private bool _redoRestored;
         private bool _done;
@@ -196,7 +201,8 @@ internal static class MacCompositionThemeProbe
                     case 2 when _shell.ProbeHasMarkedText && _shell.IsTextComposing:
                         _check = "marked-before-appearance";
                         CheckPreeditIsolation();
-                        CheckMarkedSelection();
+                        CheckMarkedSelection(_mode == "canvas"
+                            ? _initialSelection.Anchor : _insertionOffset + Candidate.Length);
                         _markedSelection = ObjC.SendRange(_shell.ProbeEditorView,
                             ObjC.Sel("selectedRange"));
                         _shell.ProbeSetWindowAppearance(false);
@@ -211,7 +217,8 @@ internal static class MacCompositionThemeProbe
                                 ObjC.Sel("selectedRange")) != _markedSelection)
                             throw new InvalidOperationException("Native marked state or palette changed early.");
                         CheckPreeditIsolation();
-                        CheckMarkedSelection();
+                        CheckMarkedSelection(_mode == "canvas"
+                            ? _initialSelection.Anchor : _insertionOffset + Candidate.Length);
                         _policyDeferred = true;
                         Capture("light-marked", ThemePolicies.DarkId);
                         // Apple specifies unmarkText accepts the current marked
@@ -228,10 +235,61 @@ internal static class MacCompositionThemeProbe
                         CheckSelection(_insertionOffset + Candidate.Length);
                         _committedVersion = CurrentStamp().Version;
                         Capture("light-settled", ThemePolicies.LightId);
-                        _shell.ProbeInvokeMenu("moteUndo:");
+                        _hostBeforeCancellation = _shell.ProbeNativeText;
+                        _beforeAppearance = _appearanceCallbacks;
+                        _beforeSettled = _settledCallbacks;
+                        _shell.ProbeSetMarkedAtEnd(CancelCandidate);
                         _stage = 5;
                         break;
-                    case 5 when CurrentStamp().Version > _committedVersion &&
+                    case 5 when _shell.ProbeHasMarkedText && _shell.IsTextComposing:
+                        _check = "cancel-marked-before-appearance";
+                        CheckCancellationIsolation();
+                        if (_shell.ProbeNativeText !=
+                            _hostBeforeCancellation + CancelCandidate)
+                            throw new InvalidOperationException("Synthetic cancel mark is absent from native host.");
+                        CheckMarkedSelection(_mode == "canvas"
+                            ? _insertionOffset + Candidate.Length
+                            : _insertionOffset + Candidate.Length + CancelCandidate.Length);
+                        _markedSelection = ObjC.SendRange(_shell.ProbeEditorView,
+                            ObjC.Sel("selectedRange"));
+                        _shell.ProbeSetWindowAppearance(true);
+                        _stage = 6;
+                        break;
+                    case 6 when _shell.PrefersDark &&
+                        _appearanceCallbacks > _beforeAppearance:
+                        _check = "deferred-dark";
+                        if (!_shell.ProbeHasMarkedText || !_shell.IsTextComposing ||
+                            _shell.ProbeThemeId != ThemePolicies.LightId ||
+                            ObjC.SendRange(_shell.ProbeEditorView,
+                                ObjC.Sel("selectedRange")) != _markedSelection)
+                            throw new InvalidOperationException("Native cancellation mark or palette changed early.");
+                        CheckCancellationIsolation();
+                        if (_shell.ProbeNativeText !=
+                            _hostBeforeCancellation + CancelCandidate)
+                            throw new InvalidOperationException("Native cancel mark changed during appearance switch.");
+                        CheckMarkedSelection(_mode == "canvas"
+                            ? _insertionOffset + Candidate.Length
+                            : _insertionOffset + Candidate.Length + CancelCandidate.Length);
+                        Capture("dark-marked", ThemePolicies.LightId);
+                        ClearSyntheticMarkedText();
+                        _stage = 7;
+                        break;
+                    case 7 when !_shell.ProbeHasMarkedText && !_shell.IsTextComposing &&
+                        _shell.ProbeThemeId == ThemePolicies.DarkId &&
+                        _settledCallbacks > _beforeSettled && AnalysisReady():
+                        _check = "cancelled-dark";
+                        CheckCancellationIsolation();
+                        if (_shell.ProbeNativeText != _hostBeforeCancellation)
+                            throw new InvalidOperationException("Cancelled candidate remains in native host.");
+                        CheckSelection(_insertionOffset + Candidate.Length);
+                        _cancelVersionUnchanged = CurrentStamp().Version == _committedVersion;
+                        _cancelSelectionPreserved = true;
+                        _cancelIsolated = true;
+                        Capture("dark-cancelled", ThemePolicies.DarkId);
+                        _shell.ProbeInvokeMenu("moteUndo:");
+                        _stage = 8;
+                        break;
+                    case 8 when CurrentStamp().Version > _committedVersion &&
                         CurrentSource() == _initialSource:
                         _check = "undo";
                         CheckSelection(_insertionOffset);
@@ -239,9 +297,9 @@ internal static class MacCompositionThemeProbe
                         _undoVersion = CurrentStamp().Version;
                         _undoRestored = true;
                         _shell.ProbeInvokeMenu("moteRedo:");
-                        _stage = 6;
+                        _stage = 9;
                         break;
-                    case 6 when CurrentStamp().Version > _undoVersion &&
+                    case 9 when CurrentStamp().Version > _undoVersion &&
                         CurrentSource() == _committedSource:
                         _check = "redo";
                         CheckSelection(_insertionOffset + Candidate.Length);
@@ -291,12 +349,41 @@ internal static class MacCompositionThemeProbe
             _preeditIsolated = true;
         }
 
-        private void CheckMarkedSelection()
+        private void CheckMarkedSelection(int expected)
         {
-            var expected = _mode == "canvas"
-                ? _initialSelection.Anchor : _insertionOffset + Candidate.Length;
             if (Selection() != (expected, expected))
                 throw new InvalidOperationException("Marked-text selection moved outside its expected state.");
+        }
+
+        private void CheckCancellationIsolation()
+        {
+            if (CurrentStamp().Generation != _baseStamp.Generation ||
+                CurrentStamp().Version != _committedVersion ||
+                CurrentSource() != _committedSource || !SameInput())
+                throw new InvalidOperationException("Cancelled text escaped into canonical source.");
+        }
+
+        /// <summary>
+        /// Clears the client's provisional range before asking the input context
+        /// to discard its conversion session. AppKit's unmarkText is deliberately
+        /// excluded because it accepts rather than cancels marked text.
+        /// </summary>
+        private void ClearSyntheticMarkedText()
+        {
+            var editor = _shell.ProbeEditorView;
+            var marked = ObjC.SendRange(editor, ObjC.Sel("markedRange"));
+            if (marked.Location == nuint.MaxValue ||
+                marked.Length != (nuint)CancelCandidate.Length)
+                throw new InvalidOperationException("Synthetic cancellation range is invalid.");
+            ObjC.Send(editor, ObjC.Sel("setMarkedText:selectedRange:replacementRange:"),
+                ObjC.String(string.Empty), new ObjC.Range(0, 0),
+                new ObjC.Range(0, marked.Length));
+            if (_shell.ProbeHasMarkedText)
+                throw new InvalidOperationException("AppKit did not clear synthetic marked text.");
+            var context = ObjC.Send(editor, ObjC.Sel("inputContext"));
+            if (context == 0)
+                throw new InvalidOperationException("AppKit input context is unavailable for discard.");
+            ObjC.Send(context, ObjC.Sel("discardMarkedText"));
         }
 
         private void CheckSelection(int expected)
@@ -412,6 +499,9 @@ internal static class MacCompositionThemeProbe
             writer.WriteNumber("LastStage", _stage);
             writer.WriteBoolean("PreeditIsolated", _preeditIsolated);
             writer.WriteBoolean("PolicyDeferred", _policyDeferred);
+            writer.WriteBoolean("CancelIsolated", _cancelIsolated);
+            writer.WriteBoolean("CancelVersionUnchanged", _cancelVersionUnchanged);
+            writer.WriteBoolean("CancelSelectionPreserved", _cancelSelectionPreserved);
             writer.WriteBoolean("UndoRestored", _undoRestored);
             writer.WriteBoolean("RedoRestored", _redoRestored);
             writer.WriteNumber("UndoSelectionAnchor", _undoSelection.Anchor);
