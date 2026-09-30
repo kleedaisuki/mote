@@ -552,7 +552,7 @@ jobs:
       # The separate MTA client uses only a synthetic CSV and target-owned messages.
       # Its opt-in bounded-window evidence is not reader/IME/focus release acceptance.
       - name: Diagnose external Windows CSV Grid accessibility (non-gating)
-        if: matrix.rid == 'win-x64'
+        if: matrix.rid == 'win-x64' || matrix.rid == 'win-arm64'
         shell: pwsh
         timeout-minutes: 5
         continue-on-error: true
@@ -560,8 +560,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $rid = '${{ matrix.rid }}'
           $exe = (Resolve-Path "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe").Path
-          $directory = Join-Path $PWD '.cache/windows-grid-accessibility-ci/win-x64'
-          $scratch = Join-Path $PWD '.temp/windows-grid-accessibility-ci/win-x64'
+          $directory = Join-Path $PWD ".cache/windows-grid-accessibility-ci/$rid"
+          $scratch = Join-Path $PWD ".temp/windows-grid-accessibility-ci/$rid"
           New-Item -ItemType Directory -Force -Path $directory, $scratch | Out-Null
           $report = Join-Path $directory 'report.json'
           $inventory = [ordered]@{
@@ -575,9 +575,11 @@ jobs:
           }
           $probe = $null
           try {
-            # Accept only the exact reviewed LF/CRLF project encodings, not arbitrary normalization.
-            if (-not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
-                '1AF72C383BB49ADD171AD8E6DADA7EE2BD012506262D5FBC292DA06B4453F6C7') -or
+            # Accept only the exact reviewed LF/CRLF source and project encodings, not arbitrary normalization.
+            if ((-not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
+                '4347749886467393FC82BC95A97EE8EBB4E9F2DA600DCF784EC6A88EE4E10E95') -and
+                -not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
+                '5D6E7D538B53685C3C592D1174A00C49F2DF116F13A28E58E47183768233B0ED')) -or
                 (-not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
                 '5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2') -and
                 -not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
@@ -613,21 +615,21 @@ jobs:
             if ($probe.ExitCode -ne 0 -or -not [StringComparer]::Ordinal.Equals($result.Classification, 'pass')) {
               throw 'External Grid subset failed or was inconclusive; inspect uploaded report without treating it as release acceptance.'
             }
-            Write-Host 'External Windows Grid subset passed; foreign global focus may remain blocked; reader/IME/ARM/release gates remain untested.'
+            Write-Host 'External Windows Grid subset passed; foreign global focus may remain blocked; reader/IME/external-cell-focus/cross-RID-parity/release gates remain untested.'
           } finally {
             $inventory | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $directory 'inventory.json') -Encoding utf8
             if ($null -ne $probe) { $probe.Dispose() }
           }
       - name: Upload external Windows CSV Grid accessibility diagnostic
-        if: always() && matrix.rid == 'win-x64'
+        if: always() && (matrix.rid == 'win-x64' || matrix.rid == 'win-arm64')
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: windows-grid-accessibility-ci-win-x64
+          name: windows-grid-accessibility-ci-${{ matrix.rid }}
           path: |
-            .cache/windows-grid-accessibility-ci/win-x64/report.json
-            .cache/windows-grid-accessibility-ci/win-x64/inventory.json
-            .cache/windows-grid-accessibility-ci/win-x64/build.log
+            .cache/windows-grid-accessibility-ci/${{ matrix.rid }}/report.json
+            .cache/windows-grid-accessibility-ci/${{ matrix.rid }}/inventory.json
+            .cache/windows-grid-accessibility-ci/${{ matrix.rid }}/build.log
           if-no-files-found: warn
           retention-days: 14
       # Paired opt-in fragment tree on the same published EXE; ARM64 and real

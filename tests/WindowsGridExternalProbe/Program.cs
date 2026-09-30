@@ -184,7 +184,7 @@ internal static class Program
             if (process is { HasExited: false }) { process.CloseMainWindow(); if (!process.WaitForExit(5000)) process.Kill(); }
             results["ElapsedMs"] = overall.Elapsed.TotalMilliseconds;
             results["Scope"] = "opt-in bounded reads, rectangular selection, readonly range facts, synthetic owned F6, native coordinate navigation; not external focus/write/reader acceptance";
-            results["RemainingGates"] = new[] { "off-owner cell Focus", "RangeValue writes", "real reader speech", "physical IME", "win-arm64", "100 MiB memory teardown", "multi-monitor scaling" };
+            results["RemainingGates"] = new[] { "off-owner cell Focus", "RangeValue writes", "real reader speech", "physical IME", "cross-RID parity beyond this one run", "100 MiB memory teardown", "multi-monitor scaling" };
             results["Errors"] = errors; results["Inconclusive"] = inconclusive;
             results["Classification"] = errors.Count > 0 ? "product-fail" : inconclusive.Count > 0 ? "inconclusive" : "pass";
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(args[2]))!);

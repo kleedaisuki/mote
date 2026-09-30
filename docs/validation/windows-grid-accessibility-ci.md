@@ -148,3 +148,67 @@ focus was tested. The table-HWND versus selected-DataItem focus distinction is
 an observed fact that needs reader/contract-specific acceptance, not evidence
 by itself of a product defect. Probe coverage also lacks unique-child-ID and
 selected-identity assertions; avoid stronger claims than the executed checks.
+
+## Windows ARM64 diagnostic extension: prepared, hosted execution pending
+
+The current workflow now runs the same non-gating external Grid client on both
+`win-x64` (`windows-latest`) and `win-arm64` (`windows-11-arm`). This extends
+execution scope only: the successful x64 result above remains historical evidence
+for its original commit and source pin, not evidence for the new ARM64 run.
+No ARM64 UIA execution result or cross-RID parity is claimed by this change.
+
+Each matrix child launches its own exact previously published Native AOT binary
+at `src/Mote.Native/bin/Release/net10.0/<rid>/publish/mote.exe`; the inventory
+records that RID and executable hash, and requires the client report to identify
+the same hash. Client build output and reports stay under
+`.cache/windows-grid-accessibility-ci/<rid>/`; isolated synthetic fixture/home
+files stay under `.temp/windows-grid-accessibility-ci/<rid>/`. Artifacts are
+`windows-grid-accessibility-ci-win-x64` and
+`windows-grid-accessibility-ci-win-arm64`, each containing only its own
+`report.json`, `inventory.json`, and `build.log`. Both diagnostic and always-run
+upload remain non-gating, with the existing 120-second client timeout,
+10-second owned-tree termination bound, five-minute step timeout, and 14-day
+artifact retention. No global input or clipboard access was added.
+
+The client's only change is truthful remaining-gate metadata: the unconditional
+`win-arm64` label becomes `cross-RID parity beyond this one run`. A passing ARM64
+run must not report its own architecture as untested; neither one passing RID
+nor the two separate reports by themselves prove broader release acceptance.
+Foreign global focus remains an ownership-reported blocked fact rather than a
+product failure, and external cell SetFocus remains safely refused, not passed.
+Selection, navigation, bounded child enumeration, and all other executed UIA
+checks are unchanged.
+
+Current exact reviewed Program.cs byte pins supersede the historical source pin
+only for the new workflow revision:
+
+- LF: `4347749886467393FC82BC95A97EE8EBB4E9F2DA600DCF784EC6A88EE4E10E95`.
+- CRLF: `5D6E7D538B53685C3C592D1174A00C49F2DF116F13A28E58E47183768233B0ED`.
+
+The project bytes are unchanged; its exact LF/CRLF pins listed above still apply.
+The workflow admits only these four exact source/project hashes with ordinal
+comparison. It does not normalize unknown hosted bytes. Git checkout may select
+LF or CRLF; deterministic local conversion reproduced each admitted pin, and an
+extra-byte source negative case was rejected by the pin-presence check.
+
+Preparation validation on the local x64 machine:
+
+- PyYAML 6.0.3 parsed the workflow; assertions passed for both exact RID conditions,
+  per-RID artifact names and paths, both non-gating flags, timeouts, retention,
+  four reviewed pins, and the altered-byte negative case.
+- PowerShell's parser accepted both expanded per-RID diagnostic scripts with no
+  AST errors. Scripts are retained at
+  `.cache/grid-arm-ci-validation/win-x64.ps1` and `win-arm64.ps1`.
+- `dotnet build tests/WindowsGridExternalProbe/WindowsGridExternalProbe.csproj
+  --configuration Release --artifacts-path .cache/grid-arm-ci-validation/build`
+  passed with zero warnings/errors; output DLL exists at
+  `build/bin/WindowsGridExternalProbe/release/WindowsGridExternalProbe.dll`.
+  Build log is `.cache/grid-arm-ci-validation/build.log`.
+- `git diff --check` passed. No hosted child was launched locally, and no local
+  x64 build is counted as hosted ARM execution or a performance measurement.
+
+After hosted execution, independently audit each RID's binary/source attribution,
+actual client exit and timeout, classification, Errors/Inconclusive arrays,
+owned-focus facts, and blocked external-cell-focus status. Any observed ARM
+failure needs its own bounded diagnosis; do not infer cross-RID success from the
+existing x64 evidence or enable accessibility registration by default.
