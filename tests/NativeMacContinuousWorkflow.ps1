@@ -84,30 +84,30 @@ function Start-Editor {
 }
 
 function Read-SourceProxy {
-    param([int] $Pid, [int] $Length)
-    $raw = Invoke-BoundedProcess $client @([string]$Pid, [string]$Length,
+    param([int] $TargetProcessId, [int] $Length)
+    $raw = Invoke-BoundedProcess $client @([string]$TargetProcessId, [string]$Length,
         'continuous-note.txt') 7000 'source-gate'
     return $raw | ConvertFrom-Json
 }
 
 function Wait-SourceProxy {
-    param([int] $Pid, [int] $Length,
+    param([int] $TargetProcessId, [int] $Length,
         [Nullable[int]] $SelectionStart, [Nullable[int]] $SelectionLength)
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while ($timer.ElapsedMilliseconds -lt 20000) {
         $editor.Refresh()
         if ($editor.HasExited) { throw "Ordinary Continuous editor exited $($editor.ExitCode)." }
         try {
-            $ax = Read-SourceProxy $Pid $Length
-            if ($ax.trusted -and $ax.applicationPid -eq $Pid -and
-                $ax.focusedWindowPid -eq $Pid -and $ax.focusedWindowMatches -and
+            $ax = Read-SourceProxy $TargetProcessId $Length
+            if ($ax.trusted -and $ax.applicationPid -eq $TargetProcessId -and
+                $ax.focusedWindowPid -eq $TargetProcessId -and $ax.focusedWindowMatches -and
                 $ax.sourceCandidates -eq 1 -and $ax.labeledSourceCandidates -eq 1 -and
                 $ax.sourceLength -eq $Length -and $ax.proxyFocused -eq $true -and
                 ($null -eq $SelectionStart -or $ax.selectionStart -eq $SelectionStart) -and
                 ($null -eq $SelectionLength -or $ax.selectionLength -eq $SelectionLength)) {
                 $result.source_proxy_observations += [ordered]@{
                     length = $Length; selection_start = $SelectionStart
-                    selection_length = $SelectionLength; pid = $Pid
+                    selection_length = $SelectionLength; pid = $TargetProcessId
                 }
                 return
             }
@@ -119,10 +119,10 @@ function Wait-SourceProxy {
 }
 
 function Send-Key {
-    param([int] $Pid, [string] $Name, [string] $Command)
+    param([int] $TargetProcessId, [string] $Name, [string] $Command)
     $body = @"
 tell application "System Events"
-    set targetProcess to first process whose unix id is $Pid
+    set targetProcess to first process whose unix id is $TargetProcessId
     set frontmost of targetProcess to true
     $Command
 end tell
