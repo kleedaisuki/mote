@@ -53,23 +53,33 @@ $start.RedirectStandardOutput = $true
 $start.RedirectStandardError = $true
 $probe = [Diagnostics.Process]::Start($start)
 try {
-    if (-not $probe.WaitForExit(20000)) {
-        $probe.Kill(); $probe.WaitForExit()
-        throw 'Activation probe exceeded 20 seconds; disposable runner must be discarded.'
+    $outTask = $probe.StandardOutput.ReadToEndAsync()
+    $errTask = $probe.StandardError.ReadToEndAsync()
+    # Two read-only five-second observation windows plus bounded fresh-process
+    # checks require a longer cap; a timeout still discards the hosted runner.
+    $timedOut = -not $probe.WaitForExit(45000)
+    if ($timedOut) {
+        $probe.Kill($true)
+        [void]$probe.WaitForExit(10000)
     }
-    $json = $probe.StandardOutput.ReadToEnd()
-    $stderr = $probe.StandardError.ReadToEnd()
+    if (-not $outTask.Wait(10000) -or -not $errTask.Wait(10000)) {
+        throw 'Activation output streams did not close; disposable runner must be discarded.'
+    }
+    $json = $outTask.GetAwaiter().GetResult()
+    $stderr = $errTask.GetAwaiter().GetResult()
     $exitCode = $probe.ExitCode
+    if ($timedOut) { throw 'Activation probe exceeded 45 seconds; disposable runner must be discarded.' }
 } finally { $probe.Dispose() }
 
-if ([string]::IsNullOrWhiteSpace($json)) { throw "Activation did not emit a JSON report: $stderr" }
+$stderrSummary = if ($stderr.Length -gt 4096) { $stderr.Substring(0, 4096) + "`n<truncated>" } else { $stderr }
+if ([string]::IsNullOrWhiteSpace($json)) { throw "Activation did not emit a JSON report: $stderrSummary" }
 $data = $json | ConvertFrom-Json -ErrorAction Stop
 if ($data.schema -cne 'mote.mac-real-ime-activation.v1' -or $data.real_ime_tested -ne $false) {
     throw 'Activation report schema invalid or mislabeled as real IME input.'
 }
 [IO.File]::WriteAllText($report, $json, [Text.UTF8Encoding]::new($false))
 Write-Host "Disposable hosted-Mac activation report: $report"
-Write-Host "Activation passed: $($data.activation_passed); restoration passed: $($data.restoration_passed); real IME tested: false"
-if ($exitCode -ne 0 -or -not $data.restoration_passed) {
-    throw "Pinyin activation or restoration failed; inspect scoped report. Helper exit=$exitCode. $stderr"
+Write-Host "Activation passed: $($data.activation_passed); restoration passed: $($data.restoration_passed); trace complete: $($data.trace_complete); real IME tested: false"
+if ($exitCode -ne 0 -or -not $data.restoration_passed -or -not $data.trace_complete) {
+    throw "Pinyin activation, restoration, or trace failed; inspect scoped report. Helper exit=$exitCode. $stderrSummary"
 }
