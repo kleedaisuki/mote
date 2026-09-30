@@ -60,7 +60,6 @@ internal static class MacCsvGridProbe
         Require(ObjC.Send(table,ObjC.Sel("numberOfColumns")) == 3,"actual columns including Missing delivery");
         Require(ObjC.ManagedString(ObjC.Send(table,ObjC.Sel("accessibilityLabel"))) ==
             (Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1" ? "CSV grid window" : "Mote CSV grid"),"native table AX label");
-        MacCsvGridAccessibilityProbe.Check(shell);
         var cell = SendCell(table,ObjC.Sel("viewAtColumn:row:makeIfNecessary:"),1,0,1);
         Require(cell != 0 && ObjC.ManagedString(ObjC.Send(cell,ObjC.Sel("stringValue"))) == "b","ready cell readback");
         Require(ObjC.Send(cell,ObjC.Sel("isEditable")) == 0,"read-only native field");
@@ -88,14 +87,30 @@ internal static class MacCsvGridProbe
         shell.SetAnalysis(view with { PresentationSequence = 2 });
         Key(table,"c",1u<<20);
         Require(intents.Last().Identity.Sequence == 2 && intents.Last().Column == 1 && intents.Last().EndColumn == 2,"same-document selection survives new identity");
+        // Run before the nested AX probe: its responder changes cannot explain this native admission regression.
+        if (Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1")
+            Require(shell.ProbeGridAccessibilityFrame is { FocusedCell: { Row: 0, Column: 2 } } activeFrame &&
+                activeFrame.Cell(new(0, 2)).State == GridValueState.Missing,
+                "native Missing active field and semantic focus agree before menu opening");
+        var missingBefore = intents.Count;
+        Key(table,"\r");
+        Key(table,"\r",1u<<20);
+        Require(intents.Count == missingBefore + 2 && intents[^2].Kind == NativeGridIntentKind.Reveal &&
+            intents[^1].Kind == NativeGridIntentKind.Replace &&
+            intents.TakeLast(2).All(i => i.Identity.Sequence == 2 && i.Row == 0 && i.Column == 2 && i.EndColumn is null),
+            "Missing native keyboard coordinate intents retain legacy controller admission");
         // Freeze menu opening, then install new same-version map before its action.
         var menu = ObjC.Send(table,ObjC.Sel("menu"));
         var menuDelegate = ObjC.Send(menu,ObjC.Sel("delegate"));
         ObjC.Send(menuDelegate,ObjC.Sel("menuWillOpen:"),menu);
+        Require(shell.ProbeGridMenuCell is { } frozenCell && frozenCell.Identity.Sequence == 2 &&
+            frozenCell.Kind == NativeGridIntentKind.Reveal && frozenCell.Row == 0 && frozenCell.Column == 2 &&
+            frozenCell.EndColumn is null,"Missing menu cell freezes sequence 2 active field before replacement");
         shell.SetAnalysis(view with { PresentationSequence = 3 });
+        var beforeMenu = intents.Count;
         var revealItem = ObjC.Send(menu,ObjC.Sel("itemAtIndex:"),0);
         ObjC.Send(ObjC.Send(revealItem,ObjC.Sel("target")),ObjC.Send(revealItem,ObjC.Sel("action")),revealItem);
-        Require(intents.Last().Identity.Sequence == 2 && intents.Last().Kind == NativeGridIntentKind.Reveal &&
+        Require(intents.Count == beforeMenu + 1 && intents.Last().Identity.Sequence == 2 && intents.Last().Kind == NativeGridIntentKind.Reveal &&
             intents.Last().Column == 2 && intents.Last().EndColumn is null,"menu freezes old identity and active field");
         var csvItem = ObjC.Send(menu,ObjC.Sel("itemAtIndex:"),2);
         ObjC.Send(ObjC.Send(csvItem,ObjC.Sel("target")),ObjC.Send(csvItem,ObjC.Sel("action")),csvItem);
@@ -105,6 +120,8 @@ internal static class MacCsvGridProbe
         ObjC.Send(ObjC.Send(followItem,ObjC.Sel("target")),ObjC.Send(followItem,ObjC.Sel("action")),followItem);
         Require(windows.Count == 1 && windows[0].FollowSource && windows[0].Identity.Sequence == 2,
             "Follow source retains frozen menu identity");
+        MacCsvGridAccessibilityProbe.Check(shell);
+        ObjC.Send(shell.ProbeWindow,ObjC.Sel("makeFirstResponder:"),table);
         windows.Clear();
         var opening = new NativeGridWindowRequest(view.Identity,0,new(0,3));
         Require(MacGridNavigation.TryCreateRequest("2:2",opening,grid.Extent,out var go) &&

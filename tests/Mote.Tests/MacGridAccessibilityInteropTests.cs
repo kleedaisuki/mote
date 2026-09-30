@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Mote.Formats;
+using Mote.Native;
 using Mote.Native.Mac;
 
 namespace Mote.Tests;
@@ -23,6 +24,24 @@ public sealed class MacGridAccessibilityInteropTests
         Assert.Equal(GridValueState.Oversized, oversized.State);
         Assert.NotNull(oversized.SourceRange);
         Assert.True(projection.Rows[0].RecordDelimiter.End <= projection.Rows[1].SourceRange.Start);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FocusedNativeIntentPreservesMissingAdmissionButRefusesPending(bool replace)
+    {
+        var kind = replace ? NativeGridIntentKind.Replace : NativeGridIntentKind.Reveal;
+        var projection = MacCsvGridAccessibilityProbe.CreateProjection();
+        var opening = new NativePresentationId(new(51, 1), 2);
+        foreach (var coordinate in new[] { new GridCoordinate(1000, 16), new(1000, 17), new(1002, 17) })
+        {
+            var captured = MacCsvGrid.CaptureFocusedIntent(projection, opening, kind, coordinate);
+            Assert.Equal(new NativeGridIntent(opening, kind, coordinate.Row, coordinate.Column), captured);
+        }
+        Assert.Null(MacCsvGrid.CaptureFocusedIntent(projection, opening, kind, new(1001, 16)));
+        Assert.Null(MacCsvGrid.CaptureFocusedIntent(projection, opening, kind, new(1000, 18)));
+        Assert.Null(MacCsvGrid.CaptureFocusedIntent(projection, opening, kind, new(1003, 16)));
     }
 
     [Fact]

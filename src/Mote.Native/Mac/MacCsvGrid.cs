@@ -43,6 +43,8 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
     private bool _windowPending;
     private NativeGridIntent? _menuSelection;
     private NativeGridIntent? _menuCell;
+    /// <summary>Diagnostic readback of the cell intent frozen at menu opening, never a source action result.</summary>
+    internal NativeGridIntent? ProbeMenuCell => _menuCell;
     private NativeGridWindowRequest? _menuWindow;
     private GridExtent _menuExtent;
     private nint _delegate;
@@ -504,12 +506,7 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
         if (_installing || _identity is not { } identity || _projection is not { } projection) return null;
         if (AccessibilityEnabled && kind is NativeGridIntentKind.Reveal or NativeGridIntentKind.Replace &&
             _accessibilityFrame?.FocusedCell is { } focused)
-        {
-            var focusedCell = NativeCsvGrid.Row(projection, focused.Row) is { } focusedRow
-                ? NativeCsvGrid.Cell(focusedRow, focused.Column) : null;
-            return focusedCell is { SourceRange: not null, State: not GridValueState.Pending and not GridValueState.Missing }
-                ? new NativeGridIntent(identity, kind, focused.Row, focused.Column) : null;
-        }
+            return CaptureFocusedIntent(projection, identity, kind, focused);
         var row = (int)ObjC.Send(_table, ObjC.Sel("selectedRow"));
         if (row < 0 || row >= _slots.Length || _column >= _displayColumns.Count) return null;
         var anchorRow = _anchorRow >= 0 && _anchorRow < _slots.Length ? _anchorRow : row;
@@ -531,6 +528,17 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
             rectangle ? selected.Ordinal : null,
             rectangle ? _displayColumns.Start + _column : null,
             kind == NativeGridIntentKind.CopyRows);
+    }
+
+    /// <summary>Captures a native keyboard/menu coordinate intent; the controller alone authorizes source actions.</summary>
+    /// <remarks>Missing is an admitted descriptor, not Pending. Preserve legacy dispatch so source policy can refuse it.</remarks>
+    internal static NativeGridIntent? CaptureFocusedIntent(GridRenderProjection projection,
+        NativePresentationId identity, NativeGridIntentKind kind, GridCoordinate focused)
+    {
+        var cell = NativeCsvGrid.Row(projection, focused.Row) is { } row
+            ? NativeCsvGrid.Cell(row, focused.Column) : null;
+        return cell is { State: not GridValueState.Pending }
+            ? new NativeGridIntent(identity, kind, focused.Row, focused.Column) : null;
     }
 
     private int FindLocalRow(int ordinal)
