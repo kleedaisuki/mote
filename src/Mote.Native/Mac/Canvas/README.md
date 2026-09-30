@@ -249,7 +249,7 @@ theme checks remained green. The light-mode cached AppKit view image has a
 readable status strip. This validates the **content-view raster** and its
 native draw callback, not the physical display compositor or global OS theme.
 
-### Synthetic marked-text appearance diagnostic (target run pending)
+### Synthetic marked-text appearance diagnostic
 
 `--check-native-mac-composition-theme` is a separate, non-gating published-binary
 diagnostic for a process-local window appearance change **during** marked text.
@@ -277,6 +277,22 @@ would not validate a physical keyboard, a real Chinese input method, candidate
 window geometry, or cancellation. A cancellation path will be added only if a
 separate AppKit sequence can prove an unmarked native host, original source,
 and **no extra engine version**; `unmarkText` is not a cancellation mechanism.
+
+[Hosted run 36680070533](https://github.com/kleedaisuki/mote/actions/runs/36680070533)
+passed this non-gating **commit-only** diagnostic on published `osx-arm64`
+and `osx-x64` Mach-O executables, in both default and canvas modes. During
+synthetic marked text, the window reported light while the applied policy
+stayed dark, preview heading remained `#8DB9ED`, and canonical source stayed
+at generation 2/version 0 with its original SHA-256. After `unmarkText`, one
+settled callback preceded the latest light policy and preview accent
+`#215FAD`; the one UTF-16-unit candidate was inserted at source offset 38
+in the default view and 20 in the bounded canvas host, advancing to version
+1. Default marked/native selection was 39, whereas canvas global selection
+remained 0 until commit and then moved to 21. Undo and Redo restored exact
+source and caret positions (38→39 default; 20→21 canvas), while the on-disk
+fixture hash remained unchanged. The three retained PNGs per mode are
+inspectable but are not used as a semantic-pixel or compositor oracle.
+No real CJK input method or cancellation was exercised.
 
 - Real CJK candidate/commit/cancel and resize behavior, VoiceOver navigation,
   bidirectional selection geometry, and practical latency remain release
