@@ -31,21 +31,29 @@ claim. The legacy position-modulo check already had this limitation, but removin
 the new per-visit check leaves it uncorrected in this implementation. Use a
 threshold/countdown or bounded iteration cadence that does not rely on visiting
 an exact absolute offset. Add a directed odd-offset escaped-string cancellation
-case. Other relevant paths: `EqualsDecoded` checks each 4,096 decoded iterations
-(up to six raw units per key per iteration), key-table growth checks each 4,096
-entries, keywords have at most five units, and large-document displayed scalar
-decoding is bounded to 16,384 units. Those are bounded but should not be described
-as uniformly 4,096 raw source visits.
+case. Key-table growth checks each 4,096 entries, keywords have at most five
+units, and large-document displayed scalar decoding is bounded to 16,384 units.
+These are bounded but are not uniformly 4,096 raw source visits.
 
 Resolution re-reviewed in the current uncommitted source: `StringValue` now
 initializes a next-position threshold and checks `_position >= nextCancellation`,
 then sets the next threshold 4,096 units later using a long intermediate. Unicode
 escape steps therefore cannot evade a checkpoint; overshoot is at most five units.
-`KeyReader` now receives the actual cancellation token on both comparison readers
-and the duplicate-label reader and checks it at each at-most-4,096-unit source
-window refill. Existing decoded-iteration checks remain. Source copies are charged
-before fetching; a refused budget checks cancellation before raising its internal
-budget exception. No unrelated tests were rerun for this static correction review.
+Final allocation refinement re-reviewed: `KeyTable` and `KeyReader` no longer
+retain added work/token fields. The production Add call passes the nullable shared
+budget into exact comparisons, reader Next/Read, and hot-key comparisons; duplicate
+label reads also pass it. Source visits and bounded window copies remain charged.
+`EqualsDecoded` checks cancellation against a long threshold on the sum of both
+reader positions. It checks immediately and then after approximately 4,096 raw
+consumed units, with at most eleven units of paired Unicode-escape overshoot.
+Lookahead copies can add two 4,096-unit window fetches between those consumption
+checks; this is a cursor-consumption cadence, not exactly 4,096 total memory reads.
+The duplicate-label path consumes at most 257 decoded characters (at most 1,542
+raw escape units), so it cannot hide an unbounded comparison without its own token.
+A refused bounded budget checks cancellation before raising its internal budget
+exception. String thresholds and key-table-growth cancellation remain independent
+of nullable accounting. No unrelated tests were rerun for this static correction
+review.
 
 The remainder of this review identifies no additional substantive source defect.
 Pending performance/native experiments remain outside this static assessment.
@@ -131,7 +139,12 @@ Pending performance/native experiments remain outside this static assessment.
    Cancellation remains independent in the corrected grammar/key loops and final
    publication check. This specialization introduces no observed correctness or
    cancellation defect on static re-review, but its speed benefit is unverified
-   here until the separate matched final-source benchmark completes.
+   here until the separate matched final-source benchmark completes. A subsequent
+   refinement removes the additional per-object/per-reader accounting fields,
+   after the implementation owner reported a 6.3% cold-allocation regression.
+   The budget is now passed call-locally; static tracing finds no missing production
+   propagation. This report does not independently establish the final allocation
+   or time improvement.
 
 ## Recommendation
 
@@ -140,6 +153,7 @@ adding speculative parser machinery. Preserve the hard final/nonfinal seams and
 single cancellation-gated state replacement. Promote only the claims supported
 by measured artifact results; retain truthful provisional display/global-count
 separation and legacy Full fallback in user-facing documentation.
+
 
 
 
