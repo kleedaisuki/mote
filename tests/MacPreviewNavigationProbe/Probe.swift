@@ -33,6 +33,15 @@ private struct Report: Codable {
     let boundsWidth: Double?
     let boundsHeight: Double?
     let actionError: String?
+    let keyFlags: KeyFlagObservation?
+}
+
+/// Numeric modifier flags before and after the probe sets an explicit key contract.
+private struct KeyFlagObservation: Codable {
+    let createdDown: UInt64
+    let createdUp: UInt64
+    let postedDown: UInt64
+    let postedUp: UInt64
 }
 
 /// A bounded, content-free AX text-area inventory for locating legacy NSTextView.
@@ -135,7 +144,8 @@ private func destination(_ preview: AXUIElement, _ marker: String) -> (Int?, CGR
 
 /// Makes a gesture against the real preview without invoking mote internals.
 private func act(_ action: String, _ pid: pid_t, _ preview: AXUIElement,
-                 _ offset: Int, _ bounds: CGRect?) -> String? {
+                 _ offset: Int, _ bounds: CGRect?,
+                 _ keyFlags: inout KeyFlagObservation?) -> String? {
     guard let process = NSRunningApplication(processIdentifier: pid) else {
         return "NSRunningApplication unavailable"
     }
@@ -179,10 +189,20 @@ private func act(_ action: String, _ pid: pid_t, _ preview: AXUIElement,
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) else {
             return "CGEvent keyboard creation failed"
         }
+        let createdDown = down.flags.rawValue
+        let createdUp = up.flags.rawValue
         if action == "save" || action == "undo" {
             down.flags = .maskCommand
             up.flags = .maskCommand
+        } else {
+            // A fresh CGEvent may inherit the hosted session's modifier state.
+            // Navigation gestures are explicitly unmodified by contract.
+            down.flags = []
+            up.flags = []
         }
+        keyFlags = KeyFlagObservation(createdDown: createdDown, createdUp: createdUp,
+                                      postedDown: down.flags.rawValue,
+                                      postedUp: up.flags.rawValue)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
     default: return "unknown action"
@@ -209,9 +229,10 @@ private func inspect(pid: pid_t, expectedLength: Int, action: String) -> Report 
     if let preview { _ = AXUIElementGetPid(preview, &previewPid) }
     let marked = preview.flatMap { destination($0, "Destination") }
     var actionError: String?
+    var keyFlags: KeyFlagObservation?
     if action != "observe" && action != "activate" {
         if let preview, let offset = marked?.0 {
-            actionError = act(action, pid, preview, offset, marked?.1)
+            actionError = act(action, pid, preview, offset, marked?.1, &keyFlags)
             Thread.sleep(forTimeInterval: 0.1)
         } else { actionError = "unique preview or Destination not found" }
     }
@@ -255,7 +276,7 @@ private func inspect(pid: pid_t, expectedLength: Int, action: String) -> Report 
                   boundsY: frame.map { Double($0.minY) },
                   boundsWidth: frame.map { Double($0.width) },
                   boundsHeight: frame.map { Double($0.height) },
-                  actionError: actionError)
+                  actionError: actionError, keyFlags: keyFlags)
 }
 
 /// Emits one compact JSON object; exit status is intentionally independent of assertions.

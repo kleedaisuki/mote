@@ -88,7 +88,8 @@ function Read-Probe {
         'sourceSelectionLength', 'sourceFocused', 'windowDirty', 'previewLength',
         'previewOffset', 'previewRangeLength', 'previewSelectionStart',
         'previewSelectionLength', 'previewFocused', 'previewEditable',
-        'boundsX', 'boundsY', 'boundsWidth', 'boundsHeight', 'actionError')) {
+        'boundsX', 'boundsY', 'boundsWidth', 'boundsHeight', 'actionError',
+        'keyFlags')) {
         if ($null -eq $state.PSObject.Properties[$name]) {
             $state | Add-Member -NotePropertyName $name -NotePropertyValue $null
         }
@@ -196,6 +197,10 @@ try {
         }
         $stage = 'keyboard-delivery-control'
         $rightAction = Read-Probe 'right'
+        $result.observations += [ordered]@{
+            stage = 'right-arrow-post'; key_flags = $rightAction.keyFlags
+            action_error = $rightAction.actionError
+        }
         if ($rightAction.actionError) {
             throw "Right-arrow delivery control failed: $($rightAction.actionError)"
         }
@@ -225,6 +230,12 @@ try {
     $stage = 'activate'
     $action = if ($Pointer) { 'click' } else { $gesture }
     $acted = Read-Probe $action
+    if (-not $Pointer) {
+        $result.observations += [ordered]@{
+            stage = 'activation-key-post'; key_flags = $acted.keyFlags
+            action_error = $acted.actionError
+        }
+    }
     if ($acted.actionError) { throw "Preview $action failed: $($acted.actionError)" }
     $after = Wait-State {
         param($state)

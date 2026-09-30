@@ -137,3 +137,13 @@ ambiguities, and next discriminators are in
 [the macOS keyboard diagnostic](mac-preview-keyboard-diagnostics.md). This
 probe does not measure viewport, document version, real IME, VoiceOver speech,
 or paint latency.
+
+In [run 36712114598](https://github.com/kleedaisuki/mote/actions/runs/36712114598),
+the new Right-arrow control moved the preview caret from 9 to **20** (the
+end of `Destination`) rather than 10, in both profiles on both Mac RIDs.
+Thus keyboard delivery occurred, but not with the intended one-character
+semantics; the Enter/Space product verdict remains untested. A Command-like
+modifier is one hypothesis, not an established cause. The probe now records
+only numeric created/posted key flags and explicitly clears modifiers for
+Right Arrow, Return, and Space before posting; the next target run must
+confirm its effect before changing the product handler.
