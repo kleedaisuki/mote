@@ -1,4 +1,8 @@
+using System.Runtime.CompilerServices;
 using Mote.Engine;
+
+[assembly: InternalsVisibleTo("Mote.Tests")]
+[assembly: InternalsVisibleTo("CsvSparseBenchmark")]
 
 namespace Mote.Formats;
 
@@ -21,9 +25,34 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     private const int MaxProjectedCellSourceLength = 64 * 1024;
     private const int MaxWindows = 8;
     private const int MaxWindowWidth = 512 * 1024;
-    private List<Segment> _segments = [];
-    private long? _version;
-    private bool _complete;
+    private const int MaxDenseSegments = 256;
+    private const int CheckpointInterval = 64 * 1024;
+    private CacheState _cache = CacheState.Empty;
+    private long _lastScannedSourceUnits;
+
+    /// <summary>Aggregate structural estimate; excludes text, output, transient graphs, and CLR layout guarantees.</summary>
+    internal CsvIndexStatistics CacheStatistics => new(_cache.Mode.ToString(), _cache.Segments.Count,
+        _cache.Checkpoints.Length, 256L + _cache.Segments.Count * 92_160L +
+        _cache.Checkpoints.Length * 4L, _cache.Version, _lastScannedSourceUnits);
+
+    /// <summary>Content-free diagnostic facts for tests and opt-in instrumentation.</summary>
+    internal readonly record struct CsvIndexStatistics(string Mode, int SegmentCount, int CheckpointCount,
+        long EstimatedRetainedIndexBytes, long? Version, long ScannedSourceUnits);
+
+    /// <summary>Complete validation is independent of retained dense row payload.</summary>
+    private enum CsvCacheMode { None, Prefix, DenseFull, SparseFull }
+
+    /// <summary>A single immutable commit owns one representation at one document version.</summary>
+    private sealed record CacheState(long? Version, CsvCacheMode Mode, List<Segment> Segments,
+        int[] Checkpoints, int ExpectedWidth, int Total)
+    {
+        internal static CacheState Empty { get; } = new(null, CsvCacheMode.None, [], [], -1, 0);
+        internal bool Complete => Mode is CsvCacheMode.DenseFull or CsvCacheMode.SparseFull;
+        internal int IndexedUntil => Segments.Count == 0 ? 0 : Segments[^1].After;
+    }
+
+    /// <summary>Counts parsed source units, including replay for projection, not bytes fetched or source length.</summary>
+    private sealed class ScanWork { internal long Units; }
     private bool _disposed;
 
     /// <inheritdoc />
@@ -56,43 +85,32 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             throw new ArgumentOutOfRangeException(nameof(scope));
         var furthest = normalized[^1];
 
-        List<Segment> rows;
-        bool complete;
-        if (_version == snapshot.Version && changesSinceCommittedState.Count == 0)
+        var work = new ScanWork();
+        CacheState candidate;
+        if (_cache.Version == snapshot.Version && changesSinceCommittedState.Count == 0)
         {
-            rows = _segments;
-            complete = _complete;
-            if (!complete && scope == AnalysisScope.Full)
-            {
-                rows = ResumeAll(snapshot, rows, cancellationToken);
-                complete = true;
-            }
-            else if (!complete && furthest.End <= VisibleScanBudget)
-            {
-                rows = ExtendVisiblePrefix(snapshot, rows, furthest, cancellationToken);
-                complete = rows.Count == 0 ? snapshot.Length == 0 : rows[^1].After == snapshot.Length;
-            }
+            candidate = _cache;
+            if (!candidate.Complete && scope == AnalysisScope.Full)
+                candidate = ScanFull(snapshot, candidate.Segments, cancellationToken, work);
+            else if (!candidate.Complete && furthest.End <= VisibleScanBudget)
+                candidate = PrefixState(snapshot,
+                    ExtendVisiblePrefix(snapshot, candidate.Segments, furthest, cancellationToken, work));
         }
-        else if (_complete && CanReuse(snapshot, changesSinceCommittedState))
+        else if (_cache.Mode == CsvCacheMode.DenseFull && CanReuse(snapshot, changesSinceCommittedState))
         {
-            rows = ParseIncremental(snapshot, changesSinceCommittedState[0].Change, cancellationToken);
-            complete = true;
+            var rows = ParseIncremental(snapshot, changesSinceCommittedState[0].Change, cancellationToken, work);
+            candidate = rows is null ? ScanFull(snapshot, [], cancellationToken, work) : DenseState(snapshot, rows);
         }
         else if (scope == AnalysisScope.Full)
-        {
-            rows = ParseAll(snapshot, cancellationToken);
-            complete = true;
-        }
+            candidate = ScanFull(snapshot, [], cancellationToken, work);
         else
-        {
-            rows = ParseVisiblePrefix(snapshot, furthest, cancellationToken);
-            complete = rows.Count == 0 ? snapshot.Length == 0 : rows[^1].After == snapshot.Length;
-        }
-        var result = Project(snapshot, rows, normalized, scope, complete, !enforceBudget, cancellationToken);
+            candidate = PrefixState(snapshot,
+                ExtendVisiblePrefix(snapshot, [], furthest, cancellationToken, work));
+
+        var result = Project(snapshot, candidate, normalized, scope, !enforceBudget, cancellationToken, work);
         cancellationToken.ThrowIfCancellationRequested();
-        _segments = rows;
-        _version = snapshot.Version;
-        _complete = complete;
+        _cache = candidate;
+        _lastScannedSourceUnits = work.Units;
         return result;
     }
 
@@ -127,17 +145,16 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     /// <inheritdoc />
     public void Dispose()
     {
-        _segments = [];
-        _version = null;
-        _complete = false;
+        _cache = CacheState.Empty;
+        _lastScannedSourceUnits = 0;
         _disposed = true;
     }
 
     private bool CanReuse(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> edits)
     {
-        var oldLength = _segments.Count == 0 ? 0 : _segments[^1].After;
-        return _version is not null && edits.Count == 1 &&
-            edits[0].BeforeVersion == _version && edits[0].AfterVersion == snapshot.Version &&
+        var oldLength = _cache.Segments.Count == 0 ? 0 : _cache.Segments[^1].After;
+        return _cache.Version is not null && edits.Count == 1 &&
+            edits[0].BeforeVersion == _cache.Version && edits[0].AfterVersion == snapshot.Version &&
             edits[0].Change.InsertText is not null && edits[0].Change.Start >= 0 &&
             edits[0].Change.DeleteLength >= 0 &&
             edits[0].Change.Start <= oldLength &&
@@ -145,20 +162,20 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             (long)oldLength - edits[0].Change.DeleteLength + edits[0].Change.InsertText.Length == snapshot.Length;
     }
 
-    private List<Segment> ParseIncremental(TextSnapshot snapshot, TextChange change, CancellationToken ct)
+    private List<Segment>? ParseIncremental(TextSnapshot snapshot, TextChange change, CancellationToken ct, ScanWork work)
     {
-        if (_segments.Count == 0) return ParseAll(snapshot, ct);
+        if (_cache.Segments.Count == 0) return null;
 
         // Restart one preceding record: a new LF at a record start can merge
         // with that record's preceding CR into a CRLF delimiter.
         var first = FindAffected(change.Start);
         var (segmentIndex, localIndex) = FindRow(first);
-        var start = _segments[segmentIndex].Get(localIndex).Start;
-        var cursor = new SnapshotCursor(snapshot, start);
-        var result = new List<Segment>(_segments.Count + 4);
-        result.AddRange(_segments.Take(segmentIndex));
-        if (localIndex > 0) result.Add(_segments[segmentIndex].Slice(0, localIndex));
-        var parsed = new List<Row>();
+        var start = _cache.Segments[segmentIndex].Get(localIndex).Start;
+        var cursor = new SnapshotCursor(snapshot, start, work);
+        var result = new List<Segment>(_cache.Segments.Count + 4);
+        result.AddRange(_cache.Segments.Take(segmentIndex));
+        if (localIndex > 0) result.Add(_cache.Segments[segmentIndex].Slice(0, localIndex));
+        var parsed = new List<Row>(BlockSize);
         var oldEnd = (long)change.Start + change.DeleteLength;
         var delta = change.InsertText.Length - change.DeleteLength;
         var candidateSegment = segmentIndex;
@@ -168,6 +185,11 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             ct.ThrowIfCancellationRequested();
             var row = ParseRow(cursor, ct, false, out _);
             parsed.Add(row);
+            if (parsed.Count == BlockSize)
+            {
+                if (!AddParsed(result, parsed)) return null;
+                parsed.Clear();
+            }
             // A record delimiter reached at the translated old delimiter is a safe
             // lexical checkpoint, even if earlier records changed quote structure.
             Row old;
@@ -176,29 +198,28 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             if (TryCandidate(candidateSegment, candidateLocal, out old) && old.After >= oldEnd &&
                 row.After == (long)old.After + delta)
             {
-                AddParsed(result, parsed);
+                if (!AddParsed(result, parsed)) return null;
                 Next(ref candidateSegment, ref candidateLocal);
-                AddSuffix(result, candidateSegment, candidateLocal, delta);
+                if (!AddSuffix(result, candidateSegment, candidateLocal, delta)) return null;
                 return result;
             }
             while (TryCandidate(candidateSegment, candidateLocal, out old) && (long)old.After + delta <= row.After)
                 Next(ref candidateSegment, ref candidateLocal);
         }
-        AddParsed(result, parsed);
-        return result;
+        return AddParsed(result, parsed) ? result : null;
     }
 
     private int FindAffected(int offset)
     {
         var lo = 0;
-        var hi = _segments.Count - 1;
+        var hi = _cache.Segments.Count - 1;
         while (lo < hi)
         {
             var mid = lo + (hi - lo) / 2;
-            if (_segments[mid].After > offset) hi = mid;
+            if (_cache.Segments[mid].After > offset) hi = mid;
             else lo = mid + 1;
         }
-        var segment = _segments[lo];
+        var segment = _cache.Segments[lo];
         var left = 0;
         var right = segment.Count - 1;
         while (left < right)
@@ -209,37 +230,87 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         }
         // Restart one preceding record: a new LF at a record start may merge
         // with the previous CR into a CRLF delimiter.
-        return Math.Max(0, _segments.Take(lo).Sum(s => s.Count) + left - 1);
+        return Math.Max(0, _cache.Segments.Take(lo).Sum(s => s.Count) + left - 1);
     }
 
-    private static List<Segment> ParseAll(TextSnapshot snapshot, CancellationToken ct)
+    /// <summary>Validates in one scan, dropping dense rows before their structural budget is exceeded.</summary>
+    private static CacheState ScanFull(TextSnapshot snapshot, List<Segment> prefix, CancellationToken ct, ScanWork work)
     {
-        var segments = new List<Segment>();
-        var rows = new List<Row>(BlockSize);
-        var cursor = new SnapshotCursor(snapshot, 0);
+        var segments = new List<Segment>(prefix);
+        var checkpoints = new List<int> { 0 };
+        var pending = new List<Row>(BlockSize);
+        var dense = true;
+        var expected = -1;
+        var total = 0;
+        void Account(Row row)
+        {
+            if (expected < 0) expected = row.Width;
+            total = checked(total + row.ErrorCount + (row.Width == expected ? 0 : 1));
+            if (row.After - checkpoints[^1] >= CheckpointInterval) checkpoints.Add(row.After);
+        }
+        // A prefix already consists of certified whole records; reuse its summaries
+        // while constructing NEW-version checkpoints and exact width dependencies.
+        foreach (var segment in prefix)
+            for (var i = 0; i < segment.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                Account(segment.Get(i));
+            }
+        var cursor = new SnapshotCursor(snapshot, prefix.Count == 0 ? 0 : prefix[^1].After, work);
         while (cursor.Position < snapshot.Length)
         {
             ct.ThrowIfCancellationRequested();
-            rows.Add(ParseRow(cursor, ct, false, out _));
-            if (rows.Count == BlockSize) { segments.Add(new Segment(rows.ToArray(), 0, rows.Count, 0)); rows.Clear(); }
+            var row = ParseRow(cursor, ct, false, out _);
+            Account(row);
+            if (!dense) continue;
+            if (segments.Count == MaxDenseSegments)
+            {
+                // No prospective block is allocated beyond the cap, including a
+                // partial block. Keep scanning with only certified checkpoints.
+                dense = false;
+                segments = [];
+                pending.Clear();
+                continue;
+            }
+            pending.Add(row);
+            if (pending.Count != BlockSize) continue;
+            segments.Add(new Segment(pending.ToArray(), 0, pending.Count, 0));
+            pending.Clear();
         }
-        if (rows.Count > 0) segments.Add(new Segment(rows.ToArray(), 0, rows.Count, 0));
-        return segments;
+        if (pending.Count > 0) segments.Add(new Segment(pending.ToArray(), 0, pending.Count, 0));
+        return new CacheState(snapshot.Version, dense ? CsvCacheMode.DenseFull : CsvCacheMode.SparseFull,
+            segments, dense ? [] : checkpoints.ToArray(), expected, total);
     }
 
-    private static List<Segment> ParseVisiblePrefix(TextSnapshot snapshot, TextSpan visible, CancellationToken ct) =>
-        ExtendVisiblePrefix(snapshot, [], visible, ct);
+    /// <summary>Calculates fresh global width dependencies from a bounded dense candidate.</summary>
+    private static CacheState DenseState(TextSnapshot snapshot, List<Segment> rows)
+    {
+        var expected = rows.Count == 0 ? -1 : rows[0].Get(0).Width;
+        var total = 0;
+        foreach (var segment in rows)
+            total = checked(total + segment.ErrorCount + segment.Count - segment.WidthCount(expected));
+        return new CacheState(snapshot.Version, CsvCacheMode.DenseFull, rows, [], expected, total);
+    }
+
+    /// <summary>Prefix validity is never confused with an empty complete file or sparse full cache.</summary>
+    private static CacheState PrefixState(TextSnapshot snapshot, List<Segment> rows)
+    {
+        if (snapshot.Length == 0 || rows.Count > 0 && rows[^1].After == snapshot.Length)
+            return DenseState(snapshot, rows);
+        return new CacheState(snapshot.Version, CsvCacheMode.Prefix, rows, [],
+            rows.Count == 0 ? -1 : rows[0].Get(0).Width, 0);
+    }
 
     /// <summary>Scans at most one bounded prefix; no partial record is committed.</summary>
     private static List<Segment> ExtendVisiblePrefix(TextSnapshot snapshot, List<Segment> prefix,
-        TextSpan visible, CancellationToken ct)
+        TextSpan visible, CancellationToken ct, ScanWork work)
     {
         var start = prefix.Count == 0 ? 0 : prefix[^1].After;
         var limit = Math.Min(snapshot.Length, Math.Min(VisibleScanBudget, Math.Max(visible.End, 8192)));
         if (start >= limit) return prefix;
         var result = new List<Segment>(prefix);
         var rows = new List<Row>(BlockSize);
-        var cursor = new SnapshotCursor(snapshot, start);
+        var cursor = new SnapshotCursor(snapshot, start, work);
         while (cursor.Position < snapshot.Length && cursor.Position < limit)
         {
             ct.ThrowIfCancellationRequested();
@@ -247,30 +318,18 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             catch (ScanBudgetExceededException) { break; }
             if (rows.Count == BlockSize)
             {
+                if (result.Count == MaxDenseSegments)
+                    return ExtendVisiblePrefix(snapshot, [], visible, ct, work);
                 result.Add(new Segment(rows.ToArray(), 0, rows.Count, 0));
                 rows.Clear();
             }
         }
-        if (rows.Count > 0) result.Add(new Segment(rows.ToArray(), 0, rows.Count, 0));
-        return result;
-    }
-
-    private static List<Segment> ResumeAll(TextSnapshot snapshot, List<Segment> prefix, CancellationToken ct)
-    {
-        var result = new List<Segment>(prefix);
-        var cursor = new SnapshotCursor(snapshot, prefix.Count == 0 ? 0 : prefix[^1].After);
-        var rows = new List<Row>(BlockSize);
-        while (cursor.Position < snapshot.Length)
+        if (rows.Count > 0)
         {
-            ct.ThrowIfCancellationRequested();
-            rows.Add(ParseRow(cursor, ct, false, out _));
-            if (rows.Count == BlockSize)
-            {
-                result.Add(new Segment(rows.ToArray(), 0, rows.Count, 0));
-                rows.Clear();
-            }
+            if (result.Count == MaxDenseSegments)
+                return ExtendVisiblePrefix(snapshot, [], visible, ct, work);
+            result.Add(new Segment(rows.ToArray(), 0, rows.Count, 0));
         }
-        if (rows.Count > 0) result.Add(new Segment(rows.ToArray(), 0, rows.Count, 0));
         return result;
     }
 
@@ -278,6 +337,20 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         out RowPayload? payload, int maxPosition = int.MaxValue,
         IReadOnlyList<TextSpan>? captureRanges = null, int maxCells = ProjectionCellBudget,
         int[]? windowCellQuota = null, int[]? projectedWindowCells = null)
+    {
+        var start = cursor.Position;
+        try
+        {
+            return ParseRowCore(cursor, ct, capture, out payload, maxPosition, captureRanges,
+                maxCells, windowCellQuota, projectedWindowCells);
+        }
+        finally { cursor.Work.Units += cursor.Position - start; }
+    }
+
+    private static Row ParseRowCore(SnapshotCursor cursor, CancellationToken ct, bool capture,
+        out RowPayload? payload, int maxPosition,
+        IReadOnlyList<TextSpan>? captureRanges, int maxCells,
+        int[]? windowCellQuota, int[]? projectedWindowCells)
     {
         if (cursor.Position >= maxPosition) throw new ScanBudgetExceededException();
         var start = cursor.Position;
@@ -465,18 +538,19 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
 
     private sealed class ScanBudgetExceededException : Exception;
 
-    private static WindowedAnalysis Project(TextSnapshot snapshot, List<Segment> segments,
-        IReadOnlyList<TextSpan> windows, AnalysisScope scope, bool complete, bool legacyProjection, CancellationToken ct)
+    private static WindowedAnalysis Project(TextSnapshot snapshot, CacheState cache,
+        IReadOnlyList<TextSpan> windows, AnalysisScope scope, bool legacyProjection, CancellationToken ct, ScanWork work)
     {
+        var segments = cache.Segments;
+        var complete = cache.Complete;
         var fullProjection = scope == AnalysisScope.Full;
         var nodes = new List<SemanticNode>();
         var diagnostics = new List<Diagnostic>();
         var tokens = new List<SemanticToken>();
-        var expected = segments.Count == 0 ? -1 : segments[0].Get(0).Width;
-        var total = 0;
+        var expected = cache.ExpectedWidth;
         // A full request still gets complete *semantic validation* on giant files,
         // but projecting every cell would create another document-sized object graph.
-        var projectAll = legacyProjection && complete && fullProjection && snapshot.Length <= 1024 * 1024 &&
+        var projectAll = legacyProjection && cache.Mode == CsvCacheMode.DenseFull && complete && fullProjection && snapshot.Length <= 1024 * 1024 &&
             segments.Sum(segment => segment.Count) <= ProjectionRowBudget &&
             segments.Sum(segment => segment.CellCount) <= ProjectionCellBudget &&
             segments.All(segment => segment.MaxRowLength <= MaxProjectedCellSourceLength);
@@ -488,12 +562,7 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
                 (i < ProjectionCellBudget % windows.Count ? 1 : 0);
         var emittedRows = new HashSet<int>();
         var truncatedRows = new HashSet<int>();
-        foreach (var segment in segments)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (complete) total += segment.ErrorCount + segment.Count - segment.WidthCount(expected);
-        }
-        var indexedUntil = segments.Count == 0 ? 0 : segments[^1].After;
+        var indexedUntil = cache.IndexedUntil;
         var delivery = new List<WindowProjection>(windows.Count);
         for (var windowIndex = 0; windowIndex < windows.Count; windowIndex++)
         {
@@ -503,52 +572,45 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             var sourceIndexed = complete || indexedUntil > 0 && window.End <= indexedUntil;
             var truncated = !sourceIndexed;
             var rowsInWindow = 0;
-            var rowBudgetExceeded = false;
-            foreach (var segment in segments)
+            foreach (var row in EnumerateRows(snapshot, cache, window, projectAll, ct, work))
             {
                 ct.ThrowIfCancellationRequested();
-                if (!projectAll && !Intersects(segment.Start, segment.After, window)) continue;
-                foreach (var row in segment.Enumerate(window, projectAll))
+                if (emittedRows.Contains(row.Start))
                 {
-                    if (emittedRows.Contains(row.Start))
-                    {
-                        rowsInWindow++;
-                        truncated |= truncatedRows.Contains(row.Start);
-                        continue;
-                    }
-                    if (!projectAll && (rowsInWindow >= quota || nodes.Count >= ProjectionRowBudget))
-                    {
-                        truncated = true;
-                        rowBudgetExceeded = true;
-                        break;
-                    }
-                    emittedRows.Add(row.Start);
                     rowsInWindow++;
-                    var projected = ParseRow(new SnapshotCursor(snapshot, row.Start), ct, true, out var payload,
-                        captureRanges: projectAll ? null : windows,
-                        maxCells: ProjectionCellBudget - projectedCells,
-                        windowCellQuota: projectAll ? null : cellQuota,
-                        projectedWindowCells: projectAll ? null : projectedWindowCells);
-                    if (projected.End != row.End || projected.After != row.After || projected.Width != row.Width ||
-                        projected.ErrorCount != row.ErrorCount)
-                        throw new InvalidOperationException("CSV record index no longer matches its snapshot.");
-                    var widthMismatch = expected >= 0 && row.Width != expected;
-                    var children = payload!.Cells.Select(cell => new SemanticNode("cell", cell.Span, value: cell.Value)).ToArray();
-                    projectedCells += children.Length;
-                    if (payload.Truncated)
-                    {
-                        truncated = true;
-                        truncatedRows.Add(row.Start);
-                    }
-                    nodes.Add(new SemanticNode("row", new TextSpan(row.Start, row.End - row.Start), children: children));
-                    diagnostics.AddRange(payload.Diagnostics);
-                    if (widthMismatch)
-                        diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "CSV004",
-                            $"Row has {row.Width} columns; the first row has {expected}.",
-                            new TextSpan(row.Start, row.End - row.Start)));
-                    tokens.AddRange(payload.Tokens);
+                    truncated |= truncatedRows.Contains(row.Start);
+                    continue;
                 }
-                if (rowBudgetExceeded) break;
+                if (!projectAll && (rowsInWindow >= quota || nodes.Count >= ProjectionRowBudget))
+                {
+                    truncated = true;
+                    break;
+                }
+                emittedRows.Add(row.Start);
+                rowsInWindow++;
+                var projected = ParseRow(new SnapshotCursor(snapshot, row.Start, work), ct, true, out var payload,
+                    captureRanges: projectAll ? null : windows,
+                    maxCells: ProjectionCellBudget - projectedCells,
+                    windowCellQuota: projectAll ? null : cellQuota,
+                    projectedWindowCells: projectAll ? null : projectedWindowCells);
+                if (projected.End != row.End || projected.After != row.After || projected.Width != row.Width ||
+                    projected.ErrorCount != row.ErrorCount)
+                    throw new InvalidOperationException("CSV record index no longer matches its snapshot.");
+                var widthMismatch = expected >= 0 && row.Width != expected;
+                var children = payload!.Cells.Select(cell => new SemanticNode("cell", cell.Span, value: cell.Value)).ToArray();
+                projectedCells += children.Length;
+                if (payload.Truncated)
+                {
+                    truncated = true;
+                    truncatedRows.Add(row.Start);
+                }
+                nodes.Add(new SemanticNode("row", new TextSpan(row.Start, row.End - row.Start), children: children));
+                diagnostics.AddRange(payload.Diagnostics);
+                if (widthMismatch)
+                    diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "CSV004",
+                        $"Row has {row.Width} columns; the first row has {expected}.",
+                        new TextSpan(row.Start, row.End - row.Start)));
+                tokens.AddRange(payload.Tokens);
             }
             delivery.Add(new WindowProjection(window, rowsInWindow, sourceIndexed, truncated));
         }
@@ -558,7 +620,34 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
                 ? AnalysisCompleteness.CoveredRegion : AnalysisCompleteness.Provisional;
         var coverage = new TextSpan(0, complete ? snapshot.Length : indexedUntil);
         return new WindowedAnalysis(snapshot.Version, completeness, [coverage],
-            complete ? total : null, root, diagnostics, tokens, delivery);
+            complete ? cache.Total : null, root, diagnostics, tokens, delivery);
+    }
+
+    /// <summary>Seeks only parser-certified record starts, with preceding checkpoint ownership at exact edges.</summary>
+    private static IEnumerable<Row> EnumerateRows(TextSnapshot snapshot, CacheState cache,
+        TextSpan window, bool all, CancellationToken ct, ScanWork work)
+    {
+        if (cache.Mode != CsvCacheMode.SparseFull)
+        {
+            foreach (var segment in cache.Segments)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!all && !Intersects(segment.Start, segment.After, window)) continue;
+                foreach (var row in segment.Enumerate(window, all)) yield return row;
+            }
+            yield break;
+        }
+        var index = Array.BinarySearch(cache.Checkpoints, window.Start);
+        // Equality must retain the preceding row for a zero-width request; using
+        // one lookbehind for all equal edges is simpler and remains bounded.
+        index = index >= 0 ? Math.Max(0, index - 1) : Math.Max(0, ~index - 1);
+        var cursor = new SnapshotCursor(snapshot, cache.Checkpoints[index], work);
+        while (cursor.Position < snapshot.Length && cursor.Position <= window.End)
+        {
+            ct.ThrowIfCancellationRequested();
+            var row = ParseRow(cursor, ct, false, out _);
+            if (Intersects(row.Start, row.After, window)) yield return row;
+        }
     }
 
     private static bool Intersects(int start, int end, TextSpan range) =>
@@ -572,17 +661,17 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
 
     private (int Segment, int Local) FindRow(int index)
     {
-        for (var i = 0; i < _segments.Count; i++)
+        for (var i = 0; i < _cache.Segments.Count; i++)
         {
-            if (index < _segments[i].Count) return (i, index);
-            index -= _segments[i].Count;
+            if (index < _cache.Segments[i].Count) return (i, index);
+            index -= _cache.Segments[i].Count;
         }
         throw new ArgumentOutOfRangeException(nameof(index));
     }
 
     private bool TryCandidate(int segment, int local, out Row row)
     {
-        if (segment < _segments.Count) { row = _segments[segment].Get(local); return true; }
+        if (segment < _cache.Segments.Count) { row = _cache.Segments[segment].Get(local); return true; }
         row = default;
         return false;
     }
@@ -590,31 +679,35 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     private void Next(ref int segment, ref int local)
     {
         local++;
-        if (segment < _segments.Count && local == _segments[segment].Count)
+        if (segment < _cache.Segments.Count && local == _cache.Segments[segment].Count)
         {
             segment++;
             local = 0;
         }
     }
 
-    private static void AddParsed(List<Segment> target, List<Row> rows)
+    private static bool AddParsed(List<Segment> target, List<Row> rows)
     {
         for (var i = 0; i < rows.Count; i += BlockSize)
         {
+            if (target.Count == MaxDenseSegments) return false;
             var count = Math.Min(BlockSize, rows.Count - i);
             var block = rows.GetRange(i, count).ToArray();
             target.Add(new Segment(block, 0, count, 0));
         }
+        return true;
     }
 
-    private void AddSuffix(List<Segment> target, int segmentIndex, int localIndex, int delta)
+    private bool AddSuffix(List<Segment> target, int segmentIndex, int localIndex, int delta)
     {
-        if (segmentIndex >= _segments.Count) return;
+        if (segmentIndex >= _cache.Segments.Count) return true;
+        if (target.Count + _cache.Segments.Count - segmentIndex > MaxDenseSegments) return false;
         if (localIndex != 0)
-            target.Add(_segments[segmentIndex].Slice(localIndex, _segments[segmentIndex].Count).Shift(delta));
-        else target.Add(_segments[segmentIndex].Shift(delta));
-        for (var i = segmentIndex + 1; i < _segments.Count; i++)
-            target.Add(_segments[i].Shift(delta));
+            target.Add(_cache.Segments[segmentIndex].Slice(localIndex, _cache.Segments[segmentIndex].Count).Shift(delta));
+        else target.Add(_cache.Segments[segmentIndex].Shift(delta));
+        for (var i = segmentIndex + 1; i < _cache.Segments.Count; i++)
+            target.Add(_cache.Segments[i].Shift(delta));
+        return true;
     }
 
     private readonly record struct Cell(TextSpan Span, string Value);
@@ -733,7 +826,9 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         private string _window = string.Empty;
         private int _windowStart = -1;
 
-        internal SnapshotCursor(TextSnapshot snapshot, int start) { _snapshot = snapshot; Position = start; }
+        internal SnapshotCursor(TextSnapshot snapshot, int start, ScanWork work)
+        { _snapshot = snapshot; Position = start; Work = work; }
+        internal ScanWork Work { get; }
         internal int Position { get; private set; }
         internal int Length => _snapshot.Length;
 
