@@ -10,6 +10,7 @@ struct Check: Codable {
 /// Fixed relation facts never enumerate or retain contextual menu contents.
 struct MenuRelationObservation: Codable {
     let node: String; let axError: Int32; let kind: String; let count: Int?
+    let ownedPID: Bool?; let role: String?; let childCount: Int?
 }
 /// Fixed phase counters distinguish traversal pressure from unavailable menu structure.
 struct Diagnostics: Codable {
@@ -105,8 +106,26 @@ final class Probe {
         let (error, raw) = try attribute(node, "AXShownMenuUIElement")
         var kind = raw == nil ? "absent" : "other"
         var count: Int? = nil
+        var ownedPID: Bool? = nil
+        var role: String? = nil
+        var childCount: Int? = nil
         if let raw {
-            if CFGetTypeID(raw) == AXUIElementGetTypeID() { kind = "element"; count = 1 }
+            if CFGetTypeID(raw) == AXUIElementGetTypeID() {
+                kind = "element"; count = 1
+                let menu = unsafeBitCast(raw, to: AXUIElement.self)
+                var observed: pid_t = 0
+                let pidError = AXUIElementGetPid(menu, &observed)
+                ownedPID = pidError == .success && observed == pid
+                // Never query role or children on an unknown/foreign owner.
+                if ownedPID == true {
+                    let name = try text(menu, "AXRole")
+                    role = name == "AXMenu" ? "expected-menu" : (name == nil ? "absent" : "other")
+                    try admit(menu)
+                    var size: CFIndex = 0
+                    let childError = AXUIElementGetAttributeValueCount(menu, "AXChildren" as CFString, &size)
+                    if childError == .success && size >= 0 && size <= 128 { childCount = size }
+                }
+            }
             else if CFGetTypeID(raw) == CFArrayGetTypeID() {
                 let array = unsafeBitCast(raw, to: CFArray.self)
                 let size = CFArrayGetCount(array)
@@ -114,7 +133,7 @@ final class Probe {
                 if size <= 8 { count = size }
             }
         }
-        shownMenuRelations.append(MenuRelationObservation(node: category, axError: error.rawValue, kind: kind, count: count))
+        shownMenuRelations.append(MenuRelationObservation(node: category, axError: error.rawValue, kind: kind, count: count, ownedPID: ownedPID, role: role, childCount: childCount))
     }
     /// String attributes remain optional: absence is not an invented empty value.
     func text(_ node: AXUIElement, _ name: String) throws -> String? {

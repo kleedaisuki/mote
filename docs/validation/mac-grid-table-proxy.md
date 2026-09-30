@@ -204,7 +204,9 @@ The next test-only discriminator adds bounded content-free phase admission/poll/
 traversal counters, maximum tree nodes, current AXMenu/AXMenuItem counts, exact
 coordinate-item label versus AXTitle match counts, and per-check admission/time
 snapshots. It also records only type/error/bounded count of the documented
-`AXShownMenuUIElement` relation on the verified Table and application (no menu
+`AXShownMenuUIElement` relation on the verified Table and application. A returned
+single element additionally has ownership classification, known-role classification
+and bounded child count queried only after exact editor PID validation (no menu
 content or child traversal). This tests whether a contextual menu is exposed
 through a relation excluded by the intentionally Table-pruned app traversal.
 It preserves all semantic predicates, 12,000 admissions, 55-second
