@@ -3,7 +3,21 @@ import ApplicationServices
 import Foundation
 
 /// Each assertion retains its result even when a later gate fails.
-struct Check: Codable { let name: String; let passed: Bool; let detail: String }
+struct Check: Codable {
+    let name: String; let passed: Bool; let detail: String
+    let admissionCount: Int; let elapsedSeconds: Double
+}
+/// Fixed relation facts never enumerate or retain contextual menu contents.
+struct MenuRelationObservation: Codable {
+    let node: String; let axError: Int32; let kind: String; let count: Int?
+}
+/// Fixed phase counters distinguish traversal pressure from unavailable menu structure.
+struct Diagnostics: Codable {
+    let shownMenuRelations: [MenuRelationObservation]
+    let elapsedSeconds: Double; let phaseAdmissions: [String: Int]; let phasePolls: [String: Int]
+    let phaseTraversals: [String: Int]; let maximumTreeNodes: Int
+    let lastTreeMenus: Int; let lastTreeMenuItems: Int; let lastExactMenuMatches: Int; let lastExactMenuTitleMatches: Int
+}
 /// Content-free metadata facts distinguish label transport from ordinal semantics.
 struct OrdinalObservation: Codable {
     let node: String; let attribute: String; let axError: Int32
@@ -12,7 +26,7 @@ struct OrdinalObservation: Codable {
 /// Synthetic-only evidence; does not certify VoiceOver, IME, paint or performance.
 struct Report: Codable {
     let status: String; let phase: String; let editorPID: Int32; let clientPID: Int32
-    let trusted: Bool; let closedByProbe: Bool; let admissionCount: Int; let checks: [Check]; let observations: [OrdinalObservation]; let note: String
+    let trusted: Bool; let closedByProbe: Bool; let admissionCount: Int; let diagnostics: Diagnostics?; let checks: [Check]; let observations: [OrdinalObservation]; let note: String
 }
 /// Fail-closed termination with an intentionally content-free reason.
 struct GateFailure: Error { let reason: String }
@@ -28,7 +42,18 @@ final class Probe {
     var phase = "preconditions"
     var closed = false
     var queries = 0
+    let started = ProcessInfo.processInfo.systemUptime
     let deadline = ProcessInfo.processInfo.systemUptime + 55
+    /// Keys are fixed phase names, never node text, identifiers or desktop metadata.
+    var phaseAdmissions: [String: Int] = [:]
+    var phasePolls: [String: Int] = [:]
+    var phaseTraversals: [String: Int] = [:]
+    var shownMenuRelations: [MenuRelationObservation] = []
+    var maximumTreeNodes = 0
+    var lastTreeMenus = 0
+    var lastTreeMenuItems = 0
+    var lastExactMenuTitleMatches = 0
+    var lastExactMenuMatches = 0
 
     init(pid: pid_t, fixture: String) throws {
         self.pid = pid
@@ -49,6 +74,7 @@ final class Probe {
             throw GateFailure(reason: "AX node timeout could not be installed")
         }
         queries += 1
+        phaseAdmissions[phase, default: 0] += 1
     }
     func attribute(_ node: AXUIElement, _ name: String) throws -> (AXError, AnyObject?) {
         try admit(node)
@@ -72,6 +98,23 @@ final class Probe {
         }
         for child in array { try admit(child) }
         return array
+    }
+    /// Probe the documented contextual-menu relation on two already owned roots.
+    /// This does not relax the existing exact menu-item discovery predicate.
+    func observeShownMenu(_ node: AXUIElement, category: String) throws {
+        let (error, raw) = try attribute(node, "AXShownMenuUIElement")
+        var kind = raw == nil ? "absent" : "other"
+        var count: Int? = nil
+        if let raw {
+            if CFGetTypeID(raw) == AXUIElementGetTypeID() { kind = "element"; count = 1 }
+            else if CFGetTypeID(raw) == CFArrayGetTypeID() {
+                let array = unsafeBitCast(raw, to: CFArray.self)
+                let size = CFArrayGetCount(array)
+                kind = size <= 8 ? "bounded-array" : "overbound-array"
+                if size <= 8 { count = size }
+            }
+        }
+        shownMenuRelations.append(MenuRelationObservation(node: category, axError: error.rawValue, kind: kind, count: count))
     }
     /// String attributes remain optional: absence is not an invented empty value.
     func text(_ node: AXUIElement, _ name: String) throws -> String? {
@@ -128,7 +171,8 @@ final class Probe {
     }
     /// Persist the first falsifier before aborting dependent actions.
     func require(_ name: String, _ passed: Bool, _ detail: String = "") throws {
-        checks.append(Check(name: name, passed: passed, detail: detail))
+        checks.append(Check(name: name, passed: passed, detail: detail,
+                            admissionCount: queries, elapsedSeconds: ProcessInfo.processInfo.systemUptime - started))
         if !passed { throw GateFailure(reason: name) }
     }
     /// Mutates only a previously validated node within the editor PID.
@@ -143,13 +187,19 @@ final class Probe {
     }
     /// Does not expand table rows/cells when finding unrelated source or transient dialogs.
     func tree() throws -> [AXUIElement] {
+        phaseTraversals[phase, default: 0] += 1
+        lastTreeMenus = 0
+        lastTreeMenuItems = 0
         var queue: [(AXUIElement, Int)] = [(app, 0)]
         var result: [AXUIElement] = []
         var index = 0
         while index < queue.count {
             guard queue.count <= 256 else { throw GateFailure(reason: "AX tree exceeds 256 nodes") }
             let (node, depth) = queue[index]; index += 1; result.append(node)
+            maximumTreeNodes = max(maximumTreeNodes, queue.count)
             let role = try text(node, "AXRole")
+            if role == "AXMenu" { lastTreeMenus += 1 }
+            if role == "AXMenuItem" { lastTreeMenuItems += 1 }
             if depth < 12 && role != "AXTable" && role != "AXRow" && role != "AXColumn" {
                 // Unsupported leaf children are normal; successful over-budget arrays are not.
                 try admit(node)
@@ -166,8 +216,15 @@ final class Probe {
     /// Exact role/name matching refuses ambiguous target selection.
     func matches(_ role: String, _ name: String? = nil) throws -> [AXUIElement] {
         var found: [AXUIElement] = []
+        if role == "AXMenuItem" { lastExactMenuMatches = 0; lastExactMenuTitleMatches = 0 }
+        defer { if role == "AXMenuItem" { lastExactMenuMatches = found.count } }
         for node in try tree() {
             if try text(node, "AXRole") == role {
+                // Only classify equality with the fixed synthetic coordinate command.
+                // Keep the established description-first assertion unchanged.
+                if role == "AXMenuItem", name != nil, try text(node, "AXTitle") == name {
+                    lastExactMenuTitleMatches += 1
+                }
                 if name == nil { found.append(node) }
                 else if try label(node) == name { found.append(node) }
             }
@@ -178,6 +235,7 @@ final class Probe {
     func wait(_ seconds: Double, _ predicate: () throws -> Bool) throws -> Bool {
         let until = min(deadline, ProcessInfo.processInfo.systemUptime + seconds)
         repeat {
+            phasePolls[phase, default: 0] += 1
             if try predicate() { return true }
             Thread.sleep(forTimeInterval: 0.15)
         } while ProcessInfo.processInfo.systemUptime < until
@@ -317,6 +375,8 @@ final class Probe {
             phase = "logical-navigation"
             let menuError = try action(table, "AXShowMenu")
             try require("context-menu-accessible", menuError == .success, "AX=\(menuError.rawValue); no key-injection fallback")
+            try observeShownMenu(table, category: "table")
+            try observeShownMenu(app, category: "application")
             var goItem: AXUIElement?
             let menuFound = try wait(3) {
                 let items = try self.matches("AXMenuItem", "Go to row:column…")
@@ -410,16 +470,20 @@ final class Probe {
     }
     /// Preserve prior checks without promoting a partial run to acceptance.
     func report(_ status: String, _ trusted: Bool, _ note: String) -> Report {
-        Report(status: status, phase: phase, editorPID: pid, clientPID: getpid(), trusted: trusted, closedByProbe: closed, admissionCount: queries, checks: checks, observations: observations, note: note)
+        Report(status: status, phase: phase, editorPID: pid, clientPID: getpid(), trusted: trusted, closedByProbe: closed, admissionCount: queries,
+            diagnostics: Diagnostics(shownMenuRelations: shownMenuRelations, elapsedSeconds: ProcessInfo.processInfo.systemUptime - started,
+                phaseAdmissions: phaseAdmissions, phasePolls: phasePolls, phaseTraversals: phaseTraversals,
+                maximumTreeNodes: maximumTreeNodes, lastTreeMenus: lastTreeMenus, lastTreeMenuItems: lastTreeMenuItems,
+                lastExactMenuMatches: lastExactMenuMatches, lastExactMenuTitleMatches: lastExactMenuTitleMatches), checks: checks, observations: observations, note: note)
     }
 }
 
 var result: Report
 if CommandLine.arguments.count == 3, let pid = Int32(CommandLine.arguments[1]), pid > 0 {
     do { result = try Probe(pid: pid, fixture: CommandLine.arguments[2]).run() }
-    catch { result = Report(status: "probe-error", phase: "fixture", editorPID: pid, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, checks: [], observations: [], note: "synthetic fixture unavailable") }
+    catch { result = Report(status: "probe-error", phase: "fixture", editorPID: pid, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, diagnostics: nil, checks: [], observations: [], note: "synthetic fixture unavailable") }
 } else {
-    result = Report(status: "probe-error", phase: "arguments", editorPID: 0, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, checks: [], observations: [], note: "expected editor PID and synthetic CSV")
+    result = Report(status: "probe-error", phase: "arguments", editorPID: 0, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, diagnostics: nil, checks: [], observations: [], note: "expected editor PID and synthetic CSV")
 }
 let encoder = JSONEncoder()
 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

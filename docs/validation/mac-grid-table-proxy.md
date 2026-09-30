@@ -1,7 +1,7 @@
 # macOS bounded semantic Table proxy candidate
 
-Date: 2026-10-01. Status: **implemented opt-in candidate, managed compilation
-and independent static review only; fresh Mac native/external execution pending**.
+Date: 2026-10-01. Status: **both Mac Native AOT/in-process targets executed; external row/cell/selection
+transport passes, external coordinate-menu discovery fails; no full AX acceptance**.
 The established default and native physical input implementation are unchanged.
 
 ## Why this representation changed
@@ -151,3 +151,63 @@ The repository's [bounded contract](../csv-grid-accessibility-contract.md)
 continues to supply the semantic and source-ownership invariants. Its cached
 frame/reader-task rationale remains valid; native platform representation is
 the engineering variable changed in response to actual external evidence.
+
+## First proxy target execution: CI 36791254056
+
+[CI run](https://github.com/kleedaisuki/mote/actions/runs/36791254056),
+commit `f657c00`, freshly publishes the proxy candidate on both Mac RIDs. Raw
+job logs (x64 job 110144423559, ARM job 110144423638) contain both actual outputs
+`Mac CSV Grid AX selector probe passed; external AX/VoiceOver/geometry gates remain untested.`
+and `mote-native-mac-csv-grid-ready` in the combined selector step, without a
+step error. The separate base native CSV Grid readiness marker also appears.
+These are actual child outputs, not merely strings printed in workflow source.
+
+| External target | x64 | ARM64 |
+| --- | --- | --- |
+| Host | macOS 15.7.9 | macOS 26.6.2 |
+| Fresh one-binary bytes | 16,744,800 | 16,396,440 |
+| Swift typecheck / trust | passed / true | passed / true |
+| Passed checks through context menu action | 26 | 26 |
+| First failure | `unique-coordinate-menu-item` after bounded 3-second readiness wait | 12,000 admission budget exhausted while searching coordinate menu |
+| Phase / Swift exit | logical-navigation / 1 | logical-navigation / 1 |
+| Input unchanged / forced cleanup | true / true | true / true |
+| Normal close | not exercised | not exercised |
+
+Both external clients now observe **Row 1** in AXDescription, the exact custom
+window-axis identifier and AXHelp. Exactly one semantic Table, independent full
+source/offscreen tail, bounded axis counts, ordinal headers, exact cell values,
+Empty versus Missing, cell parent/local ranges, rectangle selection, atomic
+sparse/over-budget/row-setter refusal, duplicate deduplication, source selection
+independence and clear selection all passed. This resolves the previously
+observed native row-wrapper metadata transport defect for this fixture on both
+platform targets; it does not prove arbitrary files or assistive-reader behavior.
+
+`AXShowMenu` returned success on both RIDs, but that alone proves neither a
+visible menu nor its reachable semantic items. x64 recorded only 1,638 admissions
+and then failed the exact menu predicate; ARM hit 12,000 before predicate failure.
+The shared missing-menu observation means an admission-limit increase alone
+cannot establish acceptance. Existing reports have no per-phase counters or
+client elapsed timing; the raw enclosing external steps lasted approximately
+14.2 seconds x64 and 9.3 seconds ARM **including Swift compilation and cleanup**,
+not editor latency measurements. No evidence identifies a native AX hang.
+
+Artifacts and downloaded raw logs are under
+`.cache/ci-36791254056-mac-proxy/{x64,arm64}/mac-grid-ax-external.json` and sibling
+`x64-job.log` / `arm64-job.log`. Binary SHA-256: x64
+`5B81F07D746656702CF5A92C924299FA01E36F3CD78A48723A994432B0F05DCA`;
+ARM `6AEB81A852D6095ECF0B039A8E741749B255E8F49DB6D828702DA89A77BE47C2`.
+The unchanged fixture hash is documented in the external harness contract.
+Logical jump, retirement, mixed stale selection and normal close were not reached.
+Containing non-gating steps report success despite the real exit-1 diagnostics.
+
+The next test-only discriminator adds bounded content-free phase admission/poll/
+traversal counters, maximum tree nodes, current AXMenu/AXMenuItem counts, exact
+coordinate-item label versus AXTitle match counts, and per-check admission/time
+snapshots. It also records only type/error/bounded count of the documented
+`AXShownMenuUIElement` relation on the verified Table and application (no menu
+content or child traversal). This tests whether a contextual menu is exposed
+through a relation excluded by the intentionally Table-pruned app traversal.
+It preserves all semantic predicates, 12,000 admissions, 55-second
+lifetime, 256-node tree, array bounds, exact PID isolation and cleanup. Native
+Swift typecheck of this instrumentation remains pending the next Mac execution;
+portable fixture preflight alone is not native evidence.

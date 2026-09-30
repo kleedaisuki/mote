@@ -1,8 +1,7 @@
 # macOS CSV Grid external AX acceptance harness
 
-Date: 2026-10-01. Status: **first native Swift/cross-process execution obtained on
-both Mac RIDs; classified external row-metadata bridge failure, not external
-acceptance**. This does not change production
+Date: 2026-10-01. Status: **proxy execution on both Mac RIDs fixes observed row metadata; 26 external
+checks pass, coordinate-menu discovery fails, not full external acceptance**. This does not change production
 accessibility defaults or certify VoiceOver/IME/release readiness.
 
 ## Purpose and ownership
@@ -233,3 +232,15 @@ runs. The green overall/non-gating job conclusion is not external acceptance.
 - [Apple Accessibility trust query](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions): permission query is not a permission grant.
 - [Apple Show Menu action](https://developer.apple.com/documentation/appkit/nsaccessibility-swift.struct/action/showmenu): contextual menu action, not keyboard-event substitution.
 - [Existing real reader acceptance protocol](../screen-reader-acceptance.md): API checks cannot replace emitted VoiceOver speech.
+
+## Proxy execution and bounded menu discriminator
+
+CI 36791254056 / `f657c00` resolves the earlier first-row metadata falsifier on
+both RIDs and reaches the next boundary: external coordinate-menu discovery.
+See [exact target results and scope](mac-grid-table-proxy.md#first-proxy-target-execution-ci-36791254056).
+The added optional `diagnostics` report field and per-check `admissionCount` /
+`elapsedSeconds` fields retain only fixed phase counters, timings and exact
+synthetic command equality counts. They never retain arbitrary AX strings,
+source text, desktop identity or foreign-process metadata. Existing schema-1
+fields and acceptance predicates remain unchanged. Query/lifetime/tree limits
+are not raised; menu AXTitle is diagnostic only, not a relaxed selection oracle.
