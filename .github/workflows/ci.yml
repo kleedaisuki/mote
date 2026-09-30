@@ -252,6 +252,31 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+      # This 100 MiB ordinary product route uses a streaming byte oracle and
+      # synthetic fixture cleanup; scrollbar movement is not a physical wheel.
+      - name: Diagnose ordinary Windows Continuous 100 MiB source (non-gating)
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeWindowsContinuousWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -ReportPath ".cache/ci-inventory/$rid/native-continuous-many100.json" `
+            -ManyMiB 100
+      - name: Upload ordinary Windows Continuous 100 MiB diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-continuous-many100-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-continuous-many100.json
+            .temp/gui-continuous-workflow/**/*-stderr.txt
+            .temp/gui-continuous-workflow/**/*-stdout.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       # Mutates only a GitHub-hosted runner's HKCU app preference inside one
       # try/finally, then restores the exact value kind/data or key absence.
       # Real HWND colors/selection are diagnostic until first hosted evidence.
@@ -334,6 +359,31 @@ jobs:
             .temp/windows-horizontal/**/*.png
             .temp/windows-horizontal/**/*-stdout.txt
             .temp/windows-horizontal/**/*-stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Same 50 MiB far-marker/copy/edit/reopen mechanics, but launched through
+      # ordinary Product Continuous rather than the historical diagnostic flag.
+      - name: Diagnose ordinary Windows Continuous 50 MiB horizontal source (non-gating)
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeWindowsHorizontalWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -OrdinaryProduct
+      - name: Upload ordinary Windows Continuous 50 MiB diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-continuous-horizontal-${{ matrix.rid }}
+          path: |
+            .cache/windows-continuous-horizontal/latest.json
+            .temp/windows-continuous-horizontal/**/result.json
+            .temp/windows-continuous-horizontal/**/*-stdout.txt
+            .temp/windows-continuous-horizontal/**/*-stderr.txt
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
@@ -638,6 +688,40 @@ jobs:
         with:
           name: mac-real-ime-source-${{ matrix.rid }}
           path: .cache/ci-inventory/${{ matrix.rid }}/mac-real-ime-source.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Compile only: no binary is linked or run, no TIS source is selected or
+      # enabled. Manual disposable activation remains a separate blocked probe.
+      - name: Diagnose macOS activation helper SDK syntax only (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $report = ".cache/ci-inventory/$rid/mac-real-ime-activation-syntax.json"
+          New-Item -ItemType Directory -Force -Path (Split-Path $report) | Out-Null
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $output = & /usr/bin/clang -fobjc-arc -Wall -Wextra -Werror `
+            -framework Foundation -framework Carbon -fsyntax-only `
+            tests/MacRealImeActivationProbe/Activate.m 2>&1
+          $code = $LASTEXITCODE
+          [pscustomobject]@{
+            rid = $rid; scope = 'Objective-C SDK syntax only; no helper binary or TIS call'
+            status = if ($code -eq 0) { 'passed' } else { 'failed' }
+            clang_exit_code = $code; elapsed_ms = [math]::Round($clock.Elapsed.TotalMilliseconds, 1)
+          } | ConvertTo-Json | Set-Content -LiteralPath $report -Encoding utf8NoBOM
+          if ($code -ne 0) {
+            $output | ForEach-Object { Write-Host $_ }
+            throw 'Activation helper failed compile-only SDK syntax check.'
+          }
+      - name: Upload macOS activation syntax-only report
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-real-ime-activation-syntax-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-real-ime-activation-syntax.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

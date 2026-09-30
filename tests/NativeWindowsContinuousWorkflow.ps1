@@ -2,7 +2,8 @@
 # real Win32 messages, exact source bytes, and a GUI reopen. No legacy-page flag.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
-    [Parameter(Mandatory)][string] $ReportPath
+    [Parameter(Mandatory)][string] $ReportPath,
+    [ValidateSet(0, 100)][int] $ManyMiB = 0
 )
 
 Set-StrictMode -Version Latest
@@ -15,14 +16,36 @@ $scratch = [IO.Path]::GetFullPath((Join-Path $scratchRoot ([guid]::NewGuid().ToS
 if (-not $scratch.StartsWith($scratchRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'GUI workflow scratch path escaped the repository.'
 }
-New-Item -ItemType Directory -Force -Path $scratch | Out-Null
 $reportRoot = [IO.Path]::GetFullPath((Join-Path $root '.cache/ci-inventory'))
 $report = [IO.Path]::GetFullPath($ReportPath)
 if (-not $report.StartsWith($reportRoot + [IO.Path]::DirectorySeparatorChar,
     [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Continuous report escaped repository .cache/ci-inventory.'
 }
+
+# Reject junctions/symlinks in every existing ancestor before fixture creation
+# and again before deletion: lexical workspace prefixes alone are insufficient.
+function Assert-NoReparseAncestors {
+    param([string] $TargetPath)
+    $cursor = [IO.Path]::GetFullPath($TargetPath)
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'A reparse-point ancestor is not permitted for synthetic GUI fixtures.'
+            }
+        }
+        $parent = [IO.Path]::GetDirectoryName($cursor)
+        if (-not $parent -or $parent -ceq $cursor) { break }
+        $cursor = $parent
+    }
+}
+Assert-NoReparseAncestors $scratch
+Assert-NoReparseAncestors $report
+New-Item -ItemType Directory -Force -Path $scratch | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path $report) | Out-Null
+Assert-NoReparseAncestors $scratch
+Assert-NoReparseAncestors $report
 
 # WM_CHAR and WM_COMMAND target the real RichEdit/main-window adapters, not controller internals.
 Add-Type -TypeDefinition @'
@@ -152,14 +175,18 @@ function Save-ChildStreams {
 
 $process = $null
 $window = [IntPtr]::Zero
+$path = $null
 $success = $false
 $stage = 'launch'
 $result = [ordered]@{
     status = 'failed'; stage = $stage; route = 'ordinary-product-Continuous'
+    many_mib = $ManyMiB
     method = 'Win32 child HWND/RichEdit island WM_CHAR and exact disk Save/reopen'
     source_chars = $null; saved_chars = $null
     initial_island_chars = $null; reopened_island_chars = $null
     source_document_tree = $null
+    vertical_scroll_before = $null; vertical_scroll_after = $null
+    large_fixture_removed = $false
     source_sha256 = $null; error = $null
     limitation = 'No physical IME, screen-reader speech, or compositor-present proof.'
 }
@@ -167,11 +194,25 @@ try {
     $exe = [IO.Path]::GetFullPath($ExecutablePath)
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Executable not found: $exe" }
     $path = Join-Path $scratch 'note.md'
-    $source = "alpha`n" + ('q' * 81920) + "`nREMOTE-MARKER`n"
-    $result.source_chars = $source.Length
-    $expected = "X$source"
+    Assert-NoReparseAncestors $path
     $utf8 = [Text.UTF8Encoding]::new($false, $true)
-    [IO.File]::WriteAllText($path, $source, $utf8)
+    if ($ManyMiB -eq 100) {
+        # The 100 MiB corpus and suffix oracle stream through bounded buffers;
+        # do not create a 100 MiB PowerShell string or upload the fixture.
+        Add-Type -Path (Join-Path $root 'benchmarks/NativeCanvasGui/CanvasFixture.cs')
+        Add-Type -Path (Join-Path $root 'benchmarks/NativeCanvasGui/Win32Probe.cs')
+        [MoteCanvasFixture]::WriteManyLines($path, 100)
+        $result.source_chars = 100L * 1024 * 1024
+        $originalHash = [MoteCanvasFixture]::Sha256($path)
+        $expected = $null
+    }
+    else {
+        $source = "alpha`n" + ('q' * 81920) + "`nREMOTE-MARKER`n"
+        $result.source_chars = $source.Length
+        $expected = "X$source"
+        [IO.File]::WriteAllText($path, $source, $utf8)
+    }
+    $readyTimeout = if ($ManyMiB -eq 100) { 60000 } else { 15000 }
     $process = Start-Editor $path
     Wait-Until {
         $process.Refresh()
@@ -180,7 +221,7 @@ try {
         $title = [Text.StringBuilder]::new(256)
         [void][MoteContinuousGuiProbe]::GetWindowText($script:window, $title, $title.Capacity)
         return $title.ToString().Contains('note.md')
-    } "Native editor did not show the opened file (exited=$($process.HasExited), window=$window, main=$($process.MainWindowHandle), title=$($process.MainWindowTitle), process_windows=$([string]::Join(',', [MoteContinuousGuiProbe]::WindowsForProcess([uint32]$process.Id))))."
+    } "Native editor did not show the opened file (exited=$($process.HasExited), window=$window, main=$($process.MainWindowHandle), title=$($process.MainWindowTitle), process_windows=$([string]::Join(',', [MoteContinuousGuiProbe]::WindowsForProcess([uint32]$process.Id))))." $readyTimeout
 
     $stage = 'bound-island-and-edit'
     $canvas = [MoteContinuousGuiProbe]::FindWindowEx($window,
@@ -217,7 +258,7 @@ try {
         $script:initialHostLength = [MoteContinuousGuiProbe]::SendBounded(
             $editor, 0x000E, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64() # WM_GETTEXTLENGTH
         return $script:initialHostLength -gt 0
-    } 'Ordinary Continuous input island did not bind any source text.'
+    } 'Ordinary Continuous input island did not bind any source text.' $readyTimeout
     if ($initialHostLength -gt 16384) {
         throw "Ordinary route did not bind a bounded input island ($initialHostLength)."
     }
@@ -237,20 +278,39 @@ try {
     }
     Wait-Until {
         try {
+            if ($ManyMiB -eq 100) {
+                return [MoteCanvasFixture]::HasOnePrefixedEdit(
+                    $path, [long]$result.source_chars, $originalHash)
+            }
             return [IO.File]::ReadAllText($path, $utf8) -ceq $expected
         }
         catch [IO.IOException] { return $false }
-    } 'Continuous Save did not persist exact X-prefixed source.'
-    $saved = [IO.File]::ReadAllText($path, $utf8)
-    $result.saved_chars = $saved.Length
-    if ([Convert]::ToHexString([IO.File]::ReadAllBytes($path)) -cne
-        [Convert]::ToHexString($utf8.GetBytes($expected))) {
-        throw 'Saved Continuous source bytes differ from the BOMless UTF-8 oracle.'
+    } 'Continuous Save did not persist exact X-prefixed source.' $readyTimeout
+    if ($ManyMiB -eq 100) {
+        $result.saved_chars = [long]$result.source_chars + 1
+        $result.vertical_scroll_before = [MoteCanvasGuiProbe]::VerticalPosition($canvas)
+        if (-not [MoteContinuousGuiProbe]::PostMessage(
+            $canvas, 0x0115, [UIntPtr]7, [IntPtr]::Zero)) {
+            throw 'Could not dispatch Canvas SB_BOTTOM navigation.'
+        }
+        Wait-Until {
+            $script:scrollPosition = [MoteCanvasGuiProbe]::VerticalPosition($canvas)
+            return $script:scrollPosition -gt $result.vertical_scroll_before
+        } 'Canvas vertical scrollbar did not move after SB_BOTTOM.' 20000
+        $result.vertical_scroll_after = $script:scrollPosition
+    }
+    else {
+        $saved = [IO.File]::ReadAllText($path, $utf8)
+        $result.saved_chars = $saved.Length
+        if ([Convert]::ToHexString([IO.File]::ReadAllBytes($path)) -cne
+            [Convert]::ToHexString($utf8.GetBytes($expected))) {
+            throw 'Saved Continuous source bytes differ from the BOMless UTF-8 oracle.'
+        }
     }
     if (-not [MoteContinuousGuiProbe]::PostMessage($window, 0x0010, [UIntPtr]::Zero, [IntPtr]::Zero)) {
         throw 'Could not close the native window.'
     }
-    Wait-Until { $process.Refresh(); return $process.HasExited } 'Native process did not exit after close.'
+    Wait-Until { $process.Refresh(); return $process.HasExited } 'Native process did not exit after close.' $readyTimeout
     if ($process.ExitCode -ne 0) { throw "Native editor exited with code $($process.ExitCode)." }
     Save-ChildStreams $process 'original'
 
@@ -264,7 +324,7 @@ try {
         $title = [Text.StringBuilder]::new(256)
         [void][MoteContinuousGuiProbe]::GetWindowText($script:window, $title, $title.Capacity)
         return $title.ToString().Contains('note.md')
-    } 'Reopened native editor did not show the saved file.'
+    } 'Reopened native editor did not show the saved file.' $readyTimeout
     $canvas = [MoteContinuousGuiProbe]::FindWindowEx($window,
         [IntPtr]::Zero, 'MoteInteractiveCanvas', $null)
     if ($canvas -eq [IntPtr]::Zero) { throw 'Reopened source canvas was absent.' }
@@ -277,24 +337,31 @@ try {
         throw "Reopened Continuous input island exceeded 16 Ki ($reopenedHostLength)."
     }
     $result.reopened_island_chars = $reopenedHostLength
-    if ([IO.File]::ReadAllText($path, $utf8) -cne $expected) {
+    if ($ManyMiB -eq 100) {
+        if (-not [MoteCanvasFixture]::HasOnePrefixedEdit(
+            $path, [long]$result.source_chars, $originalHash)) {
+            throw 'Reopened 100 MiB source failed streamed byte oracle.'
+        }
+    }
+    elseif ([IO.File]::ReadAllText($path, $utf8) -cne $expected) {
         throw 'Reopening Continuous editor changed saved source bytes.'
     }
     if (-not [MoteContinuousGuiProbe]::PostMessage($window, 0x0010, [UIntPtr]::Zero, [IntPtr]::Zero)) {
         throw 'Could not close the reopened native window.'
     }
-    Wait-Until { $process.Refresh(); return $process.HasExited } 'Reopened native process did not exit.'
+    Wait-Until { $process.Refresh(); return $process.HasExited } 'Reopened native process did not exit.' $readyTimeout
     if ($process.ExitCode -ne 0) { throw "Reopened native editor exited with code $($process.ExitCode)." }
     Save-ChildStreams $process 'reopen'
     $success = $focusProven
-    $result.source_sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    $result.source_sha256 = if ($ManyMiB -eq 100) {
+        [MoteCanvasFixture]::Sha256($path)
+    } else { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
     $result.status = if ($focusProven) { 'passed' } else { 'inconclusive' }
     if (-not $focusProven) {
         $result.error = "Source focus was not proven under a stable mote foreground: $($tree.focus_status)."
     }
     $stage = 'done'
     $result.stage = $stage
-    Write-Output ($result | ConvertTo-Json -Depth 8 -Compress)
 }
 catch {
     $result.error = $_.Exception.Message
@@ -313,8 +380,31 @@ finally {
     if (-not $scratch.StartsWith($scratchRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Refusing recursive cleanup outside repository .temp/gui-continuous-workflow.'
     }
+    # A successful byte oracle or foreground-only inconclusive result needs no
+    # retained 100 MiB fixture; keep small logs and the .cache JSON report.
+    if ($ManyMiB -eq 100 -and $null -ne $path -and
+        $result.status -in @('passed', 'inconclusive') -and
+        (Test-Path -LiteralPath $path -PathType Leaf)) {
+        try {
+            $fixtureItem = Get-Item -LiteralPath $path
+            if (-not [string]::Equals($fixtureItem.DirectoryName, $scratch,
+                [StringComparison]::OrdinalIgnoreCase) -or
+                ($fixtureItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw 'Synthetic fixture path or type changed unexpectedly.'
+            }
+            Assert-NoReparseAncestors $fixtureItem.FullName
+            Remove-Item -LiteralPath $fixtureItem.FullName -Force
+            $result.large_fixture_removed = $true
+        }
+        catch {
+            $result.status = 'failed'
+            $result.error = 'Bounded synthetic fixture cleanup failed.'
+            $success = $false
+        }
+    }
     if (-not $success) { Write-Warning "Retained failed GUI probe under $scratch" }
     $result.stage = $stage
     $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $report -Encoding utf8NoBOM
+    Write-Output ($result | ConvertTo-Json -Depth 8 -Compress)
 }
 if (-not $success) { throw 'Ordinary Windows Continuous workflow failed; inspect .cache report.' }

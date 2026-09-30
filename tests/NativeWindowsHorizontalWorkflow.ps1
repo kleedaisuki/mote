@@ -1,14 +1,18 @@
-# Exercise source-bound horizontal navigation in a published, lone Win-x64 Native AOT editor.
+# Exercise source-bound horizontal navigation in a published, lone Windows Native AOT editor.
 # The fixture and evidence stay in repository .temp/.cache; clipboard contents are never logged.
-param([Parameter(Mandatory)][string] $ExecutablePath)
+param(
+    [Parameter(Mandatory)][string] $ExecutablePath,
+    [switch] $OrdinaryProduct
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'The Windows horizontal workflow requires Windows.' }
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$tempRoot = [IO.Path]::GetFullPath((Join-Path $root '.temp/windows-horizontal'))
-$cacheRoot = [IO.Path]::GetFullPath((Join-Path $root '.cache/windows-horizontal'))
+$suffix = if ($OrdinaryProduct) { 'windows-continuous-horizontal' } else { 'windows-horizontal' }
+$tempRoot = [IO.Path]::GetFullPath((Join-Path $root ".temp/$suffix"))
+$cacheRoot = [IO.Path]::GetFullPath((Join-Path $root ".cache/$suffix"))
 $run = [IO.Path]::GetFullPath((Join-Path $tempRoot ([guid]::NewGuid().ToString('N'))))
 if (-not $run.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar,
     [StringComparison]::OrdinalIgnoreCase) -or
@@ -262,6 +266,8 @@ $success = $false
 $report = [ordered]@{
     status = 'failed'
     phase = $phase
+    route = if ($OrdinaryProduct) { 'ordinary-product-Continuous' }
+        else { 'canvas-diagnostic' }
     os = [Environment]::OSVersion.VersionString
     exe_sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
     file_utf16_line_units = $lineLength
@@ -275,7 +281,12 @@ try {
     $clipboardCaptured = $true
     $start = [Diagnostics.ProcessStartInfo]::new($exe)
     $start.WorkingDirectory = $root
-    [void]$start.ArgumentList.Add('--canvas-experimental')
+    if ($OrdinaryProduct) {
+        $start.Environment['MOTE_HOME'] = Join-Path $run 'home'
+    }
+    else {
+        [void]$start.ArgumentList.Add('--canvas-experimental')
+    }
     [void]$start.ArgumentList.Add($file)
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
