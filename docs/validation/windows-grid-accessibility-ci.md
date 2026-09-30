@@ -313,3 +313,71 @@ ARM64 execution is no longer entirely untested, but foreground/reader behavior,
 physical IME, successful off-owner focus, RangeValue writes, repeated cross-RID
 reliability, 100 MiB memory teardown and multi-monitor scaling remain open.
 Default enablement and release acceptance are not justified by these two passes.
+
+## Strengthened child identity and exact selection assertions: local x64 verification
+
+Date: 2026-10-01. This additive result closes two **client assertion** gaps,
+not the remaining accessibility release gates. Earlier hosted results above
+remain evidence for their original source pin; they cannot retroactively prove
+these new assertions. New hosted x64/ARM64 execution is still pending.
+
+The client now walks only the table's direct siblings in each Raw, Control and
+Content view. It stops on child 1105, recording a product error before aborting;
+no recursive or unbounded descendant traversal was added. Each view must expose
+exactly 1104 children for this synthetic initial 64-by-16 window (1024 cells,
+64 row headers, 16 column headers). AutomationIds and UIA runtime identities
+must each be nonempty and unique. Control/Content identity sets must equal Raw's
+sets without relying on enumeration order. These checks do not claim a full
+cross-view identity-to-coordinate mapping proof.
+
+Selection references are captured **before** their mutations. After `Select`,
+the exact one-cell set must be returned. After rectangular `AddToSelection`,
+and again after the rejected sparse addition, the exact two-cell set must be
+returned: local coordinates (0,0)/(0,1), absolute headers Row 1 and Columns 1/2,
+fixture values `R1C1`/`R1C2`, and both AutomationId and runtime identity. Record
+set equality plus exact cardinality rejects duplicates, substitutions and wrong
+coordinates while accepting reordering. The report now serializes these three
+selection snapshots. Distant navigation remains independently tested as local
+(0,0) versus absolute Row 1001/Column 17/value `R1001C17`; runtime identities
+are compared only within a live initial window, not across retired frames.
+
+Reviewed raw Program.cs SHA256 pins (no BOM):
+
+- LF: `A1B87971E4975786D67909209E1B2133432C6894710D623F2CD24ECD948940D4`.
+- CRLF: `C6894B4EDCF931BAA322B878AF8965759AC7E44EFC10291200737A18C1AD5509`.
+
+Only `tests/WindowsGridExternalProbe/Program.cs` and this additive section were
+changed in this task. Production code and workflow pins are unchanged here;
+the workflow owner must update the reviewed source pins before hosted execution.
+An independent reviewer examined the assertions and the final narrow delta;
+its record is `.cache/windows-grid-identity-probe/assertion-review.md`.
+
+### Commands, observed results and attribution limits
+
+```powershell
+dotnet build tests/WindowsGridExternalProbe/WindowsGridExternalProbe.csproj --configuration Release --artifacts-path .cache/windows-grid-identity-probe/build
+dotnet .cache/windows-grid-identity-probe/build/bin/WindowsGridExternalProbe/release/WindowsGridExternalProbe.dll .cache/windows-grid-accessibility/aot/mote.exe .temp/windows-grid-identity-probe .cache/windows-grid-identity-probe/report.json
+```
+
+The final client build completed with zero warnings/errors. Local Windows NT
+10.0.26200.0/X64 execution exited 0 with Classification `pass` and empty Errors
+and Inconclusive arrays. Each view reported 1104 children, 1104 unique
+AutomationIds and 1104 unique runtime identities, with no duplicates. All three
+selection snapshots matched the expected exact sets. The report is retained at
+`.cache/windows-grid-identity-probe/report.json`.
+
+The launched **previously published** AOT binary SHA256 is
+`BE2D17B41853A586F080F4DA3094203C2E9DD0A2AF57FF6B653DDB5B8708D0A0`,
+not a new build from current HEAD; its earlier production-source coverage limits
+remain documented in `windows-grid-accessibility.md`. Fixture SHA256 is
+`86796C9AF5EADC2DB5A0B8FBE3F14245DF7AB2F0456E6EE5189ED6987819E0B4`.
+This verifies the strengthened client against that binary only. No product
+defect was observed in this run, and no broad solution suite was repeated.
+
+Existing isolation/privacy bounds are unchanged: synthetic repo-local fixture,
+child-only opt-in and MOTE_HOME, no clipboard/global keys/input-source changes,
+exact-PID prompt checks, and owned-process cleanup. In particular the ARM64
+foreign-global-focus classification remains blocked when ownership is absent;
+this local x64 pass does not replace that hosted ARM64 observation or prove
+reader speech, physical IME, off-owner SetFocus, RangeValue writes, large-file
+memory teardown, or release/default enablement readiness.

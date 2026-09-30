@@ -63,19 +63,54 @@ internal static class Program
             Check(!first.TryGetCurrentPattern(InvokePattern.Pattern, out _), "source Invoke omitted", errors);
             var value = (ValuePattern)first.GetCurrentPattern(ValuePattern.Pattern);
             Check(value.Current.IsReadOnly && value.Current.Value == "R1C1", "read-only presentation value", errors);
+            var firstSelection = ReadSelectedCell(first);
             ((SelectionItemPattern)first.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            AssertSelection(selection, [firstSelection], "AfterSelect", results, errors);
             var second = grid.GetItem(0, 1);
+            var expectedSelection = new[] { firstSelection, ReadSelectedCell(second) };
+            Check(expectedSelection.Select(cell => (cell.Row, cell.Column)).ToHashSet().SetEquals(new[] { (0, 0), (0, 1) }) &&
+                expectedSelection.All(cell => cell.RowHeader == "Row 1") &&
+                expectedSelection.Single(cell => cell.Column == 0).ColumnHeader == "Column 1" &&
+                expectedSelection.Single(cell => cell.Column == 1).ColumnHeader == "Column 2" &&
+                expectedSelection.Single(cell => cell.Column == 0).Value == "R1C1" &&
+                expectedSelection.Single(cell => cell.Column == 1).Value == "R1C2",
+                "selection reference local indices and absolute headers", errors);
             ((SelectionItemPattern)second.GetCurrentPattern(SelectionItemPattern.Pattern)).AddToSelection();
-            Check(selection.Current.GetSelection().Length == 2, "exact rectangular selection via MTA client", errors);
+            AssertSelection(selection, expectedSelection, "AfterRectangularAdd", results, errors);
             var rejected = false;
             try { ((SelectionItemPattern)grid.GetItem(1, 1).GetCurrentPattern(SelectionItemPattern.Pattern)).AddToSelection(); }
             catch (InvalidOperationException) { rejected = true; }
-            Check(rejected && selection.Current.GetSelection().Length == 2, "impossible union rejected atomically", errors);
+            Check(rejected, "impossible sparse union rejected", errors);
+            AssertSelection(selection, expectedSelection, "AfterRejectedSparseUnion", results, errors);
+            HashSet<string>? firstViewIds = null;
+            HashSet<string>? firstViewRuntimeIds = null;
             foreach (var view in new[] { ("Raw", TreeWalker.RawViewWalker), ("Control", TreeWalker.ControlViewWalker), ("Content", TreeWalker.ContentViewWalker) })
             {
-                var children = new List<string>(); var count = 0;
+                var children = new List<string>(); var ids = new HashSet<string>(StringComparer.Ordinal);
+                var runtimeIds = new HashSet<string>(StringComparer.Ordinal);
+                var duplicateIds = new List<string>(); var duplicateRuntimeIds = new List<string>(); var count = 0;
                 for (var child = view.Item2.GetFirstChild(table); child is not null; child = view.Item2.GetNextSibling(child))
-                { if (++count > 9000) throw new Exception("Unbounded table tree"); children.Add(child.Current.ControlType.ProgrammaticName + ":" + child.Current.AutomationId); }
+                {
+                    if (++count > 1104)
+                    {
+                        errors.Add(view.Item1 + " exceeds synthetic bounded-window child limit");
+                        throw new Exception("Table exceeds synthetic bounded-window child limit");
+                    }
+                    var id = child.Current.AutomationId; var runtimeId = RuntimeIdentity(child);
+                    children.Add(child.Current.ControlType.ProgrammaticName + ":" + id);
+                    if (!ids.Add(id)) duplicateIds.Add(id);
+                    if (!runtimeIds.Add(runtimeId)) duplicateRuntimeIds.Add(runtimeId);
+                }
+                results[view.Item1 + "UniqueAutomationIdCount"] = ids.Count;
+                results[view.Item1 + "UniqueRuntimeIdCount"] = runtimeIds.Count;
+                results[view.Item1 + "DuplicateAutomationIds"] = duplicateIds;
+                results[view.Item1 + "DuplicateRuntimeIds"] = duplicateRuntimeIds;
+                Check(count == 1104, view.Item1 + " exact 64x16 cells plus 64 row and 16 column headers", errors);
+                Check(ids.Count == count && !ids.Contains(string.Empty), view.Item1 + " unique nonempty AutomationIds", errors);
+                Check(runtimeIds.Count == count && !runtimeIds.Contains(string.Empty), view.Item1 + " unique nonempty runtime identities", errors);
+                if (firstViewIds is not null)
+                    Check(ids.SetEquals(firstViewIds) && runtimeIds.SetEquals(firstViewRuntimeIds!), view.Item1 + " same child identities as Raw regardless of order", errors);
+                firstViewIds ??= ids; firstViewRuntimeIds ??= runtimeIds;
                 results[view.Item1 + "ChildCount"] = count;
                 results[view.Item1 + "UnexpectedChildren"] = children.Where(child => !child.StartsWith("ControlType.HeaderItem:Mote.CsvGrid.") && !child.StartsWith("ControlType.DataItem:Mote.CsvGrid.")).ToArray();
                 Check(children.All(child => child.StartsWith("ControlType.HeaderItem:Mote.CsvGrid.") || child.StartsWith("ControlType.DataItem:Mote.CsvGrid.")), view.Item1 + " no default ListView proxy children", errors);
@@ -193,6 +228,34 @@ internal static class Program
         Console.WriteLine(JsonSerializer.Serialize(results));
         return errors.Count == 0 && inconclusive.Count == 0 ? 0 : 1;
     }
+    /// <summary>Snapshots synthetic cell identity, local coordinates and absolute ordinal headers.</summary>
+    private sealed record SelectedCell(string AutomationId, string RuntimeId, int Row, int Column,
+        string RowHeader, string ColumnHeader, string Value);
+
+    /// <summary>Uses UIA runtime identity rather than wrapper reference equality across COM reads.</summary>
+    private static string RuntimeIdentity(AutomationElement element) => string.Join(",", element.GetRuntimeId());
+
+    /// <summary>Reads independent GridItem/TableItem/Value facts for a returned selected element.</summary>
+    private static SelectedCell ReadSelectedCell(AutomationElement element)
+    {
+        var item = ((GridItemPattern)element.GetCurrentPattern(GridItemPattern.Pattern)).Current;
+        var headers = ((TableItemPattern)element.GetCurrentPattern(TableItemPattern.Pattern)).Current;
+        var rows = headers.GetRowHeaderItems(); var columns = headers.GetColumnHeaderItems();
+        if (rows.Length != 1 || columns.Length != 1) throw new InvalidOperationException("Selected cell requires one row and column header");
+        return new(element.Current.AutomationId, RuntimeIdentity(element), item.Row, item.Column,
+            rows[0].Current.Name, columns[0].Current.Name, ((ValuePattern)element.GetCurrentPattern(ValuePattern.Pattern)).Current.Value);
+    }
+
+    /// <summary>Requires exact set membership and cardinality; duplicate or reordered COM wrappers cannot hide a wrong cell.</summary>
+    private static void AssertSelection(SelectionPattern selection, SelectedCell[] expected, string stage,
+        Dictionary<string, object?> results, List<string> errors)
+    {
+        var actual = selection.Current.GetSelection().Select(ReadSelectedCell).ToArray();
+        results[stage + "SelectedCells"] = actual;
+        Check(actual.Length == expected.Length && actual.ToHashSet().Count == actual.Length &&
+            actual.ToHashSet().SetEquals(expected), stage + " exact selected identities, local coordinates and absolute headers", errors);
+    }
+
     /// <summary>Collects all independent falsifiers before final classification.</summary>
     private static void Check(bool ok, string label, List<string> errors) { if (!ok) errors.Add(label); }
     [StructLayout(LayoutKind.Sequential)]
