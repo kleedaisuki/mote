@@ -33,6 +33,14 @@ internal static class Program
             if (result == 0) Console.WriteLine("mote-native-mac-csv-grid-ready");
             return result;
         }
+        // This diagnostic is inert by default; actual NSPasteboard mutation is
+        // admitted again by the probe's disposable-runner identity gate.
+        if (args.Length == 2 && args[0] == "--check-native-mac-grid-clipboard")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            if (args[1] is not ("fake" or "actual")) return 2;
+            return Mac.MacCsvGridClipboardProbe.Run(args[1] == "actual");
+        }
         if (args.Length == 1 && args[0] == "--check-native-mac-source-nul")
         {
             if (!OperatingSystem.IsMacOS()) return 3;

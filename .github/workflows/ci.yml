@@ -994,3 +994,39 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+
+  # Each Mac Grid clipboard probe owns a fresh disposable runner. Mutation
+  # permission exists only in the reviewed native subprocess, never the job env.
+  native-mac-grid-clipboard:
+    name: Native CSV Grid clipboard / disposable ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify actual native Mac CSV Grid clipboard roundtrip
+        shell: pwsh
+        run: "& ./tests/Invoke-NativeMacCsvGridClipboardWorkflow.ps1 -RuntimeIdentifier '${{ matrix.rid }}'"
+      - name: Upload native Mac clipboard acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-mac-grid-clipboard-${{ matrix.rid }}
+          path: |
+            .cache/native-mac-grid-clipboard/report.json
+            .cache/native-mac-grid-clipboard/stdout.txt
+            .cache/native-mac-grid-clipboard/stderr.txt
+            .cache/native-mac-grid-clipboard/exit-code.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
