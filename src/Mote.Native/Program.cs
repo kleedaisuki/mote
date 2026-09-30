@@ -40,6 +40,12 @@ internal static class Program
             if (result == 0) Console.WriteLine("mote-native-mac-source-nul-ready");
             return result;
         }
+        if (args.Length == 2 && args[0] == "--check-native-mac-draw-trace")
+        {
+            if (!OperatingSystem.IsMacOS()) return 3;
+            if (args[1] is not ("legacy" or "continuous")) return 2;
+            return Mac.MacDrawTraceProbe.Run(args[1] == "continuous");
+        }
         if (args.Length == 1 && args[0] == "--check-native-mac-theme-overrides")
         {
             if (!OperatingSystem.IsMacOS()) return 3;

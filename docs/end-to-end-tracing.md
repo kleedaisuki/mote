@@ -148,20 +148,18 @@ user document, touch clipboard/input sources, capture the screen, call external
 URLs or require accessibility permissions. The synthetic window closes in its
 Shown callback's `finally`, without an unsaved-document controller prompt.
 
-### Proposed target-safe Mac/AOT probe (not implemented or dispatched)
+### Target-safe Mac/AOT draw probe (implemented, target execution pending)
 
-After safety review, an opt-in diagnostic can own an in-memory synthetic source,
-install version 0, then accept a tiny native final edit into version 1. Observe
-the actual source draw hook **without forcing a compositor timestamp**, wait
-with a bounded process deadline, close without saving and drain the isolated
-JSONL writer. Run legacy and continuous profiles independently on each RID.
-Artifacts must assert one success for the installed generation/version, unique
-span IDs, a linked parent, path/content-free schema, and explicit cancellations
-for an intentionally superseded interval. Do not switch the OS input source,
-simulate IME or capture desktop pixels. Keep MOTE_HOME/output under repository
-`.temp`/`.cache`. This probe would validate callback wiring only; a timing SLA
-needs independent workload repetitions and a genuinely validated presentation
-endpoint. No new launch route/workflow is introduced in this change.
+An opt-in [AppKit diagnostic](native-mac-draw-trace-probe.md) now owns a small
+in-memory source, installs version 0, applies a tiny edit into version 1, and
+observes the native source draw hook after `displayIfNeeded` without claiming
+a compositor timestamp. Legacy and Continuous run in separate processes with
+bounded deadlines and repository-local content-free JSONL. The probe checks one
+cancelled prior interval, one successful installed-version interval, causal
+parentage and the terminal session record. Independent static safety review
+found no remaining dispatch blocker. Its non-gating hosted target step has been
+wired, but **no macOS target result is yet available**; success would validate
+callback wiring only, not natural input or a physical-presentation SLA.
 
 ## External basis and remaining useful experiments
 
@@ -172,7 +170,8 @@ confirms cross-platform compilation/test compatibility of the new hooks and
 published binary inventory, **not** that the macOS draw callback was actually
 triggered in a target process. The Windows managed hidden-window draw tests and
 their synthetic `UpdateWindow` stimulus remain the only runtime hook evidence
-for this change. The proposed target-safe Mac probe above remains unimplemented.
+for this change. The later opt-in Mac probe above is implemented but has not yet
+produced target-run evidence.
 
 Microsoft's [WM_PAINT contract](https://learn.microsoft.com/en-us/windows/win32/gdi/wm-paint)
 allows internal paint messages without an update region, motivating the explicit
@@ -185,7 +184,7 @@ report, not a claim that distributed-request timing transfers unchanged to
 desktop rendering.
 
 The next consequential measurements are a target-native Mac callback acceptance
-probe and an alternating tracing-off/on **real native editing workload** with
+probe result and an alternating tracing-off/on **real native editing workload** with
 enough process repetitions to distinguish queue/profiling overhead from runner
 noise. Existing startup-smoke timing cannot establish typing overhead. SQLite
 indexing or trace sampling should be considered only if real JSONL analysis or
