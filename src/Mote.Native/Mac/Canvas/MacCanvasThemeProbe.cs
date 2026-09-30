@@ -285,11 +285,17 @@ internal static class MacCanvasThemeProbe
             _check = $"{step}-preview-color";
             RequireColor(preview, policy.Palette.Accent, _check);
             ThemeColor? editor = null;
+            ThemeColor? marker = null;
             if (_mode == "default")
             {
                 var token = analysis.Tokens.First(static token => token.Kind == "heading");
-                _check = $"{step}-editor-read";
-                editor = NativeColor(_shell.ProbeEditorView, token.Span.Start);
+                if (token.Span.Length < 3)
+                    throw new InvalidOperationException("Theme heading has no interior source glyph.");
+                _check = $"{step}-editor-marker-read";
+                marker = NativeColor(_shell.ProbeEditorView, token.Span.Start);
+                _check = $"{step}-editor-interior-read";
+                editor = NativeColor(_shell.ProbeEditorView,
+                    token.Span.Start + token.Span.Length / 2);
                 _check = $"{step}-editor-color";
                 if (!ColorsMatch(editor.Value, policy.SemanticColor("heading")))
                     LogHeadingSamples(token.Span.Start, token.Span.Length);
@@ -317,7 +323,7 @@ internal static class MacCanvasThemeProbe
                 throw new IOException("Theme raster is not PNG.");
             _states.Add(new ThemeState(step, expectedId, _callbackCount,
                 CurrentStamp().Generation, CurrentVersion(), _selection.Anchor,
-                _selection.Active, preview.ToHex(), editor?.ToHex(), imageName,
+                _selection.Active, preview.ToHex(), editor?.ToHex(), marker?.ToHex(), imageName,
                 Convert.ToHexString(SHA256.HashData(bytes))));
         }
 
@@ -431,6 +437,9 @@ internal static class MacCanvasThemeProbe
                 if (state.EditorHeadingRgb is null)
                     writer.WriteNull("EditorHeadingRgb");
                 else writer.WriteString("EditorHeadingRgb", state.EditorHeadingRgb);
+                if (state.EditorMarkerRgb is null)
+                    writer.WriteNull("EditorMarkerRgb");
+                else writer.WriteString("EditorMarkerRgb", state.EditorMarkerRgb);
                 writer.WriteString("Image", state.Image);
                 writer.WriteString("ImageSha256", state.ImageSha256);
                 writer.WriteEndObject();
@@ -443,7 +452,8 @@ internal static class MacCanvasThemeProbe
     /// <summary>Content-free native paint and source-state observation at one theme step.</summary>
     private sealed record ThemeState(string Step, string ThemeId, int CallbackCount,
         long Generation, long Version, int SelectionAnchor, int SelectionActive,
-        string PreviewHeadingRgb, string? EditorHeadingRgb, string Image,
+        string PreviewHeadingRgb, string? EditorHeadingRgb, string? EditorMarkerRgb,
+        string Image,
         string ImageSha256);
 
     /// <summary>Bounded JSON result for the two-RID published-binary harness.</summary>

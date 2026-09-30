@@ -1419,6 +1419,9 @@ internal sealed unsafe class MacTextInputIsland
     {
         var cls = ObjC.AllocateClassPair(ObjC.Class("NSTextView"), InputClass, 0);
         if (cls == 0) return InputClass;
+        Add(cls, "viewDidChangeEffectiveAppearance",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&InputAppearanceChanged,
+            "v@:");
         Add(cls, "paste:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Paste, "v@:@");
         Add(cls, "pasteAsPlainText:",
@@ -1481,6 +1484,21 @@ internal sealed unsafe class MacTextInputIsland
             s_current?.EffectiveAppearanceChanged?.Invoke();
         }
         catch { /* Appearance failures must not disable text input or unwind an AppKit IMP. */ }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void InputAppearanceChanged(nint self, nint selector)
+    {
+        try
+        {
+            // This post-propagation child callback backs up the canvas view's
+            // callback. The shell classifies the canvas renderer's appearance
+            // and deduplicates both notifications without changing text input.
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTextView"));
+            SendSuperNoArgument(ref superclass, selector);
+            s_current?.EffectiveAppearanceChanged?.Invoke();
+        }
+        catch { /* Never unwind managed code through an AppKit IMP. */ }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

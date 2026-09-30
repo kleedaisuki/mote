@@ -135,7 +135,11 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             {
                 var application = ObjC.Send(ObjC.Class("NSApplication"),
                     ObjC.Sel("sharedApplication"));
-                var view = _editor != 0 ? _editor : application;
+                // In canvas mode the source renderer is the appearance authority:
+                // its callback may precede propagation to the child input view.
+                var canvasView = _canvas?.CanvasView ?? 0;
+                var view = _experimentalCanvas && canvasView != 0
+                    ? canvasView : _editor != 0 ? _editor : application;
                 var appearance = ObjC.Send(view, ObjC.Sel("effectiveAppearance"));
                 var names = ObjC.New("NSMutableArray");
                 try
