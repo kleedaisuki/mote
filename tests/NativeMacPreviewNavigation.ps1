@@ -80,7 +80,20 @@ function Read-Probe {
     param([string] $Action)
     $raw = Invoke-Bounded $client @([string]$editor.Id, [string]$source.Length, $Action) 8000 $Action
     if ([string]::IsNullOrWhiteSpace($raw)) { throw "AX $Action returned no JSON." }
-    return $raw | ConvertFrom-Json -Depth 8
+    $state = $raw | ConvertFrom-Json -Depth 8
+    # JSONEncoder omits nil Optional fields; make their absence explicit so
+    # StrictMode cannot mask the actual AX failure during diagnosis.
+    foreach ($name in @(
+        'sourcePid', 'previewPid', 'sourceLength', 'sourceSelectionStart',
+        'sourceSelectionLength', 'sourceFocused', 'windowDirty', 'previewLength',
+        'previewOffset', 'previewRangeLength', 'previewSelectionStart',
+        'previewSelectionLength', 'previewFocused', 'previewEditable',
+        'boundsX', 'boundsY', 'boundsWidth', 'boundsHeight', 'actionError')) {
+        if ($null -eq $state.PSObject.Properties[$name]) {
+            $state | Add-Member -NotePropertyName $name -NotePropertyValue $null
+        }
+    }
+    return $state
 }
 
 function Wait-State {
@@ -103,12 +116,27 @@ function Wait-State {
         }
         Start-Sleep -Milliseconds 120
     }
-    $bounded = if ($null -eq $last) { '<none>' } else {
-        "status=$($last.status) source=$($last.sourceCandidates)/$($last.sourceLength) " +
-        "selection=$($last.sourceSelectionStart):$($last.sourceSelectionLength) " +
-        "focus=$($last.sourceFocused) preview=$($last.previewCandidates)/$($last.previewOffset)"
+    $diagnostic = if ($null -eq $last) { $null } else { [ordered]@{
+        trusted = $last.trusted; status = $last.status
+        requested_pid = $last.requestedPid; application_pid = $last.applicationPid
+        frontmost_pid = $last.frontmostPid
+        source_candidates = $last.sourceCandidates; source_pid = $last.sourcePid
+        source_length = $last.sourceLength
+        source_selection_start = $last.sourceSelectionStart
+        source_selection_length = $last.sourceSelectionLength
+        source_focused = $last.sourceFocused
+        preview_candidates = $last.previewCandidates; preview_pid = $last.previewPid
+        preview_length = $last.previewLength; preview_offset = $last.previewOffset
+        preview_range_length = $last.previewRangeLength
+        preview_editable = $last.previewEditable
+        bounds = [ordered]@{ x = $last.boundsX; y = $last.boundsY
+            width = $last.boundsWidth; height = $last.boundsHeight }
+        window_dirty = $last.windowDirty; action_error = $last.actionError
+    } }
+    $result.observations += [ordered]@{
+        stage = $stage; event = 'state-timeout'; last_ax_state = $diagnostic
     }
-    throw "$What did not converge within 18 s ($bounded)."
+    throw "$What did not converge within 18 s; inspect content-free last_ax_state."
 }
 
 function Assert-Bytes {
