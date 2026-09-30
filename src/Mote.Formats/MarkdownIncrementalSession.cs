@@ -8,8 +8,8 @@ namespace Mote.Formats;
 /// A per-document Markdown analyzer with conservative, source-spanned block reuse.
 /// Small documents use Markdig's complete AST. Large files can be certified
 /// complete only when every bounded block belongs to an independent
-/// heading/paragraph/closed-fence grammar; otherwise the visible result is Provisional.
-/// Lists, references and malformed intermediates never inherit stale
+/// heading/paragraph/closed-fence grammar or the bounded explicit-reference certificate.
+/// Otherwise the visible result is Provisional. Unsupported references and malformed intermediates never inherit stale
 /// semantics from an unrelated block.
 /// </summary>
 internal sealed class MarkdownIncrementalSession : IRenderFormatSession
@@ -32,6 +32,14 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
     private bool _flatComplete;
     private TextSpan? _uncertifiedLine;
     private bool _disposed;
+    /// <summary>Additional globally certified reference domain; never shared across document lifetimes.</summary>
+    private MarkdownReferenceIndex? _references;
+    /// <summary>Occasional rebuild bounds superseded skeleton and label histories after local edits.</summary>
+    private int _referenceReuseEdits;
+    /// <summary>Reentrant requests cannot publish an older stage over a newer session state.</summary>
+    private bool _analyzing;
+    /// <summary>Refusals are memoized only for exact immutable source identity, never as source-line defects.</summary>
+    private TextSnapshot? _referenceRejectedSnapshot;
     // A local parse retains at most 64 Ki UTF-16 source units. Rebuild after
     // sixteen reused edits so superseded syntax arenas cannot accumulate forever.
     private int _syntaxReuseEdits;
@@ -41,10 +49,41 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
         AnalysisRequest request, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_analyzing) throw new InvalidOperationException("Markdown session calls must be serialized and non-reentrant.");
+        _analyzing = true;
+        try { return AnalyzeCore(snapshot, changesSinceCommittedState, request, cancellationToken); }
+        finally { _analyzing = false; }
+    }
+
+    /// <summary>All reference publication remains private until projection and cancellation gates succeed.</summary>
+    private DocumentAnalysis AnalyzeCore(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> changesSinceCommittedState,
+        AnalysisRequest request, CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(changesSinceCommittedState);
         Validate(snapshot, request);
         cancellationToken.ThrowIfCancellationRequested();
+
+        var hadReferences = _references is not null;
+        if (_references?.Current is { } referenceState && ReferenceEquals(referenceState.Snapshot, snapshot) &&
+            changesSinceCommittedState.Count == 0)
+            return _references.Project(snapshot, request, cancellationToken);
+        if (_references?.Current is { } previousReference &&
+            (changesSinceCommittedState.Count == 1 || request.Scope == AnalysisScope.Full))
+        {
+            var candidate = new MarkdownReferenceIndex();
+            var reused = _referenceReuseEdits < 16;
+            var attempt = candidate.Build(snapshot, cancellationToken,
+                reused ? previousReference : null, reused && changesSinceCommittedState.Count == 1 ? changesSinceCommittedState[0] : null,
+                allowRebuild: request.Scope == AnalysisScope.Full);
+            if (attempt.Complete)
+            {
+                var projection = candidate.Project(snapshot, request, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                CommitReferences(snapshot, candidate, reused);
+                return projection;
+            }
+        }
 
         if (_flatComplete && _version == snapshot.Version && changesSinceCommittedState.Count == 0)
             return ProjectFlat(snapshot, _flatRuns, request, cancellationToken);
@@ -82,6 +121,19 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
                 CommitFlat(snapshot, certifiedFlat);
                 return projection;
             }
+            if (request.Scope == AnalysisScope.Full && _references is null &&
+                !ReferenceEquals(_referenceRejectedSnapshot, snapshot))
+            {
+                var candidate = new MarkdownReferenceIndex();
+                var attempt = candidate.Build(snapshot, cancellationToken);
+                if (attempt.Complete)
+                {
+                    var projection = candidate.Project(snapshot, request, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    CommitReferences(snapshot, candidate, false);
+                    return projection;
+                }
+            }
             // Markdig builds a whole-document AST from one string and cannot be
             // canceled inside Parse. Even an explicit Full request must stay
             // bounded for dense or enormous inputs: references can resolve
@@ -90,6 +142,9 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
             cancellationToken.ThrowIfCancellationRequested();
             _runs = [];
             _flatRuns = [];
+            _references = null;
+            _referenceRejectedSnapshot = request.Scope == AnalysisScope.Full && !hadReferences ? snapshot :
+                ReferenceEquals(_referenceRejectedSnapshot, snapshot) ? snapshot : null;
             _version = snapshot.Version;
             _length = snapshot.Length;
             _complete = false;
@@ -107,6 +162,8 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
         cancellationToken.ThrowIfCancellationRequested();
         _runs = next;
         _flatRuns = [];
+        _references = null;
+        _referenceRejectedSnapshot = null;
         _version = snapshot.Version;
         _length = snapshot.Length;
         _complete = true;
@@ -128,6 +185,8 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
         if (analysis.Version != snapshot.Version || _version != snapshot.Version)
             throw new ArgumentException("Rendering requires the currently analyzed snapshot.", nameof(analysis));
         cancellationToken.ThrowIfCancellationRequested();
+        if (_references is not null && analysis.Completeness == AnalysisCompleteness.Complete)
+            return _references.Render(snapshot, analysis, request, cancellationToken);
         var builder = new MarkdownRenderProjection(snapshot, analysis, cancellationToken);
         var omitted = false;
         if (_complete)
@@ -185,6 +244,9 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
         _complete = false;
         _flatComplete = false;
         _uncertifiedLine = null;
+        _references = null;
+        _referenceReuseEdits = 0;
+        _referenceRejectedSnapshot = null;
         _disposed = true;
         _syntaxReuseEdits = 0;
     }
@@ -543,10 +605,22 @@ internal sealed class MarkdownIncrementalSession : IRenderFormatSession
             diagnostics, tokens, 0);
     }
 
+    /// <summary>The exact snapshot and all certificates commit together after successful bounded materialization.</summary>
+    private void CommitReferences(TextSnapshot snapshot, MarkdownReferenceIndex references, bool reused)
+    {
+        _runs = []; _flatRuns = []; _references = references;
+        _referenceRejectedSnapshot = null;
+        _version = snapshot.Version; _length = snapshot.Length;
+        _complete = false; _flatComplete = false; _uncertifiedLine = null;
+        _referenceReuseEdits = reused ? _referenceReuseEdits + 1 : 0;
+    }
+
     private void CommitFlat(TextSnapshot snapshot, List<FlatRun> runs)
     {
         _runs = [];
         _flatRuns = runs;
+        _references = null;
+        _referenceRejectedSnapshot = null;
         _version = snapshot.Version;
         _length = snapshot.Length;
         _complete = false;
