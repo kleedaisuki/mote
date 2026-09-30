@@ -703,8 +703,10 @@ jobs:
           $report = ".cache/ci-inventory/$rid/mac-real-ime-activation-syntax.json"
           New-Item -ItemType Directory -Force -Path (Split-Path $report) | Out-Null
           $clock = [Diagnostics.Stopwatch]::StartNew()
+          # -framework is a link-only input and becomes an unused-argument
+          # error under -fsyntax-only -Werror; SDK headers need no link flags.
           $output = & /usr/bin/clang -fobjc-arc -Wall -Wextra -Werror `
-            -framework Foundation -framework Carbon -fsyntax-only `
+            -fsyntax-only `
             tests/MacRealImeActivationProbe/Activate.m 2>&1
           $code = $LASTEXITCODE
           [pscustomobject]@{
