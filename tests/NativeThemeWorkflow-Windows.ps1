@@ -1,4 +1,4 @@
-# Diagnose live Windows application appearance against one published native executable.
+# Diagnose legacy-page Windows appearance; this is not default Continuous Canvas coverage.
 # This script is deliberately restricted to a disposable GitHub-hosted Windows runner:
 # it modifies HKCU only inside one try/finally and restores value existence, kind, and data.
 param(
@@ -247,8 +247,8 @@ $report = [ordered]@{
     registry_original_key_exists = $null; registry_original_value_exists = $null
     registry_original_kind = $null; registry_restored = $false
     source_sha256_unchanged = $false; cases = @(); error = $null
-    launch_observation = $null
-    scope = 'published Win32 HWND; synthetic HKCU app preference; no IME or physical-present assertion'
+    launch_observation = $null; source_mode = 'legacy-page'
+    scope = 'published legacy-page Win32 HWND; not default Continuous Canvas; synthetic HKCU app preference; no IME or physical-present assertion'
     windows_build = [Environment]::OSVersion.Version.Build
 }
 $process = $null
@@ -304,7 +304,7 @@ try {
     [void][MoteThemeProbeNative]::BroadcastAppearance()
     $report.stage = 'launch'
     $launchTimer = [Diagnostics.Stopwatch]::StartNew()
-    $process = Start-Process -FilePath $exe -ArgumentList $fixture -PassThru `
+    $process = Start-Process -FilePath $exe -ArgumentList @('--legacy-page', "`"$fixture`"") -PassThru `
         -RedirectStandardOutput (Join-Path $scratch 'stdout.txt') `
         -RedirectStandardError (Join-Path $scratch 'stderr.txt')
     $window = [IntPtr]::Zero
@@ -349,6 +349,14 @@ try {
         exact_synthetic_lf = $sourceText -ceq "alpha`nbeta`n"
         exact_synthetic_crlf = $sourceText -ceq "alpha`r`nbeta`r`n"
         exact_synthetic_cr = $sourceText -ceq "alpha`rbeta`r"
+    }
+    # Do not certify the hidden unused ID 101 left by default Continuous mode.
+    # Only the visible legacy control containing the disposable fixture is valid.
+    if ($report.launch_observation.host_mode_observation -cne 'visible-legacy-editor' -or
+        -not ($report.launch_observation.exact_synthetic_lf -or
+            $report.launch_observation.exact_synthetic_crlf -or
+            $report.launch_observation.exact_synthetic_cr)) {
+        throw 'Published legacy theme probe did not expose its visible populated legacy source host.'
     }
     if ($selection.Item1 -ne 1 -or $selection.Item2 -ne 3) { throw 'Synthetic RichEdit selection was not established.' }
 

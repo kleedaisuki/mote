@@ -13,6 +13,9 @@ Add-Type -TypeDefinition $embedded[0].Value
 if ([regex]::Matches($text, 'SendMessage\(\$editor, 0x00B1,').Count -ne 1) { throw 'Selection attempts changed.' }
 if ($text.IndexOf('$selection = [MoteThemeProbeNative]::Selection($editor)') -gt $text.IndexOf('$editorVisible =')) { throw 'Observation perturbs selection readback.' }
 if ($text -notmatch "RUNNER_ENVIRONMENT -cne 'github-hosted'") { throw 'Hosted-runner guard missing.' }
+if ($text -notmatch "-ArgumentList @\('--legacy-page',") { throw 'Legacy theme probe must explicitly select legacy source mode.' }
+if ($text -notmatch "source_mode = 'legacy-page'") { throw 'Report must declare legacy-only coverage.' }
+if ($text -notmatch 'Published legacy theme probe did not expose its visible populated legacy source host') { throw 'Host/source precondition missing.' }
 $observation = $ast.FindAll({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$report.launch_observation' -and $node.Right.Extent.Text.Contains('readiness_phase')}, $true)
 if ($observation.Count -ne 1) { throw 'Expected one content-free observation.' }
 Add-Type -TypeDefinition @"
@@ -38,5 +41,12 @@ foreach ($case in @(
     if ($null -ne $case.Match -and -not $result[$case.Match]) { throw 'Synthetic sentinel mismatch.' }
     if ($result.bounded_text_utf16_units -ne $case.Text.Length -or $result.text_read_at_capacity -ne ($case.Text.Length -eq 255)) { throw 'Wrong bounded length.' }
     if ($case.Text.Length -gt 0 -and ($result | ConvertTo-Json -Compress).Contains($case.Text)) { throw 'Source content escaped metadata report.' }
+    $guard = $ast.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.Contains("throw 'Published legacy theme probe did not expose its visible populated legacy source host.'")}, $true)
+    if ($guard.Count -ne 1) { throw 'Expected one host/source guard.' }
+    $rejected = $false
+    try { & ([scriptblock]::Create($guard[0].Extent.Text)) }
+    catch { $rejected = $true }
+    $expectedAccepted = $case.Mode -ceq 'visible-legacy-editor' -and $null -ne $case.Match
+    if ($rejected -eq $expectedAccepted) { throw 'Wrong legacy host/source acceptance.' }
 }
-'PASS: PowerShell AST; embedded C# compile; single-attempt ordering/runner guard; three metadata contracts; no source values serialized.'
+'PASS: PowerShell AST; embedded C# compile; explicit legacy scope; single-attempt ordering/runner guard; three metadata and host-acceptance contracts; no source values serialized.'

@@ -246,3 +246,26 @@ gh run download 36789139005 --name native-theme-win-x64 --dir .cache/ci-36791254
 ```
 
 The same current job's other exit **1** (step 37, baseline external UIA canvas client) is the established duplicate-Document release blocker, not a new range-behavior failure: its artifact reports **19/19** checks passed, zero `Failures`, one `ReleaseBlockers`, zero `Inconclusive`, and Raw/Control/Content counts **2/2/2**. Source text has 153,020 UTF-16 units while the RichEdit input host exposes 16; global focus is the bounded RichEdit Document with mote foreground. This repeats the baseline/opt-in-fragment distinction already documented in [release-gaps.md](release-gaps.md), and does not invalidate the separate CSV Grid provider checks. Exact artifact: `.cache/ci-36791254056-triage/uia/report.json`. No product code or validation harness was changed by this audit.
+
+#### Hosted discriminator result and explicit legacy correction
+
+[CI 36792454502](https://github.com/kleedaisuki/mote/actions/runs/36792454502) at `0b85a0e` supplied the missing evidence. The win-x64 live-theme process again exited **1** at `stage=launch`, `cases=[]`, with `registry_restored=true` and `source_sha256_unchanged=true`. Its published binary SHA-256 was `6B18BED6897FF2EF6C91F1081D86133E903BB5089957C13DD85BF8B836D1FBE5`. The content-free metadata reports:
+
+| Observation | Actual |
+| --- | --- |
+| Requested selection / readback | 1..3 / **0..0** |
+| Child ID/class/visibility | 101 / `RICHEDIT50W` / **false** |
+| Direct Canvas sibling / observed mode | true / `canvas-with-hidden-legacy-editor` |
+| Bounded text length / capacity reached | **0** / false |
+| Exact synthetic LF/CRLF/CR match | false / false / false |
+| Title readiness / selection readback | 145 ms / 156 ms |
+
+This identifies an inactive **hidden empty legacy control**, not a populated visible source host that refused selection. The program's documented default is Continuous; `WindowsEditorShell` hides `_editor` when the Canvas mode is installed and its Canvas branch does not project text into that legacy control. The historical RichEdit-specific theme harness omitted `--legacy-page`. Its repeated failure is therefore a **probe mode/host mismatch**, not evidence that the default Canvas selection or palette implementation is defective. The timing values are observations, not evidence of a readiness race.
+
+The harness correction now explicitly launches `--legacy-page`, declares `source_mode=legacy-page` and legacy-only scope in its JSON, and accepts only a visible legacy host whose bounded text exactly matches the disposable fixture (permitted native newline forms). It retains the single selection attempt, original color/source/selection assertions, hosted-only guard, fresh repository-local synthetic home/fixture, unchanged HKCU try/finally restoration, and no arbitrary content serialization. It does **not** route selection to child 301 or claim default Canvas coverage.
+
+Local regression command `pwsh -NoProfile -File tests/Test-NativeThemeWorkflowWindowsObservability.ps1` first failed on the original harness because explicit legacy launch was absent, then passed after the correction. It compiles the embedded native helper, checks AST/scope/ordering, and independently exercises acceptance of the visible populated legacy fixture versus rejection of hidden-empty Canvas and unclassified-capacity cases. This local test neither launches mote nor touches HKCU. **The corrected published legacy workflow still requires a subsequent hosted run**; CI 36792454502 predates the correction.
+
+Default Windows Canvas live-theme coverage remains a separate open target-host gate. Existing Continuous open/edit/Save probes do not assert dark→light→dark palette transitions. A bounded future probe should launch the ordinary default mode, establish exact source/active input ownership, sample policy-backed Canvas/status pixels on each transition, and check source plus global selection/history preservation through the source-backed controller contract. The bounded RichEdit input island is not a full-source legacy editor and must not be substituted into the old pixel/selection assertions. Real IME and physical presentation/screen-reader claims remain separate.
+
+Evidence: `.cache/ci-36792454502-triage/win-x64.log` and `theme/ci-inventory/win-x64/native-theme.json`. The baseline external UIA artifact in the same directory has unchanged **19/19** behavior checks, zero failures, one known duplicate-Document release blocker and zero inconclusive cases; no new UIA regression was found. Download with `gh run download 36792454502 --name native-theme-win-x64 --dir .cache/ci-36792454502-triage/theme` (baseline UIA artifact name `windows-ax-external-win-x64`).
