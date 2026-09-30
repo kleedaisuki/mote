@@ -17,7 +17,7 @@ namespace Mote.Formats;
 /// local diagnostics are reconstructed from bounded snapshot ranges.
 /// This session is single-caller and commits only after successful analysis.
 /// </remarks>
-internal sealed class CsvIncrementalSession : IWindowedFormatSession
+internal sealed partial class CsvIncrementalSession : ICsvGridFormatSession
 {
     private const int BlockSize = 1024;
     private const int VisibleScanBudget = 64 * 1024;
@@ -34,7 +34,7 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     /// <summary>Aggregate structural estimate; excludes text, output, transient graphs, and CLR layout guarantees.</summary>
     internal CsvIndexStatistics CacheStatistics => new(_cache.Mode.ToString(), _cache.Segments.Count,
         _cache.Checkpoints.Length, 256L + _cache.Segments.Count * 92_160L +
-        _cache.Checkpoints.Length * 4L + _cache.LargeRecords.Values.Sum(record => record.EstimatedBytes),
+        _cache.Checkpoints.Length * 8L + _cache.LargeRecords.Values.Sum(record => record.EstimatedBytes),
         _cache.Version, _lastScannedSourceUnits, _cache.LargeRecords.Count,
         _cache.LargeRecords.Values.Sum(record => record.Fields.Length));
 
@@ -48,9 +48,11 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
 
     /// <summary>A single immutable commit owns one representation at one document version.</summary>
     private sealed record CacheState(long? Version, CsvCacheMode Mode, List<Segment> Segments,
-        int[] Checkpoints, int ExpectedWidth, int Total)
+        RecordCheckpoint[] Checkpoints, int ExpectedWidth, int Total)
     {
         internal Dictionary<int, LargeRecord> LargeRecords { get; init; } = [];
+        internal int RowCount { get; init; }
+        internal int MaxWidth { get; init; }
         internal static CacheState Empty { get; } = new(null, CsvCacheMode.None, [], [], -1, 0);
         internal bool Complete => Mode is CsvCacheMode.DenseFull or CsvCacheMode.SparseFull;
         internal int IndexedUntil => Segments.Count == 0 ? 0 : Segments[^1].After;
@@ -91,6 +93,18 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         var furthest = normalized[^1];
 
         var work = new ScanWork();
+        var candidate = BuildCandidate(snapshot, changesSinceCommittedState, furthest, scope, cancellationToken, work);
+        var result = Project(snapshot, candidate, normalized, scope, !enforceBudget, cancellationToken, work);
+        cancellationToken.ThrowIfCancellationRequested();
+        _cache = candidate;
+        _lastScannedSourceUnits = work.Units;
+        return result;
+    }
+
+    /// <summary>Builds a private versioned state; no session mutation occurs until both deliveries succeed.</summary>
+    private CacheState BuildCandidate(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> changesSinceCommittedState,
+        TextSpan furthest, AnalysisScope scope, CancellationToken cancellationToken, ScanWork work)
+    {
         CacheState candidate;
         if (_cache.Version == snapshot.Version && changesSinceCommittedState.Count == 0)
         {
@@ -117,11 +131,7 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             candidate = PrefixState(snapshot,
                 ExtendVisiblePrefix(snapshot, [], furthest, cancellationToken, work));
 
-        var result = Project(snapshot, candidate, normalized, scope, !enforceBudget, cancellationToken, work);
-        cancellationToken.ThrowIfCancellationRequested();
-        _cache = candidate;
-        _lastScannedSourceUnits = work.Units;
-        return result;
+        return candidate;
     }
 
     private static TextSpan[] NormalizeWindows(TextSnapshot snapshot, IReadOnlyList<TextSpan> windows, bool enforceBudget)
@@ -248,18 +258,23 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     private static CacheState ScanFull(TextSnapshot snapshot, List<Segment> prefix, CancellationToken ct, ScanWork work)
     {
         var segments = new List<Segment>(prefix);
-        var checkpoints = new List<int> { 0 };
+        var checkpoints = new List<RecordCheckpoint> { new(0, 0) };
         var pending = new List<Row>(BlockSize);
         var dense = true;
         var largeRecords = new Dictionary<int, LargeRecord>();
         var expected = -1;
         var total = 0;
+        var rowCount = 0;
+        var maxWidth = 0;
         long largeRecordBytes = 0;
         void Account(Row row)
         {
             if (expected < 0) expected = row.Width;
             total = checked(total + row.ErrorCount + (row.Width == expected ? 0 : 1));
-            if (row.After - checkpoints[^1] >= CheckpointInterval) checkpoints.Add(row.After);
+            rowCount++;
+            maxWidth = Math.Max(maxWidth, row.Width);
+            if (row.After - checkpoints[^1].SourceStart >= CheckpointInterval)
+                checkpoints.Add(new RecordCheckpoint(row.After, rowCount));
         }
         // A prefix already consists of certified whole records; reuse its summaries
         // while constructing NEW-version checkpoints and exact width dependencies.
@@ -278,14 +293,14 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             var row = ParseRow(cursor, ct, false, out _, builder: builder);
             if (row.End - row.Start > VisibleScanBudget)
             {
-                var record = builder.Finish(row);
+                var record = builder.Finish(row, rowCount);
                 largeRecords.Add(row.Start, record);
                 largeRecordBytes += record.EstimatedBytes;
             }
             Account(row);
             if (!dense) continue;
             if (segments.Count == MaxDenseSegments ||
-                256L + (segments.Count + 1) * 92_160L + largeRecordBytes >= 32L * 1024 * 1024)
+                256L + (segments.Count + 1) * 92_160L + largeRecordBytes + checkpoints.Count * 8L >= 32L * 1024 * 1024)
             {
                 // No prospective block is allocated beyond the cap, including a
                 // partial block. Keep scanning with only certified checkpoints.
@@ -301,7 +316,7 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         }
         if (pending.Count > 0) segments.Add(new Segment(pending.ToArray(), 0, pending.Count, 0));
         return new CacheState(snapshot.Version, dense ? CsvCacheMode.DenseFull : CsvCacheMode.SparseFull,
-            segments, dense ? [] : checkpoints.ToArray(), expected, total) { LargeRecords = largeRecords };
+            segments, dense ? [] : checkpoints.ToArray(), expected, total) { LargeRecords = largeRecords, RowCount = rowCount, MaxWidth = maxWidth };
     }
 
     /// <summary>Calculates fresh global width dependencies from a bounded dense candidate.</summary>
@@ -311,7 +326,8 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         var total = 0;
         foreach (var segment in rows)
             total = checked(total + segment.ErrorCount + segment.Count - segment.WidthCount(expected));
-        return new CacheState(snapshot.Version, CsvCacheMode.DenseFull, rows, [], expected, total);
+        return new CacheState(snapshot.Version, CsvCacheMode.DenseFull, rows, [], expected, total)
+        { RowCount = rows.Sum(segment => segment.Count), MaxWidth = rows.Count == 0 ? 0 : rows.Max(segment => segment.MaxWidth) };
     }
 
     /// <summary>Prefix validity is never confused with an empty complete file or sparse full cache.</summary>
@@ -320,7 +336,8 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         if (snapshot.Length == 0 || rows.Count > 0 && rows[^1].After == snapshot.Length)
             return DenseState(snapshot, rows);
         return new CacheState(snapshot.Version, CsvCacheMode.Prefix, rows, [],
-            rows.Count == 0 ? -1 : rows[0].Get(0).Width, 0);
+            rows.Count == 0 ? -1 : rows[0].Get(0).Width, 0)
+        { RowCount = rows.Sum(segment => segment.Count), MaxWidth = rows.Count == 0 ? 0 : rows.Max(segment => segment.MaxWidth) };
     }
 
     /// <summary>Scans at most one bounded prefix; no partial record is committed.</summary>
@@ -359,13 +376,13 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         out RowPayload? payload, int maxPosition = int.MaxValue,
         IReadOnlyList<TextSpan>? captureRanges = null, int maxCells = ProjectionCellBudget,
         int[]? windowCellQuota = null, int[]? projectedWindowCells = null,
-        RecordBuilder? builder = null, LargeRecord? certificate = null)
+        RecordBuilder? builder = null, LargeRecord? certificate = null, GridCapture? grid = null)
     {
         var start = cursor.Position;
         try
         {
             return ParseRowCore(cursor, ct, capture, out payload, maxPosition, captureRanges,
-                maxCells, windowCellQuota, projectedWindowCells, builder, certificate);
+                maxCells, windowCellQuota, projectedWindowCells, builder, certificate, grid);
         }
         finally { cursor.Work.Units += cursor.Position - start; }
     }
@@ -373,7 +390,7 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     private static Row ParseRowCore(SnapshotCursor cursor, CancellationToken ct, bool capture,
         out RowPayload? payload, int maxPosition,
         IReadOnlyList<TextSpan>? captureRanges, int maxCells,
-        int[]? windowCellQuota, int[]? projectedWindowCells, RecordBuilder? builder, LargeRecord? certificate)
+        int[]? windowCellQuota, int[]? projectedWindowCells, RecordBuilder? builder, LargeRecord? certificate, GridCapture? grid)
     {
         if (cursor.Position >= maxPosition) throw new ScanBudgetExceededException();
         var start = cursor.Position;
@@ -390,6 +407,7 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         void AddDiagnostic(string code, string message, TextSpan span)
         {
             errors++;
+            grid?.AddDiagnostic(width, new Diagnostic(DiagnosticSeverity.Error, code, message, span));
             if (diagnostics is null ||
                 captureRanges is not null && !IntersectsAny(span.Start, span.End, captureRanges)) return;
             if (diagnostics.Count < ProjectionCellBudget)
@@ -426,9 +444,22 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
                 if (consumed >= replayAllowance && cursor.Position < certificate.Row.End)
                 { truncated = true; minimumProjectionWindow = interested + 1; continue; }
                 var seek = certificate.Seek(captureRanges[interested].Start);
-                if (seek > cursor.Position) cursor.Seek(seek);
+                if (seek > cursor.Position)
+                { cursor.Seek(seek); width = certificate.SeekSource(captureRanges[interested].Start).Ordinal; }
             }
-            builder?.Boundary(cursor.Position);
+            if (grid is not null && certificate is not null)
+            {
+                if (width >= grid.Columns.End) { cursor.Seek(certificate.Row.End); break; }
+                if (cursor.Work.Units - projectionStartUnits + cursor.Position - projectionStartPosition >= GridReplayBudget)
+                { cursor.Seek(certificate.Row.End); break; }
+                if (width < grid.Columns.Start)
+                {
+                    var checkpoint = certificate.SeekColumn(grid.Columns.Start);
+                    if (checkpoint.SourceStart > cursor.Position)
+                    { cursor.Seek(checkpoint.SourceStart); width = checkpoint.Ordinal; }
+                }
+            }
+            builder?.Boundary(cursor.Position, width);
             if (cursor.Peek() == ',')
             {
                 if (capture && cells!.Count >= maxCells) truncated = true;
@@ -463,6 +494,9 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
                     }
                     else skipUntil = cursor.Position;
                 }
+                if (grid is not null)
+                    skipUntil = width >= grid.Columns.Start && width < grid.Columns.End ? cursor.Position :
+                        (int)Math.Min(skipUntil, (long)cursor.Position + Math.Max(0, grid.Columns.Start - width));
                 if (skipUntil > cursor.Position)
                 {
                     if (builder is not null) skipUntil = Math.Min(skipUntil, cursor.Position + CheckpointInterval);
@@ -484,12 +518,12 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
                 if (giant.Unclosed is { } unclosed) AddDiagnostic("CSV001", "Unterminated quoted field.", unclosed);
                 if (giant.Invalid is { } invalid) AddDiagnostic("CSV002",
                     "Characters after a closing quote are not valid in a CSV field.", invalid);
-                if (giant.Quoted && IntersectsAny(giant.Span.Start, giant.Span.End, captureRanges!))
+                if (tokens is not null && giant.Quoted && IntersectsAny(giant.Span.Start, giant.Span.End, (captureRanges ?? [])))
                 {
                     if (tokens!.Count < ProjectionCellBudget) tokens.Add(new SemanticToken("string", giant.Span));
                     else truncated = true;
                 }
-                if (!giant.Quoted && giant.ErrorCount > 0)
+                if (diagnostics is not null && !giant.Quoted && giant.ErrorCount > 0)
                 {
                     var seenQuotes = new HashSet<int>();
                     foreach (var range in captureRanges!)
@@ -573,7 +607,9 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             }
             width++;
             var cellSpan = new TextSpan(fieldStart, cursor.Position - fieldStart);
-            builder?.Field(cellSpan, quoted, contentEnd, unclosedSpan, invalidSpan, errors - fieldErrorStart);
+            builder?.Field(cellSpan, width - 1, quoted, contentEnd, unclosedSpan, invalidSpan, errors - fieldErrorStart);
+            grid?.Add(cursor.Snapshot, width - 1, cellSpan, quoted, contentEnd,
+                certifiedField?.ErrorCount ?? errors - fieldErrorStart, certifiedField, cursor.Work, ct);
             if (cells is not null &&
                 (captureRanges is null || CellIntersectsAny(cellSpan, captureRanges)))
             {
@@ -733,11 +769,11 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             }
             yield break;
         }
-        var index = Array.BinarySearch(cache.Checkpoints, window.Start);
+        var index = FindCheckpoint(cache.Checkpoints, window.Start, false);
         // Equality must retain the preceding row for a zero-width request; using
         // one lookbehind for all equal edges is simpler and remains bounded.
         index = index >= 0 ? Math.Max(0, index - 1) : Math.Max(0, ~index - 1);
-        var cursor = new SnapshotCursor(snapshot, cache.Checkpoints[index], work);
+        var cursor = new SnapshotCursor(snapshot, cache.Checkpoints[index].SourceStart, work);
         while (cursor.Position < snapshot.Length && cursor.Position <= window.End)
         {
             ct.ThrowIfCancellationRequested();
@@ -810,17 +846,30 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     }
 
     /// <summary>A verified field too large to decode for bounded output; no source text is retained.</summary>
-    private readonly record struct GiantField(TextSpan Span, bool Quoted, int ContentEnd,
+    private readonly record struct GiantField(TextSpan Span, int Column, bool Quoted, int ContentEnd,
         TextSpan? Unclosed, TextSpan? Invalid, int ErrorCount);
 
     /// <summary>One verified oversized record and O(record-length / 64 Ki) field-start seek facts.</summary>
-    private sealed record LargeRecord(Row Row, int[] Boundaries, GiantField[] Fields)
+    private sealed record LargeRecord(Row Row, int Ordinal, FieldCheckpoint[] Boundaries, GiantField[] Fields)
     {
-        internal long EstimatedBytes => 256L + Boundaries.Length * 8L + Fields.Length * 128L;
+        internal long EstimatedBytes => 256L + Boundaries.Length * 12L + Fields.Length * 128L;
         internal int Seek(int position)
         {
-            var index = Array.BinarySearch(Boundaries, position);
-            return Boundaries[index >= 0 ? index : Math.Max(0, ~index - 1)];
+            return SeekSource(position).SourceStart;
+        }
+        internal FieldCheckpoint SeekSource(int position) => SeekBoundary(position, false);
+        internal FieldCheckpoint SeekColumn(int column) => SeekBoundary(column, true);
+        private FieldCheckpoint SeekBoundary(int value, bool ordinal)
+        {
+            var lo = 0;
+            var hi = Boundaries.Length;
+            while (lo < hi)
+            {
+                var mid = lo + (hi - lo) / 2;
+                var key = ordinal ? Boundaries[mid].Ordinal : Boundaries[mid].SourceStart;
+                if (key <= value) lo = mid + 1; else hi = mid;
+            }
+            return Boundaries[Math.Max(0, lo - 1)];
         }
         internal GiantField? FindField(int position)
         {
@@ -839,25 +888,25 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
     /// <summary>Builds sparse field facts during authoritative validation, never guesses quote state.</summary>
     private sealed class RecordBuilder
     {
-        private List<int>? _boundaries;
+        private List<FieldCheckpoint>? _boundaries;
         private List<GiantField>? _fields;
         private int _last;
         private int _start;
         internal void Reset(int start) { _start = _last = start; _boundaries?.Clear(); _fields?.Clear(); }
-        internal void Boundary(int position)
+        internal void Boundary(int position, int column)
         {
             if (position - _last < CheckpointInterval) return;
             if (_boundaries is null) _boundaries = [];
-            if (_boundaries.Count == 0) _boundaries.Add(_start);
-            _boundaries.Add(position);
+            if (_boundaries.Count == 0) _boundaries.Add(new FieldCheckpoint(_start, 0));
+            _boundaries.Add(new FieldCheckpoint(position, column));
             _last = position;
         }
-        internal void Field(TextSpan span, bool quoted, int contentEnd, TextSpan? unclosed, TextSpan? invalid, int errorCount)
+        internal void Field(TextSpan span, int column, bool quoted, int contentEnd, TextSpan? unclosed, TextSpan? invalid, int errorCount)
         {
             if (span.Length > MaxProjectedCellSourceLength)
-                (_fields ??= []).Add(new GiantField(span, quoted, contentEnd, unclosed, invalid, errorCount));
+                (_fields ??= []).Add(new GiantField(span, column, quoted, contentEnd, unclosed, invalid, errorCount));
         }
-        internal LargeRecord Finish(Row row) => new(row, _boundaries is { Count: > 0 } ? _boundaries.ToArray() : [_start], _fields?.ToArray() ?? []);
+        internal LargeRecord Finish(Row row, int ordinal) => new(row, ordinal, _boundaries is { Count: > 0 } ? _boundaries.ToArray() : [new FieldCheckpoint(_start, 0)], _fields?.ToArray() ?? []);
     }
 
     private readonly record struct Cell(TextSpan Span, string Value);
@@ -916,11 +965,12 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
                 ErrorCount += rows[i].ErrorCount;
                 CellCount += width;
                 MaxRowLength = Math.Max(MaxRowLength, rows[i].End - rows[i].Start);
+                MaxWidth = Math.Max(MaxWidth, width);
             }
         }
 
         private Segment(Row[] rows, int begin, int end, int shift,
-            Dictionary<int, int> widths, int errorCount, long cellCount, int maxRowLength)
+            Dictionary<int, int> widths, int errorCount, long cellCount, int maxRowLength, int maxWidth)
         {
             _rows = rows;
             _begin = begin;
@@ -930,6 +980,7 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
             ErrorCount = errorCount;
             CellCount = cellCount;
             MaxRowLength = maxRowLength;
+            MaxWidth = maxWidth;
         }
 
         internal int Count => _end - _begin;
@@ -938,11 +989,12 @@ internal sealed class CsvIncrementalSession : IWindowedFormatSession
         internal int ErrorCount { get; }
         internal long CellCount { get; }
         internal int MaxRowLength { get; }
+        internal int MaxWidth { get; }
         internal int WidthCount(int width) => _widths.GetValueOrDefault(width);
         internal Row Get(int index) => _rows[_begin + index].Shift(_shift);
         internal Segment Slice(int start, int end) => new(_rows, _begin + start, _begin + end, _shift);
         internal Segment Shift(int delta) => new(_rows, _begin, _end, checked(_shift + delta),
-            _widths, ErrorCount, CellCount, MaxRowLength);
+            _widths, ErrorCount, CellCount, MaxRowLength, MaxWidth);
 
         internal IEnumerable<Row> Enumerate(TextSpan range, bool all)
         {
