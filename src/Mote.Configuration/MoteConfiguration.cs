@@ -1,4 +1,17 @@
+using Mote.Themes;
+
 namespace Mote.Configuration;
+
+/// <summary>Authoritative file-load outcome for startup defaults and safe explicit reload.</summary>
+public enum ConfigReadDisposition
+{
+    /// <summary>The open operation found no file or containing directory; defaults are intentional.</summary>
+    Missing,
+    /// <summary>The file was bounded, strict UTF-8 and syntactically valid; individual groups may still reject values.</summary>
+    Loaded,
+    /// <summary>An existing or inaccessible candidate failed open/read, size, decoding or TOML syntax checks.</summary>
+    Rejected
+}
 
 /// <summary>User preference applied after a document policy's presentation convention.</summary>
 public enum PreviewLayoutPreference
@@ -20,6 +33,9 @@ public sealed record ConfigDiagnostic(string Code, string Message);
 /// </summary>
 public sealed record MoteConfiguration
 {
+    /// <summary>File-level outcome; reload must retain its prior snapshot when this is Rejected.</summary>
+    public ConfigReadDisposition ReadDisposition { get; init; } = ConfigReadDisposition.Missing;
+
     /// <summary>The selected root for mote-owned files, normally ~/.mote.</summary>
     public required string HomeDirectory { get; init; }
 
@@ -37,6 +53,12 @@ public sealed record MoteConfiguration
 
     /// <summary>Compile-time registered theme policy identifier.</summary>
     public required string ThemeId { get; init; }
+
+    /// <summary>Whether the complete requested map passed schema validation; empty or absent maps are accepted.</summary>
+    public bool ThemeOverridesAccepted { get; init; } = true;
+
+    /// <summary>Requested data-only colors; composition and contrast validation belong to Themes.</summary>
+    public ThemeOverrideData ThemeOverrides { get; init; } = ThemeOverrideData.Empty;
 
     /// <summary>Whether local tracing is enabled by the configuration file.</summary>
     public required bool TraceEnabled { get; init; }

@@ -10,5 +10,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Tomlyn" Version="2.10.1" />
+    <ProjectReference Include="../Mote.Themes/Mote.Themes.csproj" />
   </ItemGroup>
 </Project>
