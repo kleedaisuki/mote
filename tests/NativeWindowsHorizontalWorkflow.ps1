@@ -210,6 +210,15 @@ function Capture-Canvas {
             hit_class = [MoteHorizontalWin32]::ClassName($topWindow)
             foreground_pid = [MoteHorizontalWin32]::OwnerPid($foreground)
         }
+        # Only a nonzero, independently identified foreign foreground owner
+        # establishes environmental occlusion. Same-PID/PID-0 geometry remains
+        # a real failed Canvas observation, never a softened product verdict.
+        if ($report.capture_obstruction.hit_owner_pid -gt 0 -and
+            $report.capture_obstruction.hit_owner_pid -ne $process.Id -and
+            $report.capture_obstruction.foreground_pid -eq
+                $report.capture_obstruction.hit_owner_pid) {
+            $report.status = 'inconclusive'
+        }
         throw 'Canvas is obscured at its center; desktop pixels cannot prove canvas rendering.'
     }
     $bitmap = [Drawing.Bitmap]::new($width, $height)
