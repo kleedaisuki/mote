@@ -132,6 +132,10 @@ independent safety review, original finding and frozen script hashes.
 
 ## First hosted target checkpoint
 
+The separately opted-in [natural-close trace variant](WindowsNaturalCloseTrace.md)
+now provides a bounded trace-on/normal-exit path. Its target run is pending and
+does not retroactively add child phases to this trace-off checkpoint.
+
 [CI 36770328576](https://github.com/kleedaisuki/mote/actions/runs/36770328576)
 at checkout `7bc42a6a0e995a15c3dfe81cf7a198951dd52de8` completed the win-x64
 fresh-publish AOT job successfully. Its separately non-gating Python setup,

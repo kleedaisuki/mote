@@ -17,6 +17,9 @@ endpoint/CI design are in
 [`native-latency-acceptance.md`](../../docs/native-latency-acceptance.md).
 The bounded existing-driver adapter and first fresh-hosted Windows x64 capability
 result are documented in [`WindowsReadinessPilot.md`](WindowsReadinessPilot.md).
+Its [natural-close trace variant](WindowsNaturalCloseTrace.md) separates child
+monotonic endpoints from parent launch observations without edit/Save; target
+normal-close/trace validation is pending.
 
 ## Exact corpus contract
 

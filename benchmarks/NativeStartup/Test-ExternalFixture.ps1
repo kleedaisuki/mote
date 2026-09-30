@@ -77,6 +77,16 @@ try {
     $good = & $probe -ExecutablePath $exe -CheckInventoryOnly @args
     if ($good.inventory_entries -ne 1) { throw 'Valid external fixture preflight failed.' }
     $checks.Add('owned-exact-json-accepted')
+    $naturalArgs = @{FixturePath=$fixture; FixtureSha256=$sha; ReadinessOnly=$true; NaturalCloseTrace=$true}
+    $natural = & $probe -ExecutablePath $exe -CheckInventoryOnly @naturalArgs
+    if ($natural.inventory_entries -ne 1) { throw 'Valid natural-close external preflight failed.' }
+    $checks.Add('natural-close-preflight-accepted')
+    Invoke-Rejected @{NaturalCloseTrace=$true; ReadinessOnly=$true} `
+        'NaturalCloseTrace requires pinned external*' 'natural-close-without-fixture-refused'
+    Invoke-Rejected @{FixturePath=$fixture; FixtureSha256=$sha; NaturalCloseTrace=$true} `
+        'NaturalCloseTrace requires pinned external*' 'natural-close-with-edit-route-refused'
+    Invoke-Rejected @{FixturePath=$fixture; FixtureSha256=$sha; ReadinessOnly=$true; NaturalCloseTrace=$true; DiagnosticTrace=$true} `
+        'NaturalCloseTrace requires pinned external*' 'natural-close-with-legacy-trace-refused'
     Invoke-Rejected @{FixturePath=$fixture; FixtureSha256=$sha} `
         'External fixture requires*ReadinessOnly.' 'edit-save-route-refused'
     Invoke-Rejected @{FixturePath=$fixture; ReadinessOnly=$true} `

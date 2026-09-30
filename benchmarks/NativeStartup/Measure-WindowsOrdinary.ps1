@@ -9,7 +9,9 @@ param(
     [switch] $DiagnosticTrace,
     [switch] $KeepFailureArtifacts,
     [string] $FixturePath,
-    [string] $FixtureSha256
+    [string] $FixtureSha256,
+    [switch] $NaturalCloseTrace,
+    [ValidateRange(250, 5000)][int] $TraceObservationMilliseconds = 1000
 )
 
 Set-StrictMode -Version Latest
@@ -49,6 +51,9 @@ $fixtureExtension = '.md'
 $sourcePrefix = 'STARTUP-MARKER # note'
 $externalPath = $null
 $externalSha = $null
+if ($NaturalCloseTrace -and (-not $externalFixture -or -not $ReadinessOnly -or $DiagnosticTrace)) {
+    throw 'NaturalCloseTrace requires pinned external ReadinessOnly and cannot combine with DiagnosticTrace.'
+}
 if ($externalFixture -or -not [string]::IsNullOrWhiteSpace($FixtureSha256)) {
     if (-not $externalFixture -or $FixtureSha256 -cnotmatch '^[a-fA-F0-9]{64}$' -or -not $ReadinessOnly) {
         throw 'External fixture requires FixturePath, pinned FixtureSha256, and ReadinessOnly.'
@@ -79,6 +84,13 @@ if ($externalFixture -or -not [string]::IsNullOrWhiteSpace($FixtureSha256)) {
         $sourcePrefix = [Text.Encoding]::ASCII.GetString($prefixBytes)
     }
     finally { $input.Dispose() }
+}
+if ($NaturalCloseTrace) {
+    # The existing bounded artifact auditor needs Python 3.11+. This preflight
+    # is outside the editor timer and does not launch a native editor.
+    & python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'
+    if ($LASTEXITCODE -ne 0) { throw 'NaturalCloseTrace requires Python 3.11 or newer.' }
+    . (Join-Path $PSScriptRoot 'NativeTraceEvidence.ps1')
 }
 $exe = [IO.Path]::GetFullPath($ExecutablePath)
 Assert-NoReparseAncestors $exe
@@ -238,6 +250,7 @@ $expectedSha = $null
 $timeout = if ($SizeMiB -eq 100) { 120000 } else { 30000 }
 $samples = [Collections.Generic.List[object]]::new()
 $allPassed = $true
+$preserveScratch = $false
 
 try {
     for ($ordinal = 0; $ordinal -lt $Runs; $ordinal++) {
@@ -257,8 +270,9 @@ try {
         $start = [Diagnostics.ProcessStartInfo]::new($exe)
         $start.UseShellExecute = $false
         $start.WorkingDirectory = $root
-        $start.Environment['MOTE_HOME'] = $moteHome
-        $start.Environment['MOTE_TRACE'] = if ($DiagnosticTrace) { '1' } else { '0' }
+        $childHome = if ($NaturalCloseTrace) { Join-Path $scratch "home-$ordinal" } else { $moteHome }
+        $start.Environment['MOTE_HOME'] = $childHome
+        $start.Environment['MOTE_TRACE'] = if ($DiagnosticTrace -or $NaturalCloseTrace) { '1' } else { '0' }
         [void]$start.ArgumentList.Add($fixture)
         $sample = [ordered]@{
             schema_version = 1; utc = [DateTimeOffset]::UtcNow.ToString('O')
@@ -274,11 +288,21 @@ try {
             input_fixture_sha256_after_probe = $null
             configuration_ms = $null; child_open_to_editable_ms = $null
             child_open_to_draw_submission_ms = $null
-            child_endpoint_status = 'not-collected by external driver; no child clock subtraction'
+            child_endpoint_status = if ($NaturalCloseTrace) { 'requested-but-not-certified' }
+                else { 'not-collected by external driver; no child clock subtraction' }
+            child_document_open_ms = $null; child_startup_to_editable_ms = $null
+            configuration_status = 'not-instrumented; tracing begins after configuration'
+            natural_close_trace = [bool]$NaturalCloseTrace
+            trace_observation_requested_ms = if ($NaturalCloseTrace) { $TraceObservationMilliseconds } else { $null }
+            trace_observation_actual_ms = $null; close_to_exit_ms = $null
+            termination = 'not-observed'; child_exit_code = $null
+            child_trace_evidence = $null
             measurement_mode = if ($ReadinessOnly) { 'source-readiness-and-selection' }
                 else { 'source-readiness-edit-and-exact-save' }
-            diagnostic_trace = [bool]$DiagnosticTrace
-            cache_class = if ($ordinal -eq 0) {
+            diagnostic_trace = [bool]($DiagnosticTrace -or $NaturalCloseTrace)
+            cache_class = if ($NaturalCloseTrace) {
+                'fresh editor process and isolated MOTE_HOME; just-copied unique file; OS cache not evicted'
+            } elseif ($ordinal -eq 0) {
                 'first editor invocation in batch; just-written unique file; OS cache not evicted'
             } else {
                 'fresh editor process; just-written unique file; same MOTE_HOME; OS cache not evicted'
@@ -383,6 +407,33 @@ try {
                 [long]$process.PeakWorkingSet64 } else { $null }
             $sample.peak_virtual_bytes = if ($process.PeakVirtualMemorySize64 -gt 0) {
                 [long]$process.PeakVirtualMemorySize64 } else { $null }
+            if ($NaturalCloseTrace) {
+                # No forced paint or non-idempotent input. Give naturally queued
+                # source drawing a bounded opportunity, then request normal close.
+                $observe = [Diagnostics.Stopwatch]::StartNew()
+                Start-Sleep -Milliseconds $TraceObservationMilliseconds
+                $sample.trace_observation_actual_ms = $observe.Elapsed.TotalMilliseconds
+                if ($process.HasExited) { throw 'Editor exited before natural close request.' }
+                if ([MoteOrdinaryStartupWin32]::Title($window).Contains('•')) {
+                    throw 'Readiness fixture became dirty; natural-close probe will not confirm a modal.'
+                }
+                $closing = [Diagnostics.Stopwatch]::StartNew()
+                if (-not [MoteOrdinaryStartupWin32]::PostMessage($window, 0x0010,
+                    [UIntPtr]::Zero, [IntPtr]::Zero)) { throw 'Natural WM_CLOSE request failed.' }
+                if (-not $process.WaitForExit(10000)) { throw 'Natural close did not exit within 10 seconds.' }
+                $sample.close_to_exit_ms = $closing.Elapsed.TotalMilliseconds
+                $sample.child_exit_code = $process.ExitCode
+                $sample.termination = 'natural-close'
+                if ($process.ExitCode -ne 0) { throw 'Natural-close child returned nonzero.' }
+                $traceOutput = Join-Path $resultRoot (Join-Path 'traces' (Join-Path (Split-Path $scratch -Leaf) "$ordinal"))
+                $sample.child_trace_evidence = Get-NativeTraceEvidence -TraceDirectory (Join-Path $childHome 'traces') `
+                    -OutputDirectory $traceOutput -BinarySha256 $sha
+                $sample.child_endpoint_status = $sample.child_trace_evidence.endpoint_status
+                $sample.child_document_open_ms = $sample.child_trace_evidence.endpoints['document.open'].duration_ms
+                $sample.child_startup_to_editable_ms = $sample.child_trace_evidence.endpoints['mote.startup_to_editable'].duration_ms
+                $sample.child_open_to_editable_ms = $sample.child_trace_evidence.endpoints['document.open_to_editable'].duration_ms
+                $sample.child_open_to_draw_submission_ms = $sample.child_trace_evidence.endpoints['document.open_to_draw_submission'].duration_ms
+            }
             if ($externalFixture) {
                 $sample.copied_fixture_sha256_after_probe = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
                 $sample.input_fixture_sha256_after_probe = (Get-FileHash -LiteralPath $externalPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -415,12 +466,24 @@ try {
         finally {
             if ($null -ne $process) {
                 try {
-                    if (-not $process.HasExited) { $process.Kill($true); [void]$process.WaitForExit(10000) }
+                    if (-not $process.HasExited) {
+                        $sample.termination = if ($NaturalCloseTrace) { 'forced-after-failed-normal-close' } else { 'forced-legacy-cleanup' }
+                        $process.Kill($true)
+                        if (-not $process.WaitForExit(10000)) {
+                            $sample.status = 'failed'
+                            $sample.error = 'Exact child could not be reaped within 10 seconds; scratch retained.'
+                            $preserveScratch = $true
+                        }
+                    }
+                } catch {
+                    $sample.status = 'failed'
+                    $sample.error = 'Exact child cleanup failed; scratch retained.'
+                    $preserveScratch = $true
                 } finally { $process.Dispose() }
             }
         }
         $samples.Add($sample)
-        $json = $sample | ConvertTo-Json -Depth 5 -Compress
+        $json = $sample | ConvertTo-Json -Depth 8 -Compress
         Add-Content -LiteralPath $resultPath -Value $json -Encoding utf8
         Write-Output $json
         if ($sample.status -ne 'passed') {
@@ -431,7 +494,7 @@ try {
 }
 finally {
     Assert-NoReparseAncestors $scratch
-    if (-not ($KeepFailureArtifacts -and -not $allPassed) -and (Test-Path -LiteralPath $scratch)) {
+    if (-not $preserveScratch -and -not ($KeepFailureArtifacts -and -not $allPassed) -and (Test-Path -LiteralPath $scratch)) {
         Remove-Item -LiteralPath $scratch -Recurse -Force
     }
 }
