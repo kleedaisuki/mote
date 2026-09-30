@@ -188,3 +188,21 @@ arm64 light PNG was visually inspected and its status text is legible within
 the cached content view. An external on-screen window crop would still be
 needed to claim compositor-visible chrome contrast, and a real IME/global OS
 transition remains outside this probe.
+
+### Repeated Windows live-theme probe precondition failure (2026-10-01)
+
+Independent raw-log/artifact triage of [CI 36791254056](https://github.com/kleedaisuki/mote/actions/runs/36791254056) at `f657c003c8bb2d52fd94ea632335a356c2f3d445` found the win-x64 non-gating live-theme step (job step 25) exited **1**, although its `continue-on-error` conclusion and enclosing Native AOT job were `success`. The downloaded `native-theme-win-x64` report says `status=failed`, `stage=launch`, `error=launch: RuntimeException: Synthetic RichEdit selection was not established.`, and `cases=[]`. It separately records `registry_restored=true` and `source_sha256_unchanged=true`. No dark/light color case was reached, so this run provides neither a live-theme pass nor a color-transition defect reproduction.
+
+The immediately preceding [CI 36789139005](https://github.com/kleedaisuki/mote/actions/runs/36789139005) has the **same** launch-stage selection failure, empty cases and successful restoration/hash flags, with a different published executable SHA. Thus this is not a newly introduced failure of the latest Mac Grid proxy/Windows identity-probe commit. It is a repeated unresolved Windows probe precondition failure; do not erase the historical successful scoped theme evidence or call the current probe a pass.
+
+The harness waits only for a top-level title containing `theme.txt`, retrieves child ID 101, sends `EM_SETSEL(1,3)` once, and immediately asserts the returned selection. It does not record the actual returned pair, child class, source content at failure, or current native source mode. A title is not an independent content/selection-ready assertion. These missing observations prevent a supported distinction between a readiness/host-assumption problem and a product selection defect. The next useful probe should record those observations and establish the exact synthetic source/appropriate host before selecting; adding retries without that discriminator would hide rather than diagnose the failure.
+
+Reproduction and retained evidence (repository-local):
+
+```powershell
+gh api repos/kleedaisuki/mote/actions/jobs/110144423689/logs > .cache/ci-36791254056-triage/win-x64.log
+gh run download 36791254056 --name native-theme-win-x64 --dir .cache/ci-36791254056-triage/theme
+gh run download 36789139005 --name native-theme-win-x64 --dir .cache/ci-36791254056-triage/prior-theme
+```
+
+The same current job's other exit **1** (step 37, baseline external UIA canvas client) is the established duplicate-Document release blocker, not a new range-behavior failure: its artifact reports **19/19** checks passed, zero `Failures`, one `ReleaseBlockers`, zero `Inconclusive`, and Raw/Control/Content counts **2/2/2**. Source text has 153,020 UTF-16 units while the RichEdit input host exposes 16; global focus is the bounded RichEdit Document with mote foreground. This repeats the baseline/opt-in-fragment distinction already documented in [release-gaps.md](release-gaps.md), and does not invalidate the separate CSV Grid provider checks. Exact artifact: `.cache/ci-36791254056-triage/uia/report.json`. No product code or validation harness was changed by this audit.
