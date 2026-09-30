@@ -154,6 +154,13 @@ still identifies the kind of control. The in-process AppKit tree probe checks
 role, label, read-only state, and source/preview distinction. It cannot prove
 what VoiceOver speaks or whether an external AX client sees the same metadata;
 those remain separate target-host checks.
+In [run 36693226207](https://github.com/kleedaisuki/mote/actions/runs/36693226207),
+the published `osx-x64` and `osx-arm64` binaries both passed this **non-gating
+in-process** AX probe: exactly one reachable read-only `AXTextArea` was the
+actual preview view labeled `Mote preview`, distinct from the source-backed
+`Mote editor` element. The probe did not read preview body text to derive the
+label. This is AppKit tree/selector evidence only, not an independent
+`AXUIElement` client observation or a VoiceOver speech/navigation test.
 
 ### Current target-host verdict
 
