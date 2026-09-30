@@ -9,14 +9,25 @@ public readonly record struct ThemeColor(byte Red, byte Green, byte Blue)
     public static ThemeColor FromHex(string hex)
     {
         ArgumentNullException.ThrowIfNull(hex);
-        if (hex.Length != 7 || hex[0] != '#' ||
-            !byte.TryParse(hex.AsSpan(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var red) ||
-            !byte.TryParse(hex.AsSpan(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var green) ||
-            !byte.TryParse(hex.AsSpan(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var blue))
-        {
+        if (!TryParse(hex, out var color))
             throw new FormatException("Theme colors must use opaque #RRGGBB syntax.");
-        }
-        return new ThemeColor(red, green, blue);
+        return color;
+    }
+
+    /// <summary>Accepts exactly #RRGGBB with ASCII hex digits; whitespace and alpha are rejected.</summary>
+    public static bool TryParse(string? hex, out ThemeColor color)
+    {
+        color = default;
+        if (hex is null || hex.Length != 7 || hex[0] != '#') return false;
+        for (var index = 1; index < hex.Length; index++)
+            if (!((hex[index] >= '0' && hex[index] <= '9') ||
+                  (hex[index] >= 'a' && hex[index] <= 'f') ||
+                  (hex[index] >= 'A' && hex[index] <= 'F'))) return false;
+        color = new ThemeColor(
+            byte.Parse(hex.AsSpan(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture),
+            byte.Parse(hex.AsSpan(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture),
+            byte.Parse(hex.AsSpan(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+        return true;
     }
 
     /// <summary>Returns an uppercase <c>#RRGGBB</c> string for UI adapters.</summary>
