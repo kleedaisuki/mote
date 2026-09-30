@@ -49,14 +49,14 @@ internal static class NativePreviewBuilder
         ArgumentNullException.ThrowIfNull(flow);
         var spans = flow.Runs.Select(run =>
         {
-            var heading = flow.Paragraphs.FirstOrDefault(paragraph => paragraph.Kind == "heading" &&
-                run.DisplayRange.Start >= paragraph.DisplayRange.Start &&
-                run.DisplayRange.End <= paragraph.DisplayRange.End);
+            var paragraph = NativeFlowPresentation.ContainingParagraph(flow, run);
+            var heading = paragraph?.Kind == "heading";
             // The established reveal action targets a heading's marker, while
             // Flow keeps the independently precise literal origin for future actions.
-            var source = heading.Kind == "heading" ? heading.SourceRange : run.SourceRange;
+            var source = heading ? paragraph!.Value.SourceRange : run.SourceRange;
             return new NativePreviewSpan(run.DisplayRange.Start, run.DisplayRange.Length,
-                run.Role, source, (run.Style & FlowInlineStyle.Strong) != 0, run.Navigable);
+                NativeFlowPresentation.Role(run, paragraph), source,
+                heading || (run.Style & FlowInlineStyle.Strong) != 0, run.Navigable);
         }).ToArray();
         return new NativePreview(flow.Text, Array.AsReadOnly(spans), flow, flow.Truncated);
     }

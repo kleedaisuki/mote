@@ -44,9 +44,12 @@ internal static class WindowsFlowRtf
         var runColors = new int[flow.Runs.Count];
         for (var i = 0; i < flow.Runs.Count; i++)
         {
-            var role = flow.Runs[i].Role;
+            var run = flow.Runs[i];
+            var role = NativeFlowPresentation.Role(run,
+                NativeFlowPresentation.ContainingParagraph(flow, run));
             var color = role switch
             {
+                "heading" => theme.Palette.Accent,
                 "paragraph" or "text" or "table-cell" => theme.Palette.PreviewForeground,
                 "quote" => theme.Palette.MutedForeground,
                 _ => theme.SemanticColor(role)

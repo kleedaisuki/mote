@@ -76,12 +76,14 @@ internal static class MacFlowAttributes
         if (!fonts.TryGetValue((level, fontStyle), out var font))
             fonts.Add((level, fontStyle), font = Font(theme, level, fontStyle));
         Attribute(storage, "NSFont", font, range);
-        var color = run.Role switch
+        var role = NativeFlowPresentation.Role(run,
+            NativeFlowPresentation.ContainingParagraph(flow, run));
+        var color = role switch
         {
             "heading" or "list-marker" => theme?.Palette.Accent,
             "quote" or "comment" or "notice" => theme?.Palette.MutedForeground,
             "code" => theme?.Palette.Info,
-            _ => theme?.SemanticColor(run.Role)
+            _ => theme?.SemanticColor(role)
         } ?? new ThemeColor(225, 227, 231);
         if (style.HasFlag(FlowInlineStyle.Link)) color = theme?.Palette.Accent ?? color;
         if (!colors.TryGetValue(color, out var nativeColor))
