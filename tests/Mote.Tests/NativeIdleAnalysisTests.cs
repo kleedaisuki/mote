@@ -16,8 +16,10 @@ public sealed class NativeIdleAnalysisTests
         using var driver = new NativeFormatSessionDriver(policy);
         var delay = new ControlledDelay();
         var published = new TaskCompletionSource<DocumentAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var idle = new NativeIdleFullAnalysis(driver, policy.Kind,
-            (_, result, _) => published.TrySetResult(result), delay: delay.WaitAsync);
+            (_, result, _) => published.TrySetResult(result),
+            onError: (_, error) => faulted.TrySetResult(error), delay: delay.WaitAsync);
         var snapshot = document.Snapshot;
         var visible = Visible(snapshot);
         var range = new TextSpan(0, snapshot.Length);
@@ -25,7 +27,13 @@ public sealed class NativeIdleAnalysisTests
         Assert.Equal(IdleFullOffer.AlreadyPendingOrAttempted, idle.Offer(snapshot, visible, range));
         Assert.Equal(TimeSpan.FromSeconds(1), Assert.Single(delay.Requests).Duration);
         delay.Complete(0);
-        var result = await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var winner = await Task.WhenAny(published.Task, faulted.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        if (winner == faulted.Task)
+            throw new Xunit.Sdk.XunitException($"Idle Full worker failed: {await faulted.Task}");
+        Assert.True(winner == published.Task,
+            $"Expected one idle Full callback; full calls={policy.FullCalls}, " +
+            $"timer={delay.Requests[0].Task.Status}.");
+        var result = await published.Task;
         Assert.Equal(snapshot.Version, result.Version);
         Assert.Equal(AnalysisCompleteness.Complete, result.Completeness);
         Assert.Equal(0, result.TotalDiagnosticCount);
