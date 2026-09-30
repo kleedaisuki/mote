@@ -42,6 +42,35 @@ falls back to unstyled plain text if conversion changes content. Engine Undo/Red
 commands are bound to menu/accelerators; RichEdit's own undo stack is not canonical.
 Measurements and alternatives are in `docs/native-richtext-performance.md`.
 
+## Preview accessibility name
+
+The preview remains a separate **read-only** RichEdit/UIA Document; it is not a
+second editable source document. RichEdit otherwise exposes the generic UIA Name
+`RichEdit Control`, which does not distinguish the preview from the editor.
+`WindowsPreviewAccessibleName` uses the Windows
+[`IAccPropServices::SetHwndPropStr`](https://learn.microsoft.com/en-us/windows/win32/api/oleacc/nf-oleacc-iaccpropservices-sethwndpropstr)
+annotation for the preview HWND's `OBJID_CLIENT`/`CHILDID_SELF` Name property,
+setting the constant `Mote preview`. The annotation is cleared on `WM_DESTROY`;
+its failure does not prevent text editing. Neither the preview's text nor a user
+path enters its accessible Name. This follows Microsoft's
+[Win32 control-name guidance](https://learn.microsoft.com/en-us/accessibility-tools-docs/items/win32/control_name)
+without hiding or demoting the useful read-only preview.
+
+On 2026-09-30, Windows 10.0.26200.0, a strict one-file win-x64 Native AOT publish
+(`.cache/preview-name-win-x64/mote.exe`, 6,175,232 bytes, SHA-256
+`B532E5CEE1A1BB21FACFFC561479D0FA858F4D723F3DAF058CE7075165D70128`)
+was queried from a separate PowerShell UIA client in both ordinary Continuous and
+`--legacy-page` modes. The reproducible content-free probe and JSON reports are
+under `.temp/preview-name/`. Raw, Control, and Content views each contained two
+Documents. Continuous exposed one editable source `mote.source.document` named
+`Mote editor` (`ValuePattern.IsReadOnly=false`) and one preview id `102` named
+`Mote preview` (`ValuePattern.IsReadOnly=true`, `TextPattern.IsReadOnly=true`);
+legacy exposed its editable id `101` plus the same named read-only preview. The
+custom source TextPattern did not return a Boolean IsReadOnly attribute in this
+probe, so its complete editable-text contract remains a separate gate. This proves
+target-host UIA metadata for win-x64, **not** Narrator/NVDA speech, keyboard
+focus behavior, or win-arm64 ABI parity. Those are separate acceptance gates.
+
 ## Focused local probes
 
 Reproducible Windows-only probes live under repository `.temp/`:

@@ -8,6 +8,7 @@ using Mote.Native.Viewport;
 using Mote.Native.Windows.Canvas;
 using Mote.Engine;
 using Mote.Native.Accessibility;
+using Mote.Native.Windows.Accessibility;
 
 namespace Mote.Native.Windows;
 
@@ -57,6 +58,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private nint _window;
     private nint _editor;
     private nint _preview;
+    private WindowsPreviewAccessibleName? _previewAccessibleName;
     private nint _status;
     private nint _accelerators;
     private nint _editorFont;
@@ -867,6 +869,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 return 0;
             case Win32.WM_DESTROY:
                 Win32.KillTimer(window, StyleTimerId);
+                _previewAccessibleName?.Dispose();
+                _previewAccessibleName = null;
                 if (_statusBrush != 0)
                 {
                     Win32.DeleteObject(_statusBrush);
@@ -900,6 +904,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             0, 0, 100, 24, _window, (nint)StatusId, instance, 0);
         if (_editor == 0 || _preview == 0 || _status == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create native editor controls.");
+        _previewAccessibleName = WindowsPreviewAccessibleName.TryCreate(_preview);
         if (_experimentalCanvas)
         {
             Win32.ShowWindow(_editor, 0);
