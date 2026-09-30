@@ -61,6 +61,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private nint _accelerators;
     private nint _editorFont;
     private nint _uiFont;
+    private nint _statusBrush;
+    private uint? _statusBrushColor;
+    private bool _systemHighContrast;
     private string _visibleText = "";
     private RichEditOffsetMap _editorOffsets = new("");
     private RichEditOffsetMap _previewOffsets = new("");
@@ -463,8 +466,21 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             catch { Win32.DeleteObject(newEditorFont); throw; }
         }
         var canvasApplied = false;
+        var oldStatusBrush = _statusBrush;
+        var oldStatusBrushColor = _statusBrushColor;
+        nint newStatusBrush = 0;
         try
         {
+            var statusBackground = StatusColors(theme).Background;
+            if (_statusBrush == 0 || _statusBrushColor != statusBackground)
+            {
+                newStatusBrush = Win32.CreateSolidBrush(statusBackground);
+                if (newStatusBrush == 0)
+                    throw new Win32Exception(Marshal.GetLastPInvokeError(),
+                        "Status brush creation failed.");
+                _statusBrush = newStatusBrush;
+                _statusBrushColor = statusBackground;
+            }
             if (_experimentalCanvas && _canvasIsland is not null)
             {
                 _canvasIsland.SetTheme(theme);
@@ -495,6 +511,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         catch
         {
             _theme = oldTheme;
+            _statusBrush = oldStatusBrush;
+            _statusBrushColor = oldStatusBrushColor;
             if (canvasApplied)
             {
                 try { _canvasIsland?.SetTheme(oldTheme); }
@@ -504,8 +522,11 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             catch { /* Keep native callbacks fail-closed on the original error. */ }
             if (newEditorFont != 0) Win32.DeleteObject(newEditorFont);
             if (newUiFont != 0) Win32.DeleteObject(newUiFont);
+            if (newStatusBrush != 0) Win32.DeleteObject(newStatusBrush);
             throw;
         }
+        if (newStatusBrush != 0 && oldStatusBrush != 0)
+            Win32.DeleteObject(oldStatusBrush);
         if (updateFonts)
         {
             var oldEditorFont = _editorFont;
@@ -515,6 +536,79 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             if (oldEditorFont != 0) Win32.DeleteObject(oldEditorFont);
             if (oldUiFont != 0) Win32.DeleteObject(oldUiFont);
         }
+        Win32.InvalidateRect(_status, 0, true);
+        ApplyTitleChrome();
+    }
+
+    /// <summary>Uses system colors only when Windows contrast mode owns UI colors.</summary>
+    private (uint Background, uint Foreground) StatusColors(IThemePolicy theme) =>
+        _systemHighContrast
+            ? (Win32.GetSysColor(Win32.COLOR_WINDOW), Win32.GetSysColor(Win32.COLOR_WINDOWTEXT))
+            : (ColorRef(theme.Palette.PanelBackground), ColorRef(theme.Palette.MutedForeground));
+
+    /// <summary>Reuses one GDI brush across status paints and releases superseded colors.</summary>
+    private void RefreshStatusBrush()
+    {
+        var background = StatusColors(_theme).Background;
+        if (_statusBrush != 0 && _statusBrushColor == background)
+        {
+            Win32.InvalidateRect(_status, 0, true);
+            return;
+        }
+        var brush = Win32.CreateSolidBrush(background);
+        if (brush == 0) return; // Keep the previous brush if the OS cannot allocate one.
+        var old = _statusBrush;
+        _statusBrush = brush;
+        _statusBrushColor = background;
+        Win32.InvalidateRect(_status, 0, true);
+        if (old != 0) Win32.DeleteObject(old);
+    }
+
+    /// <summary>Honors the OS contrast mode without changing the configured mote policy.</summary>
+    private void RefreshSystemHighContrast()
+    {
+        var contrast = new Win32.HighContrast
+        {
+            Size = (uint)Marshal.SizeOf<Win32.HighContrast>()
+        };
+        // A failed query is treated conservatively: never force caption colors.
+        var active = !Win32.SystemParametersInfoW(Win32.SPI_GETHIGHCONTRAST,
+            contrast.Size, ref contrast, 0) ||
+            (contrast.Flags & Win32.HCF_HIGHCONTRASTON) != 0;
+        if (_systemHighContrast == active)
+        {
+            // A contrast theme can change its two system colors without toggling on/off.
+            if (active && _status != 0) RefreshStatusBrush();
+            return;
+        }
+        _systemHighContrast = active;
+        if (_status != 0) RefreshStatusBrush();
+    }
+
+    /// <summary>Uses documented Windows 11 DWM attributes; older systems retain native frames.</summary>
+    /// <remarks>
+    /// The Win32 menu bar remains OS-owned. Undocumented UXTheme menu ordinals are deliberately
+    /// excluded, so a light system menu may coexist with an explicitly dark document policy.
+    /// </remarks>
+    private void ApplyTitleChrome()
+    {
+        if (_window == 0 || !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)) return;
+        try
+        {
+            var dark = _theme.IsDark && !_systemHighContrast ? 1 : 0;
+            _ = Win32.DwmSetWindowAttribute(_window,
+                Win32.DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+            var caption = _systemHighContrast ? Win32.DWMWA_COLOR_DEFAULT :
+                (int)ColorRef(_theme.Palette.PanelBackground);
+            var foreground = _systemHighContrast ? Win32.DWMWA_COLOR_DEFAULT :
+                (int)ColorRef(_theme.Palette.ControlForeground);
+            _ = Win32.DwmSetWindowAttribute(_window, Win32.DWMWA_CAPTION_COLOR,
+                ref caption, sizeof(int));
+            _ = Win32.DwmSetWindowAttribute(_window, Win32.DWMWA_TEXT_COLOR,
+                ref foreground, sizeof(int));
+        }
+        catch (DllNotFoundException) { /* DWM is optional on older Windows. */ }
+        catch (EntryPointNotFoundException) { /* Retain the OS native title frame. */ }
     }
 
     /// <summary>Allocates a font before mutating either native text control.</summary>
@@ -648,6 +742,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <summary>Re-queries OS application appearance rather than trusting message payloads.</summary>
     private void ObserveAppearanceChange()
     {
+        RefreshSystemHighContrast();
+        ApplyTitleChrome();
         var dark = PrefersDark;
         if (_lastPrefersDark is null || _lastPrefersDark == dark)
         {
@@ -703,8 +799,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             case Win32.WM_CREATE:
                 _window = window;
                 _lastPrefersDark = PrefersDark;
+                RefreshSystemHighContrast();
                 CreateControls();
                 return 0;
+            case Win32.WM_CTLCOLORSTATIC when lParam == _status && _statusBrush != 0:
+                var (background, foreground) = StatusColors(_theme);
+                Win32.SetTextColor((nint)wParam, foreground);
+                Win32.SetBkColor((nint)wParam, background);
+                return _statusBrush;
             case WmSettingChange or WmSysColorChange or WmThemeChanged:
                 ObserveAppearanceChange();
                 return Win32.DefWindowProcW(window, message, wParam, lParam);
@@ -765,6 +867,12 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 return 0;
             case Win32.WM_DESTROY:
                 Win32.KillTimer(window, StyleTimerId);
+                if (_statusBrush != 0)
+                {
+                    Win32.DeleteObject(_statusBrush);
+                    _statusBrush = 0;
+                    _statusBrushColor = null;
+                }
                 _window = 0;
                 Win32.PostQuitMessage(0);
                 return 0;

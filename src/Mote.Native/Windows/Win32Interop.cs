@@ -37,6 +37,15 @@ internal static class Win32
     internal const int WM_CLOSE = 0x0010;
     internal const int WM_COMMAND = 0x0111;
     internal const int WM_NOTIFY = 0x004E;
+    internal const int WM_CTLCOLORSTATIC = 0x0138;
+    internal const int SPI_GETHIGHCONTRAST = 0x0042;
+    internal const int HCF_HIGHCONTRASTON = 0x00000001;
+    internal const int COLOR_WINDOW = 5;
+    internal const int COLOR_WINDOWTEXT = 8;
+    internal const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    internal const int DWMWA_CAPTION_COLOR = 35;
+    internal const int DWMWA_TEXT_COLOR = 36;
+    internal const int DWMWA_COLOR_DEFAULT = -1;
     internal const int WM_KEYDOWN = 0x0100;
     internal const uint WM_CHAR = 0x0102;
     internal const uint WM_CUT = 0x0300;
@@ -125,6 +134,15 @@ internal static class Win32
         internal int Top;
         internal int Right;
         internal int Bottom;
+    }
+
+    /// <summary>System high-contrast state used to leave native caption colors to Windows.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct HighContrast
+    {
+        internal uint Size;
+        internal uint Flags;
+        internal nint DefaultScheme;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -303,6 +321,27 @@ internal static class Win32
     internal static extern bool DestroyAcceleratorTable(nint table);
     [DllImport("user32.dll")]
     internal static extern bool InvalidateRect(nint window, nint rect, bool erase);
+    /// <summary>Reads OS contrast state without changing user preferences.</summary>
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", ExactSpelling = true,
+        SetLastError = true)]
+    internal static extern bool SystemParametersInfoW(uint action, uint parameter,
+        ref HighContrast value, uint update);
+    /// <summary>Reads a contrast-aware system COLORREF when OS colors take precedence.</summary>
+    [DllImport("user32.dll")]
+    internal static extern uint GetSysColor(int index);
+    /// <summary>Creates one cached status background brush per effective color.</summary>
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern nint CreateSolidBrush(uint color);
+    /// <summary>Applies the policy text color to the static-control paint DC.</summary>
+    [DllImport("gdi32.dll")]
+    internal static extern uint SetTextColor(nint dc, uint color);
+    /// <summary>Applies the matching opaque background to the static-control paint DC.</summary>
+    [DllImport("gdi32.dll")]
+    internal static extern uint SetBkColor(nint dc, uint color);
+    /// <summary>Sets an officially documented Windows 11 non-client frame attribute.</summary>
+    [DllImport("dwmapi.dll", ExactSpelling = true, EntryPoint = "DwmSetWindowAttribute")]
+    internal static extern int DwmSetWindowAttribute(nint window, int attribute,
+        ref int value, int size);
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool OpenClipboard(nint owner);
     [DllImport("user32.dll", SetLastError = true)]

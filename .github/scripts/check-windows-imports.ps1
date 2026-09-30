@@ -39,8 +39,9 @@ if ($imports.Count -eq 0) { throw 'No PE imports were parsed; refusing to assume
 
 # This deliberately small allowlist makes each newly linked OS API an explicit, reviewed change.
 # UIA's BSTR/SAFEARRAY interop calls the Windows OS Ole Automation library.
+# Native title-bar theming calls the documented Windows DWM system library.
 $systemDlls = @(
-    'advapi32.dll', 'bcrypt.dll', 'comdlg32.dll', 'gdi32.dll', 'kernel32.dll',
+    'advapi32.dll', 'bcrypt.dll', 'comdlg32.dll', 'dwmapi.dll', 'gdi32.dll', 'kernel32.dll',
     'ole32.dll', 'oleaut32.dll', 'shell32.dll', 'user32.dll'
 )
 $unexpected = @($imports | Where-Object {
