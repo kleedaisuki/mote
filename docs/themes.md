@@ -197,6 +197,46 @@ The immediately preceding [CI 36789139005](https://github.com/kleedaisuki/mote/a
 
 The harness waits only for a top-level title containing `theme.txt`, retrieves child ID 101, sends `EM_SETSEL(1,3)` once, and immediately asserts the returned selection. It does not record the actual returned pair, child class, source content at failure, or current native source mode. A title is not an independent content/selection-ready assertion. These missing observations prevent a supported distinction between a readiness/host-assumption problem and a product selection defect. The next useful probe should record those observations and establish the exact synthetic source/appropriate host before selecting; adding retries without that discriminator would hide rather than diagnose the failure.
 
+#### Content-free launch discriminator (pending hosted evidence)
+
+The Windows harness now records `launch_observation` after the **same single**
+`EM_SETSEL` attempt and the existing immediate text/selection readback, before
+the unchanged selection assertion. It records the actual/expected selection
+pair, child ID/class/visibility, the presence of a direct
+`MoteInteractiveCanvas` sibling, a readiness-phase label, and monotonic elapsed
+milliseconds at title readiness and selection readback. The observed host mode
+is `visible-legacy-editor`, `canvas-with-hidden-legacy-editor`, or
+`unclassified`; it is an HWND-structure observation, not an inference that
+the document is fully ready.
+
+The existing 256-unit text read contributes only a bounded UTF-16 length,
+a capacity-reached flag (255 units), and exact-equality booleans for the
+known synthetic `alpha`/`beta` fixture with LF, CRLF, or CR line endings.
+**No source string or arbitrary window caption is serialized.** A capacity-
+reached result is not a document-length measurement. These fields can distinguish
+an empty/not-yet-projected control or an inactive legacy control from a
+fully populated visible control that rejected the expected selection. They
+do not by themselves prove a readiness race or a product defect.
+
+No retry, selection routing, additional readiness wait, registry operation,
+palette assertion, or product code changed. The hosted-runner restriction and
+exact HKCU restoration remain intact. The owned workflow step has no source
+hash pin to update. A later hosted run must supply the discriminator result;
+the earlier repeated failure remains unresolved until then.
+
+Local non-mutating verification on Windows, PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File tests/Test-NativeThemeWorkflowWindowsObservability.ps1
+```
+
+Result: **PASS** for PowerShell AST parsing, compilation of the embedded C#
+native declarations, single-attempt/readback ordering and hosted-runner guard,
+and three synthetic metadata contracts (visible legacy/full CRLF sentinel,
+hidden legacy/Canvas/empty, and unclassified/capacity-reached). The test never
+starts mote, invokes the Win32 declarations, or reads/writes HKCU. It verifies
+the report contract, not the published target's live-theme behavior.
+
 Reproduction and retained evidence (repository-local):
 
 ```powershell

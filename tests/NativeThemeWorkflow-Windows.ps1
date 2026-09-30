@@ -67,6 +67,15 @@ public static class MoteThemeProbeNative {
         GetWindowText(window, text, text.Capacity);
         return text.ToString();
     }
+    /// <summary>Reads a bounded class name, never a window caption or document value.</summary>
+    public static string ClassName(IntPtr window) {
+        var name = new StringBuilder(128);
+        GetClassName(window, name, name.Capacity);
+        return name.ToString();
+    }
+    /// <summary>Detects the direct Canvas host without traversing unrelated windows.</summary>
+    public static bool HasCanvasHost(IntPtr window) =>
+        FindWindowEx(window, IntPtr.Zero, "MoteInteractiveCanvas", null) != IntPtr.Zero;
     /// <summary>Reads bounded child-control text through OS-marshaled WM_GETTEXT.</summary>
     public static string EditorText(IntPtr editor) {
         var text = new StringBuilder(256);
@@ -130,6 +139,8 @@ public static class MoteThemeProbeNative {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder text, int capacity);
     [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageText(IntPtr window, uint message, UIntPtr capacity, StringBuilder text);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr parent, int id);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string title);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", EntryPoint = "SendMessageW")] private static extern IntPtr SendMessageSelection(IntPtr window, uint message, out int start, out int end);
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out Rect rect);
@@ -236,6 +247,7 @@ $report = [ordered]@{
     registry_original_key_exists = $null; registry_original_value_exists = $null
     registry_original_kind = $null; registry_restored = $false
     source_sha256_unchanged = $false; cases = @(); error = $null
+    launch_observation = $null
     scope = 'published Win32 HWND; synthetic HKCU app preference; no IME or physical-present assertion'
     windows_build = [Environment]::OSVersion.Version.Build
 }
@@ -291,6 +303,7 @@ try {
     $registryKey.SetValue('AppsUseLightTheme', 0, [Microsoft.Win32.RegistryValueKind]::DWord)
     [void][MoteThemeProbeNative]::BroadcastAppearance()
     $report.stage = 'launch'
+    $launchTimer = [Diagnostics.Stopwatch]::StartNew()
     $process = Start-Process -FilePath $exe -ArgumentList $fixture -PassThru `
         -RedirectStandardOutput (Join-Path $scratch 'stdout.txt') `
         -RedirectStandardError (Join-Path $scratch 'stderr.txt')
@@ -302,6 +315,7 @@ try {
         return $script:window -ne [IntPtr]::Zero -and
             [MoteThemeProbeNative]::Label($script:window).Contains('theme.txt')
     } 'Published native editor did not expose its synthetic file window.'
+    $titleReadyElapsedMs = $launchTimer.ElapsedMilliseconds
     $editor = [MoteThemeProbeNative]::GetDlgItem($window, 101)
     $status = [MoteThemeProbeNative]::GetDlgItem($window, 103)
     if ($editor -eq [IntPtr]::Zero -or $status -eq [IntPtr]::Zero) {
@@ -311,6 +325,31 @@ try {
         [IntPtr]1, [IntPtr]3) # EM_SETSEL selects two synthetic source characters.
     $sourceText = [MoteThemeProbeNative]::EditorText($editor)
     $selection = [MoteThemeProbeNative]::Selection($editor)
+    $selectionReadbackElapsedMs = $launchTimer.ElapsedMilliseconds
+    # Preserve the original single selection attempt and immediate readback. Only
+    # report metadata after that read; no readiness retry or arbitrary text leaves
+    # the process. Hidden ID 101 plus a Canvas sibling discriminates host mode.
+    $editorVisible = [MoteThemeProbeNative]::IsWindowVisible($editor)
+    $canvasPresent = [MoteThemeProbeNative]::HasCanvasHost($window)
+    $report.launch_observation = [ordered]@{
+        readiness_phase = 'title-ready-controls-found-single-selection-readback'
+        title_ready_elapsed_ms = $titleReadyElapsedMs
+        selection_readback_elapsed_ms = $selectionReadbackElapsedMs
+        selection_start = $selection.Item1; selection_end = $selection.Item2
+        expected_selection_start = 1; expected_selection_end = 3
+        editor_child_id = 101; editor_child_class = [MoteThemeProbeNative]::ClassName($editor)
+        editor_child_visible = $editorVisible; direct_canvas_host_present = $canvasPresent
+        host_mode_observation = if ($canvasPresent -and -not $editorVisible) {
+            'canvas-with-hidden-legacy-editor'
+        } elseif ($editorVisible -and -not $canvasPresent) {
+            'visible-legacy-editor'
+        } else { 'unclassified' }
+        text_read_capacity_utf16_units = 256; bounded_text_utf16_units = $sourceText.Length
+        text_read_at_capacity = $sourceText.Length -eq 255
+        exact_synthetic_lf = $sourceText -ceq "alpha`nbeta`n"
+        exact_synthetic_crlf = $sourceText -ceq "alpha`r`nbeta`r`n"
+        exact_synthetic_cr = $sourceText -ceq "alpha`rbeta`r"
+    }
     if ($selection.Item1 -ne 1 -or $selection.Item2 -ne 3) { throw 'Synthetic RichEdit selection was not established.' }
 
     foreach ($case in @(
