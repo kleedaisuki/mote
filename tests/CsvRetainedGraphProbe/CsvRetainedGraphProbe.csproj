@@ -1,13 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <AssemblyName>CsvSparseBenchmark</AssemblyName>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../src/Mote.Engine/Mote.Engine.csproj" />
     <ProjectReference Include="../../src/Mote.Formats/Mote.Formats.csproj" />
   </ItemGroup>
 </Project>
