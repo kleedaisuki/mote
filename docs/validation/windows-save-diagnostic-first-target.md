@@ -528,3 +528,79 @@ normal trace drain and ordinary Save remain unverified by these helper tests.
 - `src/Mote.Native/NativeEditorController.cs`: `SaveFailureMessage`, `WarnRetainedRecovery`, `OnClosing`.
 - `src/Mote.Native/Windows/WindowsEditorShell.cs`: `ShowError`, `ConfirmDiscard`.
 - `src/Mote.Telemetry/JsonlTraceSink.cs`: buffered append and orderly final session/flush.
+
+## Fourth hosted run: independent retained-artifact audit
+
+[Run 36780934192](https://github.com/kleedaisuki/mote/actions/runs/36780934192)
+at `f76c56e787562127744158122ccc20be5e5cdd42` supplied the first complete
+positive-control and four ordinary Save traces. Independent audit command:
+
+```powershell
+python .temp/windows-save-fourth-audit/audit.py
+```
+
+The audit and machine-readable results remain in
+`.temp/windows-save-fourth-audit/`; inputs are the downloaded artifacts under
+`.cache/ci-36780934192-save/`. It reconstructs the specified 1 MiB ASCII fixture
+without invoking the driver's helpers, then compares actual retained file bytes
+(not just reported digests). Expected new bytes are exactly ASCII `X` followed
+by the original fixture. It independently parses all JSONL records, checks the
+terminal successful root `mote.session`, one session/trace identity, unique span
+IDs, resolved parent IDs, no `telemetry.dropped`, and failure-to-Save parentage.
+
+### Provenance and environment
+
+- All **491** recorded publish input digests match the pinned Git commit's blobs,
+  allowing only ordinary LF-to-CRLF Windows checkout conversion. The actual
+  retained `publish.log` digest also matches its manifest.
+- Publish and diagnostic manifests agree on commit, executable digest/size,
+  publication timestamp, SDK, runtime pack and exact isolated Native AOT command.
+  Reported executable SHA-256 is
+  `e6fa70c077d76352fecb46999c5243b67b9285379cf5b74c1c6225744dbfdafc`,
+  size **7,068,672 bytes**. **The downloaded diagnostic artifacts do not retain
+  the executable**, so this is internally consistent manifest attribution, not
+  an independently recomputed executable hash.
+- Hosted environment: Windows `10.0.26100.0`, NTFS, runner image
+  `20260922.246.2`, SDK `10.0.401`, win-x64 runtime pack `10.0.12`.
+
+| Row | Retained target bytes | Recovery bytes | Save trace | Trace records | Exit / terminal |
+| --- | --- | --- | --- | ---: | --- |
+| 0: no-Delete-share control | Exact original, 1,048,576 | Exact new, 1,048,577 | One `save.failure.replace`; failed `document.save` | 25 | Normal exit 0; complete |
+| 1 | Exact new, 1,048,577 | No recovery slot | Successful `document.save`; no Save failure | 20 | Normal exit 0; complete |
+| 2 | Exact new, 1,048,577 | No recovery slot | Successful `document.save`; no Save failure | 20 | Normal exit 0; complete |
+| 3 | Exact new, 1,048,577 | No recovery slot | Successful `document.save`; no Save failure | 20 | Normal exit 0; complete |
+| 4 | Exact new, 1,048,577 | No recovery slot | Successful `document.save`; no Save failure | 20 | Normal exit 0; complete |
+
+Original SHA-256:
+`69f4396b7a4d42b022627414f8711cc4b62292f35fbd415b34daa201fac08aea`.
+New SHA-256:
+`2d12a1cbc6df198198d7b6de8c38a3e3f3bd8ffaf3bb73025effa9026c1d75f0`.
+Row 0 has exactly the deterministic recovery slot derived from `FIXTURE.MD`;
+its bytes equal the new buffer exactly. Row 0 remains dirty after failed Save;
+ordinary rows are clean after successful Save. Each retained final trace copy
+is byte-identical to the corresponding trace-only evidence copy. No close-stage,
+child error, or forced-exit outcome is reported.
+
+### Interpretation and remaining boundaries
+
+The captured failure is now **observed**, not inferred:
+`save.failure.replace`, HResult **-2147024864 / 0x80070020** (Win32 low code 32),
+causally parented to the failed `document.save`. This is the intentional held
+no-Delete-share control; it **does not reproduce or explain** the historic
+message-derived 1175, nor exercise the documented 1176 target-missing outcome.
+The successful normal close and terminal trace close the earlier diagnostic
+teardown/zero-byte-trace gap without weakening the expected target/recovery
+bytes.
+
+The final row 0 close predicates and button inventory describe the later dirty
+buffer discard dialog (ID6); they overwrite earlier acknowledgement state.
+Therefore these artifacts establish successful overall acknowledgement/close,
+**not which ID1 or certified ID2-caption fallback branch handled each preceding
+MB_OK modal**. The branch remains supported by source/helper validation rather
+than a separately retained hosted per-modal event history.
+
+**Verdict:** all checked retained-artifact contracts pass; no material product
+defect was found. Four ordinary synthetic saves in one hosted run are not a
+reliability estimate, latency benchmark, physical durability/power-loss test,
+restart recovery/export test, or proof about arbitrary user files, filesystems,
+security software or platform variants.
