@@ -51,6 +51,17 @@ internal static class MacCsvGridAccessibilityProbe
         var table = grid.Table;
         Require(ObjC.Send(table, ObjC.Sel("accessibilityRowCount")) == 3, "local row count, not file count");
         Require(ObjC.Send(table, ObjC.Sel("accessibilityColumnCount")) == 2, "local column count");
+        var rows = ObjC.Send(table, ObjC.Sel("accessibilityRows"));
+        var legacyRows = ObjC.Send(table, ObjC.Sel("accessibilityAttributeValue:"), ObjC.String("AXRows"));
+        Require(Count(legacyRows) == Count(rows) &&
+            ObjC.Send(legacyRows, ObjC.Sel("objectAtIndex:"), 0) == ObjC.Send(rows, ObjC.Sel("objectAtIndex:"), 0),
+            "legacy AXRows and modern rows return the identical bounded wrapper");
+        var firstRow = ObjC.Send(legacyRows, ObjC.Sel("objectAtIndex:"), 0);
+        Require(Label(firstRow) == "Row 1001" &&
+            ObjC.ManagedString(ObjC.Send(firstRow, ObjC.Sel("accessibilityIdentifier"))) ==
+                $"mote.csv.window.{currentId.WindowSerial}.row.0.-1", "legacy row keeps exact absolute ordinal and window identity");
+        Require(Task.Run(() => ObjC.Send(table, ObjC.Sel("accessibilityAttributeValue:"), ObjC.String("AXRows")))
+            .GetAwaiter().GetResult() == 0, "legacy AXRows refuses off-main dispatch without reading owner state");
         var first = Cell(table, 0, 0);
         Require(first != 0 && Label(first).Contains("Row 1001, Column 17", StringComparison.Ordinal), "absolute coordinate label");
         Require(ObjC.SendRange(first, ObjC.Sel("accessibilityRowIndexRange")) == new ObjC.Range(0, 1), "local NSRange row ABI");

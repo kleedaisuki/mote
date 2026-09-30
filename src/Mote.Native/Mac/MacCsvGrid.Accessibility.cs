@@ -57,6 +57,9 @@ internal sealed unsafe partial class MacCsvGrid
     private static extern void NSAccessibilityPostNotification(nint element, nint notification);
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSendSuper")]
     private static extern byte AccessibilitySuperResponder(ref MacOnScreenCanvasNative.Super receiver, nint selector);
+    /// <summary>Legacy object-return dispatch is an experimental bridge discriminator, not a second attribute model.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSendSuper")]
+    private static extern nint AccessibilitySuperAttribute(ref MacOnScreenCanvasNative.Super receiver, nint selector, nint attribute);
 
     /// <summary>Publishes the Grid group without touching source hierarchy or input views.</summary>
     private void InitializeAccessibility()
@@ -159,6 +162,9 @@ internal sealed unsafe partial class MacCsvGrid
     private static void RegisterTableAccessibility(nint cls)
     {
         if (!AccessibilityEnabled) return;
+        // Discriminate NSTableView's legacy AXRows path without changing any other inherited attribute.
+        Add(cls, "accessibilityAttributeValue:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, nint>)&AccessibilityLegacyAttribute, "@@:@");
         foreach (var selector in new[] { "accessibilityChildren", "accessibilityRows", "accessibilityColumns",
             "accessibilityRowHeaderUIElements", "accessibilityColumnHeaderUIElements", "accessibilityVisibleRows",
             "accessibilityVisibleColumns", "accessibilityVisibleCells", "accessibilitySelectedCells",
@@ -218,6 +224,23 @@ internal sealed unsafe partial class MacCsvGrid
     /// <summary>Retired client handles have no provider entry and can never resolve to another window.</summary>
     private static AccessibilityNode? CurrentAccessibilityNode(nint self) =>
         AccessibilityNodes.TryGetValue(self, out var node) && node.Owner._accessibilityFrame?.Id == node.Id ? node : null;
+
+    /// <summary>Experimental AXRows bridge override; only live main-thread requests may inspect the installed tree.</summary>
+    /// <remarks>Other attributes retain NSTableView behavior. Do not extend this into parallel legacy provider machinery.</remarks>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static nint AccessibilityLegacyAttribute(nint self, nint selector, nint attribute)
+    {
+        try
+        {
+            if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var grid)) return 0;
+            if (ObjC.Send(attribute, ObjC.Sel("isEqualToString:"), ObjC.String("AXRows")) != 0)
+                return !grid._installing && grid._accessibilityFrame is not null
+                    ? AccessibilityArray(grid._accessibilityRows) : 0;
+            var superclass = new MacOnScreenCanvasNative.Super(self, ObjC.Class("NSTableView"));
+            return AccessibilitySuperAttribute(ref superclass, selector, attribute);
+        }
+        catch { return 0; }
+    }
 
     /// <summary>No local lookup may realize a file cell outside the installed table.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
