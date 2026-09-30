@@ -15,8 +15,8 @@ This complements, rather than duplicates, the reviewed OS-specific drivers in
 [`NativePaintLatency`](../NativePaintLatency/README.md). The next matrix and
 endpoint/CI design are in
 [`native-latency-acceptance.md`](../../docs/native-latency-acceptance.md).
-The next bounded existing-driver adapter and fresh-hosted command are documented
-in [`WindowsReadinessPilot.md`](WindowsReadinessPilot.md); target run is pending.
+The bounded existing-driver adapter and first fresh-hosted Windows x64 capability
+result are documented in [`WindowsReadinessPilot.md`](WindowsReadinessPilot.md).
 
 ## Exact corpus contract
 

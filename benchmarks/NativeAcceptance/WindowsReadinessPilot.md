@@ -1,6 +1,6 @@
 # Windows ordinary-file external JSON readiness pilot
 
-## Implemented adapter and non-gating CI pilot; hosted target run pending
+## Implemented adapter and non-gating CI pilot; one hosted capability pass
 
 The existing reviewed
 [`Measure-WindowsOrdinary.ps1`](../NativeStartup/Measure-WindowsOrdinary.ps1)
@@ -130,6 +130,31 @@ PowerShell syntax parse passed. See
 [`ExternalFixtureReview.md`](../NativeStartup/ExternalFixtureReview.md) for the
 independent safety review, original finding and frozen script hashes.
 
-No GUI run or product timings have been collected in this workspace for this
-adapter. The root owner explicitly requires a fresh published exact-checkout
-hosted diagnostic; older local executables are not a substitute.
+## First hosted target checkpoint
+
+[CI 36770328576](https://github.com/kleedaisuki/mote/actions/runs/36770328576)
+at checkout `7bc42a6a0e995a15c3dfe81cf7a198951dd52de8` completed the win-x64
+fresh-publish AOT job successfully. Its separately non-gating Python setup,
+readiness probe and report upload steps each succeeded. The downloaded artifact
+is retained locally under `.cache/ci-36770328576-readiness/`; the uploaded
+`native-readiness-win-x64` artifact contains the corpus manifest and **exactly
+one** JSONL readiness row.
+
+The row reports `status=passed`, child PID 6380, real canvas/RichEdit discovery,
+a 2,048-character bounded input island, matching pinned 20-byte source prefix,
+and native selection acknowledgment. The fixture's original, copied-after and
+input-after SHA-256 all equal
+`bae792983708d005e143e90cfcb3a2110554dd590dd299059fb0d842dc20b5dd`.
+The binary SHA-256 recorded and compared within the same hosted job is
+`55d8ad7a795040b7151ae8c3eab2dbe07d696cc8c7dbf8b9ae331c79fb7c9eb2`.
+No edit, Save or trace occurred; configuration, child open→editable and child
+draw-submission endpoints remain null/not-collected. The observer reported the
+target as foreground but did not assert native first-responder or physical key
+delivery. Its single source-bound observation was 269.2647 ms and selection
+acknowledgment 304.5401 ms from parent launch; these are **one automation-
+inclusive observation each, not p50/p95 or an input-to-paint latency result**.
+
+This establishes the adapter's narrow target capability on one published
+Windows x64 binary and one 1 MiB long-string JSON fixture. Windows ARM, macOS,
+10/100 MiB, repeated reliability, editability, whole-file JSON semantics and
+physical paint still require separate evidence.
