@@ -1,5 +1,7 @@
 # CSV retained-index budget: dense rows or sparse certified checkpoints
 
+Oversized-record follow-up: [certified field summaries](csv-oversized-projection.md) now remove the whole-giant-body warm projection replay described historically below; they are charged against the combined retained-index estimate. This is managed policy evidence, not four-RID UI acceptance.
+
 Status: **implemented and locally verified** (2026-09-30); independent production review cleared the corrected draft. Four-RID Native AOT performance/GUI acceptance remains open. This follows the implemented [two-window CSV projection](csv-sparse-projection.md) and the policy-private [semantic IR direction](semantic-ir-evolution.md). Scope is one CSV `IWindowedFormatSession`; `Document`/`TextSnapshot` remain the sole text owner. The 32 MiB figure is a target for **reachable format-index state retained by one session after a call**, not a promise about the text rope, a returned projection still held by a caller, transient allocation, or process RSS.
 
 ## The actual failure mode

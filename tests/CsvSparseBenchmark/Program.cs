@@ -15,7 +15,8 @@ using Mote.Formats;
 internal static class Program
 {
     private sealed record Sample(double Milliseconds, long Allocation, long Rss,
-        string Mode, int Segments, int Checkpoints, long EstimatedIndexBytes, long? Version, long ScannedUnits);
+        string Mode, int Segments, int Checkpoints, long EstimatedIndexBytes, long? Version, long ScannedUnits,
+        int LargeRecords, int GiantFields);
 
     /// <summary>Runs reproducible scenarios and writes invariant-culture CSV to standard output.</summary>
     private static int Main(string[] args)
@@ -25,10 +26,10 @@ internal static class Program
         var repetitions = args.Length < 2 ? 9 : int.Parse(args[1]);
         var fixture = args.Length < 3 ? "ordinary" : args[2];
         var coldRepetitions = args.Length < 4 ? Math.Min(repetitions, 3) : int.Parse(args[3]);
-        if (mib is < 3 or > 100 || repetitions is < 1 or > 100 || coldRepetitions is < 1 or > 100)
-            throw new ArgumentOutOfRangeException(nameof(args), "Use 3..100 nominal UTF-16 Mi-units and 1..100 repetitions.");
-        var source = CreateSource(mib * 1024 * 1024, fixture);
-        Console.WriteLine("fixture,nominal_utf16_mi_units,utf16_chars,text_utf16_bytes,repetitions,route,p50_ms,p95_ms,mean_alloc_bytes,max_process_rss_bytes,index_mode,segments,checkpoints,estimated_retained_index_bytes,version,mean_last_call_scanned_source_units");
+        if (mib is < 0 or > 100 || repetitions is < 1 or > 100 || coldRepetitions is < 1 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(args), "Use 0 (16 Ki-unit small file) or 1..100 nominal UTF-16 Mi-units and 1..100 repetitions.");
+        var source = CreateSource(mib == 0 ? 16 * 1024 : mib * 1024 * 1024, fixture);
+        Console.WriteLine("fixture,nominal_utf16_mi_units,utf16_chars,text_utf16_bytes,repetitions,route,p50_ms,p95_ms,mean_alloc_bytes,max_process_rss_bytes,index_mode,segments,checkpoints,estimated_retained_index_bytes,version,mean_last_call_scanned_source_units,large_records,giant_fields");
         ColdRoutes();
         WarmRoutes();
         foreach (var location in new[] { "head", "middle", "tail" }) EditRoutes(location);
@@ -62,6 +63,8 @@ internal static class Program
             Analyze(session, snapshot, AnalysisScope.Full);
             var head = Window(snapshot.Length, 0);
             var tail = Window(snapshot.Length, snapshot.Length - 80);
+            if (fixture == "quoted") AssertQuotedProjection(session, snapshot, [head, tail]);
+            if (fixture == "commas") AssertCommaProjection(session, snapshot, [head, tail]);
             Warm("legacy_one", () => session.Analyze(snapshot, [], new AnalysisRequest(head, AnalysisScope.Visible)));
             Warm("windowed_one", () => session.AnalyzeWindows(snapshot, [], [head], AnalysisScope.Visible));
             Warm("two_calls", () =>
@@ -76,6 +79,8 @@ internal static class Program
                 action();
                 var samples = new List<Sample>();
                 for (var i = 0; i < repetitions; i++) samples.Add(Measure(session, action));
+                if (fixture == "quoted") AssertQuotedProjection(session, snapshot, [head, tail]);
+                if (fixture == "commas") AssertCommaProjection(session, snapshot, [head, tail]);
                 Print(route, samples);
             }
         }
@@ -113,7 +118,7 @@ internal static class Program
                 $"{sorted[(samples.Count - 1) / 2]:F4},{sorted[(int)Math.Ceiling(samples.Count * .95) - 1]:F4}," +
                 $"{samples.Sum(sample => sample.Allocation) / samples.Count},{samples.Max(sample => sample.Rss)}," +
                 $"{last.Mode},{last.Segments},{last.Checkpoints},{last.EstimatedIndexBytes},{last.Version}," +
-                $"{samples.Sum(sample => sample.ScannedUnits) / samples.Count}");
+                $"{samples.Sum(sample => sample.ScannedUnits) / samples.Count},{last.LargeRecords},{last.GiantFields}");
         }
     }
 
@@ -126,6 +131,38 @@ internal static class Program
         var result = session.AnalyzeWindows(snapshot, [], [Window(snapshot.Length, 0)], scope);
         if (scope == AnalysisScope.Full && (result.Completeness != AnalysisCompleteness.Complete || result.TotalDiagnosticCount is null))
             throw new InvalidOperationException("Full analysis did not provide exact whole-document semantics.");
+    }
+
+    /// <summary>Checks omitted giant values remain truthful, source-anchored, and explicitly truncated.</summary>
+    /// <remarks>This oracle runs outside timing and allocation sampling; it applies only to the valid single quoted-field fixture.</remarks>
+    private static void AssertQuotedProjection(CsvIncrementalSession session, TextSnapshot snapshot, TextSpan[] windows)
+    {
+        var result = session.AnalyzeWindows(snapshot, [], windows, AnalysisScope.Visible);
+        var fullSpan = new TextSpan(0, snapshot.Length);
+        if (result.Version != snapshot.Version || result.Completeness != AnalysisCompleteness.Complete ||
+            result.TotalDiagnosticCount != 0 || result.Diagnostics.Count != 0 ||
+            result.Windows.Any(window => !window.SourceIndexed || !window.Truncated) ||
+            result.Root.Children.Count != 1 || result.Root.Children[0].Span != fullSpan ||
+            result.Root.Children[0].Children.Count != 0 ||
+            !result.Tokens.Any(token => token.Kind == "string" && token.Span == fullSpan))
+            throw new InvalidOperationException("Giant quoted projection lost exact semantics, truncation, or its source anchor.");
+    }
+
+    /// <summary>Checks distant empty-field ordinals are exact rather than phantom skipped-prefix values.</summary>
+    /// <remarks>The inclusive zero-width boundary contributes one more cell than each window's character length.</remarks>
+    private static void AssertCommaProjection(CsvIncrementalSession session, TextSnapshot snapshot, TextSpan[] windows)
+    {
+        var result = session.AnalyzeWindows(snapshot, [], windows, AnalysisScope.Visible);
+        if (result.Version != snapshot.Version || result.Completeness != AnalysisCompleteness.Complete ||
+            result.TotalDiagnosticCount != 0 || result.Diagnostics.Count != 0 ||
+            result.Windows.Any(window => !window.SourceIndexed) || result.Root.Children.Count != 1)
+            throw new InvalidOperationException("Comma projection lost exact whole-document semantics.");
+        var cells = result.Root.Children[0].Children;
+        if (cells.Count != windows.Sum(window => window.Length + 1) ||
+            cells.Any(cell => cell.Span.Length != 0 || cell.Value != "" ||
+                !windows.Any(window => cell.Span.Start >= window.Start && cell.Span.Start <= window.End)) ||
+            !cells.Any(cell => cell.Span.Start == snapshot.Length))
+            throw new InvalidOperationException("Comma projection lost exact head/tail empty-field anchors.");
     }
 
     /// <summary>Creates a bounded interval valid even when the requested origin is near EOF.</summary>
@@ -148,19 +185,20 @@ internal static class Program
         process.Refresh();
         return new Sample(elapsed, allocation, process.WorkingSet64, statistics.Mode,
             statistics.SegmentCount, statistics.CheckpointCount, statistics.EstimatedRetainedIndexBytes,
-            statistics.Version, statistics.ScannedSourceUnits);
+            statistics.Version, statistics.ScannedSourceUnits, statistics.LargeRecordCount, statistics.GiantFieldCount);
     }
 
     /// <summary>Builds exact-size UTF-16 fixtures; truncation may intentionally leave one malformed final record.</summary>
     private static string CreateSource(int length, string fixture)
     {
         if (fixture == "quoted") return "\"" + new string('a', length - 2) + "\"";
+        if (fixture == "commas") return new string(',', length);
         if (fixture == "distinct-width") return CreateDistinctWidthSource(length);
         var pattern = fixture switch
         {
             "ordinary" => "first,second,third,quoted,12345,abcdefghijklmno\r\n",
             "dense" => "a\n",
-            _ => throw new ArgumentException("Fixture must be ordinary, dense, quoted, or distinct-width.", nameof(fixture))
+            _ => throw new ArgumentException("Fixture must be ordinary, dense, quoted, distinct-width, or commas.", nameof(fixture))
         };
         var builder = new StringBuilder(length);
         while (builder.Length < length) builder.Append(pattern.AsSpan(0, Math.Min(pattern.Length, length - builder.Length)));
