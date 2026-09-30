@@ -337,11 +337,9 @@ internal static class MacCanvasThemeProbe
                 throw new InvalidOperationException("Theme raster is too small for status sampling.");
             // NSBitmapImageRep pixel coordinates start at the bitmap's top;
             // center X / penultimate bottom row avoids the status glyphs.
-            var rootPixel = ObjC.Send(bitmap, ObjC.Sel("colorAtX:y:"),
-                (nint)(width / 2), (nint)(height - 3));
-            var statusBackground = Rgb(rootPixel);
-            var rootOutsideField = Rgb(ObjC.Send(bitmap,
-                ObjC.Sel("colorAtX:y:"), (nint)(width / 2), (nint)(height - 29)));
+            var rootPixel = RawPixel(bitmap, width / 2, height - 3);
+            var statusBackground = rootPixel.Color;
+            var rootOutsideField = RawPixel(bitmap, width / 2, height - 29);
             var surface = _shell.ProbeStatusBackgroundView;
             if (surface == 0)
                 throw new InvalidOperationException("Status surface is unavailable.");
@@ -357,9 +355,8 @@ internal static class MacCanvasThemeProbe
             var surfaceHeight = checked((int)ObjC.Send(surfaceBitmap, ObjC.Sel("pixelsHigh")));
             if (surfaceWidth < 2 || surfaceHeight < 2)
                 throw new InvalidOperationException("Status surface is too small for sampling.");
-            var surfacePixel = ObjC.Send(surfaceBitmap, ObjC.Sel("colorAtX:y:"),
-                (nint)(surfaceWidth / 2), (nint)(surfaceHeight / 2));
-            var surfaceColor = Rgb(surfacePixel);
+            var surfacePixel = RawPixel(surfaceBitmap,
+                surfaceWidth / 2, surfaceHeight / 2);
             var windowPixel = ObjC.Send(_shell.ProbeWindow,
                 ObjC.Sel("backgroundColor"));
             var windowColor = Rgb(windowPixel);
@@ -375,18 +372,22 @@ internal static class MacCanvasThemeProbe
                 new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
                 throw new IOException("Theme raster is not PNG.");
             _check = $"{step}-status-background-pixel";
-            if (!ColorsMatch(statusBackground, policy.Palette.WindowBackground))
+            if (!ColorsMatch(statusBackground, policy.Palette.WindowBackground) ||
+                rootPixel.Alpha != byte.MaxValue)
                 Console.Error.WriteLine($"Mac status surface: root={statusBackground.ToHex()}/" +
-                    $"a{Alpha(rootPixel):F3};outside={rootOutsideField.ToHex()};" +
-                    $"own={surfaceColor.ToHex()}/a{Alpha(surfacePixel):F3};" +
+                    $"a{rootPixel.Alpha};outside={rootOutsideField.Color.ToHex()}/" +
+                    $"a{rootOutsideField.Alpha};" +
+                    $"own={surfacePixel.Color.ToHex()}/a{surfacePixel.Alpha};" +
                     $"window={windowColor.ToHex()}/a{Alpha(windowPixel):F3};" +
                     $"paints={_shell.ProbeStatusBackgroundPaintCount};" +
                     $"fault={_shell.ProbeStatusBackgroundPaintFault};");
             RequireColor(statusBackground, policy.Palette.WindowBackground, _check);
+            if (rootPixel.Alpha != byte.MaxValue)
+                throw new InvalidOperationException("Status background raster is not opaque.");
             _states.Add(new ThemeState(step, expectedId, _callbackCount,
                 CurrentStamp().Generation, CurrentVersion(), _selection.Anchor,
                 _selection.Active, preview.ToHex(), editor?.ToHex(), marker?.ToHex(),
-                statusBackground.ToHex(), Alpha(rootPixel), imageName,
+                statusBackground.ToHex(), rootPixel.Alpha / 255d, imageName,
                 Convert.ToHexString(SHA256.HashData(bytes))));
         }
 
@@ -415,6 +416,36 @@ internal static class MacCanvasThemeProbe
             if (color == 0) throw new InvalidOperationException("Native theme color cannot convert to sRGB.");
             return new ThemeColor(Channel(color, "redComponent"),
                 Channel(color, "greenComponent"), Channel(color, "blueComponent"));
+        }
+
+        /// <summary>
+        /// Reads stored bitmap samples without NSColor's ICC conversion. The
+        /// cached AppKit view rasters must be 8-bit packed RGB with alpha;
+        /// an unfamiliar native format fails closed instead of guessing.
+        /// </summary>
+        private static unsafe (ThemeColor Color, byte Alpha) RawPixel(nint bitmap,
+            int x, int y)
+        {
+            var bits = ObjC.Send(bitmap, ObjC.Sel("bitsPerSample"));
+            var samples = ObjC.Send(bitmap, ObjC.Sel("samplesPerPixel"));
+            var planar = ObjC.Send(bitmap, ObjC.Sel("isPlanar"));
+            var hasAlpha = ObjC.Send(bitmap, ObjC.Sel("hasAlpha"));
+            var format = (nuint)ObjC.Send(bitmap, ObjC.Sel("bitmapFormat"));
+            var colorSpace = ObjC.ManagedString(ObjC.Send(bitmap,
+                ObjC.Sel("colorSpaceName")));
+            if (bits != 8 || samples != 4 || planar != 0 || hasAlpha == 0 ||
+                (format & 4) != 0 || !colorSpace.Contains("RGB", StringComparison.Ordinal))
+                throw new InvalidOperationException("Unsupported AppKit raster sample format.");
+            nuint* channels = stackalloc nuint[4];
+            ObjC.Send(bitmap, ObjC.Sel("getPixel:atX:y:"),
+                (nint)channels, (nint)x, (nint)y);
+            var start = (format & 1) != 0 ? 1 : 0;
+            var alpha = start == 1 ? 0 : 3;
+            if (channels[start] > 255 || channels[start + 1] > 255 ||
+                channels[start + 2] > 255 || channels[alpha] > 255)
+                throw new InvalidOperationException("AppKit raster sample exceeded 8 bits.");
+            return (new ThemeColor((byte)channels[start], (byte)channels[start + 1],
+                (byte)channels[start + 2]), (byte)channels[alpha]);
         }
 
         private static byte Channel(nint color, string selector) => checked((byte)Math.Clamp(
