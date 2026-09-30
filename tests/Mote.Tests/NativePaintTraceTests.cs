@@ -140,8 +140,8 @@ public sealed class NativePaintTraceTests
         try
         {
             using var controller = Controller(temp.Path);
-            PrivateMethod("ScheduleAnalysis").Invoke(controller, [MoteTelemetry.Mark()]);
-            PrivateMethod("ScheduleAnalysis").Invoke(controller, [MoteTelemetry.Mark()]);
+            PrivateMethod("ScheduleAnalysis").Invoke(controller, [MoteTelemetry.Mark(), false]);
+            PrivateMethod("ScheduleAnalysis").Invoke(controller, [MoteTelemetry.Mark(), false]);
             controller.Dispose();
         }
         finally { await MoteTelemetry.ShutdownAsync(); }
@@ -189,7 +189,7 @@ public sealed class NativePaintTraceTests
                 .SetValue(controller, new ThrowingPolicy(false));
             var shell = typeof(NativeEditorController).GetField("_shell", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(controller)!;
-            PrivateMethod("ScheduleAnalysis").Invoke(controller, [MoteTelemetry.Mark()]);
+            PrivateMethod("ScheduleAnalysis").Invoke(controller, [MoteTelemetry.Mark(), false]);
             var pump = shell.GetType().GetMethod("Pump")!;
             var timer = Stopwatch.StartNew();
             while (timer.Elapsed < TimeSpan.FromSeconds(5))
