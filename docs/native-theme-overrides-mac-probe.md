@@ -78,5 +78,14 @@ dotnet build src/Mote.Native/Mote.Native.csproj -c Release --no-restore -warnase
 Result: **0 warnings, 0 errors**. This is compilation evidence only; AppKit was
 not executed and neither Mac RID's Native AOT publication has been validated by
 this work. Program/CLI registration and GitHub Actions invocation are owned by
-the integrating parent task, not this probe implementation. Keep the probe
-non-gating until actual published-binary macOS evidence is recorded.
+the integrating parent task, not this probe implementation. That initial
+checkpoint predates the hosted run below.
+
+The subsequent integrated [CI run 36732329913](https://github.com/kleedaisuki/mote/actions/runs/36732329913)
+passed all six strict jobs. Its non-gating published-binary probe step also
+passed on [osx-arm64](https://github.com/kleedaisuki/mote/actions/runs/36732329913/job/109944963972)
+and [osx-x64](https://github.com/kleedaisuki/mote/actions/runs/36732329913/job/109944964158),
+each emitting the exact `mote-native-mac-theme-overrides-ready` marker after
+zero exit. This supersedes the earlier target-run-pending status, but only for
+the in-memory AppKit contract listed above; no real file read, physical input,
+IME, VoiceOver or pixel timing is established by this diagnostic.

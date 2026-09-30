@@ -60,7 +60,8 @@ formatting adds an internal undo action; OS-supported suspension mitigation and 
 native undo regression are being investigated before freeze. See
 [native platform evidence](native-theme-overrides-platform.md).
 
-No macOS custom override/reload runtime or Native AOT acceptance has run yet.
+The later hosted synthetic macOS result is recorded under the final checkpoint
+below; this earlier local checkpoint was not target-platform evidence.
 
 ## Broad affected-controller run and environment limitation
 
@@ -88,5 +89,26 @@ pending redo; no clear-history workaround or weakened native assertion is used.
 
 Independent review: [reload review](reviews/native-theme-overrides-review.md).
 The in-memory Mac probe is registered as `--check-native-mac-theme-overrides` and
-passed independent safety inspection. Its actual Mac AOT run remains pending CI;
-see [Mac probe safety design](native-theme-overrides-mac-probe.md).
+passed independent safety inspection; see
+[Mac probe safety design](native-theme-overrides-mac-probe.md).
+
+## Hosted integration and independent file-backed validation (2026-09-30)
+
+[CI run 36732329913](https://github.com/kleedaisuki/mote/actions/runs/36732329913)
+at `5dc0fcf` passed all six strict jobs: Windows/macOS solution tests and
+single-binary Native AOT on win-x64, win-arm64, osx-x64 and osx-arm64. The
+separately non-gating published-binary Mac theme reload diagnostic succeeded
+with exit zero and the exact `mote-native-mac-theme-overrides-ready` marker on
+both [osx-arm64](https://github.com/kleedaisuki/mote/actions/runs/36732329913/job/109944963972)
+and [osx-x64](https://github.com/kleedaisuki/mote/actions/runs/36732329913/job/109944964158).
+This is actual target-architecture AppKit assertion evidence for its synthetic
+in-memory source/settings, not a real config file, physical keyboard, live IME,
+VoiceOver, screen pixels or timing acceptance.
+
+An independent [file-backed Windows validation](validation/native-theme-file-workflow.md)
+used a real TOML file under repository `.temp`, production loader/controller,
+hidden RichEdit/status HWNDs and native reload/Undo routes. Focused Release
+warn-as-error testing passed 1/1: same-ID color changes, half-written or
+unreadable config retention, recovery, next-launch writer-path notice and
+unchanged source/version/selection/Undo. Reflection replaced the window launch
+and message-loop delivery, so this is not a published Native AOT GUI workflow.
