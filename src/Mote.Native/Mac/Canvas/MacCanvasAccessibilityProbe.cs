@@ -111,6 +111,40 @@ internal static class MacCanvasAccessibilityProbe
         return found;
     }
 
+    /// <summary>
+    /// Finds exactly one separately labeled, read-only preview in AppKit's
+    /// accessibility children without using its rendered document text.
+    /// </summary>
+    private static void CheckPreviewElement(nint window, nint source, nint preview)
+    {
+        if (preview == 0 || preview == source ||
+            ObjC.Send(preview, ObjC.Sel("isEditable")) != 0 ||
+            ObjC.ManagedString(ObjC.Send(preview, ObjC.Sel("accessibilityRole"))) != "AXTextArea" ||
+            ObjC.ManagedString(ObjC.Send(preview, ObjC.Sel("accessibilityLabel"))) != "Mote preview")
+            throw new InvalidOperationException("Preview AX role, label, or read-only state is wrong.");
+        var queue = new Queue<nint>();
+        var seen = new HashSet<nint>();
+        queue.Enqueue(window);
+        var matches = 0;
+        var previewNodes = 0;
+        while (queue.Count > 0 && seen.Count < 512)
+        {
+            var node = queue.Dequeue();
+            if (node == 0 || !seen.Add(node)) continue;
+            if (node == preview) ++previewNodes;
+            if (Responds(node, "accessibilityRole") &&
+                ObjC.ManagedString(ObjC.Send(node, ObjC.Sel("accessibilityRole"))) == "AXTextArea" &&
+                Responds(node, "accessibilityLabel") &&
+                ObjC.ManagedString(ObjC.Send(node, ObjC.Sel("accessibilityLabel"))) == "Mote preview")
+                ++matches;
+            if (Responds(node, "accessibilityChildren"))
+                foreach (var child in Items(ObjC.Send(node, ObjC.Sel("accessibilityChildren"))))
+                    queue.Enqueue(child);
+        }
+        if (queue.Count != 0 || matches != 1 || previewNodes != 1)
+            throw new InvalidOperationException("Preview AX child is absent, duplicated, or tree traversal was truncated.");
+    }
+
     private sealed class Workflow
     {
         private readonly MacEditorShell _shell;
@@ -180,6 +214,10 @@ internal static class MacCanvasAccessibilityProbe
                         _shell.ProbeCanvasAccessibilityAttached:
                         _element = FindSourceElement(_shell.ProbeWindow);
                         CheckSourceSelectors();
+                        CheckPreviewElement(_shell.ProbeWindow, _element,
+                            _shell.ProbePreviewView);
+                        _metrics.Add("preview_ax_role=AXTextArea preview_label=Mote preview " +
+                            "preview_read_only=True source_label=Mote editor distinct=True");
                         if (!_shell.ProbeCanvasInputEditable ||
                             !_shell.ProbeCanvasInputFocused ||
                             _shell.ProbeCanvasInputAccessible)

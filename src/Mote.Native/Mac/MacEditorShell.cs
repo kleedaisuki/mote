@@ -1098,6 +1098,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         }
         else editorScroll = CreateScrollView(new ObjC.Rect(0, 0, 730, 730), true, out _editor);
         var previewScroll = CreateScrollView(new ObjC.Rect(730, 0, 390, 730), false, out _preview);
+        // A constant label distinguishes rendered output from the source AX
+        // editor without exposing document contents or changing focus/input.
+        ObjC.Send(_preview, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("Mote preview"));
         ObjC.Send(split, ObjC.Sel("addSubview:"), editorScroll);
         ObjC.Send(split, ObjC.Sel("addSubview:"), previewScroll);
         ObjC.Send(split, ObjC.Sel("adjustSubviews"));

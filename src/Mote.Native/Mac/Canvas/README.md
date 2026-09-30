@@ -143,6 +143,17 @@ The ribbon caret uses its own TextKit/NSClipView geometry and is deliberately
 source-backed text area with a parent-space frame equal to the body rectangle,
 excluding the input ribbon; the focused `NSTextView` remains usable for OS
 input. This is API-level accessibility, not VoiceOver acceptance.
+The standard read-only preview remains AppKit's own `NSTextView` AX text area,
+separate from the custom source-backed `Mote editor` element. The shell sets a
+constant `Mote preview` accessibility label on the preview view; the label
+does not derive from the rendered document or create another source owner.
+Apple's [NSAccessibility label contract](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/accessibilitylabel%28%29)
+describes a short element description, while the standard
+[text-area role](https://developer.apple.com/documentation/appkit/nsaccessibility-swift.struct/role/textarea)
+still identifies the kind of control. The in-process AppKit tree probe checks
+role, label, read-only state, and source/preview distinction. It cannot prove
+what VoiceOver speaks or whether an external AX client sees the same metadata;
+those remain separate target-host checks.
 
 ### Current target-host verdict
 
