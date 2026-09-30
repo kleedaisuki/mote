@@ -241,14 +241,14 @@ try {
     $report.registry_original_kind = if ($valueExisted) { $originalKind.ToString() } else { $null }
 
     $report.stage = 'fixtures'
-    $home = Join-Path $scratch 'home'
-    New-Item -ItemType Directory -Force -Path $home | Out-Null
-    [IO.File]::WriteAllText((Join-Path $home 'config.toml'),
+    $moteHome = Join-Path $scratch 'home'
+    New-Item -ItemType Directory -Force -Path $moteHome | Out-Null
+    [IO.File]::WriteAllText((Join-Path $moteHome 'config.toml'),
         "[appearance]`ntheme = 'system'`n", [Text.UTF8Encoding]::new($false))
     $fixture = Join-Path $scratch 'theme.txt'
     [IO.File]::WriteAllText($fixture, "alpha`nbeta`n", [Text.UTF8Encoding]::new($false))
     $sourceHash = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash
-    [Environment]::SetEnvironmentVariable('MOTE_HOME', $home)
+    [Environment]::SetEnvironmentVariable('MOTE_HOME', $moteHome)
 
     $registryTouched = $true
     $registryKey.SetValue('AppsUseLightTheme', 0, [Microsoft.Win32.RegistryValueKind]::DWord)

@@ -144,6 +144,14 @@ internal static class MacCanvasThemeProbe
                         $"analysis-ready={AnalysisReady()};" +
                         $"heading={CurrentSource().Contains(Heading, StringComparison.Ordinal)};" +
                         $"body={CurrentSource().Contains(Body, StringComparison.Ordinal)};");
+                else if (_stage == 1)
+                    Console.Error.WriteLine("Mac theme dark readiness: " +
+                        $"prefers-dark={_shell.PrefersDark};" +
+                        $"policy-dark={_shell.ProbeThemeId == ThemePolicies.DarkId};" +
+                        $"analysis-ready={AnalysisReady()};" +
+                        $"stamp={CurrentStampNullable() is not null};" +
+                        $"analysis={_shell.ProbeAnalysis is not null};" +
+                        $"heading-spans={_shell.ProbeAnalysis?.PreviewSpans?.Count(static span => span.Kind == "heading") ?? 0};");
                 Fail("deadline");
                 return;
             }
@@ -283,6 +291,8 @@ internal static class MacCanvasThemeProbe
                 _check = $"{step}-editor-read";
                 editor = NativeColor(_shell.ProbeEditorView, token.Span.Start);
                 _check = $"{step}-editor-color";
+                if (!ColorsMatch(editor.Value, policy.SemanticColor("heading")))
+                    LogHeadingSamples(token.Span.Start, token.Span.Length);
                 RequireColor(editor.Value, policy.SemanticColor("heading"), _check);
             }
             _check = $"{step}-raster";
@@ -339,13 +349,39 @@ internal static class MacCanvasThemeProbe
         private static void RequireColor(ThemeColor actual, ThemeColor expected,
             string check)
         {
-            if (Math.Abs(actual.Red - expected.Red) > 1 ||
-                Math.Abs(actual.Green - expected.Green) > 1 ||
-                Math.Abs(actual.Blue - expected.Blue) > 1)
+            if (!ColorsMatch(actual, expected))
             {
                 Console.Error.WriteLine($"Mac theme color {check}: " +
                     $"actual={actual.ToHex()} expected={expected.ToHex()}.");
                 throw new InvalidOperationException("Native attributed foreground mismatches policy.");
+            }
+        }
+
+        private static bool ColorsMatch(ThemeColor actual, ThemeColor expected) =>
+            Math.Abs(actual.Red - expected.Red) <= 1 &&
+            Math.Abs(actual.Green - expected.Green) <= 1 &&
+            Math.Abs(actual.Blue - expected.Blue) <= 1;
+
+        private void LogHeadingSamples(int start, int length)
+        {
+            Console.Error.WriteLine($"Mac theme heading span: start={start};length={length};");
+            if (length <= 0) return;
+            foreach (var (name, offset) in new[]
+            {
+                ("start", start),
+                ("middle", start + length / 2),
+                ("end", start + length - 1)
+            })
+            {
+                try
+                {
+                    var color = NativeColor(_shell.ProbeEditorView, offset);
+                    Console.Error.WriteLine($"Mac theme heading {name}-rgb={color.ToHex()};");
+                }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                {
+                    Console.Error.WriteLine($"Mac theme heading {name}-error={error.GetType().Name};");
+                }
             }
         }
 
