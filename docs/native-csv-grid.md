@@ -148,11 +148,37 @@ These results establish hidden-table/controller publisher/readback semantics,
 Grid AX/UIA/VoiceOver/Narrator, real IME, clipboard contention/failure recovery,
 physical paint, Universal Clipboard behavior on a personal Mac or latency.
 
+### Logical navigation implementation checkpoint (2026-10-01)
+
+Commit `a604ae9` installs independent logical row/column scroll controls rather
+than treating retained native rows as the complete file. Certified extent is
+explicitly unavailable, prefix or exact; fully-visible page geometry and bounded
+ordinal slots preserve gaps without inventing source authority. Navigation
+uses document/epoch/gesture identity, and ready source commands retain their
+separate presentation identity. The shared dispatcher reserves mandatory content
+and Full work while coalescing viewport traffic; the 8 ms mailbox interval is a
+scheduling choice, not a measured response guarantee
+([implementation and scheduling evidence](csv-grid-logical-scrollbar-implementation.md)).
+
+The local affected Release warnings-as-errors run passed **184/184**, including
+**16/16 Windows real hidden-HWND** cases and **11/11 portable Mac interop**
+cases ([Windows evidence](validation/windows-grid-logical-scrollbars.md),
+[Mac portable scope](validation/mac-grid-logical-scroller.md)). Commit `b7ab02a`
+wires the separately reviewed native AppKit scroller probe, but its published
+macOS x64/ARM64 target results remain **pending**
+([probe acceptance boundary](validation/native-mac-grid-scroller-probe.md)).
+This supersedes the bounded-native-scrollbar-only implementation limit, not
+external UIA/AX range/focus, desktop thumb/trackpad behavior, overlay pixel/hit-area
+acceptance or end-to-end large-file performance. No clipboard/reader/IME claim
+is inferred from portable arithmetic or hidden-control tests.
+
 ### Remaining release gates / deliberate truthful limits
 
-- Native scrollbars describe the **bounded installed window**, not the complete
-  file. Keyboard, wheel/scrollbar edge rebasing, Go to row/column and Follow source
-  are implemented; an accessible full logical-file scrollbar is not delivered.
+- Logical row/column scroll controls are now implemented at the checkpoint
+  above; retained native rows remain bounded. Published Mac AppKit scroller
+  runtime acceptance is pending, and external UIA/AX values/focus, real desktop
+  dragging/trackpad behavior and visible overlay hit-area remain unverified.
+  Implementation is not a full accessible logical-navigation release pass.
 - Cross-window/offscreen rectangular Copy is refused until its exact selected
   data is available; no padded or clipped clipboard success is invented. Mac
   nonoverlapping window navigation starts at its first ready row rather than
