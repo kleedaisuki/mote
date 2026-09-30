@@ -27,6 +27,18 @@ internal static class WindowsGridInterop
     internal static extern bool DestroyMenu(nint menu);
     [DllImport("user32.dll")]
     internal static extern bool GetScrollInfo(nint window, int bar, ref Scroll info);
+    /// <summary>Returns the resulting position; zero is not a failure indication.</summary>
+    [DllImport("user32.dll")]
+    internal static extern int SetScrollInfo(nint window, int bar, ref Scroll info, bool redraw);
+    /// <summary>Suppresses cache-local scrollbars.</summary>
+    [DllImport("user32.dll")]
+    internal static extern bool ShowScrollBar(nint window, int bar, bool show);
+    /// <summary>Disables unavailable coordinate domains.</summary>
+    [DllImport("user32.dll")]
+    internal static extern bool EnableWindow(nint window, bool enabled);
+    /// <summary>Retrieves platform scrollbar geometry.</summary>
+    [DllImport("user32.dll")]
+    internal static extern int GetSystemMetrics(int index);
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Controls { internal uint Size, Classes; }

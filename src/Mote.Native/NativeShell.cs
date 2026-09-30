@@ -68,7 +68,8 @@ internal sealed record NativeAnalysisView(
     long PresentationSequence = 0,
     FlowRenderProjection? Flow = null,
     bool ShowPreview = true,
-    GridRenderProjection? Grid = null)
+    GridRenderProjection? Grid = null,
+    NativeGridScrollFrame? GridNavigation = null)
 {
     /// <summary>Identity of this immutable text, style and source-map bundle.</summary>
     public NativePresentationId Identity => new(Stamp, PresentationSequence);
@@ -125,6 +126,12 @@ internal interface INativeEditorShell
     event Action<NativeGridIntent>? GridIntentRequested { add { } remove { } }
     /// <summary>Raises bounded logical table interests; callbacks never parse source.</summary>
     event Action<NativeGridWindowRequest>? GridWindowRequested { add { } remove { } }
+    /// <summary>Admits a fresh immutable gesture before any coordinate phase is dispatched.</summary>
+    event Func<NativeGridGestureBegin, NativeGridGesture?>? GridGestureBeginning { add { } remove { } }
+    /// <summary>Raises captured token phases; navigation never authorizes Copy or Reveal.</summary>
+    event Action<NativeGridGestureAction>? GridGestureRequested { add { } remove { } }
+    /// <summary>Retires coordinate gestures when native clipped geometry changes.</summary>
+    event Action<int, int>? GridGeometryChanged { add { } remove { } }
     /// <summary>Raised by the New command.</summary>
     event Action? NewRequested;
     /// <summary>Raised by the Open command.</summary>
@@ -176,6 +183,8 @@ internal interface INativeEditorShell
     void CancelSourceDrawTrace() { }
     /// <summary>Updates semantic decoration without altering text or selection.</summary>
     void SetAnalysis(NativeAnalysisView view);
+    /// <summary>Installs bounded pending navigation without relabeling old ready cells.</summary>
+    void SetGridNavigation(NativeGridScrollFrame? frame) { }
     /// <summary>
     /// Applies one policy to all platform controls before returning; it must
     /// never silently defer a subset. Throws NativeThemeDeferredException

@@ -10,7 +10,9 @@ internal enum IdleFullOffer
     AlreadyPendingOrAttempted,
     Complete,
     PolicyLimited,
-    MemoryLimited
+    MemoryLimited,
+    Deferred,
+    Failed
 }
 
 /// <summary>
@@ -20,7 +22,7 @@ internal enum IdleFullOffer
 /// <remarks>
 /// This scheduler belongs to one document and its format driver. The driver
 /// serializes policy calls; the controller must cancel this lane before an edit
-/// or viewport interaction and must validate document identity and version on
+/// or document replacement, not same-version CSV viewport interaction and must validate document identity and version on
 /// the UI thread before publishing the callback result. A Full request is only
 /// a request: its returned completeness remains the policy's claim.
 /// </remarks>
@@ -32,6 +34,9 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
     private readonly object _gate = new();
     private readonly NativeFormatSessionDriver _driver;
     private readonly DocumentKind _kind;
+    private readonly NativeAnalysisDispatcher? _dispatcher;
+    private IdleFullOffer? _outcome;
+    private long? _outcomeVersion;
     private readonly Action<TextSnapshot, DocumentAnalysis, TextSpan> _publish;
     private readonly Action<TextSnapshot, NativeFormatPresentation, TextSpan>? _publishPresentation;
     private readonly Action<TextSnapshot, Exception>? _onError;
@@ -50,12 +55,14 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
         Action<TextSnapshot, DocumentAnalysis, TextSpan> publish,
         Action<TextSnapshot, Exception>? onError = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
-        Action<TextSnapshot, NativeFormatPresentation, TextSpan>? publishPresentation = null)
+        Action<TextSnapshot, NativeFormatPresentation, TextSpan>? publishPresentation = null,
+        NativeAnalysisDispatcher? dispatcher = null)
     {
         _driver = driver ?? throw new ArgumentNullException(nameof(driver));
         if (driver.Kind != kind)
             throw new ArgumentException("The idle lane and format driver must use the same policy.", nameof(kind));
         _kind = kind;
+        _dispatcher = dispatcher;
         _publish = publish ?? throw new ArgumentNullException(nameof(publish));
         _publishPresentation = publishPresentation;
         _onError = onError;
@@ -85,9 +92,12 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
             {
                 CancelPending();
                 _attemptedVersion = snapshot.Version;
+                SetOutcome(snapshot.Version, IdleFullOffer.Complete);
                 return IdleFullOffer.Complete;
             }
             if (!CanRun()) return IdleFullOffer.PolicyLimited;
+            if (_outcomeVersion == snapshot.Version && _outcome is IdleFullOffer.Deferred or IdleFullOffer.Failed)
+                return _outcome.Value;
             if (_attemptedVersion == snapshot.Version)
                 return IdleFullOffer.AlreadyPendingOrAttempted;
             if (_pending is { } current)
@@ -105,6 +115,59 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
             _ = RunAsync(pending, visibleRange);
             return IdleFullOffer.Scheduled;
         }
+    }
+
+    /// <summary>
+    /// Demands the same admitted Full attempt immediately. Retry explicitly clears
+    /// a terminal refusal/failure; navigation alone cannot restart it.
+    /// </summary>
+    public IdleFullOffer Demand(TextSnapshot snapshot, TextSpan visibleRange, bool retry = false)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (visibleRange.Start < 0 || visibleRange.Start > snapshot.Length ||
+            visibleRange.Length < 0 || visibleRange.Length > snapshot.Length - visibleRange.Start)
+            throw new ArgumentOutOfRangeException(nameof(visibleRange));
+        lock (_gate)
+        {
+            if (_disposed) return IdleFullOffer.AlreadyPendingOrAttempted;
+            if (_outcomeVersion == snapshot.Version && _outcome is { } outcome)
+            {
+                if (!retry || outcome == IdleFullOffer.Complete || outcome == IdleFullOffer.AlreadyPendingOrAttempted)
+                    return outcome;
+                CancelPending();
+                _attemptedVersion = null;
+                _outcome = null;
+            }
+            if (_pending is { } current && current.Snapshot.Version == snapshot.Version)
+            {
+                current.ReservedTask ??= _dispatcher?.ReserveFullAsync(snapshot, visibleRange, current.Cancellation.Token);
+                current.Promotion.TrySetResult();
+                return IdleFullOffer.Scheduled;
+            }
+            if (_attemptedVersion == snapshot.Version) return IdleFullOffer.AlreadyPendingOrAttempted;
+            if (!CanRun()) return IdleFullOffer.PolicyLimited;
+            CancelPending();
+            var memory = GC.GetGCMemoryInfo();
+            if (!HasMemoryBudget(_kind, snapshot.Length, memory.TotalAvailableMemoryBytes,
+                memory.HighMemoryLoadThresholdBytes, memory.MemoryLoadBytes, snapshot.LineCount))
+            {
+                SetOutcome(snapshot.Version, IdleFullOffer.Deferred);
+                return IdleFullOffer.Deferred;
+            }
+            var pending = new Pending(snapshot);
+            pending.ReservedTask = _dispatcher?.ReserveFullAsync(snapshot, visibleRange, pending.Cancellation.Token);
+            pending.Promotion.TrySetResult();
+            _pending = pending;
+            _ = RunAsync(pending, visibleRange);
+            return IdleFullOffer.Scheduled;
+        }
+    }
+
+    /// <summary>Stores one terminal outcome for the version, under the scheduler gate.</summary>
+    private void SetOutcome(long version, IdleFullOffer outcome)
+    {
+        _outcomeVersion = version;
+        _outcome = outcome;
     }
 
     /// <summary>
@@ -192,8 +255,12 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
     {
         try
         {
-            await _delay(DelayFor(pending.Snapshot.Length), pending.Cancellation.Token)
-                .ConfigureAwait(false);
+            if (!pending.Promotion.Task.IsCompleted)
+            {
+                var timer = _delay(DelayFor(pending.Snapshot.Length), pending.TimerCancellation.Token);
+                var winner = await Task.WhenAny(timer, pending.Promotion.Task).ConfigureAwait(false);
+                if (winner == timer) await timer.ConfigureAwait(false);
+            }
             lock (_gate)
             {
                 pending.Cancellation.Token.ThrowIfCancellationRequested();
@@ -202,7 +269,10 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
                 _attemptedVersion = pending.Snapshot.Version;
             }
             var request = new AnalysisRequest(visibleRange, AnalysisScope.Full);
-            var presentation = _publishPresentation is null ? null :
+            var presentation = _dispatcher is not null ?
+                await (pending.ReservedTask ?? _dispatcher.ReserveFullAsync(pending.Snapshot, visibleRange,
+                    pending.Cancellation.Token)).ConfigureAwait(false) :
+                _publishPresentation is null ? null :
                 await _driver.AnalyzePresentationAsync(pending.Snapshot, request,
                     pending.Cancellation.Token).ConfigureAwait(false);
             var result = presentation?.Analysis ??
@@ -212,15 +282,29 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
             lock (_gate)
             {
                 if (_disposed || !ReferenceEquals(_pending, pending)) return;
+                SetOutcome(pending.Snapshot.Version, result.Completeness == AnalysisCompleteness.Complete
+                    ? IdleFullOffer.Complete : IdleFullOffer.AlreadyPendingOrAttempted);
             }
-            if (presentation is not null)
-                _publishPresentation!(pending.Snapshot, presentation, visibleRange);
+            if (presentation is not null && _publishPresentation is not null)
+                _publishPresentation(pending.Snapshot, presentation, visibleRange);
             else _publish(pending.Snapshot, result, visibleRange);
         }
-        catch (OperationCanceledException) when (pending.Cancellation.IsCancellationRequested) { }
+        catch (OperationCanceledException)
+        {
+            lock (_gate)
+                if (ReferenceEquals(_pending, pending)) _attemptedVersion = null;
+        }
         catch (ObjectDisposedException) when (pending.Cancellation.IsCancellationRequested) { }
+        catch (NativeFullAnalysisDeferredException exception)
+        {
+            lock (_gate)
+                if (ReferenceEquals(_pending, pending)) SetOutcome(pending.Snapshot.Version, IdleFullOffer.Deferred);
+            _onError?.Invoke(pending.Snapshot, exception);
+        }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
+            lock (_gate)
+                if (ReferenceEquals(_pending, pending)) SetOutcome(pending.Snapshot.Version, IdleFullOffer.Failed);
             _onError?.Invoke(pending.Snapshot, exception);
         }
         finally
@@ -236,6 +320,8 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
                 try { await cancellation.ConfigureAwait(false); }
                 catch (AggregateException) { }
             }
+            await pending.TimerCancellation.CancelAsync().ConfigureAwait(false);
+            pending.TimerCancellation.Dispose();
             pending.Cancellation.Dispose();
         }
     }
@@ -248,7 +334,9 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
         _pending = null;
         if (pending.Started && _attemptedVersion == pending.Snapshot.Version)
             _attemptedVersion = null;
+        if (_outcomeVersion == pending.Snapshot.Version) _outcome = null;
         pending.CancellationTask = pending.Cancellation.CancelAsync();
+        _ = pending.TimerCancellation.CancelAsync();
     }
 
     /// <summary>One timer or parser request and its cancellation ownership.</summary>
@@ -260,6 +348,12 @@ internal sealed class NativeIdleFullAnalysis : IDisposable
         public CancellationTokenSource Cancellation { get; } = new();
         /// <summary>Whether the driver's Full call has been attempted.</summary>
         public bool Started { get; set; }
+        /// <summary>Demand reserves service synchronously, before the timer continuation can resume.</summary>
+        public Task<NativeFormatPresentation>? ReservedTask { get; set; }
+        /// <summary>Demand signal wakes an existing quiet timer.</summary>
+        public TaskCompletionSource Promotion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>Separate cancellation lifetime for an abandoned quiet delay.</summary>
+        public CancellationTokenSource TimerCancellation { get; } = new();
         /// <summary>Completion of asynchronous cancellation callbacks, when requested.</summary>
         public Task? CancellationTask { get; set; }
     }

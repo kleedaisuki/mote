@@ -138,6 +138,9 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         shell.PreviewActivated += PreviewActivated;
         shell.GridIntentRequested += GridIntentRequested;
         shell.GridWindowRequested += GridWindowRequested;
+        shell.GridGestureBeginning += BeginGridGesture;
+        shell.GridGestureRequested += GridGestureRequested;
+        shell.GridGeometryChanged += GridGeometryChanged;
         shell.NewRequested += New;
         shell.OpenRequested += Open;
         shell.SaveRequested += Save;
@@ -177,6 +180,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     {
         if (_disposed) return;
         _disposed = true;
+        RetireGridNavigation();
         CancelGridCopy();
         _shell.CancelSourceDrawTrace();
         FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
@@ -191,9 +195,13 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _shell.PreviewActivated -= PreviewActivated;
         _shell.GridIntentRequested -= GridIntentRequested;
         _shell.GridWindowRequested -= GridWindowRequested;
+        _shell.GridGestureBeginning -= BeginGridGesture;
+        _shell.GridGestureRequested -= GridGestureRequested;
+        _shell.GridGeometryChanged -= GridGeometryChanged;
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
         _idleFullAnalysis?.Dispose();
+        _analysisDispatcher?.Dispose();
         _visibleSessionAnalysis = null;
         _document.ChangedRange -= DocumentChanged;
         _sessionDriver?.Dispose();
@@ -1475,13 +1483,13 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         return offset;
     }
 
-    private void ScheduleAnalysis(TelemetryMark editMark = default)
+    private void ScheduleAnalysis(TelemetryMark editMark = default, bool gridViewport = false)
     {
-        var hadPreview = _presentedPreview is not null;
+        var hadPreview = _presentedPreview is not null || _policy.Kind == DocumentKind.Csv && _gridFrame is not null;
         CancelAnalysis();
         _presentationMark = editMark;
         _presentationDimensions = Dimensions(_document.Snapshot);
-        _idleFullAnalysis?.Cancel();
+        if (_policy.Kind != DocumentKind.Csv) _idleFullAnalysis?.Cancel();
         _visibleSessionAnalysis = null;
         var cancellation = new CancellationTokenSource();
         _analysisCancellation = cancellation;
@@ -1503,7 +1511,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         if (_sessionDriver is { } driver)
         {
             ScheduleSessionAnalysis(driver, document, snapshot, policy,
-                pageStart, pageLength, cancellation, serial, editMark);
+                pageStart, pageLength, cancellation, serial, editMark, gridViewport);
             return;
         }
         var full = snapshot.Length <= FullAnalysisLimit;
@@ -1576,12 +1584,27 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     private void ScheduleSessionAnalysis(NativeFormatSessionDriver driver,
         Document document, TextSnapshot snapshot, IDocumentPolicy policy,
         int pageStart, int pageLength, CancellationTokenSource cancellation,
-        long serial, TelemetryMark editMark)
+        long serial, TelemetryMark editMark, bool gridViewport)
     {
         var scope = snapshot.Length <= FullAnalysisLimit ? AnalysisScope.Full : AnalysisScope.Visible;
         var request = new AnalysisRequest(new Mote.Formats.TextSpan(pageStart, pageLength), scope);
         var gridRequest = policy.Kind == DocumentKind.Csv && PreviewVisible()
             ? CreateGridRequest(snapshot, request) : null;
+        var csv = policy.Kind == DocumentKind.Csv;
+        var content = csv && _csvContentVersion != snapshot.Version;
+        if (content)
+        {
+            _csvContentVersion = snapshot.Version;
+            _csvContentCancellation?.Cancel();
+            _csvContentCancellation?.Dispose();
+            _csvContentCancellation = new CancellationTokenSource();
+        }
+        var workToken = content ? _csvContentCancellation!.Token : cancellation.Token;
+        var dispatcher = _analysisDispatcher;
+        // Register mandatory content before returning to native dispatch. A
+        // demand Full must not overtake an edit merely because Task.Run started later.
+        var csvTurn = csv && dispatcher is not null ? dispatcher.AnalyzeAsync(snapshot, request,
+            workToken, gridRequest, content, content ? 80 : 0) : null;
         _ = Task.Run(async () =>
         {
             try
@@ -1595,9 +1618,16 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                     > 8 * 1024 * 1024 => 200,
                     _ => 80
                 } : 80;
-                await Task.Delay(delay, cancellation.Token).ConfigureAwait(false);
-                var presentation = await AnalyzeSessionTraced(driver, snapshot, request,
-                    cancellation.Token, editMark, gridRequest).ConfigureAwait(false);
+                NativeFormatPresentation presentation;
+                if (csvTurn is not null)
+                    presentation = await AnalyzeSessionTraced(driver, snapshot, request,
+                        workToken, editMark, gridRequest, csvTurn).ConfigureAwait(false);
+                else
+                {
+                    await Task.Delay(delay, cancellation.Token).ConfigureAwait(false);
+                    presentation = await AnalyzeSessionTraced(driver, snapshot, request,
+                        cancellation.Token, editMark, gridRequest).ConfigureAwait(false);
+                }
                 var result = presentation.Analysis;
                 cancellation.Token.ThrowIfCancellationRequested();
                 PostAnalysis(serial, () =>
@@ -1617,11 +1647,14 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                         _projection!);
                     var diagnostics = SessionDiagnosticSummary(result, pageStart, pageLength);
                     var preview = presentation.Preview;
+                    if (presentation.Grid is { } targetGrid && ResolveGridTarget(targetGrid)) return;
+                    _gridPending = false;
                     _visibleSessionAnalysis = new NativeAnalysisView(tokens, diagnostics,
                         preview.Text, $"{policy.DisplayName} · {result.Completeness} · v{result.Version}",
                         new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans,
                         Flow: preview.Flow, Grid: presentation.Grid);
                     PresentAnalysis(_visibleSessionAnalysis);
+                    if (serial != _analysisSerial || cancellation.IsCancellationRequested) return;
                     _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
                         result.Completeness, result.Coverage,
                         VisibleSourceTokens(result.Tokens, pageStart, pageLength),
@@ -1660,6 +1693,11 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                         ReferenceEquals(driver, _sessionDriver))
                     {
                         FinishEditPresentation(TelemetryStatus.Failure);
+                        if (csv && _gridFrame is not null)
+                        {
+                            GridDeliveryFailed();
+                            return;
+                        }
                         PresentAnalysis(new NativeAnalysisView([], "Analysis failed.", "",
                             $"{policy.DisplayName}: {ex.Message}",
                             new NativeDocumentStamp(_canvasGeneration, snapshot.Version)));
@@ -1688,12 +1726,12 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     /// <summary>Measures the serialized format turn, including its bounded render projection.</summary>
     private static async Task<NativeFormatPresentation> AnalyzeSessionTraced(NativeFormatSessionDriver driver,
         TextSnapshot snapshot, AnalysisRequest request, CancellationToken token, TelemetryMark mark,
-        CsvGridRequest? gridRequest = null)
+        CsvGridRequest? gridRequest = null, Task<NativeFormatPresentation>? admitted = null)
     {
         using var parse = MoteTelemetry.StartChild(TelemetryOperation.AnalysisParse, mark, Dimensions(snapshot));
         try
         {
-            var result = await driver.AnalyzePresentationAsync(snapshot, request, token, gridRequest).ConfigureAwait(false);
+            var result = await (admitted ?? driver.AnalyzePresentationAsync(snapshot, request, token, gridRequest)).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             MoteTelemetry.RecordElapsed(TelemetryOperation.EditToAnalysis, MoteTelemetry.Fork(mark), Dimensions(snapshot));
             return result;
@@ -1710,6 +1748,11 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         catch
         {
             if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Failure);
+            if (serial == _analysisSerial && _policy.Kind == DocumentKind.Csv && _gridFrame is not null)
+            {
+                GridDeliveryFailed();
+                return;
+            }
             throw;
         }
     });
@@ -1765,7 +1808,10 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     private NativeIdleFullAnalysis? CreateIdleFullAnalysis(NativeFormatSessionDriver? driver,
         Document document, IDocumentPolicy policy)
     {
+        _analysisDispatcher?.Dispose();
+        _analysisDispatcher = null;
         if (driver is null) return null;
+        _analysisDispatcher = policy.Kind == DocumentKind.Csv ? new NativeAnalysisDispatcher(driver) : null;
         return new NativeIdleFullAnalysis(driver, policy.Kind,
             (_, _, _) => { },
             (snapshot, error) => Post(() =>
@@ -1776,6 +1822,13 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 {
                     MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded,
                         dimensions: Dimensions(snapshot), status: TelemetryStatus.Failure);
+                    if (policy.Kind == DocumentKind.Csv)
+                    {
+                        SetGridIndexNotice(error is NativeFullAnalysisDeferredException
+                            ? "CSV Full indexing deferred by memory pressure; Retry indexing explicitly."
+                            : "CSV Full indexing failed; Retry indexing explicitly; source unchanged.");
+                        return;
+                    }
                     if (_visibleSessionAnalysis is { } visible)
                         PresentAnalysis(visible with
                         {
@@ -1785,7 +1838,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 }
             }), publishPresentation: (snapshot, presentation, visibleRange) => Post(() =>
                 PublishIdleFullAnalysis(driver, document, policy, snapshot,
-                    presentation.Analysis, visibleRange, presentation.Preview)));
+                    presentation.Analysis, visibleRange, presentation.Preview)), dispatcher: _analysisDispatcher);
     }
 
     /// <summary>
@@ -1800,13 +1853,16 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         if (_disposed || !ReferenceEquals(driver, _sessionDriver) ||
             !ReferenceEquals(document, _document) || !ReferenceEquals(policy, _policy) ||
             snapshot.Version != _document.Snapshot.Version || result.Version != snapshot.Version ||
-            visibleRange.Start != _pageStart || visibleRange.Length != _pageLength)
+            policy.Kind != DocumentKind.Csv &&
+                (visibleRange.Start != _pageStart || visibleRange.Length != _pageLength))
         {
             MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded);
             return;
         }
         if (result.Completeness != AnalysisCompleteness.Complete)
         {
+            if (policy.Kind == DocumentKind.Csv)
+                SetGridIndexNotice($"CSV Full pass {result.Completeness}; file totals remain unknown; Retry indexing explicitly.");
             // The Full request did run, but the policy could not certify the
             // entire file. Keep visible facts and make the finite result clear.
             if (_visibleSessionAnalysis is { } visible)
@@ -1820,9 +1876,10 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
         if (policy.Kind == DocumentKind.Csv && PreviewVisible())
         {
+            _gridIndexNotice = null;
             // Idle indexing has committed the same session's coordinate facts.
             // Query the latest bounded interest rather than replacing Grid with Flow.
-            ScheduleAnalysis();
+            ScheduleAnalysis(gridViewport: true);
             return;
         }
 
@@ -1930,7 +1987,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         return $"{errors} errors · {warnings} warnings · {first.Code}: {first.Message}";
     }
 
-    private void CancelAnalysis()
+    private void CancelAnalysis(bool preservePreview = false)
     {
         FinishEditPresentation(TelemetryStatus.Cancelled);
         _analysisCancellation?.Cancel();
@@ -1938,7 +1995,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _analysisCancellation = null;
         // A still-painted old preview may remain visible until the next result,
         // but it must not navigate after its source map has been invalidated.
-        _presentedPreview = null;
+        if (!preservePreview) _presentedPreview = null;
     }
 
     /// <summary>Arms drawing only for an accepted engine revision, before native installation can draw it.</summary>
@@ -1983,12 +2040,24 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             ShowPreview = PreviewVisible() };
         var previous = _presentedPreview;
         _presentedPreview = view;
+        if (view.ShowPreview && view.Grid is { } grid)
+        {
+            _gridFrame = MakeGridFrame(view.Identity, grid);
+            view = view with { GridNavigation = _gridFrame };
+            _presentedPreview = view;
+        }
         try { _shell.SetAnalysis(view); }
         catch
         {
             // Reentrant layout callbacks may already have published another map.
             if (ReferenceEquals(_presentedPreview, view)) _presentedPreview = previous;
             throw;
+        }
+        if (ReferenceEquals(_presentedPreview, view) && view.GridNavigation is { Ready: not null } frame)
+        {
+            _gridDeliveredFrame = frame;
+            _gridDeliveredView = view;
+            _gridDeliveredAnchor = _gridAnchor;
         }
     }
 

@@ -188,6 +188,20 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public event Action<NativeGridIntent>? GridIntentRequested;
     /// <inheritdoc />
+    public event Func<NativeGridGestureBegin, NativeGridGesture?>? GridGestureBeginning;
+    /// <inheritdoc />
+    public event Action<NativeGridGestureAction>? GridGestureRequested;
+    /// <inheritdoc />
+    public event Action<int, int>? GridGeometryChanged;
+    /// <inheritdoc />
+    public void SetGridNavigation(NativeGridScrollFrame? frame)
+    {
+        if (frame is not null) EnsureGrid();
+        _grid?.SetNavigation(frame);
+        if (frame is not null && _grid?.HasNavigation(frame) == true)
+            UpdateStatus(frame.Status + (_analysis?.DiagnosticsSummary is { Length: > 0 } diagnostics ? "  " + diagnostics : ""));
+    }
+    /// <inheritdoc />
     public event Action<NativeGridWindowRequest>? GridWindowRequested;
 
     /// <inheritdoc />
@@ -511,12 +525,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         // Layout may synchronously publish a newer analysis through Canvas resize.
         // Never overwrite that nested install with this superseded presentation.
         if (!ReferenceEquals(_analysis, view)) return;
-        if (view.ShowPreview && view.Grid is not null) EnsureGrid();
+        if (view.ShowPreview && (view.Grid is not null || view.GridNavigation is not null)) EnsureGrid();
         if (!ReferenceEquals(_analysis, view)) return;
         _grid?.Install(view.ShowPreview ? view.Grid : null, view.Identity);
         if (!ReferenceEquals(_analysis, view)) return;
-        var showGrid = view.ShowPreview && view.Grid is not null;
-        if (_grid is not null) Win32.ShowWindow(_grid.Handle, showGrid ? 5 : 0);
+        _grid?.SetNavigation(view.ShowPreview ? view.GridNavigation : null);
+        if (!ReferenceEquals(_analysis, view)) return;
+        var showGrid = view.ShowPreview && (view.Grid is not null || view.GridNavigation is not null);
+        if (_grid is not null) _grid.Show(showGrid);
         // ShowWindow synchronously dispatches WM_SHOWWINDOW. A nested publish
         // owns both visibility and content; an older outer call must stop here.
         if (!ReferenceEquals(_analysis, view)) return;
@@ -524,8 +540,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (!ReferenceEquals(_analysis, view)) return;
         if (!showGrid) InstallPreview(view);
         if (!ReferenceEquals(_analysis, view)) return;
-        UpdateStatus(view.Status.Length == 0 ? view.DiagnosticsSummary :
-            view.Status + "  " + view.DiagnosticsSummary);
+        var status = view.Status.Length == 0 ? view.DiagnosticsSummary : view.Status + "  " + view.DiagnosticsSummary;
+        if (view.ShowPreview && view.GridNavigation is { Status.Length: > 0 } navigation)
+            status += "  " + navigation.Status;
+        UpdateStatus(status);
     }
 
     /// <inheritdoc />
@@ -912,6 +930,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 }
                 HandleCommand((int)(wParam & 0xFFFF));
                 return 0;
+            case 0x0114 or 0x0115:
+                if (_grid?.HandleScroll(message, wParam, lParam) == true) return 0;
+                return Win32.DefWindowProcW(window, message, wParam, lParam);
             case Win32.WM_NOTIFY:
                 if (_grid?.HandleNotify(lParam, out var gridResult) == true) return gridResult;
                 if (_editor != 0 && lParam != 0 && !_settingText && !_settingSelection)
@@ -1047,6 +1068,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         _grid = new WindowsCsvGrid(_window, 104, _theme);
         _grid.IntentRequested += intent => GridIntentRequested?.Invoke(intent);
         _grid.WindowRequested += request => GridWindowRequested?.Invoke(request);
+        _grid.GestureBeginning += begin => GridGestureBeginning?.Invoke(begin);
+        _grid.GestureRequested += action => GridGestureRequested?.Invoke(action);
+        _grid.GeometryChanged += (rows, columns) => GridGeometryChanged?.Invoke(rows, columns);
         _grid.Faulted += error => ReportCallbackFailure("CSV table", error);
         if (_uiFont != 0) Win32.SendMessageW(_grid.Handle, Win32.WM_SETFONT, (nuint)_uiFont, 1);
         ResizeControls();
@@ -1063,8 +1087,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         if (_experimentalCanvas) _canvasIsland?.Resize(editorWidth, bodyHeight);
         else Win32.MoveWindow(_editor, 0, 0, editorWidth, bodyHeight, true);
         Win32.MoveWindow(_preview, editorWidth, 0, width - editorWidth, bodyHeight, true);
-        if (_grid is not null) Win32.MoveWindow(_grid.Handle, editorWidth, 0,
-            width - editorWidth, bodyHeight, true);
+        if (_grid is not null) _grid.Resize(editorWidth, 0, width - editorWidth, bodyHeight);
         Win32.MoveWindow(_status, 4, bodyHeight, Math.Max(0, width - 8), statusHeight, true);
     }
 

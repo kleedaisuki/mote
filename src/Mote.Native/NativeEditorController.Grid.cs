@@ -24,6 +24,7 @@ internal sealed partial class NativeEditorController
     /// <summary>Forgets coordinates after edits/format/lifetime changes rather than shifting quote-sensitive rows.</summary>
     private void ResetGridInterest()
     {
+        RetireGridNavigation();
         CancelGridCopy();
         _gridAnchor = null;
         _gridColumns = new GridRange(0, 16);
@@ -39,7 +40,7 @@ internal sealed partial class NativeEditorController
     /// <summary>Rejects stale document and same-version native geometry before any source/clipboard action.</summary>
     private GridRenderProjection? CurrentGrid(NativePresentationId identity)
     {
-        if (_disposed || _shell.IsTextComposing || _canvasShell?.IsCanvasComposing == true ||
+        if (_disposed || _gridPending || _shell.IsTextComposing || _canvasShell?.IsCanvasComposing == true ||
             _presentedPreview is not { ShowPreview: true, Grid: { } grid } view ||
             view.Identity != identity || identity.Document != new NativeDocumentStamp(
                 _canvasGeneration, _document.Snapshot.Version)) return null;
@@ -63,7 +64,7 @@ internal sealed partial class NativeEditorController
         // invalidating previously queued actions even at the same source version.
         if (_presentedPreview is { } old)
             PresentAnalysis(old with { Status = old.Status + " · requested Grid window pending" });
-        ScheduleAnalysis();
+        ScheduleAnalysis(gridViewport: true);
     }
 
     /// <summary>Dispatches explicit table actions; ordinary selection neither changes nor focuses source.</summary>

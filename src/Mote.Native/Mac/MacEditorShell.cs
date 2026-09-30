@@ -124,6 +124,19 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public event Action<NativeGridIntent>? GridIntentRequested;
     /// <inheritdoc />
     public event Action<NativeGridWindowRequest>? GridWindowRequested;
+    /// <summary>Admits immutable Grid gesture tokens before native tracking begins.</summary>
+    public event Func<NativeGridGestureBegin, NativeGridGesture?>? GridGestureBeginning;
+    /// <summary>Dispatches only the token captured at native gesture admission.</summary>
+    public event Action<NativeGridGestureAction>? GridGestureRequested;
+    /// <summary>Raises deduplicated measured pages after native pane or column resize.</summary>
+    public event Action<int, int>? GridGeometryChanged;
+
+    /// <summary>Shows bounded pending coordinates without retaining ready command authority.</summary>
+    public void SetGridNavigation(NativeGridScrollFrame? frame)
+    {
+        if (frame is not null) SwitchGrid(true);
+        _csvGrid?.SetNavigation(frame);
+    }
     /// <inheritdoc />
     public string? PromptGridReplacement(string value) =>
         MacGridReplacement.Prompt(value);
@@ -1336,6 +1349,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         _appliedPreviewIdentity = null;
         _deferredAnalysisText = null;
         _csvGrid?.Clear(preserveGridSelection);
+        _csvGrid?.SetNavigation(null);
         _previewText = string.Empty;
         if (_preview != 0)
             ObjC.Send(_preview, ObjC.Sel("setString:"), ObjC.String(string.Empty));
@@ -1372,7 +1386,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             !AnalysisMatchesCurrentDocument(view)) return;
         if (view.Grid is { } grid)
         {
-            _csvGrid!.Install(grid, view.Identity);
+            _csvGrid!.Install(grid, view.Identity, view.GridNavigation);
             return;
         }
         if (view.Flow is { } flow)
@@ -1493,7 +1507,10 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         if (_split == 0 || show == _gridShown) return;
         _csvGrid ??= new MacCsvGrid(
             intent => GridIntentRequested?.Invoke(intent),
-            request => GridWindowRequested?.Invoke(request));
+            request => GridWindowRequested?.Invoke(request),
+            begin => GridGestureBeginning?.Invoke(begin),
+            action => GridGestureRequested?.Invoke(action),
+            (rows, columns) => GridGeometryChanged?.Invoke(rows, columns));
         if (_theme is not null) _csvGrid.SetTheme(_theme);
         var old = ActivePreviewPane;
         var frame = MacOnScreenCanvasNative.GetRect(old, ObjC.Sel("frame"));
