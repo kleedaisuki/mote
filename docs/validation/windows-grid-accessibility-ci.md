@@ -1,7 +1,7 @@
 # Hosted Windows CSV Grid accessibility subset diagnostic
 
-Date: 2026-10-01. Status: workflow integration prepared; **no hosted result is
-claimed by this document**. This is a non-gating diagnostic, not a release gate.
+Date: 2026-10-01. Status: first hosted attempt rejected project pin before client
+execution; corrected exact line-ending pins await hosted validation. This is a non-gating diagnostic, not a release gate.
 
 ## Contract and provenance
 
@@ -16,7 +16,22 @@ project contract. Client build/restore output stays in
 Reviewed source pins:
 
 - `Program.cs`: `1AF72C383BB49ADD171AD8E6DADA7EE2BD012506262D5FBC292DA06B4453F6C7`.
-- `WindowsGridExternalProbe.csproj`: `5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2`.
+- `WindowsGridExternalProbe.csproj`, exact LF encoding: `5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2`.
+- The same project, exact CRLF encoding: `6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4`.
+
+The two project pins admit only these two reviewed raw byte streams through
+ordinal hash equality. They do not normalize arbitrary input or accept changed
+content. The Program.cs source pin is unchanged. Local deterministic conversion
+from the reviewed LF bytes to CRLF reproduces the second hash exactly; a
+changed-byte negative case is not accepted.
+
+Hosted run `36782853022` at commit `6fada3e2f880d2d564cf597b6ac9ded849d81a19`
+recorded the expected Program.cs SHA and the CRLF project SHA in
+`.cache/ci-36782853022-grid-windows/inventory.json`. The old LF-only pin rejected
+that checkout before build/client execution (`process_exit_code: null`,
+`timed_out: false`); **this run provides no Grid UIA execution result**. Git's
+checkout line-ending conversion explains the exact verified byte difference,
+not a source-content change. The narrow two-pin fix remains fail-closed.
 
 `inventory.json` records the commit/run ID, exact published binary SHA256,
 source/project SHA256, timeout and actual client exit status. `report.json`

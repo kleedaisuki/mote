@@ -575,10 +575,13 @@ jobs:
           }
           $probe = $null
           try {
+            # Accept only the exact reviewed LF/CRLF project encodings, not arbitrary normalization.
             if (-not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
                 '1AF72C383BB49ADD171AD8E6DADA7EE2BD012506262D5FBC292DA06B4453F6C7') -or
+                (-not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
+                '5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2') -and
                 -not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
-                '5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2')) {
+                '6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4'))) {
               throw 'Windows Grid external probe differs from reviewed bytes.'
             }
             $artifacts = Join-Path $directory 'build'

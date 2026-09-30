@@ -4,7 +4,7 @@ Date: 2026-10-01. Scope: only the uncommitted Windows Grid external diagnostic a
 
 ## Final verdict
 
-No remaining substantive integration issue was found after the targeted artifact-upload fix. This verdict covers workflow integration only, not live accessibility acceptance. Reviewed final workflow SHA256: `907B2046A796D112F4B943C1B71125D43398FB206E41DB0EAA9ED3E7EAB0F038`.
+No remaining substantive integration issue was found after the targeted artifact-upload fix. This verdict covers workflow integration only, not live accessibility acceptance. Reviewed final workflow SHA256 after the exact checkout-encoding correction: `75C722AA32A1B12508C99D78D4E79C6C890C1DEF5991BDDD8BBAD99FC9E427FA`.
 
 ## Resolved necessary correction
 
@@ -30,3 +30,11 @@ Disposition: the upload now has `continue-on-error: true` at `.github/workflows/
 ## Limits
 
 No live UIA/editor launch, full build, hosted run, external focus acceptance, timing benchmark or artifact-service outage was performed by this review. Existing client implementation was inspected only to assess the integration's safety, report aggregation and scope; it was not redesigned or changed. Production source and workflow were not modified by this reviewer.
+
+## Hosted checkout pin correction review
+
+Hosted run [36782853022](https://github.com/kleedaisuki/mote/actions/runs/36782853022), commit `6fada3e2f880d2d564cf597b6ac9ded849d81a19`, failed the old LF-only project pin before build/client execution. Independently inspected downloaded `.cache/ci-36782853022-grid-windows/inventory.json` and the hosted log: Program.cs matches the existing pin; project hash is `6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4`; `process_exit_code` is null and `timed_out` false. The log explicitly reports the reviewed-bytes exception before build. No Grid UIA success can be inferred from this run.
+
+The narrow correction accepts only the two explicit project hashes using ordinal equality and correct `not LF AND not CRLF` rejection logic; the Program.cs condition remains unchanged. Independently derived exact LF and CRLF byte streams from the reviewed local project: LF reproduces `5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2`; replacing each LF with CRLF reproduces the hosted hash exactly. No production or project content was changed. The workflow itself performs no newline normalization and therefore does not admit arbitrary mixed endings or modified source.
+
+Evaluated the exact rejection predicate: both reviewed project hashes are accepted, while the changed-content project `<UseWPF>false` hash `8E14CECD7FB44BC2613B7F66BCBC60429152FD9B9BAE447C1C8E55567FCCE174` is rejected. Binary provenance, exit/classification checks, source pin, timeouts and non-gating upload remain intact. No remaining substantive issue was found in this narrow correction. A new hosted execution is still required; this review does not relabel the earlier rejection as a UIA pass.
