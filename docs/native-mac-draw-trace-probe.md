@@ -113,5 +113,24 @@ The Continuous binding is corrected to satisfy the existing single-line contract
 Neither production hook nor completion guards changed. Independent safety
 re-review and target re-execution are required; no Mac success is claimed yet.
 
+## Corrected hosted target result
+
+[CI run 36754713708](https://github.com/kleedaisuki/mote/actions/runs/36754713708)
+at `dea61e5` completed all seven strict jobs successfully. On both
+`osx-arm64` and `osx-x64`, each of the separate Legacy and Continuous
+published-Native-AOT diagnostic processes exited zero and printed its exact
+`mote-native-mac-draw-trace-ready` mode marker. Root independently inspected
+both job logs and downloaded all four JSONL artifacts beneath repository
+`.cache/ci-36754713708-mac-draw-{arm,x64}/`. Each process emitted exactly five
+records with one successful version-1 `edit_to_draw_submission`, a cancelled
+version-0 draw, the corresponding causal parents and terminal session. This
+closes the initial **probe** failure for these four synthetic target invocations.
+
+These are source draw callback-return observations, not physically displayed
+pixels, natural user input, a latency distribution, or proof that the earlier
+Legacy ARM timing race cannot recur under a different load. The CI steps remain
+non-gating: their logs, exact markers and artifacts—not the green parent icon—
+are the acceptance evidence for this narrow run.
+
 See [end-to-end tracing](end-to-end-tracing.md) for production endpoint,
 cancellation, content privacy and interpretation contracts.
