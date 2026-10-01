@@ -8,6 +8,95 @@ namespace Mote.Tests;
 [Collection("Telemetry")]
 public sealed class TelemetryRequestTests
 {
+    /// <summary>Unavailable provider evidence cannot hide or redirect the original filesystem code.</summary>
+    [Fact]
+    public async Task Explicit_failure_with_rejecting_data_records_unknown_primary_code()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        try
+        {
+            var request = MoteTelemetry.BeginRequest(TelemetryOperation.CommandSave)!;
+            MoteTelemetry.RecordSaveFailure(new RejectingFailureData(), request.Mark);
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var rows = Read(temp.Path);
+        var failure = Assert.Single(rows, r => Op(r) == "save.failure.unknown");
+        Assert.Equal(-2147024864, failure.GetProperty("attributes").GetProperty("hresult").GetInt32());
+        Assert.DoesNotContain("SECRET", string.Join('\n', rows.Select(r => r.GetRawText())));
+    }
+
+    /// <summary>Models a provider that refuses optional exception evidence reads.</summary>
+    private sealed class RejectingFailureData() : IOException("SECRET-message", unchecked((int)0x80070020))
+    {
+        /// <inheritdoc />
+        public override System.Collections.IDictionary Data => throw new System.Security.SecurityException("SECRET-evidence");
+    }
+
+    /// <summary>Compatibility failures remain explicit children and expose no arbitrary exception data.</summary>
+    [Theory]
+    [InlineData("Replace", "save.failure.replace")]
+    [InlineData("SECRET-untrusted", "save.failure.unknown")]
+    public async Task Explicit_failure_preserves_legacy_schema_and_parent(string phase, string operation)
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        try
+        {
+            var request = MoteTelemetry.BeginRequest(TelemetryOperation.CommandSave)!;
+            var parent = request.BeginPhase(TelemetryOperation.Save);
+            var error = new IOException("SECRET-message", unchecked((int)0x80070020));
+            error.Data["Mote.Engine.SavePhase"] = phase;
+            error.Data["SECRET-path"] = "SECRET-data";
+            MoteTelemetry.RecordSaveFailure(error, parent, new TelemetryDimensions(Version: 7));
+            MoteTelemetry.RecordSaveFailure(new InvalidOperationException("SECRET-non-filesystem"), parent);
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var rows = Read(temp.Path);
+        var failure = Assert.Single(rows, r => Op(r).StartsWith("save.failure.", StringComparison.Ordinal));
+        Assert.Equal(operation, Op(failure));
+        Assert.Equal(Span(rows.Single(r => Op(r) == "document.save.entered")), Parent(failure));
+        Assert.Equal("failure", failure.GetProperty("status").GetString());
+        Assert.Equal(-2147024864, failure.GetProperty("attributes").GetProperty("hresult").GetInt32());
+        Assert.Equal(7, failure.GetProperty("attributes").GetProperty("version").GetInt64());
+        Assert.DoesNotContain("SECRET", string.Join('\n', rows.Select(r => r.GetRawText())));
+    }
+
+    /// <summary>Legacy failure compatibility cannot borrow the replacement session's identity.</summary>
+    [Fact]
+    public async Task Explicit_failure_rejects_reconfigured_session_and_counts_original_sink()
+    {
+        using var old = new RepoTemp();
+        using var fresh = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = old.Path });
+        var request = MoteTelemetry.BeginRequest(TelemetryOperation.CommandSave)!;
+        var parent = request.BeginPhase(TelemetryOperation.Save);
+        var sink = parent.Sink!;
+        await MoteTelemetry.ShutdownAsync();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = fresh.Path });
+        try
+        {
+            var before = sink.Health.DroppedRecords;
+            MoteTelemetry.RecordSaveFailure(new IOException("SECRET"), parent);
+            Assert.Equal(before + 1, sink.Health.DroppedRecords);
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        Assert.DoesNotContain(Read(fresh.Path), r => Op(r).StartsWith("save.failure.", StringComparison.Ordinal));
+        Assert.DoesNotContain(Read(old.Path), r => Op(r).StartsWith("save.failure.", StringComparison.Ordinal));
+    }
+
+    /// <summary>Disabled compatibility calls inspect no evidence and allocate no telemetry objects.</summary>
+    [Fact]
+    public async Task Disabled_explicit_failure_allocates_nothing()
+    {
+        await MoteTelemetry.ShutdownAsync();
+        var error = new IOException("not serialized");
+        for (var i = 0; i < 100; i++) MoteTelemetry.RecordSaveFailure(error, default);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10_000; i++) MoteTelemetry.RecordSaveFailure(error, default);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
     /// <summary>Disabled explicit instrumentation allocates no request, mark payload or checkpoint.</summary>
     [Fact]
     public async Task Disabled_request_and_checkpoints_allocate_nothing()

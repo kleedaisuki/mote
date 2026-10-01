@@ -5,6 +5,33 @@ namespace Mote.Telemetry;
 public static partial class MoteTelemetry
 {
     /// <summary>
+    /// Preserves the schema-1 filesystem failure event under an explicit original
+    /// Save parent. Stale parents are rejected by their original sink, never
+    /// redirected to a newer session. Only the fixed phase, numeric HResult and
+    /// caller-supplied content-free dimensions are recorded; disabled parents do
+    /// not allocate or inspect exception evidence.
+    /// </summary>
+    public static void RecordSaveFailure(Exception error, TelemetryMark parent,
+        TelemetryDimensions dimensions = default)
+    {
+        if (error is not (IOException or UnauthorizedAccessException) ||
+            !TryAcquireOriginal(parent, out var sink)) return;
+        try
+        {
+            string? phase = null;
+            try { phase = error.Data["Mote.Engine.SavePhase"] as string; }
+            catch (Exception evidenceError) when (evidenceError is not OutOfMemoryException)
+            {
+                // Optional provider evidence must not hide the primary filesystem failure.
+            }
+            sink!.TryRecord(new TraceRecord(DateTimeOffset.UtcNow, parent.TraceId,
+                ActivitySpanId.CreateRandom(), parent.SpanId, SaveFailureName(phase),
+                0, TelemetryStatus.Failure, dimensions, error.HResult));
+        }
+        finally { sink!.ReleaseProducer(); }
+    }
+
+    /// <summary>
     /// Starts an explicit native request and immediately records receipt. Returns
     /// null without allocating when tracing is disabled. No ambient Activity or
     /// producer lease survives this call; the caller owns the request lifetime.

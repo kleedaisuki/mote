@@ -93,6 +93,8 @@ internal sealed partial class NativeEditorController
             error = ex;
             status = TelemetryStatus.Failure;
             reason = TelemetryReason.SaveFailed;
+            MoteTelemetry.RecordSaveFailure(ex, saveMark,
+                new TelemetryDimensions(Version: observer?.SnapshotVersion));
         }
         finally
         {

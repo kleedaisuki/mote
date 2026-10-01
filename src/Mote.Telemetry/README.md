@@ -82,6 +82,12 @@ fixed `save.failure.<phase>` operation and the original signed numeric
 `save.failure.unknown`; exception messages, paths, and other `Exception.Data`
 values are never serialized. This is diagnostic evidence, not an automatic
 retry or a claim that a localized error message identifies the Win32 cause.
+The original `RecordSaveFailure(Exception)` public signature is preserved. Native
+Save uses its explicit-parent overload to retain the schema-1 failure event
+alongside the typed Engine phase, with the actual captured snapshot version when
+available. Its parent belongs to the original Save session: reconfiguration
+rejects and counts the event against that sink rather than falling back into the
+new session. Successful Saves do not emit a legacy failure event.
 At normal process exit call `await MoteTelemetry.ShutdownAsync()` after closing
 controller-owned delayed intervals. Shutdown closes new producer admission,
 allows already admitted scopes to enqueue their final records, then drains the
