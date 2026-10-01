@@ -71,4 +71,3 @@ outcomes and ordinary native Save evidence, rather than trusting a green job.
 The five-minute publish/experiment budget may produce incomplete diagnostics
 on an unusually slow runner; that is surfaced as missing or failed evidence,
 not a release-gate relaxation.
-
