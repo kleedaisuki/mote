@@ -51,10 +51,8 @@ and Redo each advance the version, explaining the required captured versions
   `Process.ExitCode` remains independently required.
 - Windows supports retrieving process CPU after exit when its handle remains
   available; the driver uses that supported lifetime and handles unavailable
-  accounting conservatively. See [Microsoft Process.TotalProcessorTime]
-  (https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.totalprocessortime?view=net-10.0)
-  and [PowerShell native preference behavior]
-  (https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_preference_variables?view=powershell-7.5).
+  accounting conservatively. See [Microsoft Process.TotalProcessorTime](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.totalprocessortime?view=net-10.0)
+  and [PowerShell native preference behavior](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_preference_variables?view=powershell-7.5).
 - The rank interval implementation correctly chooses the largest admissible
   symmetric rank, with coverage
   `1 - 2 * sum(comb(n, j), j=0..k-1) / 2**n`. At n=20 this gives ranks 6/15 and
@@ -63,8 +61,7 @@ and Redo each advance the version, explaining the required captured versions
   ABBA ordering nor a fixed host proves those assumptions. Documentation makes
   this limitation explicit rather than implying an unconditional hosted-fleet
   confidence statement. The motivation to report variation and uncertainty
-  agrees with [Kalibera and Jones, ISMM 2013]
-  (https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf).
+  agrees with [Kalibera and Jones, ISMM 2013](https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf).
 - Existing bounded unsettled-control warm-up remains inside each original
   driver attempt. It is not an added excluded qualification run or replacement
   sample. The endpoint remains software screen-DC capture, not photons,
