@@ -5,6 +5,9 @@ Scope: the original external `AXUIElementPerformAction(..., AXShowMenu)` reply,
 not downstream coordinate navigation, VoiceOver, physical input or release
 acceptance. Implementation of the opt-in observation/cleanup seams below must
 be agreed with the integration owner before editing them.
+The [independent design review](../reviews/mac-grid-showmenu-discriminator-review.md)
+is incorporated below: exclude action warmup and keep the first pair's server
+observation lean. The seven-control audit remains unchanged.
 
 ## Evidence this experiment must preserve
 
@@ -21,6 +24,13 @@ already establish the following on both Mac RIDs in CI
   enabled getter and a generic need for legacy dispatch do not explain that
   difference in those controls. They do not eliminate a product-specific
   Native AOT callback/bridge difference.
+- These seven-control `modernCalls=1` results are **non-inspection modern
+  admission-attempt counts**, corroborated by `requests=1`, not total action
+  method invocation counts. The old owner's `Metadata()` invokes ShowMenu
+  directly through `objc_msgSend` and through `NSInvocation` while
+  `inspecting=YES`; those two dry-run entries return true without queuing or
+  incrementing the modern counter. Thus its ABI/introspection experiment
+  remains valid, but its owner setup is not a minimal request-history baseline.
 - The control and product clients currently differ, as do their preparations.
   In particular, `tests/MacGridAxExternalProbe/Probe.swift::run` performs
   `AXSelectedCells` and `AXSelectedRows` **setters** before ShowMenu. Its first
@@ -41,6 +51,17 @@ the executable/source hashes and action wire key. Use a standalone single
 `runtime-B` control derived from `Contract.m`, not all seven controls in one
 owner. Give that synthetic Table the same fixed identifier classification
 `mote.csv.table`; do not change the existing seven-control test.
+
+**Do not reuse `Metadata()` or its dry-run setup.** Neither C0 nor P0 may call
+ShowMenu directly, invoke it through `NSInvocation`, probe
+`isAccessibilitySelectorAllowed:`, or otherwise warm action dispatch before
+the external attempt. Pure class registration is necessary; non-invoking
+metadata inspection is not necessary for the first pair and should be omitted.
+Count **every actual action method entry from process startup**, including
+inspection, refusal and unexpected framework entries, separately from admitted
+requests. Expected total is one; any additional entry must be preserved and
+explained, not hidden behind an admitted-effect counter. One external attempt
+does not, by itself, prove one total method entry.
 
 | Session | Fresh target process | Prelude | Action target |
 | --- | --- | --- | --- |
@@ -65,6 +86,9 @@ through AX. Readiness is a target-specific internal predicate, not evidence
 that control and product frame lifecycles are identical. Preserve ready
 publication and any later epoch changes. The marker seam requires the same
 coordination/opt-in constraints as cleanup below.
+Evaluate readiness through existing read-only attachment/menu conditions:
+never invoke the action, reserve its queue admission or call `TryQueue` to
+test readiness.
 
 Shared minimal discovery is: query trust without prompting; create the exact
 target-PID AX application; require one owned window; bounded breadth-first
@@ -101,15 +125,18 @@ observable wrapper/graph changes, but **post-action equality does not prove
 identity was unchanged at every instant during transport**, and CFEqual does
 not certify a managed owner or internal frame epoch. Those need server facts.
 
-## Small opt-in server observation, not an alternative implementation
+## Stage 1: lean opt-in server observation
 
 The product/control server records the same fixed fact vocabulary, without
 adding an accessibility attribute or replacing any method return. The existing
-product root/Group/child dispatchers and admission/lifetime seams are the
-observation sites. Do not swizzle AppKit, add legacy methods, install fallback
+product action admission/lifetime seams are the observation sites for C0/P0;
+do not instrument root/Group/child information getters in this first pair.
+Do not swizzle AppKit, add legacy methods, install fallback
 selectors, call `description` or request new native attributes while recording.
 
-At every action entry, including refusal paths, record: main-thread status;
+At every action entry from process startup, including inspection and refusal
+paths, increment total entries independently of admitted requests and record:
+main-thread status;
 owner lookup outcome; receiver equals current attachment root; attached;
 installation in progress; frame present; attachment generation equal to the
 one at discovery-ready publication; current frame epoch equal to that baseline;
@@ -125,6 +152,26 @@ On queue/dispatch/menu-open/menu-close/detach, record only generation/epoch
 serialize native handles, document revisions, absolute coordinates or field
 content. A callback trace without complete entry instrumentation cannot prove
 that a missing entry means no callback.
+
+Use fixed preallocated numeric fields and a small bounded action/lifetime event
+ledger, formatting/exporting only outside native callbacks. Preserve any
+counter overflow or unavailable entry path; it precludes an absence inference.
+C0/P0 contains the frozen client's action begin/end/error facts, ready/finish,
+complete action/refusal/lifetime accounting and the post-reply identity audit
+only. Set `dispatcher_observation_available=false`, leave `server_calls=[]`
+and leave dispatcher discard/overflow fields null. This first stage cannot
+claim that a particular information selector was absent or that request order
+caused the reply.
+
+## Stage 2: optional information-dispatcher history
+
+Only after a stable shared-client difference (C0=0/P0=-25205 with admitted,
+current attachment) or another explicit followup requiring selector history,
+propose this additional recorder as a **separate configuration/experiment**.
+It is not a prerequisite for C0/P0 and must not be retroactively described as
+part of its instrumentation. Re-establish the discriminating baseline with
+the recorder enabled before interpreting its sequence; broad instrumentation
+can itself perturb the transport. It does not relax the patch threshold below.
 
 To inspect request order, instrument **already implemented** information
 dispatchers with fixed selector IDs (Role, Parent, Window, TopLevel, Children,
@@ -245,6 +292,7 @@ mean unobserved/unavailable; enum values are fixed and whitelist validated.
   "session": "P0",
   "target": "product",
   "prelude": "minimal",
+  "instrumentation": "lean",
   "status": "reply-observed",
   "rid": "osx-arm64",
   "source_sha256": null,
@@ -260,12 +308,16 @@ mean unobserved/unavailable; enum values are fixed and whitelist validated.
     "window_equal_discovered_window": null, "top_level_equal_window": null,
     "reciprocal_child_occurrences": null, "parent_cycle": null },
   "server": { "observation_available": null, "callback_entries": null,
+    "total_method_entries": null, "inspection_entries": null,
+    "refusal_entries": null, "admitted_requests": null,
     "on_main_thread": null, "owner_lookup": null, "receiver_equal_current_root": null,
     "attached": null, "installing": null, "frame_present": null,
     "ready_baseline_available": null, "attachment_equal_baseline": null,
     "epoch_equal_baseline": null, "queue_result": null, "method_return": null,
-    "opens": null, "closes": null, "prelude_discarded": null, "post_entry_overflow": null },
+    "opens": null, "closes": null, "dispatcher_observation_available": false,
+    "prelude_discarded": null, "post_entry_overflow": null },
   "client_calls": [],
+  "action_lifetime_events": [],
   "server_calls": [],
   "cleanup": { "finish_after_reply": null, "normal_exit": null,
     "forced": null, "fixture_unchanged": null }
@@ -277,6 +329,16 @@ category, numeric AX error and result-kind/count/equality classification only.
 Server rows contain sequence, fixed phase/selector ID, category, result kind,
 bounded counts and equality/admission flags only. Rows never contain arbitrary
 native strings, menu/document text, coordinates, exception text or pointer IDs.
+In stage 1, `server_calls` is empty and the separate fixed action/lifetime
+ledger and counters carry entry/admission/cleanup facts; empty getter rows are
+**unavailable instrumentation**, not an observed absence. In stage 2, the
+dispatcher flag and bounded rows/discard/overflow facts are populated.
+`action_lifetime_events` has a 16-event ceiling with an independent overflow
+count; every method-entry counter is updated before any guard, separately from
+that event-ledger ceiling. Its fixed phases are entry, refusal, queue-return,
+method-return, dispatch, open, close and detach. Numeric counters must saturate
+and retain an overflow flag rather than wrap. No discarded entry can support
+an inference of exactly one total invocation.
 Parser tests reject unknown fields/enums, over-bound arrays and inconsistent
 one-action counters. Include wrapper/client/owner exit facts and source/host
 version metadata separately. A completed experiment can preserve a failing
@@ -286,7 +348,7 @@ reply; use `completed-failure-observed`, not product `passed`.
 
 | Observed outcome | Supported conclusion / next action |
 | --- | --- |
-| Same frozen client: C0=0, P0=-25205, live/current root and admitted callback | Client language and original 25-check preparation are not necessary for the observed failure; inspect fixed observed dispatcher differences, do not add a legacy bridge |
+| Same frozen client: C0=0, P0=-25205, live/current root and admitted callback | Client language and original 25-check preparation are not necessary for the observed failure; propose the next targeted dispatcher-history experiment, do not claim stage-1 getter observations or add a legacy bridge |
 | C0 also fails with admitted callback | Control's prior successful environment was not reproduced; check shared-client/cleanup/readiness changes before attributing a product cause |
 | P0 succeeds but original probe still fails | Preparation/client interaction remains plausible; run P5 and then split reads from setters, do not claim repaired product |
 | Graph/equality or attachment facts disagree around action | Concrete graph/lifetime interaction is present; reproduce the exact disagreement before choosing a repair |
