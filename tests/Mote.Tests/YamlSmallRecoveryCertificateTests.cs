@@ -152,6 +152,3 @@ public sealed class YamlSmallRecoveryCertificateTests
         Assert.Equal(new TextSpan(source.IndexOf("*missing", StringComparison.Ordinal), 8), error.Span);
     }
 }
-
-
-
