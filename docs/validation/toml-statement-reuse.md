@@ -264,3 +264,46 @@ nine public-suite entries still concern only strict byte decoding. Final product
 on worktree parent HEAD `f226a28848735e159597074f20571c57fbd2a546`.
 This closes the demonstrated local recovery-span regression. It does not claim
 all untested parser recovery shapes, GUI rendering or native execution are verified.
+
+## Final bounded token context and immutable product checkpoint
+
+The public recovery implementation was committed as `9f57a38`; the following
+source checkpoint `70def6d2c04ec5c77185f4616b9a8e716261406c` additionally projects
+validated key and top-level primitive spans in cached large-file windows. It clips
+those spans to the bounded viewport context, then lexes only remaining gaps. A
+window inside a multiline basic/literal scalar string therefore cannot become a
+false comment/table/number simply because opening quotes are off-screen. A window
+inside a quoted key remains a key; later comments/booleans resume after the exact
+scalar end. All emitted spans are current absolute UTF-16 intervals.
+
+`TomlTokenProjectionTests` adds eight retained controls, including real cached edits
+and cold Full equivalence. The actual changed-projection validation command was:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release --no-restore `
+  --filter 'FullyQualifiedName~TomlTokenProjectionTests|FullyQualifiedName~TomlStatementReuseTests' `
+  --logger 'trx;LogFileName=toml-token-projection.trx' `
+  --results-directory .cache/toml-uniform
+```
+
+Observed **65/65 executed and passed**, zero failed/skipped/not executed, process
+exit 0. The result is `.cache/toml-uniform/toml-token-projection.trx`. The existing
+57 cache cases were rerun because their actual token-projection implementation changed,
+not to enlarge a completed result. The 703 already-passing public-policy corpus cases
+were not rerun for an unrelated large-file rendering helper.
+
+This exactness claim is confined to validated keys and top-level primitive scalar
+spans. A window beginning inside a long comment or inside a nested array/inline-table
+string can still have lexical-gap ambiguity. `Complete` certifies the source syntax
+and policy ownership checks, not every bounded token's context. A future immutable
+local token-span representation can close the remaining gap without retaining value
+contents/trees, but its metadata and cold cost must be measured before adoption.
+
+The final matched public-policy experiment freezes source `70def6d2`, Formats DLL
+SHA-256 `C8F3A5FFA6A0BC42B58F2A5D91EBC3AF35074B1F16191A9FB16A0C6125F296E2`.
+Its material additional parsing/allocation is explicitly documented in
+[`../performance/toml-statement-cost.md`](../performance/toml-statement-cost.md),
+including real runtime binary controls, rejected comparisons and all retained rows.
+Historical local cache costs at `b93c4c2` are a separate checkpoint, not silently
+relabelled as final performance. Native AOT, hosted Windows/macOS product workflows
+and end-to-end typing remain integration evidence owned by the root task.
