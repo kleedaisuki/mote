@@ -775,3 +775,117 @@ and a tag pointing to this source; an older candidate or later documentation-onl
 commit must not silently replace their identity. This audit does not claim that
 publication has already occurred. No GUI/test rerun, original artifact rewrite,
 production/oracle change or commit was performed by this final audit.
+
+## Serviced toolchain candidate: run 36937827713
+
+Publication of the preceding `3c2209c` binaries was held for toolchain servicing:
+their successful functional audit did not make the older embedded runtime an
+appropriate release payload after a security update was identified. This new
+qualification supersedes their **release eligibility**, not their historical
+functional evidence.
+
+Exact serviced candidate:
+**`fcac11d0f1f2cfdc8de8f8777bf2c5478d8f581a`**, run **36937827713**, all eight
+jobs successful. The independent task audit reused the unchanged behavioral
+oracles; no local GUI/test rerun or production/oracle change occurred.
+
+```powershell
+python -B .cache/release-ci-36937827713/product-audit/audit.py
+```
+
+| Serviced target | Exact tasks and fresh GUI reopens | Process traces | Task rows |
+| --- | ---: | ---: | ---: |
+| win-x64 | 6/6 | 12 | 726 |
+| win-arm64 | 6/6 | 12 | 709 |
+| osx-x64 | 6/6 | 6 | 987 |
+| osx-arm64 | 6/6 | 6 | 1,020 |
+
+All **24 tasks /36 processes /3,442 rows** pass independent original/output bytes,
+original protection, fresh GUI reopen, strict Save/current semantic sidecars and
+bare/default CLI/config witnesses. All 12 Windows completion-before-read witnesses
+match their actual successful Save session/version. All four archive checksums and
+actual executable payload sizes/hashes match the serviced source/RID manifests
+and suite identities.
+
+The manifest's expanded `build.toolchain` summary is supported rather than rejected
+as an unexpected old-build-field shape. Each target reports pinned **SDK 10.0.401,
+runtime 10.0.12 and ILCompiler 10.0.12**, with matching RID/schema. This artifact
+audit checks that sanitized summary and source/payload binding; the separate root
+asset/toolchain audit verifies the retained resolved raw metadata against that
+summary. Its `asset-audit.json` passes ten checksummed assets and **888** matching
+Git source blobs for this exact commit. No claim that AOT automatically inherits
+machine-installed runtime security updates is made.
+
+Serviced candidate executable SHA-256 values:
+
+- win-x64: `6D4E62AF2213DC06614663F56D1B6D36490E07827583AE6765630F9B0ADF0AC3`.
+- win-arm64: `B8FC9B6EE853E62D852258ECBC9E40BA565687687F1C53AF0F0FE5AD544979F6`.
+- osx-x64: `A535833FC3922D18B372FC18A75C32144CEEF54B1522DB836193E11C20798055`.
+- osx-arm64: `1DC0B425EAB3F7A329DA81C6774F0D6EB825CFD984D12460579D1F285B7CF7B2`.
+
+The six actual TRX collections still enumerate, per OS, **3,695/3,695** main
+results, Themes **14/14**, Configuration **9/9**, zero failures/unexecuted results.
+Evidence and frozen helper copies:
+`.cache/release-ci-36937827713/product-audit/{audit.py,result.json,test-counters.json}`,
+the adjacent `frozen-windows-task.ps1`/`frozen-suite.ps1`, and the downloaded
+`assets/`/`evidence/` trees plus root `asset-audit.json`.
+
+Supported verdict: the **serviced exact candidate** passes all four task/final-view
+contracts and its version/source/payload checks. Future merge/main/tag identity
+must still be qualified explicitly; this is not publication or physical input,
+reader, pixel-color, universal semantic conformance or latency certification.
+
+## Final serviced main qualification: run 36938529836
+
+After the servicing change merged, exact main
+**`ed96fe4f29278e633e10421c89e2ce1f5b0536ae`**, run **36938529836**, completed
+all eight jobs successfully. This is independently checked final-main evidence,
+not the `fcac11d` candidate result relabeled after merging.
+
+```powershell
+python -B .cache/release-ci-36938529836/product-audit/audit.py
+```
+
+| Final serviced target | Exact tasks and fresh GUI reopens | Process traces | Task rows |
+| --- | ---: | ---: | ---: |
+| win-x64 | 6/6 | 12 | 731 |
+| win-arm64 | 6/6 | 12 | 727 |
+| osx-x64 | 6/6 | 6 | 994 |
+| osx-arm64 | 6/6 | 6 | 1,027 |
+
+All **24 tasks /36 processes /3,479 task records** pass unchanged independent
+text bytes, original protection, normal fresh GUI reopen, strict Save graph,
+current final-sidecar and default CLI/config contracts. All 12 Windows reports
+bind completion-before-one-read to the matching successful Save session/version.
+Both Mac CSV tasks have complete actual-render 3×3 ready frames with zero pending
+cells and current admitted analysis/style identities. These successful witnesses
+do not expand into physical Pinyin, reader, pixel-color or performance claims.
+
+The collected archive checksums, actual executable payload bytes/sizes, exact
+main/RID manifests and suite identities all agree. The expanded toolchain summary
+remains **SDK 10.0.401 /runtime 10.0.12 /ILCompiler 10.0.12**. Root's independent
+archive/source/raw-toolchain audit also passes ten checksummed assets and **888**
+corresponding Git blobs for this same main commit. Known framework-resolution
+pack records are toolchain evidence, not a claim that every recorded ASP.NET or
+WindowsDesktop pack is linked or shipped in the editor.
+
+Final serviced-main executable SHA-256 values:
+
+- win-x64: `BD01A0E5E642A6227FE5E53147891C9B95F2938B553B9142C54C1F5E9EC1622B`.
+- win-arm64: `A33457F96EF4862059F17689E23B73F3C9D93E2C3C6CC83F80A987E441E81A38`.
+- osx-x64: `0C2B9CBEF7EFF87C52641D032BA0CEEC3FC0B5373E5361C8802617C17CAD22C3`.
+- osx-arm64: `32CA794B25EEBED62B55D06B9CA65E3E38ECFD83FBEBD8DFBEAE15EB6BAAA3F7`.
+
+Enumerated actual TRX results, per OS: **3,695/3,695** main, Themes **14/14**,
+Configuration **9/9**, with no failed or unexecuted results. Reproducible audit,
+counters and frozen helper copies are retained in
+`.cache/release-ci-36938529836/product-audit/`; raw tasks/manifests/archives remain
+under its run's `evidence/` and `assets/`, with root `asset-audit.json`.
+
+Supported verdict: **the exact serviced final-main four-target release payloads
+pass the task/final-view and toolchain/source identity contracts**. Shipping must
+use these verified archives and a tag pointing to `ed96fe4`; neither the old
+runtime-11 main nor the servicing candidate may silently replace this identity.
+This entry records qualification, not completed publication. No GUI/test rerun,
+production/oracle change, original artifact rewrite or commit occurred in this
+audit; the release owner records publication separately.

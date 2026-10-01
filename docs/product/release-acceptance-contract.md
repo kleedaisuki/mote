@@ -117,3 +117,33 @@ packaging owns package construction/workflow/notices; independent validation own
 task fixtures/oracles; documentation owns README/manual/CHANGELOG/release page;
 review owns its findings only. One writer per file area, not a repository-wide
 lock. Experimental artifacts remain under repository `.cache/` and `.temp/`.
+
+## Publication record: v0.1.0
+
+Published [v0.1.0](https://github.com/kleedaisuki/mote/releases/tag/v0.1.0) on
+2026-10-02 07:10:43 Asia/Singapore (2026-10-01T23:10:43Z), release ID401422384.
+The annotated tag targets exact main `ed96fe4f29278e633e10421c89e2ce1f5b0536ae`;
+[run36938529836](https://github.com/kleedaisuki/mote/actions/runs/36938529836)
+passes all eight required jobs. Independent task audit: 24 tasks, 36 processes,
+3,479 records, protected originals/exact Save/fresh GUI reopens/current views.
+Each OS managed suite passes3695 main,14 Themes and9 Configuration tests.
+
+The publisher inspected all ten SHA256SUMS entries, native image architectures,
+complete payload inventories, matching source's888 Git blobs, and resolved
+SDK401/runtime/compiler12 provenance. Resolved known framework-pack entries do
+not establish every recorded framework is linked or shipped. The old successful
+SDK400/runtime11 main and serviced candidate are not substituted for this release.
+
+After upload to a new draft, all eleven GitHub asset lengths/digests and the
+remote tag target were checked before publication. A separate no-token/no-account
+script then read the public release/tag API and downloaded all eleven public
+assets, byte-compared them to the qualified set and checked GitHub's digests.
+This establishes public availability and exact identity, not publisher signing.
+Evidence: `.cache/release-ci-36938529836/{asset-audit.json,product-audit/}` and
+`.cache/release-public-v0.1.0/public-audit.json`. Reproducer:
+`.temp/release-coordination/verify-public-release.py`.
+
+Post-publication documentation may record the outcome/screenshots without
+rebuilding binaries, replacing immutable archives or moving `v0.1.0`. Original
+vision gaps remain in the goal checklist; the delivery-first objective, not
+universal performance/semantics/IME certification, is the completed scope.

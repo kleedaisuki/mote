@@ -8,22 +8,36 @@ the old literal-binary constraint and unapproved size/latency promotion budgets
 are retired. See the [release acceptance contract](release-acceptance-contract.md)
 and [versioned release page](../releases/v0.1.0.md).
 
-Latest exact-main qualification:
-`3c2209cb8728120c5f2b94f9155b0c57b13ee7c4`,
-[CI 36935354135](https://github.com/kleedaisuki/mote/actions/runs/36935354135).
+**First deliverable published:**
+[v0.1.0](https://github.com/kleedaisuki/mote/releases/tag/v0.1.0),
+2026-10-02 07:10:43 Asia/Singapore (2026-10-01T23:10:43Z).
+The immutable annotated tag targets exact main
+`ed96fe4f29278e633e10421c89e2ce1f5b0536ae`, qualified by
+[CI 36938529836](https://github.com/kleedaisuki/mote/actions/runs/36938529836).
 All eight jobs pass. The independent audit verifies 24 six-format tasks,
-36 process traces, 3,460 causal records, exact protected-original/saved bytes,
+36 process traces, 3,479 causal records, exact protected-original/saved bytes,
 fresh GUI reopens and current native semantic views. Both OS main suites pass
 3695/3695, Themes14/14 and Configuration9/9. Archive/payload checks and all
-886 corresponding source blobs bind to this exact main source, not its candidate.
+888 corresponding source blobs bind to this exact main source, not its candidate.
+Selected SDK10.0.401 and resolved runtime/ILCompiler/native-runtime packs10.0.12
+are checked against retained actual metadata. All eleven public assets were
+downloaded anonymously and byte-compared with the qualified set; their tag,
+source, run and public availability agree. Evidence is retained under
+`.cache/release-ci-36938529836/` and `.cache/release-public-v0.1.0/`.
 
-**Publication hold:** no public tag or release exists. This qualified build uses
-SDK10.0.400/runtime10.0.11; the official September servicing release provides
-SDK10.0.401/runtime10.0.12. The release team is updating the exact toolchain,
-matching notices and actual resolved AOT-pack provenance before publication.
-This is a servicing-policy correction, not evidence that mote exposes all six
-reported September CVEs. Any changed source/build must qualify its own four
-native packages; the successful main evidence is retained, not relabeled.
+**Scope of completion:** the current delivery-first objective is fulfilled by
+the published four-RID AOT release and maintained product documentation. The
+original broader vision's semantic, performance, physical IME/reader and capacity
+gaps remain explicitly Partial below; publication does not close them.
+Later documentation status corrections do not rebuild images or move this tag.
+
+Previous pre-servicing exact-main checkpoint:
+`3c2209cb8728120c5f2b94f9155b0c57b13ee7c4`,
+[CI 36935354135](https://github.com/kleedaisuki/mote/actions/runs/36935354135),
+passed all eight jobs and 24 tasks/36 process traces/3,460 records. Publication
+was held because its SDK400/runtime11 baseline preceded current servicing.
+This successful evidence remains historical; it is not the shipped payload.
+The servicing correction does not imply all six September CVEs expose mote.
 See the [packaging validation record](../validation/release-packaging.md) and
 [official servicing release](https://github.com/dotnet/core/blob/main/release-notes/10.0/10.0.12/10.0.12.md).
 
@@ -42,9 +56,10 @@ native architectures and all **886 corresponding Git source blobs** against
 the exact commit. Artifacts and reproducible audits are under
 `.cache/release-ci-36933575580/`.
 
-This candidate was integrated by PR2 and the resulting main source was qualified
-separately above. Public release/tag remains pending. A changed final source
-identity requires its own qualification; no older run will be relabeled.
+This candidate was integrated by PR2; the later servicing update was integrated
+by PR3 and the resulting main was separately qualified and published above.
+A changed final source identity requires its own qualification; no older run
+will be relabeled.
 
 Previous failed default/source-view candidate:
 `832dae60ed5361ee45f652d39ef61dd2ae208d19`,
@@ -150,13 +165,13 @@ runtime acceptance supplies stronger evidence.
 | --- | --- | --- |
 | Open a single document without projects/workspaces/LSP | Established | Native composition opens one document; no discovery/indexing/language-server dependency. |
 | Mechanism/policy architecture | Established | Engine owns canonical text/lifetime/I/O/history; statically registered format/theme policies and UI adapters are separate modules. |
-| C# Native AOT application packages | Exact-main four-RID qualified; security servicing/publication pending | 3c2209c passes all four actual ordinary-default packages/tasks/final-view/codecs/inventories and assembled asset checks. SDK/runtime servicing upgrade requires its own qualification before publication. Literal-one-executable inventory is historical, not the current delivery gate. |
+| C# Native AOT application packages | Established and published for four RIDs | v0.1.0 ships exact ed96fe4 serviced SDK401/runtime12 packages with ordinary-default tasks/final-view/codecs/inventories and public byte/source checks. Literal-one-executable inventory is historical, not the current delivery gate. |
 | Text model, versioned snapshots and edit history | Established | Immutable chunked text, line indexing, undo/redo, ordered edits and stale-result rejection. |
-| Safe file persistence and default encoding | Established with four-RID scoped native task evidence | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; all four AOT six-format suites prove exact Save/fresh-process reopen at f2b2de7. Not power-loss/autosave or every recovery-state certification. |
+| Safe file persistence and default encoding | Established with four-RID scoped native task evidence | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; all four shipped AOT six-format suites prove exact Save/fresh-process reopen at ed96fe4. Not power-loss/autosave or every recovery-state certification. |
 | Six-format parsing/semantic results | Partial | All six policies exist and produce structural results, diagnostics and conservative formatting/rendering. General semantic completeness and recovery/large-domain boundaries remain format-specific. |
 | Intermediate representation / source projections | Established foundation | Versioned semantic nodes, tokens and source spans; per-format caches/compact summaries. Not a claim of one universal compiler IR or general local incremental parsing. |
 | Incremental analysis and caching | Partial | Actual reuse for CSV, restricted JSON/Markdown domains and TOML statements; YAML still re-streams. Session interface alone is not incrementality. |
-| Native Windows/macOS editing | Ordinary default tasks established; attended evidence partial | f3da110 uses a coherent native source locus and passes actual four-RID edits/history/navigation/Save/reopen/final-view tasks. Physical Pinyin and attended assistive-technology acceptance remain open and unadvertised. |
+| Native Windows/macOS editing | Ordinary default tasks established; attended evidence partial | Shipped ed96fe4 uses a coherent native source locus and passes actual four-RID edits/history/navigation/Save/reopen/final-view tasks. Physical Pinyin and attended assistive-technology acceptance remain open and unadvertised. |
 | Restrained strategy-based themes | Established foundation | Dark/light/high-contrast policies, overrides and system appearance notifications. Physical/high-DPI/all-state visual polish is not certified. |
 | ~/.mote conventions and configurable directories | Established | Typed configuration, MOTE_HOME, relocatable cache/data/trace paths; explicit settings override conventions. |
 | End-to-end tracing | Partial | Opt-in bounded local JSONL, explicit Save provenance, versioned analysis/draw boundaries and native observations. Physical presentation and missing cross-process edges are not fabricated. |
@@ -164,7 +179,7 @@ runtime acceptance supplies stronger evidence.
 | Smooth editing and bounded memory | Partial | Chunked engine and bounded visible work exist; actual input-to-visible tails, long-line/native composition and prolonged interaction require stronger evidence. |
 | Large-file capability | Partial | Capacity tests, virtualized projections and correctness-preserving partial status exist; no universal full semantics/fluent large-file certificate. Retain resilience, prioritize actual ordinary workflows. |
 | GitHub Actions cross-platform validation | Established | Managed/native/AOT/inventory/control/artifact jobs execute. Non-gating success is not product acceptance. |
-| Native release-ready product | Exact-main qualified; security servicing and public tag/assets pending | Joint chosen-default qualification and corrected visible CSV readiness pass at exact main3c2209c. Updated security servicing build must qualify before immutable publication. Do not confuse unverified IME/readers/tail latency with advertised certification. |
+| Native release-ready product | First delivery established and publicly available | v0.1.0 at exact ed96fe4 passes joint chosen-default and current visible CSV qualification; eleven immutable assets and tag were publicly downloaded/verified. Product landing/version page, install/manual/config and changelog are maintained. Unverified IME/readers/tail latency and broader semantic boundaries are not advertised certificates. |
 
 ## Historical component checkpoint before active release work (6827cd1a)
 
