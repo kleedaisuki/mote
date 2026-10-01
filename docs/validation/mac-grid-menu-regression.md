@@ -258,3 +258,13 @@ on both targets. The shown-menu relation is absent with -25204 transport error
 on x64 and -25205 no-value on ARM; getter correctness alone does not establish
 native menu lifecycle or external accessibility transport. See
 [full target accounting](mac-grid-table-proxy.md#shown-menu-forwarding-target-ci-36792454502).
+
+### Corrected native BOOL lifecycle execution
+
+CI 36794910486 / `e439942` passes the actual in-process combined probes on both
+Mac RIDs, but both external clients reject AXShowMenu (`AX=-25205`). Bounded
+native lifecycle trace reports a configured 12-item menu containing the exact
+coordinate command, followed by inherited BOOL false, with zero open/close
+callbacks. No menu relation query or navigation polling is reached. This
+supersedes earlier apparent action success for this corrected roundtrip.
+See [full target evidence](mac-grid-table-proxy.md#correct-bool-and-lifecycle-target-ci-36794910486).

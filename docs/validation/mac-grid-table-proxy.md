@@ -268,3 +268,55 @@ ARM `C0ECC093152D9EA432D8C2F0D45FB96DDBC8E8201270FC36FB9C81586EAA1828`.
 but is insufficient for actual external coordinate-menu acceptance. The next
 informative discriminator is content-free native open/close/show lifecycle
 accounting, not another speculative budget increase or weakened menu predicate.
+
+## Correct BOOL and lifecycle target: CI 36794910486
+
+[Final run 36794910486](https://github.com/kleedaisuki/mote/actions/runs/36794910486)
+at `e439942` exercises the corrected native BOOL roundtrip and bounded lifecycle
+trace. Both x64 job 110156619460 and ARM job 110156619500 print actual selector
+success and enclosing `mote-native-mac-csv-grid-ready` markers without a combined
+step error. External Swift typecheck and exact-PID trust pass on both hosts.
+
+The real external result is **failed / exit 1 on both RIDs**, with 25 passed
+checks and the first false assertion `context-menu-accessible`, detail
+`AX=-25205; no key-injection fallback`. x64 consumes 1,635 admissions / 1.339s;
+ARM 2,409 / 1.226s. Logical-navigation consumes exactly one admission each:
+the action. No menu polling or shown-menu relation query is reached. Thus the
+empty relation-observation array means **not exercised**, not absent relation.
+
+Both native traces are exactly:
+
+```text
+mote-grid-menu-v1 phase=show-enter seq=1 requests=1 opens=0 closes=0 open=0 result=-1 configured=1 items=12 coordinate=1 shown=0 key=1 first=0 active=1
+mote-grid-menu-v1 phase=native-return seq=2 requests=1 opens=0 closes=0 open=0 result=0 configured=1 items=12 coordinate=1 shown=0 key=1 first=0 active=1
+```
+
+The bounded facts show the exact coordinate command exists in a configured
+12-item native menu, the window is key and adapter active, but the inherited
+native action returns BOOL false. No `will-open` or `did-close` callbacks are
+recorded and the shown-menu flag stays false. This localizes the failure to
+native action admission/presentation, not semantic row transport, menu titles,
+query pressure or timeout. The physical Table not being first responder is an
+observed fact, not by itself a proved cause. Earlier apparent AXShowMenu success
+must not be used to override this corrected BOOL/lifecycle evidence.
+
+Original files remain byte-identical and both editors require forced cleanup.
+Logical jumps, retirement and normal close remain unexercised. Artifacts and
+raw logs: `.cache/ci-36794910486-mac-menu/`. Binary bytes/SHA-256:
+
+- x64: 16,824,064;
+  `82E337CCE49915857BB80F697C59E26F4EA25199A541018C4D37D29F631017A0`.
+- ARM64: 16,466,616;
+  `3FB538EE18B799EC333A87A248B53D37FBAD2846085AC9AE4DEA056EABB68EE2`.
+
+The predecessor run 36794858729 / `181a9b2` was cancelled. Its completed ARM
+external diagnostic corroborates the same two-row refusal (2,378 admissions /
+1.597s, exit 1); its x64 cancellation artifact says published executable absent,
+with no editor PID, Swift execution or native rows. That prelaunch x64 artifact
+is unavailable target evidence, **not** an editor defect. Final-run evidence
+supersedes the cancelled run for two-platform accounting.
+
+The next candidate may explicitly schedule the existing exact native menu on
+the owner UI thread; a queued acknowledgment is not completion. Its target
+acceptance must still prove the unchanged external coordinate menu/prompt/jump/
+retirement/close oracle, with no synthetic key fallback or relaxed bounds.
