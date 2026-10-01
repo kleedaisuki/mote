@@ -241,4 +241,3 @@ public sealed class TelemetryRequestTests
     /// <summary>Extracts an opaque parent identity for causal assertions.</summary>
     private static string? Parent(JsonElement row) => row.GetProperty("parent_span_id").GetString();
 }
-
