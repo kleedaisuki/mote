@@ -40,7 +40,7 @@ public sealed class TelemetryRequestTests
         var request = Assert.IsType<TelemetryRequest>(MoteTelemetry.BeginRequest(TelemetryOperation.CommandSave));
         await MoteTelemetry.ShutdownAsync();
         var records = Read(temp.Path);
-        Assert.Single(records, r => Op(r) == "command.received");
+        Assert.Single(records, r => Op(r) == "command.save.received");
         Assert.DoesNotContain(records, r => Op(r) == "command.save");
         Assert.Equal("success", records.Single(r => Op(r) == "mote.session").GetProperty("status").GetString());
         Assert.True(request.EndOnce(TelemetryStatus.Cancelled, TelemetryReason.LifetimeEnded));
@@ -74,7 +74,7 @@ public sealed class TelemetryRequestTests
         var requestRow = rows.Single(r => Op(r) == "command.save_as");
         var coarseRow = rows.Single(r => Op(r) == "document.save");
         var phaseRow = rows.Single(r => Op(r) == "save.snapshot_capture");
-        var received = rows.Single(r => Op(r) == "command.received");
+        var received = rows.Single(r => Op(r) == "command.save_as.received");
         var coarseEntry = rows.Single(r => Op(r) == "document.save.entered");
         var phaseEntry = rows.Single(r => Op(r) == "save.snapshot_capture.entered");
         Assert.Equal(Span(received), Parent(requestRow));
@@ -195,12 +195,38 @@ public sealed class TelemetryRequestTests
                 if (rows.Any(r => Op(r) == "save.commit_replace.entered")) break;
                 await Task.Delay(25);
             }
-            var received = Assert.Single(rows, r => Op(r) == "command.received");
+            var received = Assert.Single(rows, r => Op(r) == "command.save.received");
             var coarseEntry = Assert.Single(rows, r => Op(r) == "document.save.entered");
             var phaseEntry = Assert.Single(rows, r => Op(r) == "save.commit_replace.entered");
             Assert.Equal(Span(received), Parent(coarseEntry));
             Assert.Equal(Span(coarseEntry), Parent(phaseEntry));
             Assert.DoesNotContain(rows, r => Op(r) is "command.save" or "document.save" or "save.commit_replace");
+            Assert.False(request.IsEnded);
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+    }
+
+    /// <summary>Receipt alone preserves the actual command kind when the request never reaches a terminal.</summary>
+    [Theory]
+    [InlineData(TelemetryOperation.CommandSave, "command.save.received")]
+    [InlineData(TelemetryOperation.CommandSaveAs, "command.save_as.received")]
+    public async Task Held_receipt_prefix_identifies_save_kind(TelemetryOperation operation, string expected)
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        try
+        {
+            var request = Assert.IsType<TelemetryRequest>(MoteTelemetry.BeginRequest(operation));
+            JsonElement[] rows = [];
+            var deadline = Stopwatch.StartNew();
+            while (deadline.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                rows = ReadPrefix(temp.Path);
+                if (rows.Any(r => Op(r) == expected)) break;
+                await Task.Delay(25);
+            }
+            Assert.Single(rows, r => Op(r) == expected);
+            Assert.DoesNotContain(rows, r => Op(r) is "command.received" or "command.save" or "command.save_as");
             Assert.False(request.IsEnded);
         }
         finally { await MoteTelemetry.ShutdownAsync(); }

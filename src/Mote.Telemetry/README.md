@@ -162,8 +162,9 @@ MoteTelemetry.EndPhase(TelemetryOperation.Save, save);
 request?.EndOnce(TelemetryStatus.Success, TelemetryReason.Completed);
 ```
 
-Receipt and phase entry are **persisted causal anchors**: `command.received`
-uses the request mark identity, and each fixed `<phase>.entered` uses its phase
+Receipt and phase entry are **persisted causal anchors**: `command.save.received` or
+`command.save_as.received` uses the request mark identity and records command kind
+even when no terminal exists, and each fixed `<phase>.entered` uses its phase
 mark identity. Ordinary checkpoints use fresh child IDs. Terminal request and
 phase durations also use fresh IDs, parented to their respective entry anchors,
 and measure from the original mark timestamp. Therefore every row has a unique

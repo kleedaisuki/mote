@@ -26,7 +26,8 @@ public static partial class MoteTelemetry
             var mark = new TelemetryMark(sink, Stopwatch.GetTimestamp(), sink.SessionTraceId,
                 ActivitySpanId.CreateRandom(), sink.SessionSpanId);
             var request = new TelemetryRequest(operation, mark, dimensions);
-            WriteEntry(sink, EventName(TelemetryEvent.CommandReceived), mark, dimensions);
+            WriteEntry(sink, operation == TelemetryOperation.CommandSave
+                ? "command.save.received" : "command.save_as.received", mark, dimensions);
             return request;
         }
         finally { sink.ReleaseProducer(); }
