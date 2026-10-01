@@ -1,8 +1,10 @@
 # Ordinary native Canvas: visual product assessment and acceptance
 
-Date: 2026-10-01. Status: **product assessment and proposed acceptance contract,
-not production changes or a visual-release pass**. Scope: ordinary Windows
-Continuous Canvas in the strict single-binary `Mote.Native` product. Source
+Date: 2026-10-01. Status: **product assessment with current-state follow-up;
+not a visual-release pass**. The scoped typography correction and Mac label
+follow-up below do not close the full acceptance contract. Scope: ordinary
+Windows Continuous Canvas in the strict single-binary `Mote.Native` product,
+with a separately identified Mac label consistency finding. Original source
 inspection checkpoint: `c3296b15508bbd3a194983671146d7182e8ac98f`.
 
 ## 1. Product decision
@@ -73,7 +75,26 @@ here. No native workload was rerun for this assessment.
 | Status says `Plain text · Complete · v0 No diagnostics.` | Useful format/diagnostic truth mixed with an internal version identifier. The technical status is not a product-wide explanation of caret location, saving or partial analysis. |
 | No line-number gutter appears | An observation, not a release failure by itself. Stable source location and diagnostic navigation matter more than adding an always-on decorative gutter. |
 
-## 3. Typography has a concrete scale mismatch
+## 3. Historical typography mismatch and current correction
+
+**Current-state check, 2026-10-01 at `db8b8e2`: the specific source/input
+13-DIP versus 17-unit mismatch below is already corrected.** Production commit
+`4c7fe6e` introduced `CanvasDipToInputCharacterHeight`, which requests
+`-Round(EditorFontSize)` at this fixed-96-DPI Canvas/MM_TEXT boundary. Current
+production and typography-test files are byte-identical to that reviewed
+correction. Do not implement it again or repeat its completed tests.
+
+The retained [paired native validation](../validation/windows-canvas-typography.md)
+measures applied RichEdit size **255 -> 195 twips** (17 -> 13 client units at
+the measured 96 DPI), while source em and hit geometry remain unchanged.
+The [independent review](../reviews/windows-canvas-typography-review.md#hosted-follow-up-run-36814164862)
+also records hosted x64 solution-test inclusion and x64/ARM64 Native AOT
+publication compatibility. These are not physical 200%/per-monitor, actual IME,
+fallback-ink or full visual-product acceptance. Shared UI/LegacyPage/RTF/Mac
+size interpretations and bundled default values were intentionally unchanged.
+
+The following diagnosis describes the earlier inspected checkpoint, not the
+current island conversion:
 
 At the inspected source checkpoint:
 
@@ -101,7 +122,7 @@ or behavior at 200% scaling.
 ([DirectWrite contract](https://learn.microsoft.com/en-us/windows/win32/api/dwrite/nf-dwrite-idwritefactory-createtextformat),
 [GDI contract](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createfontw).)
 
-**Acceptance direction:** give editor/UI font sizes an explicit common logical
+**Remaining acceptance direction:** give editor/UI font sizes an explicit common logical
 unit, apply platform/DPI conversion once at native boundaries, and derive
 padding/line height from actual metrics. Do not fix the effect by independently
 guessing smaller ribbon numbers, or blindly enlarge Canvas to the ribbon's
@@ -115,7 +136,7 @@ semantics through an explicit migration if their established unit differs.
 | Priority | Direction | User value / guardrail |
 | --- | --- | --- |
 | P0 | One understandable edit destination across source, input projection and IME | Clicking/selecting source, typing, Undo and Save must act on the same global source interval. No hidden second document, duplicate commit, two blinking carets, source-row overlay or unannounced offscreen editing. |
-| P0 | Consistent typography units and DPI behavior | Source is readable and primary; projection text has the same intended editor em size, not an accidental 4/3 enlargement. No clipping or target-coordinate drift when scaling changes. |
+| P0 | Consistent typography units and DPI behavior | The Canvas input's accidental 4/3 em enlargement is corrected at its existing boundary; complete visual/scale acceptance remains open. Source is readable and primary, with no clipping or target-coordinate drift when scaling changes. |
 | P1 | Explain the input host without promoting it to a second editor | While the reserved ribbon is necessary, label it as source editing/composition context with a human location such as `Editing line 1, column 4`; distinguish offscreen target explicitly. Reserve technical absolute UTF-16 offsets for diagnostics. Keep it subordinate, bounded and clearly separate from document rows. |
 | P1 | Calm, useful status hierarchy | Prefer location plus format/diagnostic state and actionable Save/recovery notice. Keep `Analyzing`/`Partial analysis` honest; absence of diagnostics in a covered viewport is not full-document health. Do not let routine analysis erase a recovery notice. Put engine version in an explicit diagnostic view, not permanent product chrome. |
 | P1 | Native menu/scroll behavior with coherent surroundings | Keep standard menu accelerators, focus, OS high-contrast colors and scroll semantics. Adjust app-owned padding/surfaces first. A native system-colored menu is preferable to an undocumented customization that breaks accessibility; a coherent dark menu is desirable only through supported, verified native behavior. |
@@ -227,3 +248,56 @@ task observations, and leave the visual gate open until the failure is fixed.
 The next product milestone is one coherent, readable native editing experience
 with intentional scale and input semantics—not additional workspace features
 or a more elaborate theme.
+
+## 8. Current editing-locus findings and next bounded decision
+
+Source inspection at `db8b8e2` is not a new native execution or usability study.
+The earlier source/input size defect is closed within its measured boundary;
+the following ordinary-file issues remain independently actionable:
+
+| Current source behavior | User-facing consequence / evidence boundary |
+| --- | --- |
+| Windows `WindowsRichEditIsland.PaintRibbon` displays `Input @ {active}` from the current frame, but degrades to just `Input` in the narrower label slot. | This is still an absolute UTF-16 offset, not an explanation of the source editing destination. Narrow windows lose even that location cue. The code proves the wording, not how confusing users find it. |
+| Mac `MacTextInputIsland.PlaceHost` displays `_binding.Active`, whereas `ProjectedHostSelection` uses `_frame.SelectionActive`. `NativeEditorController.ShowCanvasDocument` calls `SetCanvasFrame` without rebinding for same-version caret moves within the existing input interval. | The label can retain a prior binding offset while the real native selection follows a newer frame offset. This is a direct source-of-truth inconsistency, not evidence of a wrong-target committed edit. |
+| `ShowCanvasDocument`'s `Line N / total` uses `frame.TopAnchor.SourceOffset`. | This is the viewport's top line, not necessarily the editing caret line. Do not relabel it as a caret location without changing its producer. |
+| `StartFind` reports `Found at {SelectionStart}`; analysis presentation emits format/completeness/internal version status separately. | Search and analysis already reject stale document/version results and defer safely around composition, but their status vocabulary still exposes implementation coordinates. Existing safety must survive any chrome cleanup. |
+
+**First corrective slice, now implemented:** Mac `PlaceHost` consumes a pure
+`TryGetRibbonContext` result: its label uses current `frame.SelectionActive`
+and its native range uses the unchanged clamped/reversed frame projection.
+The original null/editor/marked-text guards and AppKit calls remain in place.
+The existing `frame.Version == binding.Snapshot.Version` admission is local
+frame/binding admissibility, not a new global document-identity certificate.
+No input view, binding, source transaction, composition settlement, public API,
+label style or layout option changes. [Portable validation](../validation/mac-canvas-ribbon-context.md)
+executes the actual production helper: **18/18** cases, with a zero-warning,
+zero-error Release build. It proves current-frame label/range semantics,
+including retained-binding movement and null/stale refusal; it does not prove
+AppKit applied text, actual IME, visual comprehension or a hosted Mac/AOT run.
+
+Then coordinate one shared **source-editing context** presentation contract
+before changing both adapters or permanent status. Its facts should come from
+the canonical snapshot/selection, not from preview, the viewport top line or
+the original binding offset: document generation/version, active source
+boundary, one-based source line, selected interval, physical caret visibility
+and input availability/composition state. Label the ribbon as editing source,
+and distinguish a source target outside the visible viewport without moving
+the native candidate-owning host. Reuse the existing platform caret geometry
+contract; inclusion in a logical source slice alone does not prove visible ink.
+
+For the first ordinary-file slice, a truthful line-only label is preferable to
+silently treating UTF-16 code units as user-perceived columns. If a column is
+shown, define whether it counts grapheme clusters, UTF-16 or display cells,
+including tabs and bidi text, and share that definition with navigation and
+accessibility. Compute from bounded/indexed source data; never materialize a
+whole file or an unbounded line solely to draw chrome.
+
+Acceptance should discriminate the actual failure: move within a retained
+binding, click source, Find/Find Next, reverse a selection, scroll the unchanged
+caret offscreen, and verify label/current selection agree at the same version.
+Then type once, Undo/Redo, Save/reopen exact bytes and use real Pinyin commit
+and cancel on a controlled host. A portable context test can establish state
+semantics; native label/selection and a short observed user session establish
+application and comprehensibility. Neither substitutes for the other. Use
+ordinary small structured files and a few-MiB TXT; retain existing large-file
+resilience coverage rather than adding another 100-MiB typography campaign.

@@ -4,6 +4,26 @@ Date: 2026-10-01. Scope: the ordinary Windows Canvas input ribbon only.
 Status: **local native requested/applied em parity established at effective 96 DPI;
 not a visual, Native AOT, real IME or display-scale release certification**.
 
+### Current-source reconciliation, 2026-10-01
+
+At `db8b8e2`, `git diff 4c7fe6e HEAD --` for the production island and its
+typography test is empty. Their SHA-256 values remain the recorded
+`05DD183A...117158D0` and `821BE674...116ED16F` respectively. Independent
+rehashing also matches the recorded baseline/corrected native JSON and both
+final TRX files; retained counters are **13/13** typography and **49/49**
+integration, zero failed. This is a current-state audit of prior evidence,
+**not a rerun or a new display-scale observation**.
+
+The [review's hosted follow-up](../reviews/windows-canvas-typography-review.md#hosted-follow-up-run-36814164862)
+records included x64 JIT solution-test execution and strict x64/ARM64 Native
+AOT publication compatibility at `874a7ec`; it does not retain a separate
+hosted applied-font JSON or establish ARM64/AOT font measurements. The
+architecture document's original proposal/execution order and the product
+assessment's original screenshots remain historical. The narrow unit
+correction is implemented; the larger visual, real IME and DPI gates remain
+open. See the [current editing-locus findings](../product/native-canvas-visual-acceptance.md#8-current-editing-locus-findings-and-next-bounded-decision)
+for the next ordinary-file investigation instead of repeating this correction.
+
 ## Decision and preserved contracts
 
 Following [the unit-boundary design](../architecture/native-typography-units.md)
