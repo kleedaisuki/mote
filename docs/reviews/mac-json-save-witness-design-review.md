@@ -20,6 +20,20 @@ after forced cleanup is censored, not evidence that a selector/controller did no
 execute. Instrumentation can change scheduling and must not be advertised as a
 Save reliability repair or production performance sample.
 
+**Concrete recommendation: implement this opt-in two-marker discriminator now,**
+with R1/R2 as mandatory acceptance criteria for its code review. Recurrence on
+ARM64/100 MiB and x64/1 MiB, including a current failure with positive sampled
+application activity, justifies instrumenting the next causal boundary rather
+than spending another run collecting the same activity facts. Initially enable
+it only for the scoped Mac pilot; preserve fresh-process one-attempt behavior
+and label that sample diagnostic-on. Do not add worker markers, heartbeat,
+activation, retries or flush changes in the same patch. Validate portable framing,
+loss/closure and child-kill retention tests before the next hosted AOT pilot,
+then require raw original-process witness inspection alongside unchanged exact
+Save/trace/reopen acceptance. A passing diagnostic-on run remains a successful
+sample, not a causal repair; a failing run with one/both positive markers is the
+discriminating result sought.
+
 ## Required implementation contracts
 
 ### R1: Bound parsing before allocation and continue draining after retention caps
