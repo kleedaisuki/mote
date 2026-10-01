@@ -110,7 +110,11 @@ internal sealed partial class NativeEditorController
         trace?.Checkpoint(TelemetryEvent.SaveUiPostReturned, new TelemetryDimensions(Version: savedVersion));
     }
 
-    /// <summary>Receipt means callback entry only; stale work cannot select policy or publish success.</summary>
+    /// <summary>
+    /// Receipt means callback entry only; stale work cannot select policy or publish success.
+    /// Nonfatal presentation failures end the request without unwinding into the native dispatcher;
+    /// they never undo a file commit or recursively retry a failed error dialog.
+    /// </summary>
     private void CompleteSave(Document document, long generation, long attempt, TelemetryRequest? trace,
         long? savedVersion, Exception? error, TelemetryStatus status, TelemetryReason reason)
     {
@@ -148,7 +152,9 @@ internal sealed partial class NativeEditorController
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             trace?.EndOnce(TelemetryStatus.Failure, TelemetryReason.CallbackFailed, dimensions);
-            throw;
+            // This callback returns through the native UI dispatcher. A committed
+            // file is not rolled back by presentation failure, and retrying error
+            // UI here could fail recursively. Retain the failed UI terminal only.
         }
     }
 
