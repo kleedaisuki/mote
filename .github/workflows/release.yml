@@ -84,12 +84,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Complete solution tests
+      - name: Restore complete solution
+        shell: pwsh
+        run: |
+          dotnet restore mote.sln
+          if ($LASTEXITCODE -ne 0) { throw 'Complete solution restore failed.' }
+      - name: Build complete solution including Desktop prototype
+        shell: pwsh
+        run: |
+          dotnet build mote.sln -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'Complete solution build failed.' }
+      - name: Complete solution tests with bounded hang evidence
         shell: pwsh
         run: |
           # Let each test host select its own timestamped TRX name. A fixed
           # LogFileName makes the three project runs overwrite one another.
-          dotnet test mote.sln -c Release --logger trx --results-directory '.cache/release-evidence/tests'
+          # Five minutes is a per-test liveness watchdog, not an editor UX SLA.
+          # Keep the blame sequence without collecting memory/content dumps.
+          dotnet test mote.sln -c Release --no-build --logger trx `
+            --blame-hang-timeout 5m --blame-hang-dump-type none `
+            --results-directory '.cache/release-evidence/tests'
           if ($LASTEXITCODE -ne 0) { throw 'Complete solution tests failed.' }
       - name: Release package integrity tests
         run: python -B -m unittest discover -s tests -p test_release_packaging.py -v
@@ -108,7 +122,9 @@ jobs:
           retention-days: 30
 
   package:
-    needs: [identity, test]
+    # Native product evidence and managed suites are independent branches.
+    # Only release-assets may join them into a complete download set.
+    needs: identity
     strategy:
       fail-fast: false
       matrix:

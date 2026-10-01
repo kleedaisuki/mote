@@ -36,13 +36,14 @@ SHA and canonical stable version. The source project version must agree. The
 workflow pins SDK 10.0.400/runtime 10.0.11 to match the distributed notice texts;
 a toolchain upgrade must deliberately update the runtime notice inventory.
 
-The gate order is source identity, complete solution tests on Windows/macOS,
-packer/oracle negative controls, native-architecture AOT publish on four runners,
-archive extraction and exact inventory, actual packaged CLI/runtime/GUI startup,
-six-format edits/Save/fresh-process reopen, seven embedded codec checks, then
-post-run byte verification. Evidence is retained on failure. Download candidates
-are uploaded only after that RID passes; the complete release-assets set is
-assembled only if **all four** pass. The workflow has read-only repository
+After source identity passes, two branches run concurrently: complete solution
+tests and packer/oracle negative controls on Windows/macOS; and native-architecture
+AOT publish on four runners, archive extraction and exact inventory, actual
+packaged CLI/runtime/GUI startup, six-format edits/Save/fresh-process reopen,
+seven embedded codec checks, then post-run byte verification. Evidence is retained
+on failure. Download candidates are private CI artifacts uploaded only after that
+RID passes; the complete release-assets set is assembled only if **both complete
+test suites and all four package jobs** pass. The workflow has read-only repository
 permissions and never creates tags/releases or overwrites existing release assets.
 
 Root publication protocol: inspect a successful run of the intended exact commit,

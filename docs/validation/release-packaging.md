@@ -102,6 +102,47 @@ Windows test failure. The next hosted run must confirm all three suite reports
 are retained. Only workflow PowerShell syntax was checked locally for this fix;
 already-passing packer tests were not repeated.
 
+### Restore/build/test stage observability and liveness
+
+During the second qualification run `36917391363` at source `dff3b4a`, the
+Windows job completed successfully, while the combined macOS solution-test step
+remained opaque for more than six minutes. The first macOS job had been cancelled
+after approximately eighteen minutes without usable logs. Neither observation
+establishes whether restore, compilation, a test or runner infrastructure caused
+the delay; no product failure is inferred from elapsed time alone.
+
+The next workflow revision separates complete-solution restore, complete-solution
+build (`--no-restore`, still including Desktop), and complete-solution tests
+(`--no-build`). VSTest test execution additionally uses
+`--blame-hang-timeout 5m --blame-hang-dump-type none`. The official VSTest
+contract makes this a per-test watchdog (renewed after each xUnit test case),
+terminates the test host on expiry and implies blame collection without collecting
+memory dumps. Existing recursive always-upload retains TRX/blame sequence evidence
+under the same project-local results directory. This is an infrastructure liveness
+diagnostic, **not a five-minute editor experience target**, a retry or a weaker
+assertion. It does not diagnose a restore/build stall, which the newly separated
+steps identify independently.
+
+Only YAML/workflow PowerShell syntax is checked locally for this narrow change;
+no full solution tests, packer tests or GUI are rerun. The next actual hosted run
+must validate stage behavior and any timeout evidence rather than treating this
+configuration as a successful runtime test. Primary reference:
+[Microsoft dotnet test with VSTest](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test-vstest).
+
+### Parallel qualification branches, joint release barrier
+
+After immutable source/version identity passes, the four native publish/package
+jobs and the two complete-solution test jobs now run concurrently. Native runtime
+evidence therefore remains available even if an independent managed-suite branch
+is slow or fails. A successful per-RID candidate upload is only a private CI
+artifact, not a published or fully qualified release. The final `release-assets`
+job still requires **both** the complete test matrix and the complete package
+matrix to succeed (`needs: [test, package]`). Any failed suite or RID prevents
+the complete download set. No test, assertion, product probe or publication gate
+is removed; this is a dependency-graph scheduling change only. The narrow YAML
+graph check verifies identity-only package admission and the unchanged joint
+barrier; no test rerun is needed for this edit.
+
 The root owner must freeze commit/version/default profile and run the workflow.
 Only a complete successful release-assets job for the intended commit is eligible.
 Before upload, inspect run/job evidence and verify checksum/index identities. A
