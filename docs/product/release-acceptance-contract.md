@@ -32,7 +32,7 @@ running the full stress matrix on each release change.
 | Layer | Required outcome | Evidence and limits |
 | --- | --- | --- |
 | Source correctness | Exact Unicode/newline/encoding preservation; one canonical document and Engine history; stale results rejected; pending native input cannot silently bypass Save/replacement | Full solution tests and source-specific regressions; portable tests alone do not certify native controls |
-| Ordinary product task | Actual source control opens each small Markdown/TOML/JSON/YAML/CSV/plain-text sample; a located selection is replaced; Undo/Redo are exact; Save produces independently expected bytes; a new GUI process reopens them | Native release task workflow for each RID; synthetic samples are behavioral controls, not user/market observations |
+| Ordinary product task | Actual default source control opens each small Markdown/TOML/JSON/YAML/CSV/plain-text sample; a located selection is replaced; Undo/Redo are exact; Save produces independently expected bytes; a new GUI process reopens them | Native release task workflow for each RID; synthetic samples are behavioral controls, not user/market observations |
 | Product usability | Bare launch/help/version and error handling agree with the documented default; global source Find/Goto/select/history do not expose internal page numbers; built-in themes/config preserve semantics | Route/model tests, real native task witness and public manual; direct messages/AppKit selectors are labelled as such |
 | Runtime | Published image executes on its native architecture; embedded codecs and GUI create/close successfully; no separately installed .NET prerequisite | Execute actual package payload on native hosted runner; console marker is not GUI readiness |
 | Package integrity | Immutable full source SHA; version/architecture/build identity; complete per-file manifest and asset checksums; executable permission and macOS bundle metadata; license and corresponding source accompany release | Package round-trip validation, actual packaged-binary qualification and independent archive audit |
@@ -58,6 +58,16 @@ examples with independent expected outputs. They do not replace parser
 conformance/resource tests, nor prove all syntax receives complete analysis.
 Incomplete/provisional analysis must remain explicit; absence of diagnostics in
 an incomplete result is not a clean global verdict.
+
+Text-byte correctness must not excuse a proven ordinary rendering defect. In
+particular, a Complete CSV parse is not authority to label native visible rows
+Ready when their source-backed payload is absent. The ordinary last-record
+source-follow case needs matching same-version navigation, projection and native
+row slots. Final macOS task capture should observe the saved document's current
+analysis before rapid subsequent lifecycle edits, rather than photographing an
+earlier version and interpreting it as the final semantic view. These are
+correctness/readiness conditions, not additional numerical performance budgets
+or exhaustive parser/browser/pixel certification.
 
 Win32 messages and in-process AppKit mutations verify distinct native paths;
 neither proves physical keyboard delivery, real Pinyin candidate/marked-text
