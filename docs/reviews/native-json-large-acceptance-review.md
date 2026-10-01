@@ -87,3 +87,39 @@ The prior stale local x64 1 MiB pilot is not current product acceptance. This
 review does not certify real IME, physical keys, foreground focus, screen reader
 behavior, compositor presentation, disk-cold startup or latency tails. One traced
 sample per size is explicitly a capability/causal-phase pilot, not an SLA.
+
+## Scoped recheck: Save observer interference and failure metadata
+
+Date: 2026-10-01. Inspected subsequent uncommitted changes to `save_exact`,
+Windows/Mac observations and failure cleanup, Swift guard metadata and three
+new portable regressions. **No new substantive finding.** No native launch or
+redundant portable suite run was performed. The trace predicate was not changed,
+so the previously completed adversarial trace reproduction was not repeated.
+
+The Save observer now requires a witnessed dirty title, dispatches Save once,
+and polls native metadata until the title is clean before calling target
+`stat`/streamed digest. No target file read remains in the pending-Save polling
+loop. The product title contract in `NativeEditorController.BuildView` uses the
+same ` •` suffix. Clean title is necessary, not sufficient: exact size/hash and
+successful Save/terminal trace remain independent acceptance requirements. This
+removes the demonstrated observer-induced Windows DELETE-sharing interference
+without weakening the byte oracle. The polling also reads bounded source/status
+metadata through the existing driver; "title-only" means file-I/O-free, not
+literally a single AX/Win32 attribute read.
+
+Failure cleanup records bounded owned-dialog count/enabled/dirty metadata on
+Windows, or the last sanitized Mac report. It makes one owned normal-close
+attempt, leaves workload status failed/blocked, does not dismiss unknown dialogs
+or retry Save, and retains forced kill/reap if the child stays alive. Mac reports
+whitelist fixed status/guard-stage enums and exact numeric/Boolean fields before
+retention; titles, arbitrary AX strings and raw exception messages are not
+forwarded. Added Swift fields and AXError.rawValue assignment are consistent
+with surrounding native client patterns; actual compilation of this changed
+Swift source remains hosted validation, not a static-review claim.
+
+The added regressions assert no hash before clean acknowledgement, wrong bytes
+cannot pass despite clean UI, and failed Mac guard metadata survives without AX
+strings. They are portable contract tests rather than OS sharing/input tests.
+Owner reports 12/12 portable cases and one stale-binary local 100 MiB full
+Save/reopen/terminal pass; this reviewer did not independently rerun them and
+does not promote the stale binary result to current-source four-RID acceptance.
