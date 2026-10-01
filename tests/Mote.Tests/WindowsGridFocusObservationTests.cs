@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 using Mote.Native;
 using Mote.Native.Windows;
 using Mote.Native.Windows.Accessibility;
@@ -196,6 +197,22 @@ public sealed class WindowsGridFocusObservationTests
         Assert.Equal(TelemetryFocusPane.OwnedOther, WindowsGridFocusClassifier.Classify(99, roles, true));
         Assert.Equal(TelemetryFocusPane.OwnedOther, WindowsGridFocusClassifier.Classify(10, roles with { Source = 0 }, true));
         Assert.Equal(TelemetryFocusPane.None, WindowsGridFocusClassifier.Classify(0, default, true));
+    }
+
+    /// <summary>An unpublished or retired lifetime returns unknown native evidence before any native read.
+    /// This bypasses construction intentionally: no HWND, native resource, or Dispose call is permitted.
+    /// On non-Windows runners an accidentally reached native import would fail rather than return this sample.</summary>
+    [Fact]
+    public void Unpublished_lifetime_capture_returns_unknown_without_native_resources()
+    {
+        // Only managed allocation and the interface's lifetime-false branch are exercised.
+        // The enclosing Windows type annotation does not describe this resource-free branch.
+#pragma warning disable CA1416
+        var evidence = (IWindowsGridFocusEvidence)RuntimeHelpers.GetUninitializedObject(typeof(WindowsCsvGrid));
+#pragma warning restore CA1416
+        var sample = evidence.CaptureFocusEvidence();
+        Assert.Equal(new TelemetryFocusSample(TelemetryFocusThreadRelation.Unknown,
+            TelemetryFocusThreadRelation.NonOwner, TelemetryFocusPane.Unavailable), sample);
     }
 
     /// <summary>Programmable evidence and action boundaries, deliberately independent of native implementations.</summary>
