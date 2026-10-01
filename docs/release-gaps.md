@@ -1,4 +1,19 @@
-# Release gap audit — strict one-binary product
+# Release gap audit — historical evidence and current delivery boundary
+
+## Current release decision (2026-10-02)
+
+The user supersedes the literal-single-binary goal: multi-file application
+packages are allowed, Native AOT remains required, and the next deliverable is a
+versioned usable release with a maintained landing page, manual and changelog.
+The historical investigations below retain their original failures/scopes;
+they are not an ever-growing requirement to redo every reference probe before
+shipping. Release authority is [task-level acceptance](product/release-acceptance-contract.md)
+and [the versioned release page](releases/v0.1.0.md). Package/default status and
+exact binary provenance are recorded there when actual qualification completes.
+No aggregate green or old one-file inventory replaces new-product validation.
+Unsigned/non-notarized macOS distribution, actual IME/reader scope, capacity and
+physical-presentation limits must be explicit in the public documentation.
+
 
 Audit date: 2026-10-01 (implementation evidence [CI 36836309613](https://github.com/kleedaisuki/mote/actions/runs/36836309613) / `b4093b8`, blocking-gate followup [CI 36837499493](https://github.com/kleedaisuki/mote/actions/runs/36837499493) / `a33c5ca`; current verdict below; historical checkpoints retain their original scope). This is a **moving source audit**, not a claim about a shipped release. `P0` means the hard user contract cannot yet be met; `P1` means substantial verification or integration remains. Owners and decisive experiments are included so a gap can be closed by evidence. Target architecture: [architecture.md](architecture.md); incremental migration: [incremental-plan.md](incremental-plan.md); local-path/theme contracts: [configuration.md](configuration.md), [themes.md](themes.md).
 

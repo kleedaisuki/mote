@@ -169,8 +169,9 @@ First establish functional acceptance, regardless of file size:
 
 The numbers below are **starting hypotheses for owner review and task testing**.
 They are not measured mote results, literature-derived universal thresholds,
-current CI gates, or reasons to optimize before confirming value. They do not
-override any stricter existing architecture or phase-specific budgets. Calibrate them
+current CI gates, or reasons to optimize before confirming value. They and the historical architecture budgets have no release-gate authority
+without task/context approval. The [release acceptance contract](release-acceptance-contract.md)
+separates ordinary tasks, capacity stress and mechanism experiments. Calibrate them
 on a documented representative SSD laptop/hardware class rather than the fastest
 development machine; test Windows and macOS independently.
 

@@ -1,5 +1,13 @@
 # Ordinary editing: one source surface, not a prettier input ribbon
 
+> Current delivery decision, 2026-10-02: the user permits multi-file application
+> packages while retaining Native AOT. Original one-executable constraints and
+> provisional numerical candidate targets below are historical; use the
+> [release acceptance contract](../product/release-acceptance-contract.md) for
+> current task and qualification authority. Existing CLI routes, source/history,
+> pending-input safety and `~/.mote` contracts remain protected.
+
+
 Date: 2026-10-01. Status: **architecture recommendation and discriminating
 implementation contract; not a default change or native acceptance result**.
 Source inspection checkpoint: `6736b0d26031454d25eced015fca401ee3f59bd1`.

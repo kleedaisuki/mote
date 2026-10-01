@@ -1,4 +1,35 @@
-# Native latency acceptance: the next measurable slice
+# Native latency evidence: ordinary tasks and historical stress protocol
+
+## Current release authority (2026-10-02)
+
+The former primary 1/10/100 MiB ladder is reclassified as an explicit
+**capacity/mechanism** protocol, not ordinary user demand or a release latency
+SLO. Fixtures, raw measurements, failed/censored cases and strict correctness
+readers are retained. No old failure is changed into a pass. Literal single
+binary inventories describe historical builds; Native AOT application packages
+are now allowed. See the [independent standards audit](research/editor-experience-standard-audit.md)
+and [release acceptance contract](product/release-acceptance-contract.md).
+
+Ordinary release validation first checks complete source access and exact task
+outcomes on representative small Markdown/TOML/JSON/YAML/CSV/text samples:
+find a known value, navigate globally, replace selected text, Undo/Redo, Save,
+and reopen a fresh product process. These self-created samples are behavioral
+regressions, not observed market demand or parser-conformance proof. Full solution
+semantic/encoding/history tests remain blocking. Each adapter names its actual
+input method; direct Win32 messages and in-process AppKit calls cannot be called
+physical keys or real Pinyin.
+
+Record launch/edit/semantic/Save endpoints and raw failures when available;
+keep observer durations separate from child causal phases and from physical
+presentation. A process watchdog only prevents hung infrastructure. No generic
+16/50/100 ms threshold or memory-to-file-size ratio is approved for this release;
+do not fabricate descriptive tails from a few samples or optimize toward these
+historical hypotheses. Slow, nonfunctional ordinary work remains a defect that
+requires task-level evidence, not permission to hide a blocking delay.
+
+The remainder of this document preserves the original research protocol and its
+scope. Its mandatory repetition counts and size matrix are **not** automatic
+obligations for the initial ordinary-task release.
 
 ## Decision and present bottleneck evidence
 
@@ -62,9 +93,9 @@ use the observer's clock. Persist both as separate endpoint families. The causal
 audit uses span IDs and revisions, never UTC timing subtraction. A first
 successful source draw can occur **before** semantic readiness.
 
-## Workload and fair-control matrix
+## Historical capacity/mechanism workload and fair-control matrix
 
-Primary scope: published strict-single-binary Native AOT **win-x64** and
+Historical research scope: published strict-single-binary Native AOT **win-x64** and
 **osx-arm64**, ordinary/default launch policy and isolated convention-default
 configuration/theme. Add win-arm64/osx-x64 only after their capability/focus path
 is certified; do not infer them from another ABI. Preserve the binary SHA,
@@ -103,7 +134,7 @@ and incomplete/never-drawn intervals are retained separately from successes.
 The most recent scroller probe's hosted outcome remains a separate integration
 gate; this artifact tool does not rerun or supersede it.
 
-## Repetitions and uncertainty
+## Historical repetition design and uncertainty (not a release prerequisite)
 
 1. **Capability pilot:** one 1 MiB case per format on each target, one long-line
    negative/layout control. It answers whether the driver and endpoint work;
