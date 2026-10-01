@@ -101,3 +101,40 @@ Follow-up verification: Release `NativePostedCallbackTests` with
 `.cache/validation/posted-callbacks/posted-callbacks-windows-notice.trx`.
 The shared session writer and menu implementation are unchanged in this
 follow-up, so the already-passing menu cases were not repeated.
+
+## Owned AppKit queue fault control (hosted execution pending)
+
+`MacPostedCallbackProbe` extends the existing strict in-process Mac Flow
+diagnostic, without a new CLI mode, workflow, production fault hook, or tracing
+configuration. Once the actual shell is shown, the diagnostic queues one
+throwing callback through `MacEditorShell.Post`, followed by its ordinary
+successful Flow check. The first callback throws a nonfatal custom exception;
+its `Message` getter increments a separate counter and throws a second
+nonfatal exception. The actual AppKit `moteDrainPosted:` selector must contain
+both faults and continue to the later queued item.
+
+The later item requires **one** primary callback invocation and **one** message
+getter access before running its existing checks. Duplicate queueing fails
+instead of retrying. A successful counter check prints the fixed marker
+`Mac posted callback primary/report fault containment passed.` The getter
+throws before `ShowError` can construct an `NSAlert`, so there is no modal
+dialog, key posting, clipboard access, input-source mutation, or injected
+exception text in telemetry. Production guard code is unchanged.
+
+This control distinguishes actual created-AppKit queue continuation from the
+portable helper and uncreated Windows-shell checks above. Native AOT
+compilation alone does **not** establish that continuation occurred. Actual
+execution on both macOS RIDs remains pending in the next hosted strict Flow
+run; record the fixed marker and original process exit before upgrading this
+claim. The control does not certify telemetry emission (tracing stays at its
+existing setting), native Objective-C exception containment, fatal recovery,
+Windows dispatch, wake completeness, external input, or performance.
+
+Local verification on the repository Windows host: `dotnet build
+src/Mote.Native/Mote.Native.csproj -c Release -p:PublishAot=false
+-p:TreatWarningsAsErrors=true --no-restore` succeeded with zero warnings and
+zero errors. This verifies managed compilation of the new helper, not native
+Mac execution or the subsequently integrated Flow call sites. Source checks
+confirm that the hostile getter throws during argument evaluation, before
+`ShowError`, and that the existing posted guard excludes out-of-memory faults;
+the injected exceptions are ordinary `Exception`/`InvalidOperationException`.
