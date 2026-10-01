@@ -121,3 +121,56 @@ engine UTF-8 policy, native GUI/AOT execution, macOS behavior, arbitrary nesting
 or budget-free large-session certification. Retain all original failure artifacts and validate newly changed recovery cases
 before treating this revision as integration-ready; do not repeat unrelated
 completed work.
+
+## Final integration addendum: recovery and bounded coordinates
+
+Independent final integration review pins public recovery implementation
+`9f57a3895609b8bb10704d49c3e62998196d4a21` and validator fixtures `e6204ea`.
+Artifact ownership was explicitly handed off after `f226a28`; this addendum does
+not overwrite the earlier review or erase its initially missed diagnostic-loss
+issue. **No remaining substantive defect found in the scoped public recovery
+integration.** No production/test files were changed and no suites were rerun.
+
+Verified the source contracts together, rather than treating parser validity as
+the only acceptance criterion:
+
+* `TomlPolicy.Analyze` retains whole-document grammar witnesses and merges local
+  syntax/inline and normative namespace witnesses. Exact record equality governs
+  deduplication; independent messages/spans are not collapsed to the first error.
+  Whole-source projection remains the lossless parser tree.
+* Public validation accepts each recoverable local unit into the ownership model
+  without retaining a whole-document statement cache. Invalid syntax never
+  mutates the index. Invalid headers quarantine subsequent assignment ownership;
+  only a successful later header restores a certified scope. Malformed multiline
+  owners do not gain guessed seams, and their whole-parser grammar evidence stays
+  available.
+* The public-only journal reverses newly added bindings and parent-origin/scope
+  changes in reverse order after a failed operation. A failed assignment does not
+  poison the next valid header; a failed header cannot attach its following keys
+  to the preceding table. Normal bounded cache construction does not opt into
+  this journal or public recovery and retains its existing first-refusal/budget
+  behavior. No resource refusal becomes a Complete certification here.
+* Final `TomlStatementSummary.DiagnosticSpan` clamps both local offset and length
+  to the actual local unit before the reader shifts into absolute UTF-16
+  coordinates. An EOF witness at local length is consequently zero-width, not
+  one character beyond the immutable source. Existing public whole-parser span
+  clamping and exact grammar-witness retention are preserved.
+
+Independently parsed `.cache/toml-uniform/toml-recovery-anchors.trx`: **801 executed,
+773 passed, 28 failed, zero unexecuted**. Parsed the retained corrected
+`toml-recovery-anchors-fixed.trx`: **801 executed, 801 passed, zero failed or
+unexecuted**. The same bounds assertions and failing corpus fixtures remain;
+the correction does not relax their oracle. The final set comprises 744
+public-policy/decoder cases and 57 bounded reuse cases, with nine entries still
+testing only strict byte decoding. The reviewed local-summary SHA-256 matches
+the retained validator identity:
+`E957DD69D9A49ABEA789C18C201B51C0ABCB0B928C7D9F08A7608A5162918145`.
+
+This closes the demonstrated independent-diagnostic loss and local EOF span
+regression, including the directed illegal-prefix header cases, within this
+retained scope. It does not certify all possible malformed recovery shapes or
+decoded scalar values, Native AOT/GUI behavior, arbitrary nesting, or performance
+neutrality. Subsequent incremental token-projection changes are a separate scope;
+their in-progress source does not extend this pinned verdict. The additional
+public parsing pass still requires the separately owned matched performance
+measurement, not an inferred zero-cost claim.
