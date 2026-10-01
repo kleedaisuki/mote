@@ -19,7 +19,7 @@ internal static class NativeSourceCapabilityProbe
     {
         if (!Hosted()) return 3;
         string directory;
-        try { directory = AdmitDirectory(output); }
+        try { directory = AdmitDirectory(output, Environment.CurrentDirectory); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { return 2; }
         PhaseReport report;
         try { Directory.CreateDirectory(directory); report = new PhaseReport(Path.Combine(directory, "report.jsonl")); }
@@ -57,12 +57,17 @@ internal static class NativeSourceCapabilityProbe
         (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("RUNNER_OS") == "Windows" ||
          OperatingSystem.IsMacOS() && Environment.GetEnvironmentVariable("RUNNER_OS") == "macOS");
 
-    /// <summary>Requires a new repository-contained destination and refuses linked existing ancestors.</summary>
-    private static string AdmitDirectory(string output)
+    /// <summary>
+    /// Requires a new repository-contained destination and refuses linked ancestors.
+    /// Run supplies its actual current directory; the explicit private root lets
+    /// portable tests exercise admission without mutating process-global cwd.
+    /// Relative outputs resolve against that same root, preserving Run semantics.
+    /// </summary>
+    private static string AdmitDirectory(string output, string repositoryRoot)
     {
-        var root = Path.GetFullPath(Environment.CurrentDirectory);
+        var root = Path.GetFullPath(repositoryRoot);
         Require(Directory.Exists(Path.Combine(root, ".git")), "repository-root-required");
-        var path = Path.GetFullPath(output);
+        var path = Path.GetFullPath(output, root);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         Require(new[] { ".cache", ".temp" }.Any(area => path.StartsWith(
             Path.Combine(root, area) + Path.DirectorySeparatorChar, comparison)), "artifact-boundary-invalid");

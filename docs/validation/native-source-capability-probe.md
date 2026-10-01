@@ -160,3 +160,19 @@ Earlier build/test identities do not qualify the changed guard; focused portable
 guard tests, independent review and the coordinated final build are required.
 No local native invocation or process-global environment test accompanies this
 correction.
+
+
+### Private testability seam and excluded harness attempt
+
+The first 12 focused admission cases failed before exercising their intended
+guards because VSTest's current directory was its output bin directory, not the
+repository root. Those results are excluded as unqualified harness evidence;
+they do not qualify or refute ancestor-link admission behavior.
+
+The private AdmitDirectory helper now receives an explicit repositoryRoot. Run
+always passes its actual Environment.CurrentDirectory; relative output arguments
+resolve against that same root, preserving normal invocation semantics. Portable
+tests pass their discovered actual repository root without changing process cwd
+or environment variables. This adds no public API, CLI option or environment
+override. The corrected 12-case qualification and affected build remain pending;
+the unchanged 33 binding/model cases must not be replayed solely for this seam.
