@@ -91,3 +91,43 @@ read-only `EM_GETLANGOPTIONS` before/after, without changing the user's layout.
   readers, complete edit/Undo/Save journeys and end-to-end performance remain
   unverified by this review. Equal requested em size is not a visual identity
   claim across DirectWrite and RichEdit.
+
+## Hosted follow-up: run 36814164862
+
+Independently audited the completed
+[CI run](https://github.com/kleedaisuki/mote/actions/runs/36814164862) at
+`874a7ecaec291af12b2501fc815024271fbb08c3`. Evidence downloaded under
+`.cache/ci-run-36814164862-typography-review/`; no tests were rerun.
+The typography production/test source is unchanged between the reviewed commit
+and this checkpoint.
+
+| Raw evidence | Observed outcome |
+| --- | --- |
+| Windows strict job `110215496299`, `windows-test.log:175` | `Mote.Tests.dll`: 1242 passed, 0 failed, 0 skipped, 1242 total; 55 seconds. Themes 14/14 and configuration 9/9 also pass. |
+| `win-x64` publish job `110215496463`, log `:126` and publish inventory artifact | Native code generated; payload is exactly `mote.exe`, 7,130,624 bytes; zero non-executable payload files and zero bundled native libraries. |
+| `win-arm64` publish job `110215496390`, log `:126` and publish inventory artifact | Native code generated; payload is exactly `mote.exe`, 7,272,448 bytes; zero non-executable payload files and zero bundled native libraries. |
+| Published executable smoke output, x64 log `:455`, ARM64 log `:264` | Both report `mote-native-windows-canvas-ready cases=5 ascii=2 clusters=5`. This is the existing offscreen text-canvas probe, not the new RichEdit typography measurement. |
+
+The strict Windows job runs `dotnet test mote.sln --configuration Release
+--no-build --blame` with no filter on the `windows-latest` x64 runner. The
+unchanged test source contains 13 typography cases (one native measurement,
+five valid conversions, seven invalid conversions). Complete-suite success with
+zero skips supports their inclusion and passing outcome; the increase from the
+prior 1229-case suite is exactly 13. **The successful normal-verbosity raw log
+does not enumerate these cases or print the native JSON**, and no successful
+per-case TRX is uploaded. Therefore this is all-suite execution evidence for
+13 passing included cases, not a separately retained hosted typography report
+with auditable applied-height values. The exact 195-twip measurement above
+remains backed by the paired local artifacts, not newly observed CI JSON.
+
+The AOT matrix publishes and probes the application on native Windows x64 and
+ARM64 runners; it does **not** execute `WindowsCanvasTypographyTests` or the
+Mote.Tests suite on ARM64. Consequently the new RichEdit default/bound/inserted
+font measurement is hosted **x64 JIT-test evidence only**, not an ARM64/AOT
+typography measurement. The raw native build/inventory and existing smoke
+results close the new-code AOT publish compatibility question on both Windows
+RIDs, without closing that remaining platform-specific applied-font gate.
+
+All high-DPI/per-monitor, foreground physical IME, fallback/baseline visual,
+screen-reader and end-to-end performance limits above remain open. A green
+publish job does not replace those acceptance checks.
