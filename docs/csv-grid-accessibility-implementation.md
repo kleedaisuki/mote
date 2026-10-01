@@ -247,3 +247,137 @@ complete write, one final `dotnet build tests/Mote.Tests/Mote.Tests.csproj
 The missing-resource failure remains separately retained. Neither compilation
 result is a Grid runtime test result. Runtime correctness remains unverified
 until the actual hosted owned seams and unchanged external client execute.
+
+## Focus provenance construction after CI 36858899063
+
+The current final-source integration at `c856816` establishes both new managed
+owned-HWND regressions on both native Windows architectures (2/2 each), while
+the original published-AOT client still exits 1 with the same seven product
+errors on each RID. The separately owned authoritative hosted audit is
+[Windows Grid CI evidence](validation/windows-grid-accessibility-ci.md).
+Passive SW_SHOWNA is therefore **not established as a cure**. Do not repeat the
+successful owned-HWND test or reinterpret its scope as the missing cross-process
+callback proof.
+
+### Missing observations and source constraints
+
+The native adapter's `Focus` admits only its captured managed owner thread;
+off-owner calls return Unsupported before native SetFocus. The generated COM
+provider advertises `UseComThreading`, and the shell requests STA before HWND
+creation. The fixed external report text provides neither the native callback
+thread relation nor the actual adapter return. Legitimate owner-thread delivery,
+real off-owner refusal, and UIA framework behavior must be separate outcomes.
+The initial physical pane also needs an independently established source HWND,
+not the client's arbitrary initial GUITHREADINFO focus handle.
+
+An external client alone cannot measure the server callback's native thread:
+client apartment/thread IDs, a provider option flag, a normal COM return, and
+FocusedElement are not server-thread witnesses. A timeout-driven focus dispatcher
+is explicitly rejected: native focus can reenter and complete after timeout,
+so a failed caller receipt cannot promise no late effect. No FocusSource reset,
+SetForegroundWindow, AttachThreadInput, global event tap, retry, or changed
+legacy oracle is part of this construction.
+
+### Proposed opt-in production boundary (awaiting root approval)
+
+Instrument **only the actual Windows Grid provider Focus invocation**, before
+and after its existing sole adapter action; do not instrument ambient Activity
+or infer a request from selection/focus labels. A Windows-only observation
+interface implemented by the adapter supplies content-free native samples.
+It does not change shared Engine/Formats/Mac actions or focus admission.
+
+| Fact | Construction | Persistence constraint |
+| --- | --- | --- |
+| Actual callback thread relation | GetCurrentThreadId versus GetWindowThreadProcessId of the live table HWND, independently compare with the existing managed owner admission | Separate closed native_thread_relation and managed_admission_relation owner/non_owner/unknown fields; no numeric thread/PID/HWND values |
+| Physical pane before/after | GetGUIThreadInfo for that explicit native owner thread; compare returned HWND against actual source/table/row/column/coordinate handles | Closed source/table/row_scroller/column_scroller/coordinate/owned_other/outside/none/unavailable names only; inspect no foreign metadata |
+| Source identity | Shell passes its actual native input HWND (Canvas input or legacy source) at Grid creation; enabled capture validates live PID/thread/parent identity and rejects changed adapter lifetime | Native handle stays process-local; Canvas source absence never becomes a legacy fallback; no document text/path or new provider tree |
+| Target | Provider knows table versus cell | Closed table/cell classification; no names or coordinates |
+| Admission result | Capture the existing GridAccessibilityResult returned by that exact adapter invocation; preserve translated HRESULT | Closed eight existing result names plus fault; no guessed outcome from HasKeyboardFocus |
+| Request identity | Immediately persisted nonambient receipt anchor under the session; terminal has a new span and that receipt as parent | Original-sink once-only completion; no retained Activity, producer lease, context string or fallback to another session |
+
+Proposed names are `native.grid.focus.received` and `native.grid.focus`; the
+receipt carries fixed thread/before/target facts, and its terminal carries the
+same facts plus after/result. A dedicated typed payload—not free-form attributes
+or opaque packed counts—must serialize only closed values. Schema-1 remains
+additive; existing Save/menu/input records keep their exact shapes and enum IDs.
+Strict readers accept these fields **only** on these two fixed operations and
+validate their operation-specific field/status/parent contracts. The generic
+privacy whitelist must not start accepting these fields on unrelated records.
+
+The exact receipt boundary is awaiting root's final choice. A lean two-operation
+boundary at `WindowsGridUiaBridge.Focus` observes the **adapter attempt**, where
+the exact eight-valued result exists before its many-to-one HRESULT map. If
+selected, its names must explicitly be `native.grid.focus.adapter.received` and
+`native.grid.focus.adapter`; early stale/unsupported `WindowsGridUiaNode.SetFocus`
+returns are outside that coverage, and missing adapter receipt is unobserved,
+not a certified absence of a provider call. A full Node.SetFocus-entry boundary
+instead needs a distinct provider-refused terminal disposition carrying its
+actual HRESULT without inventing an adapter result. It must preserve both
+existing early-return and actual adapter paths. Neither boundary may use a
+capturing lambda wrapper on the disabled path.
+
+For the adapter-specific boundary, freeze action status independently of query
+health: Applied/NoChange map to success; each of the other six existing adapter
+results maps to failure (a refused focus attempt, not a product/job verdict).
+An original thrown action maps to a fault terminal while preserving its throw
+and existing COM conversion. An unavailable physical/thread observation is a
+closed unknown fact, **not** a replacement focus result; it does not turn an
+Applied action into failure or an Unsupported action into success. Observation
+serialization/query failure must be contained separately and cannot fabricate
+a complete receipt/terminal pair.
+
+The disabled path must branch before any evidence capture/native query, allocate
+nothing, and execute the original action exactly once. Enabled observation may
+query focus but never sets it. Nonfatal observation faults must not alter the
+original return or escape COM, and must not call user-facing error UI. Missing
+receipt/terminal, failed query, drop/fault, censored shutdown or multiple requests
+remain incomplete/ambiguous, never inferred absence or an invented successful
+focus transfer. Published request lineage is a positive method-call witness,
+not an OS input delivery or physical-reader certificate.
+
+### Proposed independent sequential external discriminator
+
+Keep `tests/WindowsGridExternalProbe/Program.cs`, its project, all pins and old
+assertions unchanged. A separate temporary prototype under
+`.temp/windows-grid-focus-provenance/` will become a separately reviewed hosted
+client only after approval. It starts one owned published editor with existing
+MOTE_TRACE and MOTE_HOME options, no new application CLI. Native child discovery
+certifies source and Grid pane handles by exact launched PID/owner GUI thread,
+known parent/control identities and native visibility, **before any UIA query**.
+It records one physical pane sample at initial discovery, before/after each
+original read/selection block, before F6, and before/after one cell SetFocus.
+Source can legitimately be absent/unavailable; that is refused discovery, not
+an invented source assignment.
+
+Each sequential operation has a fixed operation label and one explicit client
+begin/end receipt; no rescue action, focus reset or repeated input occurs.
+Mirror the original selection and bounded tree-read sequence to preserve the
+suspect context, then post at most one F6 to the physically focused, certified
+owned HWND. Retain the independently classified actual pane and the original
+unmodified acceptance report; the new client's purpose is provenance, not to
+replace its failing expected cycle with a green adjusted oracle. One explicit
+cell SetFocus records the actual exception/HResult and before/after native facts.
+Server receipt/terminal pairs are reconstructed by their explicit span edges.
+There is no proposed cross-process request token: even a unique server pair
+within one client interval supports compatibility, **not a certified causal
+edge**. Retain the independent client/server graphs and classify cross-process
+operation attribution unjoined. No claim that unobserved Focus
+callbacks never happened follows from an incomplete or lossy trace.
+
+Both Windows RIDs must run against the strict published AOT binary, once, with
+exact process exits and retained raw report/traces. The old external client
+remains an independent non-gating product-fail oracle. Portable checks will
+cover closed-value serialization, explicit receipt/terminal graph integrity,
+default-off allocation, preservation of action/HResult and observation-fault
+containment; source/build checks are not native UIA execution.
+
+Primary runtime contracts:
+[GetWindowThreadProcessId](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid)
+identifies the window's creating thread;
+[GetCurrentThreadId](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentthreadid)
+identifies the executing callback thread;
+[GetGUIThreadInfo](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getguithreadinfo)
+queries an explicit GUI thread without adopting foreground/global focus;
+[ProviderOptions](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-provideroptions)
+documents COM threading/focus responsibilities but is not itself delivery proof.
+Existing CHI/TVCG motivation and reader/IME release gates remain unchanged.
