@@ -12,12 +12,12 @@ Cancelled while the Save scope is live, and a throwing complete idle publication
 cannot dispose a Success span before the caller handles the exception. No new
 Save operation, byte transformation, approval rule, or retry was introduced.
 
-One material **pre-existing** complete-idle publication ownership gap remains.
+At the initial review, one material **pre-existing** complete-idle publication ownership gap remained. The follow-up below records its resolution in `4f0ad17`.
 It is not a regression introduced by this commit, but prevents interpreting every
 Success/AnalysisPublished record as a still-current, completely installed result.
 Repair it while strengthening causal provenance, not by adding more log statements.
 
-## P2: idle publication may install superseded semantics and certify success
+## P2 (resolved in 4f0ad17): idle publication may install superseded semantics and certify success
 
 Location at reviewed commit: `src/Mote.Native/NativeEditorController.cs:2024-2036`
 (entry ownership checks), `2067-2078` (external installation and terminal status),
@@ -113,3 +113,53 @@ and local injected tests are distinct from hosted execution certificates.
 Relevant contract guidance: [.NET distributed tracing concepts](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/distributed-tracing-concepts)
 explains explicit parentage; causal truth must follow operation ownership rather
 than timestamp proximity or merely a normal callback return.
+
+
+## Follow-up review: 4f0ad17 resolves the identified ownership gap
+
+Reviewed `4f0ad173b7fda5b574ea003549a128912d32ed53` production and test diff
+against the original finding and actual `PresentAnalysis`/presentation identity
+semantics. **No substantive new defect was found in this narrow repair.** The
+previous P2 is resolved for the complete idle publication path.
+
+Both post-callback checks are present: the first precedes semantic submission;
+the second precedes AnalysisPublished/Success. The predicate checks disposal,
+reference identity of document/driver/policy, source version, document generation,
+page start/length, projection reference, analysis serial, and exact installed
+presentation identity. `PresentAnalysis` assigns exactly the checked next
+presentation sequence before calling the native shell; nested installation
+advances/replaces that identity, so even a same-version replacement is rejected.
+Generation also distinguishes replacement documents whose versions happen to
+match. No callback or await separates the captured facts from the initial
+projection/install invocation.
+
+Supersession calls one Discard helper, assigns Cancelled, records one
+AnalysisDiscarded and returns. It cannot subsequently emit AnalysisPublished or
+Success. A projection or either native installation exception still unwinds the
+Failure-initialized scope and preserves exception propagation. The old operation
+cannot alter the outcome of a newer scope. No Save, byte, telemetry schema or
+privacy contract changes occur in this follow-up.
+
+The six added cases distinguish pane callback from semantic callback and check
+actual overlay ownership, not just status strings: newer edits preserve the newer
+version; same-version replacement preserves its distinct coverage; viewport-only
+supersession preserves the prior overlay. They also require one scope, exact
+Cancelled/Success, exact discarded/published counts, single hook invocation, and
+absence of SECRET payloads. The semantic hook stores its overlay before invoking
+the nested transition, meaning assertions genuinely test whether stale work
+resumes and overwrites/certifies a replacement. One-shot hook replacement prevents
+fixture recursion without weakening the shipped callback path.
+
+Limits remain explicit: document replacement/disposal and every individual guard
+are source-reviewed rather than separately injected here. Viewport mutation uses
+a controlled private-field change; real reentrant resize/edit behavior is already
+established by the adjacent tests cited above. The repair cannot undo an external
+installation call already in progress; its guarantee is that stale controller
+work does not resume after reentry to overwrite newer semantics or certify
+success. It does not claim rollback of arbitrary native side effects.
+
+Reused recorded local results in `docs/validation/native-telemetry-outcomes.md`:
+expanded outcomes **11/11** and paint/controller regressions **164/164**. These
+completed checks were not rerun; no specific uncovered executable defect required
+another experiment. No production, test or CI file was edited for this review,
+and no new hosted/native-AOT or performance certification is implied.
