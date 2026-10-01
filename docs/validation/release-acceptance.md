@@ -487,3 +487,93 @@ Windows, complete Save and nine cells all passed. This exercises the newly added
 argument construction/binding, not only a Python function call. Retained:
 `.temp/release-semantic-artifact-audit/helper.ps1`, `helper-result.log` and
 `helper.stdout.txt`. No GUI/global setting/full-suite rerun or dispatch occurred.
+
+## Scoped final-view audit: failed run 36928548957
+
+Frozen source: **`832dae60ed5361ee45f652d39ef61dd2ae208d19`**. The run is a
+**terminal failure**: both Windows six-task final-view suites passed, but both
+Mac suites stopped at CSV stage 8 after their first four successful formats.
+Do not promote partial Mac tasks or green managed tests into a complete release.
+
+```powershell
+python -B .cache/release-ci-36928548957/product-audit/audit.py
+```
+
+This artifact-only audit reused the independent full-byte fixtures and applied
+the distinct Windows/Mac sidecar schema readers to the actual retained data.
+No GUI/product/test rerun, original-report rewrite or production change occurred.
+
+| Target | Completed source/Save/fresh-reopen/final-view tasks | Completed-task trace rows | Save version | Not certified |
+| --- | ---: | ---: | ---: | --- |
+| win-x64 | 6/6 | 729 | 5 | Physical input/pixels/reader and broad conformance |
+| win-arm64 | 6/6 | 722 | 5 | Same boundaries |
+| osx-x64 | 4/6 | 618 | 4 | CSV completion; plain-text task not started |
+| osx-arm64 | 4/6 | 652 | 4 | CSV completion; plain-text task not started |
+
+All **20 completed tasks** match independent original and saved bytes, protect
+their originals, and have successful fresh GUI process reopen evidence. Their
+**32 process traces / 2,721 rows** pass the existing strict session/causal/privacy
+checks. Every completed final-view sidecar matches the suite's retained checked
+sidecar result and is linked to a complete Save chain plus successful same-version
+parse/publication/style evidence. This is new evidence, not a reinterpretation
+of the earlier runs that captured only prefix text or lacked saved-version
+analysis publication.
+
+Both Windows targets actually use bare/default opening for edit and fresh reopen.
+Their sidecars bind the exact saved version/session, expected source units,
+current native status/preview and—on CSV—all nine actual label-checked cells.
+Both Mac targets completed Markdown/TOML/JSON/YAML with complete current coverage,
+zero diagnostics, admitted style/geometry identities, and token counts
+**10 /15 /10 /50**, respectively. All four targets' CLI/config cases pass their
+recorded contracts, including the actual bare/default source-surface install
+and readback witnesses in opt-in config traces.
+
+The incomplete Mac CSV evidence is deliberately preserved separately:
+
+- Both original and saved CSV bytes are independently exact, and each has a
+  complete successful Save chain at **version 4**.
+- Both have successful parse, publication and style phases at version 4.
+- Both stderr files say `Mac release workflow stage 8 did not complete.`; the
+  child returned 1, with no success marker.
+- Neither has a final semantic sidecar, final PNG or fresh GUI reopen record.
+  The plain-text directory/task was never reached.
+- Each CSV trace passes structural graph integrity (x64 **129 rows**, ARM64
+  **127 rows**), but graph/Save success is **not** CSV task completion.
+- Each retained trace also has an `analysis.to_presentation` failure at **version
+  3**. That older-version failure must not be attributed to the successful saved
+  version 4 or described as proof that current version-4 presentation failed.
+
+The frozen observer reveals a concrete architecture bias: `ProbeReleaseSemantics`
+passed `_csvGrid.AccessibilityFrame` to the final-ready model, while publication
+of that frame requires the **disabled-by-default experimental**
+`MOTE_NATIVE_GRID_ACCESSIBILITY` registration. A normal product run therefore
+could never satisfy a guard requiring that optional frame. This establishes an
+observer dependency defect; it does **not** establish actual visible CSV cells
+were correct. The product owner is changing the witness to inspect the actual
+installed render state without enabling experimental accessibility. Corrected
+runtime CSV/final-view evidence remains required in the next frozen run.
+
+The six retained TRX collections were independently enumerated: on each OS the
+main suite has **3,684/3,684** passed results, Themes **14/14**, Configuration
+**9/9**, zero failures or unexecuted results. These managed correctness checks
+remain distinct from the Mac AOT task failures.
+
+Suite executable identities (reported frozen binaries):
+
+- win-x64: `3E435AF7C3E35FDFA78C4ADACC035054CDBEB2B3FE8DDD0BC59D6D623CC51DE6`.
+- win-arm64: `AB9A72073A8925CEFFA299D736B57F6120C45AF5C9094CFECF5748C0F414300E`.
+- osx-x64: `4E323EF5A06944FBE0C0C20EE8A5281F1A945B68117D8D7996ED70FBF8396DD3`.
+- osx-arm64: `31198239A9195D6BF8AE0338ED0C2DD007CAD1875C6EA3B384714CF739F13814`.
+
+Reproduction/evidence:
+
+- `.cache/release-ci-36928548957/product-audit/audit.py` and `result.json`
+- `.cache/release-ci-36928548957/product-audit/test-counters.json`
+- `.cache/release-ci-36928548957/product-audit/frozen-mac-semantic-model.cs`
+- `.cache/release-ci-36928548957/product-audit/frozen-mac-semantic-observer.cs`
+- `.cache/release-ci-36928548957/product-audit/frozen-mac-grid-accessibility.cs`
+- `.cache/release-ci-36928548957/evidence/release-evidence-<rid>/product/`
+
+Supported verdict: Windows's new six-task default/final-view contracts pass;
+Mac's first four do too, but **neither Mac CSV nor Mac plain-text completion is
+certified, and the release remains failed**. No gate was waived or hidden.
