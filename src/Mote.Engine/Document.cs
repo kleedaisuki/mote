@@ -94,49 +94,8 @@ public sealed partial class Document : IDisposable
     /// chunks; opening a large file does not require a whole-file string allocation.
     /// </summary>
     /// <exception cref="DecoderFallbackException">The input is invalid for its detected encoding.</exception>
-    public static async Task<Document> OpenAsync(string path, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        path = Path.GetFullPath(path);
-        var before = FileStamp.Read(path);
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
-            64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        var marker = new byte[4];
-        var markerLength = await stream.ReadAtLeastAsync(marker, 4, false, cancellationToken).ConfigureAwait(false);
-        var (encoding, markerSize) = DetectEncoding(marker.AsSpan(0, markerLength));
-        stream.Position = markerSize;
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(marker, 0, markerSize);
-        var decoder = encoding.GetDecoder();
-        var bytes = new byte[64 * 1024];
-        var chars = new char[64 * 1024];
-        var chunks = new List<string>();
-        long length = 0;
-        int count;
-        while ((count = await stream.ReadAsync(bytes, cancellationToken).ConfigureAwait(false)) > 0)
-        {
-            hash.AppendData(bytes, 0, count);
-            var consumed = 0;
-            while (consumed < count)
-            {
-                decoder.Convert(bytes, consumed, count - consumed, chars, 0, chars.Length, false,
-                    out var bytesUsed, out var charsUsed, out _);
-                if (bytesUsed == 0 && charsUsed == 0)
-                    throw new IOException("The decoder did not make progress.");
-                consumed += bytesUsed;
-                AddChunk(chunks, chars, charsUsed, ref length);
-            }
-        }
-        decoder.Convert(Array.Empty<byte>(), 0, 0, chars, 0, chars.Length, true,
-            out _, out var finalChars, out _);
-        AddChunk(chunks, chars, finalChars, ref length);
-        var after = FileStamp.Read(path);
-        if (after != before) throw new IOException("The file changed while it was being opened.");
-        var document = new Document(RopeNode.FromChunks(chunks), path, encoding, markerSize > 0);
-        document._fileStamp = after;
-        document._fileHash = hash.GetHashAndReset();
-        return document;
-    }
+    public static Task<Document> OpenAsync(string path, CancellationToken cancellationToken = default) =>
+        OpenCoreAsync(path, null, cancellationToken);
 
     /// <summary>Applies a UTF-16 replacement and returns the new immutable snapshot.</summary>
     /// <example><code>document.Apply(new TextChange(5, 0, " world"));</code></example>
