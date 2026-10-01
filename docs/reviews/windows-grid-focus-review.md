@@ -348,6 +348,56 @@ trace/report and numerical process outcomes. Portable action/serializer/graph
 tests and successful native compilation cannot prove that callback delivery or
 the suspected initial-focus transition occurred.
 
+## Promoted client observation-truthfulness review
+
+Reviewed only the three promoted files under
+`tests/WindowsGridFocusProvenanceProbe/`, plus retained source-extraction manifest
+and logs. No previously completed native/producer/reader/graph tests were repeated.
+
+Two promotion corrections are sound at source level:
+
+- Prompt discovery now requires exact main ownership via GetParent in addition
+  to launched PID, GUI thread, shipped modal class and visibility.
+  `SelectUniquePrompt` refuses a second eligible window rather than selecting
+  whichever enumeration happens to visit last. The main/input/accept identities
+  remain process-local and no arbitrary window receives the coordinate action.
+- `ObserveBefore` is outside the action-error containment region. If the before
+  query throws, the body is not entered, `ActionAttempted=false`, Outcome is
+  `not_attempted`, observation fields carry the failure, and the original query
+  error propagates even for a normally allowed Focus refusal. Actual action
+  return/throw is recorded separately. `ObserveAfter` preserves that original
+  result and records failed after evidence as unavailable, not an invented
+  action throw. `ActionAttempted` witnesses client body entry, not OS/server
+  delivery; this boundary is explicitly documented.
+
+The retained pure-source extraction manifest lists the exact Observe/before/
+after/unique-prompt methods and report DTOs, SHA256s, no native imports, fake
+Snapshot and fixed fake exception mapping. Its log reports **8/8 controls passed**.
+The old-Observe negative log fails with `before was swallowed`, directly showing
+that the controls distinguish the old containment bug. These are executable
+branch/action-model checks, not native ownership, real exception mapping, whole
+UIA sequence or hosted process-lifetime certification.
+
+### New P2 finding: after-observation failure can still produce observed/exit0
+
+At this review checkpoint, Main sets `report.Classification = "observed"`
+unconditionally after RunSequence. Final classification and exit check only
+cleanup faults, not operation `ObservationException`. Trigger: the last
+`cell_focus_once` body returns, but its after Snapshot throws. ObserveAfter
+correctly records unavailable and an observation failure while preserving the
+body result; Main then marks the report observed and can return zero after normal
+child exit and unchanged fixture. This contradicts the stated complete
+observations/zero-exit contract and can present the missing decisive after-focus
+evidence as a successful diagnostic run.
+
+Confidence: high, direct executable branch analysis; no GUI experiment needed.
+Remedy: preserve actual body outcomes, but independently mark the report
+incomplete and return nonzero whenever a required observation fails. Add a pure
+source-extracted final-report classification control for returned body + failed
+after query. The existing 8/8 controls do not include Main's final classification,
+so they cannot falsify this finding. Reported promptly to the implementation
+owner; resolution remains pending at this checkpoint.
+
 ## Addendum: scoped dual-architecture hosted focus step
 
 Independent workflow-only review on 2026-10-01 examined the additive 26-line
