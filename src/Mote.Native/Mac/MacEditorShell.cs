@@ -266,6 +266,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         if (s_current is not null) throw new InvalidOperationException("Only one macOS editor shell may run per process.");
         _uiThreadId = Environment.CurrentManagedThreadId;
         s_current = this;
+        NativeSaveDiagnostic.Initialize();
         try
         {
             // A direct invocation of the system framework loads AppKit before objc_getClass.
@@ -322,7 +323,11 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
                 ObjC.Send(pool, ObjC.Sel("release"));
             }
         }
-        finally { s_current = null; }
+        finally
+        {
+            s_current = null;
+            NativeSaveDiagnostic.Shutdown();
+        }
     }
 
     /// <inheritdoc />
@@ -2159,7 +2164,10 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     { var shell = s_current; shell?.NotifyAfterComposition(shell.OpenRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Save(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.NotifyAfterComposition(shell.SaveRequested); }
+    {
+        NativeSaveDiagnostic.Record(NativeSaveDiagnosticStage.SelectorEntered);
+        var shell = s_current; shell?.NotifyAfterComposition(shell.SaveRequested);
+    }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SaveAs(nint self, nint selector, nint sender)
     { var shell = s_current; shell?.NotifyAfterComposition(shell.SaveAsRequested); }

@@ -680,6 +680,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             Path.GetFullPath(current), Path.GetFullPath(path),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         _saving = true;
+        NativeSaveDiagnostic.Record(NativeSaveDiagnosticStage.ControllerAdmitted);
         _ = Task.Run(async () =>
         {
             Exception? error = null;
