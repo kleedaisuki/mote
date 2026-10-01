@@ -152,11 +152,11 @@ public sealed class WindowsGridAccessibilityTests
 
     /// <summary>A stalled UI admission times out without a late mutation; concurrent commands stay bounded.</summary>
     [Fact]
-    public async Task External_selection_timeout_throw_and_focus_refusal_have_no_late_effects()
+    public void External_selection_timeout_throw_and_focus_refusal_have_no_late_effects()
     {
         if (!OperatingSystem.IsWindows()) return;
         using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim(); using var ready = new ManualResetEventSlim();
-        WindowsCsvGrid? grid = null; uint threadId = 0; var mode = 0;
+        WindowsCsvGrid? grid = null; uint threadId = 0; var mode = 0; Thread? caller = null;
         var owner = new Thread(() =>
         {
             if (!OperatingSystem.IsWindows()) return;
@@ -181,10 +181,22 @@ public sealed class WindowsGridAccessibilityTests
         {
             Assert.True(ready.Wait(5000)); var frame = ReadFrame(grid!);
             Volatile.Write(ref mode, 1);
-            var request = Task.Run(() => OperatingSystem.IsWindows() ? grid!.MutateSelection(frame.Id, new GridSelectionMutation.Clear()) : GridAccessibilityResult.Unavailable);
+            var result = GridAccessibilityResult.Unsupported;
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+            // This caller must reach the blocked HWND owner independently of the test runner's
+            // pool. Task.Run can remain queued while other tests synchronously occupy its workers.
+            caller = new Thread(() =>
+            {
+                if (!OperatingSystem.IsWindows()) return;
+                try { result = grid!.MutateSelection(frame.Id, new GridSelectionMutation.Clear()); }
+                catch (Exception error) { failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error); }
+            });
+            caller.Start();
             Assert.True(entered.Wait(5000));
             Assert.Equal(GridAccessibilityResult.Unsupported, grid!.MutateSelection(frame.Id, new GridSelectionMutation.Clear()));
-            Assert.Equal(GridAccessibilityResult.Unavailable, await request.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.True(caller.Join(5000));
+            failure?.Throw();
+            Assert.Equal(GridAccessibilityResult.Unavailable, result);
             release.Set(); Volatile.Write(ref mode, 0);
             // A synchronous no-change request waits behind the expired message, proving it has resumed.
             Assert.Equal(GridAccessibilityResult.NoChange, grid.MutateSelection(frame.Id,
@@ -195,7 +207,12 @@ public sealed class WindowsGridAccessibilityTests
             Assert.Equal(frame.Selection, ReadFrame(grid).Selection);
             Assert.Equal(GridAccessibilityResult.Unsupported, grid.Focus(frame.Id, new(1000, 16)));
         }
-        finally { release.Set(); PostThreadMessageW(threadId, 0x0012, 0, 0); Assert.True(owner.Join(5000)); }
+        finally
+        {
+            release.Set();
+            try { if (caller is not null) Assert.True(caller.Join(5000)); }
+            finally { PostThreadMessageW(threadId, 0x0012, 0, 0); Assert.True(owner.Join(5000)); }
+        }
     }
 
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
