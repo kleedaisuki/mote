@@ -209,3 +209,37 @@ Research motivation is reused from the contract's CHI/TVCG sources: reader
 orientation needs actual structure/navigation/feedback evidence, not merely a
 truthful label. No new literature claim or physical-reader result is inferred
 from this narrowly scoped investigation.
+
+### Passive visibility mechanism and pending discriminator
+
+Root approved replacing the six Grid child `SW_SHOW` calls with `SW_SHOWNA`:
+the [ShowWindow contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow)
+distinguishes activating `5` from nonactivating `8`. These surfaces are installed
+by asynchronous ready/pending analysis, not an explicit user input action.
+`WindowsGridInterop.ShowWithoutActivation` names that mechanism;
+`WindowsCsvGrid.Show` uses it for group, table, both scrollers, status and Go-to
+visibility. Hide remains `SW_HIDE=0`; keyboard F6, pointer selection, admitted
+owner-thread cell Focus and source Reveal retain their explicit focus paths.
+No global source-focus reset, COM apartment change, focus timeout dispatcher or
+provider/pattern ABI change was made. This is an independently justified passive
+visibility correction, **not a proven cause or cure for the hosted failure**.
+
+The added owned-window regression establishes source focus before Grid
+construction, Install, SetNavigation, Resize, Show, repeated same-version
+installation, selection-only mutation and provider reads; it does not reset
+focus to repair a failed transition. The retained F6 regression now checks both
+complete forward/reverse native cycles and both scroller/table/cell cached focus
+facts at each target. These are managed-provider reads over owned HWND seams,
+not an external COM or physical-reader certificate. The original external
+client and its refusal/selection/navigation assertions remain unchanged.
+
+No local HWND test was executed: even the retained offscreen NOACTIVATE setup
+must not be assumed incapable of disturbing the desktop while activation is the
+disputed boundary. Root owns hosted execution on both Windows architectures.
+The modified Native project compiled in Release with zero warnings/errors; log
+is `.cache/validation/windows-grid-focus/focus-native-build.log`. The final test
+source had previously compiled cleanly, but a subsequent concurrent TOML fixture
+resource addition temporarily made the full test project build fail with
+`CS1566` until that resource was materialized. That unrelated build observation
+is not a Grid test result. Runtime correctness remains unverified until the
+actual hosted owned seams and unchanged external client execute.

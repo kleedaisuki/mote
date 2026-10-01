@@ -5,6 +5,8 @@ namespace Mote.Native.Windows;
 /// <summary>Owner-data ListView ABI; all item and column counts remain bounded by the installed Grid.</summary>
 internal static class WindowsGridInterop
 {
+    /// <summary>Shows passive Grid child surfaces without taking activation from the user's current pane.</summary>
+    internal const int ShowWithoutActivation = 8; // SW_SHOWNA, not the activating SW_SHOW.
     internal const int First = 0x1000;
     internal const int GetItemCount = First + 4, SetItemCount = First + 47;
     internal const int InsertColumn = First + 97, DeleteColumn = First + 28;

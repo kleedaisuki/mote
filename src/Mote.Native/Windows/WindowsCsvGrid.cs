@@ -334,15 +334,19 @@ internal sealed class WindowsCsvGrid : IDisposable, IGridAccessibilityActions
         PublishAccessibility(true);
     }
 
-    /// <summary>Shows or hides table and logical scrollers together.</summary>
+    /// <summary>Shows passive table/navigation surfaces without taking activation; explicit input owns focus.</summary>
     internal void Show(bool visible)
     {
-        Win32.ShowWindow(_groupHandle, visible ? 5 : 0);
-        Win32.ShowWindow(_goToHandle, visible ? 5 : 0);
-        Win32.ShowWindow(_statusHandle, visible ? 5 : 0);
-        Win32.ShowWindow(Handle, visible ? 5 : 0);
-        Win32.ShowWindow(RowScroller, visible && _navigation is not null ? 5 : 0);
-        Win32.ShowWindow(ColumnScroller, visible && _navigation is not null ? 5 : 0);
+        // Ready/pending analysis may install after the user starts editing another pane.
+        // Visibility publication is not an input action and must not activate these children.
+        var show = visible ? WindowsGridInterop.ShowWithoutActivation : 0;
+        Win32.ShowWindow(_groupHandle, show);
+        Win32.ShowWindow(_goToHandle, show);
+        Win32.ShowWindow(_statusHandle, show);
+        Win32.ShowWindow(Handle, show);
+        var navigation = visible && _navigation is not null ? WindowsGridInterop.ShowWithoutActivation : 0;
+        Win32.ShowWindow(RowScroller, navigation);
+        Win32.ShowWindow(ColumnScroller, navigation);
         PublishAccessibility(true);
     }
 
