@@ -8,7 +8,23 @@ the old literal-binary constraint and unapproved size/latency promotion budgets
 are retired. See the [release acceptance contract](release-acceptance-contract.md)
 and [versioned release page](../releases/v0.1.0.md).
 
-Latest completed candidate: `9fecef2d5ede8b0c593e709bdd6b39d7ad3e6986`,
+First complete passing release candidate:
+`f2b2de77912b7bb57baa6c72947d392c9b1f9668`,
+[CI 36925090282](https://github.com/kleedaisuki/mote/actions/runs/36925090282).
+Both complete managed matrices pass (main 3661/3661, Themes14/14,
+Configuration9/9 on each OS, no skips). All four actual extracted Native AOT
+packages pass six-format exact edits/history/Save/fresh GUI-process reopen,
+seven embedded codec contracts and post-task byte inventories. The final joint
+release-assets job passes. Root downloaded the set and independently checked all
+10 SHA256SUMS entries, both embedded/external manifests, actual image architecture
+headers/permissions and all **876 Git blobs** in corresponding source against
+that exact commit. See `.cache/release-ci-36925090282/asset-audit.json`.
+This is not a public release or a promoted-default certificate: the qualified
+candidate still uses explicit NativeSource. Default promotion and a visible CSV
+cell-readiness issue are being integrated separately and require another frozen
+qualification. Public v0.1.0 assets do not yet exist.
+
+Previous failed candidate: `9fecef2d5ede8b0c593e709bdd6b39d7ad3e6986`,
 [CI 36921665382](https://github.com/kleedaisuki/mote/actions/runs/36921665382).
 The overall workflow **failed** and no public release/default promotion exists.
 All four actual Native AOT builds, package extraction/inventories and GUI smoke
@@ -21,13 +37,13 @@ assertion because the external observer used an invalid cross-process pointer.
 The full Windows main suite passed 3660/3661; the remaining test has a proven
 thread-pool scheduling dependency. The macOS main suite passed 3661/3661.
 
-Corrections are undergoing next-candidate integration: explicit external
+The passing f2b2de7 run qualifies corrections for explicit external
 PowerShell process/report protocol, pointer-free bounded selection observation,
 actual prompt-child readiness and an independent caller thread in the test.
-Corrected local Windows **managed** six-format tasks pass; this is not Native AOT
-qualification. Repaired Grid neighbors pass 30/30, with the original failure and
-controlled before/after reproduction retained. A new four-RID hosted run is
-required before promotion. See the release acceptance, Windows product,
+Earlier corrected local Windows **managed** tasks and 30 Grid neighbors remain
+scoped supporting evidence, not substituted for the subsequent hosted tasks.
+Original failures and controlled before/after reproductions are retained.
+See the release acceptance, Windows product,
 Grid failure and packaging validation records. Old Canvas/capacity experiments
 remain explicitly dispatchable, not deleted. Independent scoped counts are not
 added into a fabricated complete-suite total.
@@ -79,9 +95,9 @@ runtime acceptance supplies stronger evidence.
 | --- | --- | --- |
 | Open a single document without projects/workspaces/LSP | Established | Native composition opens one document; no discovery/indexing/language-server dependency. |
 | Mechanism/policy architecture | Established | Engine owns canonical text/lifetime/I/O/history; statically registered format/theme policies and UI adapters are separate modules. |
-| C# Native AOT application packages | Release qualification pending | Four prior AOT architectures established; new Windows directories/macOS .app resources now allowed. Literal-one-executable inventory is historical, not the current delivery gate. |
+| C# Native AOT application packages | Four-RID candidate qualified; publication pending | f2b2de7 passes actual four-architecture packages/tasks/inventories and assembled asset checks. Default promotion/final source still need qualification. Literal-one-executable inventory is historical, not the current delivery gate. |
 | Text model, versioned snapshots and edit history | Established | Immutable chunked text, line indexing, undo/redo, ordered edits and stale-result rejection. |
-| Safe file persistence and default encoding | Established with scoped native task evidence | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; both Mac six-format AOT task suites prove exact Save/fresh-process reopen. Windows corrected managed tasks pass, hosted AOT acceptance remains open. |
+| Safe file persistence and default encoding | Established with four-RID scoped native task evidence | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; all four AOT six-format suites prove exact Save/fresh-process reopen at f2b2de7. Not power-loss/autosave or every recovery-state certification. |
 | Six-format parsing/semantic results | Partial | All six policies exist and produce structural results, diagnostics and conservative formatting/rendering. General semantic completeness and recovery/large-domain boundaries remain format-specific. |
 | Intermediate representation / source projections | Established foundation | Versioned semantic nodes, tokens and source spans; per-format caches/compact summaries. Not a claim of one universal compiler IR or general local incremental parsing. |
 | Incremental analysis and caching | Partial | Actual reuse for CSV, restricted JSON/Markdown domains and TOML statements; YAML still re-streams. Session interface alone is not incrementality. |
@@ -93,7 +109,7 @@ runtime acceptance supplies stronger evidence.
 | Smooth editing and bounded memory | Partial | Chunked engine and bounded visible work exist; actual input-to-visible tails, long-line/native composition and prolonged interaction require stronger evidence. |
 | Large-file capability | Partial | Capacity tests, virtualized projections and correctness-preserving partial status exist; no universal full semantics/fluent large-file certificate. Retain resilience, prioritize actual ordinary workflows. |
 | GitHub Actions cross-platform validation | Established | Managed/native/AOT/inventory/control/artifact jobs execute. Non-gating success is not product acceptance. |
-| Native release-ready product | Release qualification pending | Product code/manual/packaging exist; Windows hosted tasks, all-four joint qualification, actual default-route promotion and immutable public publication remain open. Do not confuse unverified IME/readers/tail latency with advertised certification. |
+| Native release-ready product | Final default qualification/publication pending | All-four joint candidate qualification passed. Visible CSV readiness, actual default-route promotion and immutable public publication remain open. Do not confuse unverified IME/readers/tail latency with advertised certification. |
 
 ## Historical component checkpoint before active release work (6827cd1a)
 
