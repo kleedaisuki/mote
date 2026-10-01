@@ -58,17 +58,23 @@ def classify_focus(records, *, terminated=False):
     and conflicting repeated dimensions are integrity errors, not missing data.
     No input, provider-entry, physical transfer, or client-to-server certificate
     is constructed. Example: ``classify_focus(rows, terminated=True)``.
+
+    At most 100,000 records are retained. The first excess item is fetched only
+    to detect overflow, then rejected before validation/storage; an oversized or
+    unbounded iterable is never exhausted. Direct decoded objects do not have a
+    serialized byte/line limit; file bounds belong to ``read_focus_paths``.
     """
-    rows = list(records)
-    if len(rows) > 100000:
-        raise FocusTraceIntegrityError("trace exceeds bounded record count")
+    rows = []
     by_id = {}
-    for row in rows:
+    for row in records:
+        if len(rows) >= 100000:
+            raise FocusTraceIntegrityError("trace exceeds bounded record count")
         _STRICT.validate_record(row)
         key = _key(row)
         if key in by_id:
             raise FocusTraceIntegrityError("duplicate trace span")
         by_id[key] = row
+        rows.append(row)
     _check_cycles(by_id)
     dropped_scopes = {_key(row)[:2] for row in rows
                       if row["operation"] == "telemetry.dropped"}
@@ -142,6 +148,11 @@ def read_focus_paths(paths, *, terminated=False):
     An unterminated final row is discarded only after the owned process has
     terminated; complete malformed rows always fail. File hashes/paths are not
     returned in the graph report, avoiding accidental client attribution.
+
+    The shared loader permits at most 32 MiB per file, 16,384 decoded characters
+    per retained line and 100,000 retained records across all paths. It does not
+    impose a path-count or aggregate file-byte limit; callers must supply a finite
+    artifact inventory. These are the existing loader bounds, not a new policy.
     """
     records, _ = _STRICT.load_records(paths, discard_partial=terminated)
     return classify_focus(records, terminated=terminated)

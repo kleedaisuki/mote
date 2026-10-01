@@ -93,6 +93,41 @@ class FocusGraphTests(unittest.TestCase):
             self.assertEqual("unobserved", report["status"])
             self.assertFalse(report["absence_certified"])
 
+    def test_oversized_generator_stops_after_first_excess_record(self):
+        consumed = 0
+
+        def records():
+            """An oversized finite source makes eager exhaustion observable."""
+            nonlocal consumed
+            for index in range(100017):
+                consumed += 1
+                yield row(index + 1, "view.paint")
+
+        with self.assertRaisesRegex(ValueError, "bounded record count"):
+            classify_focus(records())
+        self.assertEqual(100001, consumed)
+
+    def test_unbounded_generator_is_not_consumed_beyond_limit_plus_one(self):
+        consumed = 0
+
+        def records():
+            """Guard an otherwise infinite source so a regression cannot hang."""
+            nonlocal consumed
+            while True:
+                consumed += 1
+                if consumed > 100001:
+                    raise RuntimeError("reader consumed beyond its advertised limit")
+                yield row(consumed, "view.paint")
+
+        with self.assertRaisesRegex(ValueError, "bounded record count"):
+            classify_focus(records())
+        self.assertEqual(100001, consumed)
+
+    def test_generator_at_exact_record_limit_is_accepted(self):
+        report = classify_focus(row(index + 1, "view.paint") for index in range(100000))
+        self.assertEqual("unobserved", report["status"])
+        self.assertFalse(report["absence_certified"])
+
     def test_missing_terminal_is_incomplete_despite_root_end(self):
         rows = pair()
         observed = self.observation([rows[0], rows[2]], terminated=True)
