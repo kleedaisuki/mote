@@ -171,6 +171,218 @@ jobs:
           if ($inventory.non_executable_payload_count -ne 0) {
             throw "Native AOT publish is not one executable: $($inventory.non_executable_payload_count) additional payload files, including $($inventory.bundled_native_library_count) bundled native libraries. See uploaded inventory."
           }
+      # Tiny codec correctness is a blocking published-image contract, with no GUI.
+      - name: Verify embedded native encoding codecs
+        if: always() && steps.inventory.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 2
+        env:
+          PROBE_KIND: codec
+        run: &native_probe_execution |
+          $ErrorActionPreference = 'Stop'
+          $rid = '${{ matrix.rid }}'
+          $kind = $env:PROBE_KIND
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              -not (($IsWindows -and $env:RUNNER_OS -ceq 'Windows') -or ($IsMacOS -and $env:RUNNER_OS -ceq 'macOS'))) {
+            throw 'Disposable hosted Windows/macOS runner required.'
+          }
+          $root = (Get-Location).Path
+          $area = if ($kind -ceq 'codec') { 'encoding-runtime' } else { 'source-capability' }
+          $directory = Join-Path $root ".cache/ci-inventory/$rid/$area"
+          # Refuse existing or redirected evidence; never delete earlier attempts.
+          function Assert-ProbePath([string] $Path) {
+            $full = [IO.Path]::GetFullPath($Path)
+            $cache = Join-Path $root '.cache'
+            if (-not $full.StartsWith($cache + [IO.Path]::DirectorySeparatorChar,
+                $(if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }))) { throw 'Unsafe artifact area.' }
+            for ($cursor = $full; $cursor; $cursor = [IO.Path]::GetDirectoryName($cursor)) {
+              if ((Test-Path -LiteralPath $cursor) -and
+                  ((Get-Item -LiteralPath $cursor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe artifact ancestry.' }
+            }
+          }
+          Assert-ProbePath $directory
+          if (Test-Path -LiteralPath $directory) { throw 'Probe output must be fresh.' }
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          $result = [ordered]@{
+            schema_version = 1; rid = $rid; probe = $kind; status = 'unknown'; process_exit_code = $null
+            process_launched = $false; timed_out = $false; cleanup_forced = $false; terminated = $false; process_boundary = 'unobserved'
+            stdout_complete = $false; stderr_complete = $false; descendant_boundary = 'not_certified'
+            binary_sha256_before = $null; binary_sha256_after = $null; error_class = 'preflight'
+            codec_report_complete = $false; capability_report_complete = $false; trace_drain_witness = 'unobserved'
+          }
+          $process = $stdoutFile = $stderrFile = $copies = $null
+          $cancel = [Threading.CancellationTokenSource]::new()
+          try {
+            $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+            $exe = (Resolve-Path "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name").Path
+            $inventory = Get-Content ".cache/ci-inventory/$rid/publish-inventory.json" -Raw | ConvertFrom-Json
+            if ($inventory.rid -cne $rid -or $inventory.executable -cne $name -or
+                $inventory.payload_files.Count -ne 1 -or $inventory.payload_files[0].path -cne $name) { throw 'Strict published image required.' }
+            $result.binary_sha256_before = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+            $stdoutFile = [IO.FileStream]::new((Join-Path $directory 'stdout.txt'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $stderrFile = [IO.FileStream]::new((Join-Path $directory 'stderr.txt'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $start = [Diagnostics.ProcessStartInfo]::new($exe)
+            $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+            $start.WorkingDirectory = $root; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+            $start.Environment['MOTE_HOME'] = Join-Path $directory 'isolated-home'
+            $flag = if ($kind -ceq 'codec') { '--check-native-encoding' } else { '--check-native-source-capability' }
+            $start.ArgumentList.Add($flag); $start.ArgumentList.Add((Join-Path $directory 'probe'))
+            $result.error_class = 'launch'
+            $process = [Diagnostics.Process]::Start($start)
+            $result.process_launched = $null -ne $process
+            # Stream prefixes reach retained files while the child runs; no pipe-capacity deadlock.
+            $copies = [Threading.Tasks.Task[]]@(
+              $process.StandardOutput.BaseStream.CopyToAsync($stdoutFile, $cancel.Token),
+              $process.StandardError.BaseStream.CopyToAsync($stderrFile, $cancel.Token))
+            $limit = if ($kind -ceq 'codec') { 60000 } else { 120000 }
+            $result.error_class = 'execution'
+            $result.timed_out = -not $process.WaitForExit($limit)
+            $result.error_class = if ($result.timed_out) { 'timeout' } else { $null }
+          } catch {
+            # Outward evidence uses fixed categories; raw process streams remain separately retained.
+          } finally {
+            # Both probes create no children. This owns only the exact process, NOT a descendant certificate.
+            $cleanup = [Diagnostics.Stopwatch]::StartNew()
+            if ($null -ne $process) {
+              try {
+                if (-not $process.HasExited) { $result.cleanup_forced = $true; $process.Kill() }
+                $remaining = [Math]::Max(0, 10000 - [int]$cleanup.ElapsedMilliseconds)
+                $result.terminated = $process.WaitForExit($remaining)
+                if ($result.terminated) { $result.process_exit_code = $process.ExitCode }
+                if ($null -ne $copies) {
+                  $remaining = [Math]::Max(0, 10000 - [int]$cleanup.ElapsedMilliseconds)
+                  [void][Threading.Tasks.Task]::WaitAll($copies, $remaining)
+                  $result.stdout_complete = $copies[0].IsCompletedSuccessfully
+                  $result.stderr_complete = $copies[1].IsCompletedSuccessfully
+                }
+              } catch { $result.error_class = 'cleanup' }
+              try { $cancel.Cancel() } catch { $result.error_class = 'cleanup' }
+              # Dispose only owned streams/handle, with no blocking await of an incomplete copy.
+              foreach ($stream in @($process.StandardOutput, $process.StandardError)) {
+                try { $stream.Dispose() } catch { $result.error_class = 'cleanup' }
+              }
+              try { $process.Dispose() } catch { $result.error_class = 'cleanup' }
+            }
+            if ($null -ne $copies) {
+              foreach ($copy in $copies) {
+                # Never execute a PowerShell scriptblock on a task thread without a runspace.
+                if ($copy.IsFaulted) { [void]$copy.Exception }
+              }
+            }
+            foreach ($stream in @($stdoutFile, $stderrFile, $cancel)) {
+              if ($null -ne $stream) { try { $stream.Dispose() } catch { $result.error_class = 'cleanup' } }
+            }
+          }
+          try {
+            if (-not $result.terminated -or $result.timed_out -or $result.cleanup_forced) {
+              $result.process_boundary = if ($result.process_launched) { 'censored' } else { 'unobserved' }
+              if ($result.timed_out) { $result.error_class = 'timeout' }
+              if ($null -eq $result.error_class) { $result.error_class = 'cleanup' }
+              throw 'Process completion unproven.'
+            }
+            $result.process_boundary = if ($result.process_exit_code -eq 0) { 'normal_exit_observed' } else { 'nonzero_exit_observed' }
+            if ($result.process_exit_code -ne 0 -or -not $result.stdout_complete -or -not $result.stderr_complete -or
+              $null -ne $result.error_class) {
+              if ($null -eq $result.error_class) { $result.error_class = 'process_evidence' }
+              throw 'Incomplete process evidence.'
+            }
+            $result.error_class = 'image_identity'
+            $result.binary_sha256_after = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+            if ($result.binary_sha256_before -cne $result.binary_sha256_after) { throw 'Image identity changed.' }
+            $architecture = if ($rid.EndsWith('arm64')) { 'Arm64' } else { 'X64' }
+            $result.error_class = 'report'
+            if ($kind -ceq 'codec') {
+              $reportPath = Join-Path $directory 'probe/report.json'
+              Assert-ProbePath $reportPath
+              if ((Get-Item -LiteralPath $reportPath).Length -gt 65536) { throw 'Codec report exceeds bounds.' }
+              $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+              $keys = @($report.PSObject.Properties.Name | Sort-Object)
+              if (($keys -join '|') -cne 'architecture|checks|error_kind|schema|status' -or
+                  ($report.schema -isnot [int] -and $report.schema -isnot [long]) -or $report.schema -ne 1 -or
+                  $report.status -cne 'success' -or $report.error_kind -cne 'none' -or $report.architecture -cne $architecture) { throw 'Codec report incomplete.' }
+              $expected = @('Gbk_exact_save', 'Gbk_strict_encode_protection', 'Gb18030_exact_save', 'Big5_exact_save',
+                'Big5_strict_encode_protection', 'default_utf8_refusal', 'unicode_bom_conflict_and_exact_save')
+              if (@($report.checks).Count -ne 7) { throw 'Missing codec checks.' }
+              for ($i = 0; $i -lt 7; $i++) { if ($report.checks[$i] -isnot [string] -or $report.checks[$i] -cne $expected[$i]) { throw 'Invalid codec check.' } }
+              if ([IO.File]::ReadAllText((Join-Path $directory 'stdout.txt')).Trim() -cne 'mote-native-encoding-ready') { throw 'Missing codec marker.' }
+              $result.codec_report_complete = $true; $result.status = 'passed'
+            } else {
+              $reportPath = Join-Path $directory 'probe/report.jsonl'
+              Assert-ProbePath $reportPath
+              if ((Get-Item -LiteralPath $reportPath).Length -gt 4194304) { throw 'Capability report exceeds bounds.' }
+              $text = [IO.File]::ReadAllText($reportPath)
+              if (-not $text.EndsWith("`n")) { throw 'Truncated capability report.' }
+              $rows = @($text -split "`n" | Where-Object { $_.Length -ne 0 } | ForEach-Object { $_ | ConvertFrom-Json })
+              if (@($rows | Where-Object { $_.state -cin @('failed', 'failure-evidence') }).Count -ne 0 -or
+                  @($rows | Where-Object { $_.phase -ceq 'probe' -and $_.state -ceq 'complete' }).Count -ne 1 -or
+                  @($rows | Where-Object { $_.phase -ceq 'runtime-architecture' -and $_.state -ceq $architecture.ToLowerInvariant() }).Count -ne 1 -or
+                  @($rows | Where-Object { $_.phase -ceq 'executable' -and $_.state -ceq 'identity' -and $_.sha256 -ceq $result.binary_sha256_before }).Count -ne 1 -or
+                  @($rows | Where-Object { $_.phase -ceq 'telemetry-health' -and $_.state -ceq 'healthy' }).Count -ne 1 -or
+              $rows[-1].phase -cne 'probe' -or $rows[-1].state -cne 'complete') { throw 'Capability completion unobserved.' }
+              foreach ($fixture in @('mixed-text', 'novel-text', 'dense-json')) {
+                if (@($rows | Where-Object { $_.fixture -ceq $fixture -and $_.phase -ceq 'saved-bytes' -and $_.state -ceq 'exact' }).Count -ne 1 -or
+                    @($rows | Where-Object { $_.fixture -ceq $fixture -and $_.phase -ceq 'fresh-document-reopen' -and $_.state -ceq 'completed' }).Count -ne 1) { throw 'Fixture incomplete.' }
+              }
+              $pending = [Collections.Generic.Stack[string]]::new()
+              foreach ($row in $rows) {
+                $key = $row.fixture + '|' + $row.phase
+                if ($row.state -ceq 'entered') { $pending.Push($key) }
+                if ($row.state -ceq 'completed') {
+                  if ($pending.Count -eq 0 -or $pending.Pop() -cne $key) { throw 'Unpaired capability phase.' }
+                }
+              }
+              if ($pending.Count -ne 0) { throw 'Unterminated capability phase.' }
+              $result.capability_report_complete = $true
+              $result.trace_drain_witness = 'unknown'
+              $traceRoot = Join-Path $directory 'probe/mote-home/traces'
+              Assert-ProbePath $traceRoot
+              $paths = @(Get-ChildItem -LiteralPath $traceRoot -Filter '*.jsonl' -File)
+              if ($paths.Count -lt 1 -or $paths.Count -gt 16) { throw 'Trace inventory unavailable.' }
+              $records = foreach ($path in $paths) {
+                Assert-ProbePath $path.FullName
+                if ($path.Length -gt 33554432) { throw 'Trace exceeds bounds.' }
+                $trace = [IO.File]::ReadAllText($path.FullName)
+                if (-not $trace.EndsWith("`n")) { throw 'Truncated normal trace.' }
+                $trace -split "`n" | Where-Object { $_.Length -ne 0 } | ForEach-Object { $_ | ConvertFrom-Json }
+              }
+              if (@($records | Where-Object { $_.operation -ceq 'mote.session' -and $_.status -ceq 'success' }).Count -ne 1 -or
+                  @($records | Where-Object { $_.operation -ceq 'telemetry.dropped' }).Count -ne 0) { throw 'Trace drain witness unavailable.' }
+              $result.trace_drain_witness = 'observed'; $result.status = 'observed'
+            }
+            $result.error_class = $null
+          } catch {
+            # Prefix reports/traces remain untouched; no malformed record is converted to success.
+          } finally {
+            $path = Join-Path $directory 'supervisor.json'
+            Assert-ProbePath $path
+            $output = [IO.FileStream]::new($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+            try {
+              $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($result | ConvertTo-Json -Depth 5))
+              $output.Write($bytes); $output.Flush($true)
+            } finally { $output.Dispose() }
+          }
+          if ($result.status -cin @('passed', 'observed')) {
+            Write-Host "Native $kind bounded evidence: $($result.status); exact process exit $($result.process_exit_code)."
+          } else { throw 'Native probe evidence incomplete or unknown; inspect retained artifacts.' }
+      - name: Diagnose full native source capability (non-gating)
+        if: always() && steps.inventory.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          PROBE_KIND: capability
+        run: *native_probe_execution
+      - name: Retain native codec and source capability evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-codec-source-evidence-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/encoding-runtime/**
+            .cache/ci-inventory/${{ matrix.rid }}/source-capability/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
       # This one-case capability probe is deliberately non-gating: the external
       # source/selection observer is not an input-to-paint latency acceptance.
       - name: Set up Python for Windows structured-text readiness pilot
