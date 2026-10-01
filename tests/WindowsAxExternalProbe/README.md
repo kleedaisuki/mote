@@ -214,3 +214,20 @@ binary is **not a build of the current repository HEAD**. Fresh hosted x64 and
 ARM64 ordinary-launch validation, screen-reader speech and real IME coexistence
 remain separate gates; do not call the duplicate diagnostic baseline a default
 product release blocker.
+
+### Later fresh hosted ordinary launch (run 36797859586)
+
+The separate `-ProductContinuous` reports from
+[36797859586](https://github.com/kleedaisuki/mote/actions/runs/36797859586),
+commit `833ef480f00dd82a99814aae11197b9722c21e9d`, now supply the ordinary
+launch evidence missing above: **19/19**, **1/1/1 Documents**, source-prefix128
+from the input HWND, physical host16, and no behavioral/tree blockers on both
+Windows RIDs. x64 source focus was consistent and the client succeeded;
+ARM64 source focus was false under foreign foreground, the focused identity
+was redacted and the client explicitly exited **1** for inconclusive focus.
+The baseline remains 2/2/2; the fragment diagnostic remains 1/1/1. Each RID's
+three reports share the same executable hash. See the independent
+[target audit](../../docs/reviews/windows-source-uia-scope-correction.md#fresh-ordinary-product-hosted-evidence-run-36797859586)
+for raw-log exit classification, source/client pins, exact binary/fixture
+hashes, inventory and remaining reader/IME/focus limits. This does not close
+ARM64 desktop-global focus or complete accessibility release acceptance.

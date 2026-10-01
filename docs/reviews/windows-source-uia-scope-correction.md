@@ -77,10 +77,89 @@ foreign foreground. Its report is
 `.cache/windows-uia-scope-client/product-local.json`; editor closed normally.
 An earlier same-binary invocation had consistent focus/exit0, but the final
 retained report is the guarded inconclusive one, not a manufactured retry pass.
-This binary predates current HEAD; no fresh hosted ordinary launch is claimed.
+This binary predates current HEAD; that local experiment alone did not claim
+fresh hosted ordinary launch. The later hosted result below supplies that
+specific missing evidence.
 
-No product files changed. Parent owns CI integration: add a separate ordinary
-product step/report/artifact on both Windows RIDs, leave diagnostic A/B intact,
-and correct the old workflow comment's default-product attribution. Complete
-TextPattern, Narrator/NVDA speech, composition coexistence and fresh hosted
-ordinary identity/focus remain independent release gates.
+No product files changed. Parent integrated a separate ordinary product CI
+step/report/artifact on both Windows RIDs, leaving diagnostic A/B intact and
+correcting the old baseline comment's default-product attribution. Complete
+TextPattern, Narrator/NVDA speech and composition coexistence remain independent
+release gates; hosted ARM64 desktop-global focus remains unresolved below.
+
+## Fresh ordinary-product hosted evidence: run 36797859586
+
+Independently audited the six source UIA JSON artifacts and each Windows job's
+raw log from [run 36797859586](https://github.com/kleedaisuki/mote/actions/runs/36797859586),
+source commit `833ef480f00dd82a99814aae11197b9722c21e9d`. Evidence is retained
+under `.cache/windows-uia-scope-36797859586/`; logs came from the individual
+completed jobs (x64 `110165317237`, ARM64 `110165317456`), not the still-running
+overall run's status. Successful/non-gating step conclusions were not used
+as proof of diagnostic success.
+
+The ordinary product's source/client preflight SHA checks matched the reviewed
+files; no pin error preceded either actual report. Independently hashing the
+Git blobs at the tested commit gives:
+
+| Client source file | LF SHA-256 |
+| --- | --- |
+| `Program.cs` | `7D4E0AFDD791BC9F54D6DEF3F0E2541DF156C693BC17DE377565893615BA48D8` |
+| `ProbeLaunchRoute.cs` | `6D9C7770FC316965089582D47CF82B1914C22CFDB8BA23D01962AF85B0C5916D` |
+| `Run.ps1` | `AAD02A5340E8D2DB3DEDC444AC32A6C022A4439613E17B51A39E5D622961CDB7` |
+
+Windows checkout may use the explicitly pinned CRLF equivalent; this does not
+change the client contract. Product reports have `Mode=product-continuous`
+and **empty** `PresentationArguments`, unlike the historical diagnostic
+reports. Thus this evidence finally queries ordinary `mote <fixture>`, not
+an opt-in fragment flag that might conceal a default routing error.
+
+| RID / route | Checks passed | Documents Raw / Control / Content | Tree blockers | Global focus | Client exit |
+| --- | --- | --- | --- | --- | --- |
+| x64 baseline | 19/19 | 2 / 2 / 2 | 1 | consistent native host | 1 |
+| x64 fragment | 19/19 | 1 / 1 / 1 | 0 | consistent source | 0 |
+| x64 **ordinary product** | **19/19** | **1 / 1 / 1** | **0** | **consistent source** | **0** |
+| ARM64 baseline | 19/19 | 2 / 2 / 2 | 1 | inconclusive foreign foreground | 1 |
+| ARM64 fragment | 19/19 | 1 / 1 / 1 | 0 | inconclusive foreign foreground | 1 |
+| ARM64 **ordinary product** | **19/19** | **1 / 1 / 1** | **0** | **inconclusive foreign foreground** | **1** |
+
+Both product reports have no behavioral failures, physical RichEdit length
+**16**, `FromHandle(input)` routed to source `mote.source.document` with exact
+source prefix **128**, cached and fresh TextPattern usable after oversize
+failure `0x80131509`, the offscreen tail present after scroll, same-HWND New
+invalidating old ranges, normal editor exit0 and post-Close range rejection.
+The independently reconstructed synthetic fixture is **153,020 UTF-16 units**,
+UTF-8 SHA-256 `B872F046C6644D960F1FB62A22989A12FC00567A255FBA88F26F01693DA52845`;
+both reports match it. This validates the tested fixture, not arbitrary large
+documents or reader speech.
+
+All three routes share their executable SHA-256 within each RID:
+
+- x64: `2236907D16D3FA3723375950F30FAF20B9CC22C159C29C28E9CC126B4D7DF838`,
+  OS build **26100**, client **X64**, .NET **10.0.12**.
+- ARM64: `D50C3347B2074CA68DF52385476D148F0B9B9962D9935DC004B44F267ADADD51`,
+  OS build **26200**, client **Arm64**, .NET **10.0.12**.
+
+The separate publish inventories contain exactly `mote.exe` per RID
+(x64 **7,105,024 bytes**, ARM64 **7,244,288 bytes**), no non-executable payload
+and no bundled native library. Inventory does not itself contain a binary
+hash; executable identity above comes from each external client's SHA-256.
+
+x64 ordinary focus sampled stable target PID **1560** before/after, with source
+and input-mapped source true across all four property paths and focused
+identity `mote.source.document`. Its wrapper reached the following upload
+without an error; the reviewed client/wrapper success path implies exit0.
+ARM64 sampled stable foreign foreground PID **5116** while mote PID was
+**1988**; source and input-mapped source were false on all four paths and
+`Focused=<focus-identity-not-inspected>`. Its artifact has exactly one
+`Inconclusive` item; the raw product-step log explicitly records exit **1**.
+This is correct negative-foreground behavior, **not** a global focus acceptance
+pass or a demonstrated provider defect. No foreign control metadata is in the
+current focused-identity field.
+
+**Conclusion:** fresh published x64 and ARM64 ordinary launches each have one
+source Document and pass the tested source/lifetime behavior. The historical
+baseline's duplicate Document is not a default-product release blocker.
+Global source focus is supported on this x64 run only; ARM64's foreground
+acceptance remains unverified. Do not promote this bounded result into full
+TextPattern, Narrator/NVDA, real IME coexistence or general accessibility
+release readiness.
