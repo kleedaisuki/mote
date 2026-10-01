@@ -49,7 +49,7 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
                 if (end > start) tokens.Add(new SemanticToken(token.Kind.ToString(), new TextSpan(start, end - start)));
             }
             var parser = Parser.CreateParser(new StringReader(text));
-            var projector = new Projector(parser, text.Length, diagnostics, tokens, cancellationToken);
+            var projector = new Projector(parser, text, diagnostics, tokens, cancellationToken);
             documents.AddRange(projector.ParseDocuments());
         }
         catch (YamlException error)
@@ -144,6 +144,7 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
     private sealed class Projector
     {
         private readonly IParser _parser;
+        private readonly string _source;
         private readonly int _length;
         private readonly List<Diagnostic> _diagnostics;
         private readonly List<SemanticToken> _tokens;
@@ -154,11 +155,12 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
         private readonly Dictionary<SemanticNode, KeyIdentity> _keyIdentities = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<IdentityEntry, int> _internedKeys;
 
-        public Projector(IParser parser, int length, List<Diagnostic> diagnostics,
+        public Projector(IParser parser, string source, List<Diagnostic> diagnostics,
             List<SemanticToken> tokens, CancellationToken cancellationToken)
         {
             _parser = parser;
-            _length = length;
+            _source = source;
+            _length = source.Length;
             _diagnostics = diagnostics;
             _tokens = tokens;
             _cancellationToken = cancellationToken;
@@ -231,7 +233,7 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
                     var value = ParseNode(depth + 1);
                     items.Add(new SemanticNode("item", value.Span, children: new[] { value }));
                 }
-                var span = Range(sequence.Start, _parser.Current.End);
+                var span = CollectionRange(sequence.Start, _parser.Current, sequence.Style, ']');
                 _parser.MoveNext();
                 var node = new SemanticNode("sequence", span, sequence.Tag, children: items);
                 BindAnchor(sequence, node);
@@ -253,7 +255,7 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
                     entries.Add(new SemanticNode("entry", span, key.Value, children: new[] { key, value }));
                     _tokens.Add(new SemanticToken("key", key.Span));
                 }
-                var mapSpan = Range(mapping.Start, _parser.Current.End);
+                var mapSpan = CollectionRange(mapping.Start, _parser.Current, mapping.Style, '}');
                 _parser.MoveNext();
                 var node = new SemanticNode("mapping", mapSpan, mapping.Tag, children: entries);
                 BindAnchor(mapping, node);
@@ -288,6 +290,20 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
         {
             var offset = Math.Clamp(start.Index, 0, _length);
             return new TextSpan(offset, Math.Clamp(end.Index, offset, _length) - offset);
+        }
+
+        /// <summary>
+        /// SharpYaml 3.13.1 emits zero-width flow-end marks at the closing delimiter.
+        /// Include that verified source character without extending block collections or
+        /// implicit mappings in flow sequences, which have no matching '}' of their own.
+        /// Already half-open end marks need no correction if the dependency is updated.
+        /// </summary>
+        private TextSpan CollectionRange(Mark start, ParsingEvent end, YamlStyle style, char delimiter)
+        {
+            var span = Range(start, end.End);
+            return style == YamlStyle.Flow && end.Start.Index == end.End.Index &&
+                span.End < _length && _source[span.End] == delimiter
+                ? new TextSpan(span.Start, span.Length + 1) : span;
         }
 
         /// <summary>Checks all mapping keys after aliases have been bound to complete nodes.</summary>

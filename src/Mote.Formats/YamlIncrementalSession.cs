@@ -273,7 +273,7 @@ internal sealed class YamlIncrementalSession : IFormatSession
         var diagnostics = new List<Diagnostic>();
         var tokens = new List<SemanticToken>();
         var nodes = new List<SemanticNode>();
-        var projector = new StreamProjector(snapshot.Length, visible, diagnostics, tokens, nodes, ct);
+        var projector = new StreamProjector(snapshot, visible, diagnostics, tokens, nodes, ct);
         try
         {
             using var reader = new SnapshotTextReader(snapshot, 0, snapshot.Length, ct);
@@ -328,6 +328,7 @@ internal sealed class YamlIncrementalSession : IFormatSession
     /// </summary>
     private sealed class StreamProjector
     {
+        private readonly TextSnapshot _snapshot;
         private readonly int _length;
         private readonly TextSpan _visible;
         private readonly List<Diagnostic> _diagnostics;
@@ -351,10 +352,11 @@ internal sealed class YamlIncrementalSession : IFormatSession
             public bool Ready;
         }
 
-        internal StreamProjector(int length, TextSpan visible, List<Diagnostic> diagnostics,
+        internal StreamProjector(TextSnapshot snapshot, TextSpan visible, List<Diagnostic> diagnostics,
             List<SemanticToken> tokens, List<SemanticNode> nodes, CancellationToken ct)
         {
-            _length = length;
+            _snapshot = snapshot;
+            _length = snapshot.Length;
             _visible = visible;
             _diagnostics = diagnostics;
             _tokens = tokens;
@@ -520,7 +522,7 @@ internal sealed class YamlIncrementalSession : IFormatSession
                 }
                 if (needed) { children!.Add(value!); shapeChars += value!.Length; }
             }
-            var end = _parser.Current.End;
+            var end = CollectionEnd(_parser.Current, start.Style, ']');
             _lastNodeEnd = end;
             _parser.MoveNext();
             if (!needed || children is null) return null;
@@ -613,7 +615,7 @@ internal sealed class YamlIncrementalSession : IFormatSession
                     shapeChars += pair.Length;
                 }
             }
-            var end = _parser.Current.End;
+            var end = CollectionEnd(_parser.Current, start.Style, '}');
             _lastNodeEnd = end;
             _parser.MoveNext();
             _keyChars -= localKeyChars;
@@ -677,6 +679,21 @@ internal sealed class YamlIncrementalSession : IFormatSession
         {
             var offset = Math.Clamp(start.Index, 0, _length);
             return new TextSpan(offset, Math.Clamp(end.Index, offset, _length) - offset);
+        }
+
+        /// <summary>
+        /// Corrects SharpYaml's zero-width explicit flow delimiter without copying source.
+        /// Matching the actual code unit leaves block ends and implicit flow mappings intact.
+        /// </summary>
+        private Mark CollectionEnd(ParsingEvent end, YamlStyle style, char delimiter)
+        {
+            var mark = end.End;
+            if (style != YamlStyle.Flow || end.Start.Index != mark.Index ||
+                mark.Index < 0 || mark.Index >= _length) return mark;
+            foreach (var chunk in _snapshot.GetChunks(mark.Index, 1))
+                if (chunk.Span[0] == delimiter)
+                    return new Mark(mark.Index + 1, mark.Line, mark.Column + 1);
+            return mark;
         }
 
         /// <summary>Expands standard YAML tag handles for structural comparison.</summary>

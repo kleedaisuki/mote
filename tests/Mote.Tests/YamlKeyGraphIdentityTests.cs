@@ -96,22 +96,21 @@ public sealed class YamlKeyGraphIdentityTests
     }
 
     /// <summary>
-    /// Characterizes an inherited flow-key span omission; this is not a correct full-span claim.
-    /// Frozen baseline and candidate both omit the closing bracket for BMP and supplementary text.
+    /// Requires complete flow-key coverage after the inherited closing-bracket omission was fixed.
+    /// BMP and supplementary text both use exact UTF-16 half-open source offsets.
     /// </summary>
     [Theory]
     [InlineData("猫", "犬")]
     [InlineData("猫", "😀")]
-    public void Existing_flow_key_span_omits_closing_bracket(string left, string right)
+    public void Flow_key_span_includes_closing_bracket(string left, string right)
     {
         var key = $"[{left}, {right}]";
         var source = $"# 猫😀\n? {key}\n: first\n? {key}\n: second\n";
         var result = new YamlPolicy().Analyze(source);
         var duplicate = Assert.Single(result.Diagnostics, d => d.Code == "yaml.duplicate-key");
         Assert.Equal(source.LastIndexOf(key, StringComparison.Ordinal), duplicate.Span.Start);
-        // Correct full collection coverage would be key.Length; retain the observed gap explicitly.
-        Assert.Equal(key.Length - 1, duplicate.Span.Length);
-        Assert.Equal(key[..^1], source.Substring(duplicate.Span.Start, duplicate.Span.Length));
+        Assert.Equal(key.Length, duplicate.Span.Length);
+        Assert.Equal(key, source.Substring(duplicate.Span.Start, duplicate.Span.Length));
         AssertSpans(source, result);
     }
     /// <summary>A cached shallow success cannot bypass the existing deep-path comparison limit.</summary>
