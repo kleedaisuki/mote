@@ -238,9 +238,25 @@ jobs:
         shell: pwsh
         timeout-minutes: 10
         run: |
-          & ./tests/NativeReleaseProductWorkflow.ps1 -ExecutablePath $env:RELEASE_EXECUTABLE `
+          # A script invocation in this shell does not supply a native exit
+          # status. Run an external pwsh so LASTEXITCODE belongs to this suite.
+          & pwsh -NoProfile -File ./tests/NativeReleaseProductWorkflow.ps1 -ExecutablePath $env:RELEASE_EXECUTABLE `
             -OutputDirectory '.cache/release-evidence/${{ matrix.rid }}/product' -RuntimeIdentifier '${{ matrix.rid }}'
           if ($LASTEXITCODE -ne 0) { throw 'Packaged product workflow failed.' }
+          $report = Get-Content '.cache/release-evidence/${{ matrix.rid }}/product/release-acceptance.json' -Raw | ConvertFrom-Json
+          $fixtures = @('markdown', 'toml', 'json', 'yaml', 'csv', 'text')
+          $binaryHash = (Get-FileHash -LiteralPath $env:RELEASE_EXECUTABLE -Algorithm SHA256).Hash
+          if ($report.status -cne 'passed' -or $report.runtime_identifier -cne '${{ matrix.rid }}' -or
+              $report.executable_sha256 -cne $binaryHash -or @($report.fixtures).Count -ne 6 -or
+              ($report.fixtures.name -join '|') -cne ($fixtures -join '|')) {
+            throw 'Packaged product workflow report is incomplete or mismatched.'
+          }
+          foreach ($fixture in $report.fixtures) {
+            if ($fixture.exact_bytes -ne $true -or $fixture.original_protected -ne $true -or
+                $fixture.fresh_gui_process_reopen -ne $true) {
+              throw 'Packaged product workflow did not establish all required byte/reopen contracts.'
+            }
+          }
       - name: Verify seven embedded AOT codec contracts
         shell: pwsh
         timeout-minutes: 3
@@ -276,6 +292,21 @@ jobs:
         with:
           name: release-evidence-${{ matrix.rid }}
           path: .cache/release-evidence/${{ matrix.rid }}/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Retain failed qualification payload for private reproduction
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          # Never matches release-package-* and never enters release-assets.
+          name: release-diagnostic-payload-${{ matrix.rid }}
+          path: |
+            .cache/release-publish/${{ matrix.rid }}/**
+            .cache/release-packages/${{ matrix.rid }}/*.zip
+            .cache/release-packages/${{ matrix.rid }}/*.tar.gz
+            .cache/release-packages/${{ matrix.rid }}/*.manifest.json
+            .cache/release-packages/${{ matrix.rid }}/*.sha256
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30

@@ -171,6 +171,35 @@ must install the exact SDK pin; updating it requires deliberate runtime notice
 updates rather than relaxing the packaging guard. Primary reference:
 [Microsoft global.json SDK selection](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json).
 
+### Fourth qualification: explicit suite exit and retained failed binaries
+
+Run `36921665382` produced passed six-fixture acceptance reports for both macOS
+architectures: exact edited bytes, protected originals, fresh GUI-process reopen,
+trace checks and PNG capture checks completed. The enclosing workflow nevertheless
+failed immediately afterward because it checked `$LASTEXITCODE` after invoking a
+PowerShell script in the current shell. Such a script invocation does not establish
+a native-command exit code; the value may be unset or inherited from a previous
+native command. This was an invocation-protocol bug, not evidence of failed Mac
+editing. Windows product Find acknowledgement failures and a separate Windows
+managed accessibility test failure remain real independent failures and are not
+resolved by this correction.
+
+The suite now runs through an external `pwsh -NoProfile -File`, so its native exit
+status is unambiguous. Success additionally requires the independently read JSON
+report to say passed, match RID/executable SHA-256, contain exactly the six required
+fixture names, and certify exact bytes/original protection/fresh GUI-process reopen
+for every fixture. No exit value is reset or forced to zero. Workflow syntax and
+the archived Mac report shape are the local evidence for this change; native
+product qualification still needs the next hosted run.
+
+On a failed package job, a separately named `release-diagnostic-payload-<rid>`
+artifact now retains the frozen native publish payload and any constructed archive
+with provenance files for private reproduction. It is never labeled qualified,
+never matches the `release-package-*` download pattern and cannot enter the final
+release-assets barrier. The existing requirement that all managed tests and all
+four package jobs pass remains unchanged. Diagnostic retention does not promote a
+failed candidate into downloadable product assets.
+
 The root owner must freeze commit/version/default profile and run the workflow.
 Only a complete successful release-assets job for the intended commit is eligible.
 Before upload, inspect run/job evidence and verify checksum/index identities. A
