@@ -1,7 +1,6 @@
 # Hosted Windows CSV Grid accessibility subset diagnostic
 
-Date: 2026-10-01. Status: first hosted attempt rejected project pin before client
-execution; corrected exact line-ending pins await hosted validation. This is a non-gating diagnostic, not a release gate.
+Date: 2026-10-01. Current checkpoint: native-architecture owned-HWND focus tests pass on both Windows RIDs; the unchanged external AOT Grid oracle still reports product-fail/exit 1. Earlier pin-rejection and successful subset evidence below remain historical. The external diagnostic remains non-gating, not release acceptance.
 
 ## Contract and provenance
 
