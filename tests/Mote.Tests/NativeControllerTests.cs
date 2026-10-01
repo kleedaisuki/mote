@@ -1569,7 +1569,13 @@ public sealed partial class NativeControllerTests
         /// <inheritdoc />
         public void SetCanvasChrome(string title, string status, bool isModified) => _statusText = status;
         /// <inheritdoc />
-        public void SetCanvasSemantics(NativeCanvasSemantics semantics) => CanvasSemantics = semantics;
+        public void SetCanvasSemantics(NativeCanvasSemantics semantics)
+        {
+            CanvasSemantics = semantics;
+            DuringCanvasSemanticsApply?.Invoke(semantics);
+        }
+        /// <summary>Models a native synchronous callback during semantic overlay installation.</summary>
+        public Action<NativeCanvasSemantics>? DuringCanvasSemanticsApply { get; set; }
         /// <inheritdoc />
         public void SetCanvasAccessibility(AccessibleDocument document, IAccessibleViewport viewport)
         {

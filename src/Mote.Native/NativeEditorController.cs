@@ -2063,19 +2063,49 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         // Scope disposal precedes the outer callback's error handling. Only a
         // fully installed publication may be classified as successful.
         present?.SetStatus(TelemetryStatus.Failure);
+        var pageStart = _pageStart;
+        var pageLength = _pageLength;
+        var projection = _projection;
+        var serial = _analysisSerial;
+        var identity = new NativePresentationId(new NativeDocumentStamp(_canvasGeneration, result.Version),
+            checked(_presentationSequence + 1));
         var tokens = ProjectTokens(result.Tokens, _pageStart, _pageLength, _projection!);
         PresentAnalysis(new NativeAnalysisView(tokens,
             SessionDiagnosticSummary(result, _pageStart, _pageLength),
             preview.Text, $"{policy.DisplayName} · Complete · v{result.Version}",
             new NativeDocumentStamp(_canvasGeneration, result.Version), preview.Spans,
             Flow: preview.Flow));
+        if (!StillCurrent())
+        {
+            Discard();
+            return;
+        }
         _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(result.Version,
             result.Completeness, result.Coverage,
-            VisibleSourceTokens(result.Tokens, _pageStart, _pageLength),
-            VisibleSourceDiagnostics(result.Diagnostics, _pageStart, _pageLength)));
+            VisibleSourceTokens(result.Tokens, pageStart, pageLength),
+            VisibleSourceDiagnostics(result.Diagnostics, pageStart, pageLength)));
+        if (!StillCurrent())
+        {
+            Discard();
+            return;
+        }
         MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
             dimensions: Dimensions(snapshot));
         present?.SetStatus(TelemetryStatus.Success);
+
+        /// <summary>Native callbacks may replace even a same-version presentation synchronously.</summary>
+        bool StillCurrent() => !_disposed && ReferenceEquals(driver, _sessionDriver) &&
+            ReferenceEquals(document, _document) && ReferenceEquals(policy, _policy) &&
+            snapshot.Version == _document.Snapshot.Version && _canvasGeneration == identity.Document.Generation &&
+            pageStart == _pageStart && pageLength == _pageLength && ReferenceEquals(projection, _projection) &&
+            serial == _analysisSerial && _presentedPreview?.Identity == identity;
+
+        /// <summary>Supersession is cancellation, not a successful installation or a thrown failure.</summary>
+        void Discard()
+        {
+            present?.SetStatus(TelemetryStatus.Cancelled);
+            MoteTelemetry.Record(TelemetryEvent.AnalysisDiscarded);
+        }
     }
 
     /// <summary>

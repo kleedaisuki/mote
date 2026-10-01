@@ -62,3 +62,49 @@ regressions. These are deterministic controller tests, not macOS/native AOT
 acceptance, physical input-to-photon measurement, or diagnostic-on performance
 benchmarks. Request identity, command receipt, Save phase evidence and abnormal
 termination readable-prefix guarantees remain separate infrastructure work.
+
+## Follow-up: fail-closed idle publication under native reentrancy
+
+Independent review of the initial outcome repair identified a pre-existing
+correctness hole: the entry identity check was not repeated after native
+`SetAnalysis`, which can synchronously mutate source, viewport, policy or the
+installed presentation. A stale complete result could then overwrite newer
+canvas semantics and emit a misleading successful publication.
+
+The complete idle path now captures its canonical document/driver/policy,
+source version, generation, page start/length, projection object, analysis serial
+and exact next presentation identity. After **each** external installation
+(`SetAnalysis`, then `SetCanvasSemantics`) it verifies that all these facts still
+match. Supersession emits one `analysis.discarded` and closes this old
+presentation scope `Cancelled`, with no `analysis.published`; a native exception
+still remains `Failure` and propagates unchanged. After a SetAnalysis reentry,
+old semantics are never submitted. A reentry inside SetCanvasSemantics cannot
+undo the native call that is already executing, but the old callback performs
+no further overwrite/publication after the replacement and never claims Success.
+
+The existing fake gained one adjacent documented `DuringCanvasSemanticsApply`
+callback seam (no production observer/API added). Six additional deterministic
+Canvas cases cover: ordinary success; source edit, viewport change and
+same-version frame replacement during SetAnalysis; and source edit or
+same-version frame replacement during SetCanvasSemantics. Tests assert one
+terminal scope, exact success/cancelled status, publication/discard counts,
+privacy and preservation of the newer semantic overlay. The viewport-only case
+asserts that the pre-existing overlay is not replaced by the stale full result.
+
+Executed locally after this repair:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release -warnaserror --no-restore --filter FullyQualifiedName~NativeTelemetryOutcomeTests
+# Passed 11/11; 0 failed; 0 skipped; test duration 296 ms.
+```
+
+This closes the reviewed complete-result reentrancy hole; it does not certify
+all other controller publication paths or native platform callback behaviors.
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release -warnaserror --no-build --no-restore --filter 'FullyQualifiedName~NativePaintTraceTests|FullyQualifiedName~NativeControllerTests'
+# Passed 164/164; 0 failed; 0 skipped; test duration 41 s.
+```
+
+The regression command reused the warning-clean Release outputs; the only
+subsequent source change was an XML documentation comment on the fixture helper.
