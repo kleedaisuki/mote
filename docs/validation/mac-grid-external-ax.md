@@ -290,3 +290,34 @@ all entry/open/close phases require -1. A schedule result certifies admission,
 not completion; a native popup result distinguishes selection from cancellation,
 not semantic navigation success. Independent tests reject inconsistent results
 for these additions. Neither the 16-row bound nor external menu oracle changes.
+
+## Read-only action-failure discriminator
+
+The next helper candidate distinguishes AppKit's modern single-element
+`NSAccessibility.Attribute.shownMenu.rawValue` from the legacy Carbon array
+relation `AXShownMenuUIElement`. Prior observations of the latter alone do not
+establish absence of the modern getter. Each relation observation now labels
+its exact API key and fixed root category; an owned single menu additionally
+records a bounded child count and only the number of exact known coordinate
+command titles. No arbitrary labels or source contents are retained.
+
+If the original AXShowMenu action fails, the helper performs **one read-only
+followup**, with no readiness wait or new action: exact Table action-name
+membership, modern and legacy relation reads on the verified Table/application,
+and one bounded app-tree exact coordinate-item match. The framework's action-
+name API has no count-before-copy equivalent; an array above 32 entries is
+rejected before inspecting strings. Only error/count/fixed showMenu membership
+is retained, never the action-name list. Wire-key equality compares AppKit's
+showMenu constant with the existing literal, without a retry.
+
+Followup completion/gate/client status and accesses are recorded separately
+under fixed `action-failure-diagnostic` accounting. Even if it observes a real
+menu or its diagnostics fail, the helper subsequently records the **original
+false context-menu-accessible assertion** and fails. It never presses that
+menu, relaxes its success predicate, or advances navigation. Existing 12,000
+admissions, 55-second lifetime, per-call timeout, 256-node traversal, bounded
+arrays, exact PID checks and forced cleanup remain unchanged.
+
+Portable CSV/path preflight still passes. New Swift/AppKit code cannot be
+natively typechecked on the Windows investigation host; fresh two-RID CI must
+validate compilation and actual read-only observations before drawing conclusions.

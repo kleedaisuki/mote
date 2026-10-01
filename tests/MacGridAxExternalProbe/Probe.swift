@@ -1,5 +1,6 @@
 // A separate-process, exact-PID AX client. Never uses the system-wide AX root or key events.
 import ApplicationServices
+import AppKit
 import Foundation
 
 /// Each assertion retains its result even when a later gate fails.
@@ -7,13 +8,15 @@ struct Check: Codable {
     let name: String; let passed: Bool; let detail: String
     let admissionCount: Int; let elapsedSeconds: Double
 }
-/// Fixed relation facts never enumerate or retain contextual menu contents.
+/// Bounded relation facts retain only owned node counts and fixed command equality.
 struct MenuRelationObservation: Codable {
-    let node: String; let axError: Int32; let kind: String; let count: Int?
-    let ownedPID: Bool?; let role: String?; let childCount: Int?
+    let node: String; let attribute: String; let axError: Int32; let kind: String; let count: Int?
+    let ownedPID: Bool?; let role: String?; let childCount: Int?; let exactCoordinateTitles: Int?
 }
 /// Fixed phase counters distinguish traversal pressure from unavailable menu structure.
 struct Diagnostics: Codable {
+    let showMenuWireKeyMatches: Bool; let actionFailureFollowup: String
+    let actionNamesError: Int32?; let actionNamesCount: Int?; let showMenuActionAdvertised: Bool?
     let shownMenuRelations: [MenuRelationObservation]
     let elapsedSeconds: Double; let phaseAdmissions: [String: Int]; let phasePolls: [String: Int]
     let phaseTraversals: [String: Int]; let maximumTreeNodes: Int
@@ -49,6 +52,10 @@ final class Probe {
     var phaseAdmissions: [String: Int] = [:]
     var phasePolls: [String: Int] = [:]
     var phaseTraversals: [String: Int] = [:]
+    var actionNamesError: Int32? = nil
+    var actionNamesCount: Int? = nil
+    var showMenuActionAdvertised: Bool? = nil
+    var actionFailureFollowup = "not-exercised"
     var shownMenuRelations: [MenuRelationObservation] = []
     var maximumTreeNodes = 0
     var lastTreeMenus = 0
@@ -102,13 +109,14 @@ final class Probe {
     }
     /// Probe the documented contextual-menu relation on two already owned roots.
     /// This does not relax the existing exact menu-item discovery predicate.
-    func observeShownMenu(_ node: AXUIElement, category: String) throws {
-        let (error, raw) = try attribute(node, "AXShownMenuUIElement")
+    func observeShownMenu(_ node: AXUIElement, category: String, key: String = "AXShownMenuUIElement") throws {
+        let (error, raw) = try attribute(node, key)
         var kind = raw == nil ? "absent" : "other"
         var count: Int? = nil
         var ownedPID: Bool? = nil
         var role: String? = nil
         var childCount: Int? = nil
+        var exactCoordinateTitles: Int? = nil
         if let raw {
             if CFGetTypeID(raw) == AXUIElementGetTypeID() {
                 kind = "element"; count = 1
@@ -123,7 +131,15 @@ final class Probe {
                     try admit(menu)
                     var size: CFIndex = 0
                     let childError = AXUIElementGetAttributeValueCount(menu, "AXChildren" as CFString, &size)
-                    if childError == .success && size >= 0 && size <= 128 { childCount = size }
+                    if childError == .success && size >= 0 && size <= 128 {
+                        childCount = size
+                        var exact = 0
+                        for item in try elements(menu, "AXChildren", limit: 128) {
+                            if try text(item, "AXRole") == "AXMenuItem",
+                               try text(item, "AXTitle") == "Go to row:column…" { exact += 1 }
+                        }
+                        exactCoordinateTitles = exact
+                    }
                 }
             }
             else if CFGetTypeID(raw) == CFArrayGetTypeID() {
@@ -133,7 +149,21 @@ final class Probe {
                 if size <= 8 { count = size }
             }
         }
-        shownMenuRelations.append(MenuRelationObservation(node: category, axError: error.rawValue, kind: kind, count: count, ownedPID: ownedPID, role: role, childCount: childCount))
+        shownMenuRelations.append(MenuRelationObservation(node: category, attribute: key, axError: error.rawValue, kind: kind, count: count, ownedPID: ownedPID, role: role, childCount: childCount, exactCoordinateTitles: exactCoordinateTitles))
+    }
+    /// The framework has no action-name count-before-copy API. Reject arrays above
+    /// 32 entries before examining strings; retain only error/count/fixed membership.
+    func observeActionNames(_ node: AXUIElement) throws {
+        try admit(node)
+        var raw: CFArray?
+        let error = AXUIElementCopyActionNames(node, &raw)
+        actionNamesError = error.rawValue
+        guard error == .success, let raw else { return }
+        let count = CFArrayGetCount(raw)
+        guard count >= 0 && count <= 32 else { return }
+        actionNamesCount = count
+        guard let names = raw as? [String], names.count == count else { return }
+        showMenuActionAdvertised = names.contains(NSAccessibility.Action.showMenu.rawValue)
     }
     /// String attributes remain optional: absence is not an invented empty value.
     func text(_ node: AXUIElement, _ name: String) throws -> String? {
@@ -393,9 +423,27 @@ final class Probe {
 
             phase = "logical-navigation"
             let menuError = try action(table, "AXShowMenu")
+            if menuError != .success {
+                // Diagnose once, read-only, and preserve the original action falsifier.
+                // No retry, menu press, relaxed predicate, or readiness wait is admitted.
+                phase = "action-failure-diagnostic"
+                do {
+                    try observeActionNames(table)
+                    try observeShownMenu(table, category: "table-modern", key: NSAccessibility.Attribute.shownMenu.rawValue)
+                    try observeShownMenu(app, category: "application-modern", key: NSAccessibility.Attribute.shownMenu.rawValue)
+                    try observeShownMenu(table, category: "table-legacy")
+                    try observeShownMenu(app, category: "application-legacy")
+                    _ = try matches("AXMenuItem", "Go to row:column…")
+                    actionFailureFollowup = "completed-read-only"
+                } catch {
+                    actionFailureFollowup = error is GateFailure ? "bounded-gate-failure" : "client-error"
+                }
+                phase = "logical-navigation"
+            }
             try require("context-menu-accessible", menuError == .success, "AX=\(menuError.rawValue); no key-injection fallback")
-            try observeShownMenu(table, category: "table")
-            try observeShownMenu(app, category: "application")
+            try observeShownMenu(table, category: "table-modern", key: NSAccessibility.Attribute.shownMenu.rawValue)
+            try observeShownMenu(table, category: "table-legacy")
+            try observeShownMenu(app, category: "application-legacy")
             var goItem: AXUIElement?
             let menuFound = try wait(3) {
                 let items = try self.matches("AXMenuItem", "Go to row:column…")
@@ -490,7 +538,9 @@ final class Probe {
     /// Preserve prior checks without promoting a partial run to acceptance.
     func report(_ status: String, _ trusted: Bool, _ note: String) -> Report {
         Report(status: status, phase: phase, editorPID: pid, clientPID: getpid(), trusted: trusted, closedByProbe: closed, admissionCount: queries,
-            diagnostics: Diagnostics(shownMenuRelations: shownMenuRelations, elapsedSeconds: ProcessInfo.processInfo.systemUptime - started,
+            diagnostics: Diagnostics(showMenuWireKeyMatches: NSAccessibility.Action.showMenu.rawValue == "AXShowMenu",
+                actionFailureFollowup: actionFailureFollowup, actionNamesError: actionNamesError,
+                actionNamesCount: actionNamesCount, showMenuActionAdvertised: showMenuActionAdvertised, shownMenuRelations: shownMenuRelations, elapsedSeconds: ProcessInfo.processInfo.systemUptime - started,
                 phaseAdmissions: phaseAdmissions, phasePolls: phasePolls, phaseTraversals: phaseTraversals,
                 maximumTreeNodes: maximumTreeNodes, lastTreeMenus: lastTreeMenus, lastTreeMenuItems: lastTreeMenuItems,
                 lastExactMenuMatches: lastExactMenuMatches, lastExactMenuTitleMatches: lastExactMenuTitleMatches), checks: checks, observations: observations, note: note)
