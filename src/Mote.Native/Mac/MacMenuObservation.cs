@@ -41,6 +41,9 @@ internal static unsafe class MacMenuObservation
     /// <summary>Reads a single unichar without materializing a managed string.</summary>
     [DllImport(Runtime, EntryPoint = "objc_msgSend")]
     private static extern ushort CharacterAt(nint value, nint selector, nuint index);
+    /// <summary>Reads Objective-C BOOL without assuming anything about upper return-register bits.</summary>
+    [DllImport(Runtime, EntryPoint = "objc_msgSend")]
+    private static extern byte IsKindOfClass(nint receiver, nint selector, nint cls);
 
     /// <summary>Allocates stock NSMenu unless healthy tracing explicitly enables observation.</summary>
     internal static nint Create()
@@ -66,7 +69,7 @@ internal static unsafe class MacMenuObservation
     {
         try
         {
-            if (s_baseClass != 0 && ObjC.Send(menu, ObjC.Sel("isKindOfClass:"), ObjC.Class(ClassName)) != 0)
+            if (s_baseClass != 0 && IsKindOfClass(menu, ObjC.Sel("isKindOfClass:"), ObjC.Class(ClassName)) != 0)
                 Record(TelemetryEvent.NativeMenuObservationReady);
         }
         catch (Exception error) when (error is not OutOfMemoryException)
