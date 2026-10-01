@@ -22,11 +22,33 @@ internal static class TomlStatementReader
         Func<TomlStatement, bool> accept, Func<int, bool>? stopAtSeam, CancellationToken ct)
     {
         using var reader = new SnapshotTextReader(snapshot, start, snapshot.Length - start, ct);
+        return ReadCore(reader, start, true, accept, stopAtSeam, null, ct);
+    }
+
+    /// <summary>
+    /// Validates a legacy string without large-session budgets or a second document/rope copy.
+    /// Statements are released immediately. Recoverable units keep their independent
+    /// diagnostics; invalid headers can explicitly quarantine subsequent assignment scope.
+    /// </summary>
+    internal static TomlStatementScan Validate(string source, Func<TomlStatement, bool> accept,
+        Action<bool> invalidUnit, CancellationToken ct)
+    {
+        using var reader = new StringReader(source);
+        return ReadCore(reader, 0, false, accept, null, invalidUnit, ct);
+    }
+
+    /// <summary>Shares one scanner/parser mechanism between budgeted caching and unbounded validation.</summary>
+    private static TomlStatementScan ReadCore(TextReader reader, int start, bool bounded,
+        Func<TomlStatement, bool> accept, Func<int, bool>? stopAtSeam,
+        Action<bool>? invalidUnit, CancellationToken ct)
+    {
         var buffer = ArrayPool<char>.Shared.Rent(8192);
         var builder = new StringBuilder();
         var summaries = new List<TomlStatement>();
+        List<Diagnostic>? diagnostics = null;
         var boundary = new TomlStatementBoundary();
         int offset = start, statementStart = start, lines = 0, scanned = 0, parsed = 0, visits = 0;
+        bool header = false, classified = false;
         try
         {
             int read;
@@ -37,25 +59,31 @@ internal static class TomlStatementReader
                 {
                     char ch = buffer[i];
                     builder.Append(ch);
+                    if (!classified && !char.IsWhiteSpace(ch) && !char.IsControl(ch))
+                    { header = ch == '['; classified = true; }
                     offset++;
                     visits++;
-                    if (builder.Length > MaxLength) return Result(false);
+                    if (bounded && builder.Length > MaxLength) return Result(false);
                     if (ch != '\n') continue;
-                    if (++lines > MaxLines) return Result(false);
+                    if (++lines > MaxLines && bounded) return Result(false);
                     bool continues = boundary.Continues(builder, scanned);
                     scanned = builder.Length;
-                    if (continues) continue;
+                    // Headers cannot span lines. Public recovery may therefore discard
+                    // an invalid header at its physical boundary without guessing the
+                    // continuation state of a valid multiline assignment value.
+                    if (continues && (bounded || !header)) continue;
                     if (!Append()) return Result(false);
                     if (stopAtSeam?.Invoke(offset) == true) return Result(true);
                     builder.Clear();
                     boundary = default;
                     scanned = lines = 0;
+                    header = classified = false;
                     statementStart = offset;
                 }
             }
             if (builder.Length != 0)
             {
-                if (boundary.Continues(builder, scanned) || !Append()) return Result(false);
+                if (boundary.Continues(builder, scanned) && bounded || !Append()) return Result(false);
             }
             return Result(true);
         }
@@ -65,17 +93,33 @@ internal static class TomlStatementReader
         bool Append()
         {
             ct.ThrowIfCancellationRequested();
-            if (summaries.Count == MaxStatements) return false;
+            if (bounded && summaries.Count == MaxStatements) return false;
             parsed += builder.Length;
-            var summary = TomlStatementSummary.Parse(builder.ToString());
-            if (summary is null) return false;
+            var source = builder.ToString();
+            var summary = TomlStatementSummary.Parse(source, out var localDiagnostics, out bool headerUnit);
+            if (localDiagnostics.Count != 0)
+            {
+                diagnostics ??= new List<Diagnostic>();
+                foreach (var error in localDiagnostics)
+                    diagnostics.Add(error with { Span = new TextSpan(statementStart + error.Span.Start, error.Span.Length) });
+            }
+            if (summary is null)
+            {
+                if (bounded) return false;
+                if (localDiagnostics.Count == 0)
+                    (diagnostics ??= new List<Diagnostic>()).Add(new(DiagnosticSeverity.Error, "TOML_PARSE",
+                        "Invalid TOML statement.", new TextSpan(statementStart, source.Length)));
+                invalidUnit?.Invoke(headerUnit);
+                return true;
+            }
             var statement = new TomlStatement(statementStart, summary);
             if (!accept(statement)) return false;
-            summaries.Add(statement);
+            if (bounded) summaries.Add(statement);
             return true;
         }
 
-        TomlStatementScan Result(bool valid) => new(valid, summaries, offset, parsed, visits);
+        TomlStatementScan Result(bool valid) => new(valid && diagnostics is not { Count: > 0 }, summaries,
+            offset, parsed, visits, diagnostics ?? (IReadOnlyList<Diagnostic>)Array.Empty<Diagnostic>());
     }
 }
 
@@ -85,5 +129,6 @@ internal static class TomlStatementReader
 /// <param name="End">Absolute stop position at EOF, a certified seam or a refused unit.</param>
 /// <param name="ParsedCharacters">Actual standalone parser input units.</param>
 /// <param name="ScannedCharacters">Actual logical-boundary visits; not a whole-analysis cost metric.</param>
+/// <param name="Diagnostics">Absolute local syntax/inline diagnostics; unbounded mode recovers across certified seams.</param>
 internal sealed record TomlStatementScan(bool Valid, IReadOnlyList<TomlStatement> Statements,
-    int End, int ParsedCharacters, int ScannedCharacters);
+    int End, int ParsedCharacters, int ScannedCharacters, IReadOnlyList<Diagnostic> Diagnostics);

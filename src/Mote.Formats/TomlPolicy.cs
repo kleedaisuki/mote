@@ -3,7 +3,7 @@ using Tomlyn.Syntax;
 
 namespace Mote.Formats;
 
-/// <summary>Full-fidelity TOML policy backed by Tomlyn's validated, lossless syntax tree.</summary>
+/// <summary>Lossless TOML syntax with shared normative source-order ownership validation.</summary>
 public sealed class TomlPolicy : IIncrementalDocumentPolicy
 {
     /// <inheritdoc />
@@ -20,9 +20,9 @@ public sealed class TomlPolicy : IIncrementalDocumentPolicy
         ArgumentNullException.ThrowIfNull(text);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Validation includes table/key ownership (including dotted keys and arrays of tables),
-        // which cannot be inferred correctly from independent physical lines.
-        DocumentSyntax syntax = SyntaxParser.Parse(text, validate: true);
+        // Retain the lossless grammar tree, but do not delegate global array element identity
+        // to Tomlyn's whole-file validator. The same normative ownership model serves all sizes.
+        DocumentSyntax syntax = SyntaxParser.Parse(text, validate: false);
         var diagnostics = new List<Diagnostic>();
         foreach (var diagnostic in syntax.Diagnostics)
         {
@@ -31,6 +31,12 @@ public sealed class TomlPolicy : IIncrementalDocumentPolicy
                 diagnostic.Kind == DiagnosticMessageKind.Error ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
                 "TOML_PARSE", diagnostic.Message, Span(diagnostic.Span, text.Length)));
         }
+        // Local recovery cannot replace the whole grammar parser's independent witnesses.
+        // Exact duplicate records are collapsed, never unrelated messages/spans.
+        var seen = new HashSet<Diagnostic>(diagnostics);
+        foreach (var diagnostic in TomlDocumentValidation.Validate(text, cancellationToken))
+            if (seen.Add(diagnostic)) diagnostics.Add(diagnostic);
+        diagnostics.Sort((left, right) => left.Span.Start.CompareTo(right.Span.Start));
 
         var tokens = new List<SemanticToken>();
         foreach (var token in syntax.Tokens(includeCommentsAndWhitespaces: true))
@@ -58,8 +64,8 @@ public sealed class TomlPolicy : IIncrementalDocumentPolicy
     public string Format(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        var syntax = SyntaxParser.Parse(text, validate: true);
-        if (syntax.HasErrors) return text;
+        var syntax = SyntaxParser.Parse(text, validate: false);
+        if (syntax.HasErrors || TomlDocumentValidation.Validate(text, default).Count != 0) return text;
 
         // Only horizontal gaps directly adjacent to an assignment token are eligible. In
         // particular, this never rewrites a key/value token, a comment, or a newline.
@@ -73,8 +79,9 @@ public sealed class TomlPolicy : IIncrementalDocumentPolicy
         if (edits.Count == 0) return text;
         edits.Sort((a, b) => b.Start.CompareTo(a.Start));
         string candidate = ApplyReverse(text, edits);
-        var reparsed = SyntaxParser.Parse(candidate, validate: true);
-        if (reparsed.HasErrors || !Equivalent(Project(syntax, text.Length), Project(reparsed, candidate.Length))) return text;
+        var reparsed = SyntaxParser.Parse(candidate, validate: false);
+        if (reparsed.HasErrors || TomlDocumentValidation.Validate(candidate, default).Count != 0 ||
+            !Equivalent(Project(syntax, text.Length), Project(reparsed, candidate.Length))) return text;
         return candidate;
     }
 

@@ -4,6 +4,55 @@ Status: ownership correction and compact edit reuse implemented, 2026-10-01. Rea
 [`../toml-large-semantics.md`](../toml-large-semantics.md). This is a route toward
 general large-file semantics, not a claim that existing resource refusals are complete.
 
+## Uniform public policy and diagnostic recovery
+
+`TomlPolicy.Analyze` and `Format` now share the normative ownership model with
+large sessions. Actual current Tomlyn 2.10.1 rejected two source-order minimals
+accepted by both retained independent processors, even though it accepted all
+218 published valid corpus files. The lossless whole syntax tree therefore parses
+with `validate:false` for grammar/tokens/projection; every logical statement still
+passes Tomlyn `validate:true` for local grammar, numeric syntax and inline ownership.
+The whole-file ownership index uses decoded keys and independently owned latest
+array elements. There are no fixture-name exceptions and no discarded local checks.
+
+The legacy public string path reads a `StringReader` without building a second
+`Document`/rope. It does not inherit large-session statement/line/length/binding
+budgets and releases each temporary statement summary/tree. Its ownership index
+has an opt-in operation journal; the bounded cache path allocates no journal.
+After an ownership error, added bindings/origin/latest-scope mutations are rolled
+back. Invalid headers quarantine subsequent assignments until a successful header
+establishes scope. Invalid assignments do not taint implicit parents or erase the
+known valid current scope. Headers cannot span lines, so malformed header units can
+recover at physical newlines; malformed multiline values can still hide later units.
+Broad whitespace/control/header-tree classification is used only for *quarantine*,
+never to accept invalid trivia.
+
+Public diagnostics retain all whole-grammar witnesses plus independently recoverable
+local and ownership witnesses, deduplicating exact diagnostic records. They preserve
+`TOML_PARSE` and current absolute UTF-16 anchors. Statement-local EOF sentinel spans
+are clamped to the actual unit before shifting. The first draft stopped at one error;
+root review caught the user-visible loss of independent duplicates and it was corrected
+before landing. The expanded corpus span checks then exposed 28 real out-of-bounds
+EOF diagnostics (773/801 pass), fixed with unchanged assertions (801/801 pass).
+These failures remain in `.cache/toml-uniform/`; they were not converted into passes
+by filtering or weakening expectations.
+
+Small sessions with any diagnostic still return Provisional and unknown total; public
+`FormatAnalysis` has no completeness field. Recovery is not asserted to enumerate every
+error under malformed multiline syntax. All 703 decoded corpus cases retain correct
+validity, all 485 invalid decoded files remain byte-for-text unchanged by `Format`,
+all 218 valid files pass format/reanalysis/idempotence/semantic-content checks, and
+the two historical valid minimals now format safely. Nine bad UTF-8 fixtures remain
+separate decoder-boundary evidence. The final 801 cases also include the existing
+57 cache controls, multi-error/quarantine/rollback and all public diagnostic/token bounds.
+
+The added small-file parse work is a material cost, not a free abstraction. Matched
+final-source measurements and frozen hashes are recorded in
+[`../performance/toml-statement-cost.md`](../performance/toml-statement-cost.md).
+Current large cache measurements were separately frozen at `b93c4c2`; their whole-call
+edit medians include source verification/mapping/projection, while the narrower counters
+do not. None of these JIT experiments certifies Native AOT or end-to-end native latency.
+
 ## Representation and normative ownership
 
 TOML has two independent state machines: logical-statement syntax and source-ordered

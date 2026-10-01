@@ -24,9 +24,22 @@ internal sealed record TomlStatementSummary(int Length, TomlStatementAction Acti
 {
     /// <summary>Validates grammar and inline ownership before extracting external namespace effects.</summary>
     internal static TomlStatementSummary? Parse(string source)
+        => Parse(source, out _);
+
+    /// <summary>Preserves local parser diagnostics for unbounded public-policy validation.</summary>
+    internal static TomlStatementSummary? Parse(string source, out IReadOnlyList<Diagnostic> diagnostics)
+        => Parse(source, out diagnostics, out _);
+
+    /// <summary>Retains recovery header identity without treating invalid leading trivia as valid syntax.</summary>
+    internal static TomlStatementSummary? Parse(string source, out IReadOnlyList<Diagnostic> diagnostics,
+        out bool headerUnit)
     {
         var syntax = SyntaxParser.Parse(source, validate: true);
-        if (syntax.Diagnostics.Count != 0) return null;
+        headerUnit = syntax.Tables.Any() || HasHeaderPrefix(source);
+        diagnostics = syntax.Diagnostics.Count == 0 ? Array.Empty<Diagnostic>() : syntax.Diagnostics.Select(error =>
+            new Diagnostic(error.Kind == DiagnosticMessageKind.Error ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
+                "TOML_PARSE", error.Message, DiagnosticSpan(error.Span, source.Length))).ToArray();
+        if (diagnostics.Count != 0) return null;
         var pairs = syntax.KeyValues.ToArray();
         var tables = syntax.Tables.ToArray();
         if (pairs.Length + tables.Length == 0)
@@ -38,6 +51,20 @@ internal sealed record TomlStatementSummary(int Length, TomlStatementAction Acti
         return new(source.Length, table is TableArraySyntax ? TomlStatementAction.ArrayTable : TomlStatementAction.Table,
             TomlOwnershipIndex.Parts(table.Name), Span(table.Name.Span), Span(table.Span), default,
             table.Name.ToString().Trim(), null);
+    }
+
+    /// <summary>
+    /// Conservative recovery-only classification. Broad whitespace/control skipping never
+    /// certifies source; the parser still rejects all non-TOML leading characters.
+    /// </summary>
+    private static bool HasHeaderPrefix(string source)
+    {
+        foreach (char ch in source)
+        {
+            if (char.IsWhiteSpace(ch) || char.IsControl(ch)) continue;
+            return ch == '[';
+        }
+        return false;
     }
 
     /// <summary>All validated values seal their external path, independent of their semantic category.</summary>
@@ -86,6 +113,12 @@ internal sealed record TomlStatementSummary(int Length, TomlStatementAction Acti
 
     /// <summary>Copies coordinates, never parser ownership or source storage.</summary>
     private static TextSpan Span(SourceSpan span) => new(span.Offset, span.Length);
+    /// <summary>Parser EOF sentinels are zero-width inside the actual statement, never one unit beyond it.</summary>
+    private static TextSpan DiagnosticSpan(SourceSpan span, int length)
+    {
+        int start = Math.Clamp(span.Offset, 0, length);
+        return new(start, Math.Clamp(span.Length, 0, length - start));
+    }
     /// <summary>Maps statement-local coordinates into the current immutable snapshot.</summary>
     private static TextSpan Shift(TextSpan span, int start) => new(start + span.Start, span.Length);
 }

@@ -14,12 +14,22 @@ namespace Mote.Formats;
 internal sealed class TomlOwnershipIndex
 {
     private const int MaxBindings = 200_000;
+    /// <summary>Large sessions bound memory; legacy whole-source validation may explicitly opt out.</summary>
+    private readonly int _bindingLimit;
     private readonly Scope _root = new();
-    private Scope _current;
+    private Scope? _current;
     private int _bindings;
+    /// <summary>Opt-in public-policy recovery journal; normal large sessions allocate no journal.</summary>
+    private readonly List<Mutation>? _journal;
 
     /// <summary>Starts at the root table with no user-defined bindings.</summary>
-    internal TomlOwnershipIndex() => _current = _root;
+    internal TomlOwnershipIndex(int bindingLimit = MaxBindings, bool recover = false)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bindingLimit);
+        _bindingLimit = bindingLimit;
+        _journal = recover ? new List<Mutation>() : null;
+        _current = _root;
+    }
 
     /// <summary>Whether the trie has kept every binding needed for duplicate detection.</summary>
     internal bool IsExhaustive { get; private set; } = true;
@@ -37,6 +47,18 @@ internal sealed class TomlOwnershipIndex
     /// <summary>Replays decoded statement semantics without retaining a parser syntax tree.</summary>
     internal Diagnostic? AddHeader(IReadOnlyList<string> parts, bool array, TextSpan keySpan)
     {
+        var problem = AddHeaderCore(parts, array, keySpan);
+        if (problem is not null && _journal is not null) { Rollback(); _current = null; }
+        _journal?.Clear();
+        return problem;
+    }
+
+    /// <summary>A failed header leaves its following assignments unowned until a valid header resumes.</summary>
+    internal void InvalidateCurrentScope() => _current = null;
+
+    /// <summary>Applies one header with optional reversible mutations for diagnostic recovery.</summary>
+    private Diagnostic? AddHeaderCore(IReadOnlyList<string> parts, bool array, TextSpan keySpan)
+    {
         if (parts.Count == 0) return Conflict("Invalid table path.", keySpan);
         var parent = ResolveParent(_root, parts, Origin.ImplicitHeader, keySpan, out var problem);
         if (problem is not null) return problem;
@@ -53,13 +75,13 @@ internal sealed class TomlOwnershipIndex
         {
             // References can only reach the latest element. Earlier element namespaces
             // cannot be revisited, even when they contain nested table/array headers.
-            binding.Scope = new Scope();
+            SetScope(binding, new Scope());
             _current = binding.Scope;
             return null;
         }
         if (!array && binding.Origin == Origin.ImplicitHeader)
         {
-            binding.Origin = Origin.ExplicitTable;
+            SetOrigin(binding, Origin.ExplicitTable);
             _current = binding.Scope!;
             return null;
         }
@@ -73,8 +95,20 @@ internal sealed class TomlOwnershipIndex
     /// <summary>All validated assignment values seal the external namespace, regardless of category.</summary>
     internal Diagnostic? AddAssignment(IReadOnlyList<string> parts, TextSpan keySpan)
     {
+        // Syntax errors still surface independently. Unknown header context must not
+        // manufacture ownership conflicts against the preceding valid table.
+        if (_current is null) return null;
+        var problem = AddAssignmentCore(parts, keySpan);
+        if (problem is not null && _journal is not null) Rollback();
+        _journal?.Clear();
+        return problem;
+    }
+
+    /// <summary>Applies one assignment; failed dotted-parent state changes are reversible.</summary>
+    private Diagnostic? AddAssignmentCore(IReadOnlyList<string> parts, TextSpan keySpan)
+    {
         if (parts.Count == 0) return Conflict("Invalid key.", keySpan);
-        var parent = ResolveParent(_current, parts, Origin.Dotted, keySpan, out var problem);
+        var parent = ResolveParent(_current!, parts, Origin.Dotted, keySpan, out var problem);
         if (problem is not null) return problem;
         if (parent is null) return null;
         var name = parts[^1];
@@ -107,7 +141,7 @@ internal sealed class TomlOwnershipIndex
             // redeclaration while still allowing another dotted sibling.
             if (newParentOrigin == Origin.Dotted)
             {
-                if (binding.Origin == Origin.ImplicitHeader) binding.Origin = Origin.Dotted;
+                if (binding.Origin == Origin.ImplicitHeader) SetOrigin(binding, Origin.Dotted);
                 else if (binding.Origin is Origin.ExplicitTable or Origin.ArrayTable)
                 {
                     problem = Conflict($"Key '{parts[i]}' cannot redefine an explicitly defined table.", keySpan);
@@ -122,11 +156,39 @@ internal sealed class TomlOwnershipIndex
     /// <summary>Limits memory for documents with unbounded unique-key cardinality.</summary>
     private Binding? NewBinding(Scope parent, string name, Origin origin)
     {
-        if (_bindings == MaxBindings) { IsExhaustive = false; return null; }
+        if (_bindings == _bindingLimit) { IsExhaustive = false; return null; }
         _bindings++;
         var binding = new Binding(origin, origin is Origin.Value or Origin.InlineTable ? null : new Scope());
         parent.Children.Add(name, binding);
+        _journal?.Add(new(MutationKind.Added, parent, name, binding, default, null));
         return binding;
+    }
+
+    /// <summary>Records only changed namespace state, never cloning the whole ownership index.</summary>
+    private void SetOrigin(Binding binding, Origin origin)
+    {
+        _journal?.Add(new(MutationKind.Origin, null, null, binding, binding.Origin, null));
+        binding.Origin = origin;
+    }
+
+    /// <summary>Latest-element replacement is reversible when recovering an invalid header.</summary>
+    private void SetScope(Binding binding, Scope scope)
+    {
+        _journal?.Add(new(MutationKind.Scope, null, null, binding, default, binding.Scope));
+        binding.Scope = scope;
+    }
+
+    /// <summary>Restores the exact certified prefix after a failed ownership transition.</summary>
+    private void Rollback()
+    {
+        for (int i = _journal!.Count - 1; i >= 0; i--)
+        {
+            var mutation = _journal[i];
+            if (mutation.Kind == MutationKind.Added)
+            { mutation.Parent!.Children.Remove(mutation.Name!); _bindings--; }
+            else if (mutation.Kind == MutationKind.Origin) mutation.Binding.Origin = mutation.Origin;
+            else mutation.Binding.Scope = mutation.Scope;
+        }
     }
 
     /// <summary>Uses decoded Tomlyn key components, so escaped-equivalent names collide.</summary>
@@ -167,4 +229,10 @@ internal sealed class TomlOwnershipIndex
 
     /// <summary>Only implicit header parents may later become explicit tables.</summary>
     private enum Origin { ImplicitHeader, Dotted, ExplicitTable, ArrayTable, Value, InlineTable }
+
+    /// <summary>The three reversible namespace mutations produced by an ownership operation.</summary>
+    private enum MutationKind { Added, Origin, Scope }
+    /// <summary>One undo entry owned only for the duration of the current recoverable operation.</summary>
+    private readonly record struct Mutation(MutationKind Kind, Scope? Parent, string? Name,
+        Binding Binding, Origin Origin, Scope? Scope);
 }

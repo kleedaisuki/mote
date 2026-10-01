@@ -1,5 +1,33 @@
 # TOML large-file ownership certification
 
+## Compact edit reuse and uniform policy (2026-10-01)
+
+Large Complete analyses now retain validated logical-statement summaries and exactly
+one committed snapshot identity. A real single edit repairs only affected owners,
+expanding to a certified mapped seam; exact unchanged prefix/suffix and inserted
+payload are checked without hashes. Namespace-effect equality reuses valid ownership;
+key/header changes replay all off-screen dependencies. Missing/bogus/multiple edit
+history rebuilds safely. Mapping/projection remain O(statement count), and resource
+refusals remain real gaps. Cold Visible is still Provisional; a cached Complete source
+may return Complete Visible. The 57 retained reuse controls pass after the current
+reader/recovery changes.
+
+The public small/string policy now uses the same normative ownership model with an
+unbounded validation mode rather than Tomlyn's disputed whole-file nested-AoT ownership.
+It preserves the lossless grammar tree, per-statement validated local semantics and
+all independently recoverable diagnostics, including rollback and invalid-header scope
+quarantine. Final current-source evidence is **801/801** after independently finding
+and fixing 28 EOF span regressions. The prior first-witness draft and failed evidence
+are documented, not hidden. See
+[`architecture/toml-statement-semantic-reuse.md`](architecture/toml-statement-semantic-reuse.md)
+and [`validation/toml-statement-reuse.md`](validation/toml-statement-reuse.md).
+
+Matched <=8 MiB managed experiments show real edit reuse and retained-metadata/cold
+cost tradeoffs; final public-policy duplicate parsing also incurs measurable work.
+Exact source/binary hashes, adverse observations, excluded control mistakes and scope
+are in [`performance/toml-statement-cost.md`](performance/toml-statement-cost.md).
+No local GUI, AOT/macOS execution or arbitrary-size completeness is claimed here.
+
 ## Normative ownership correction (2026-10-01)
 
 The large Full path now uses the complete table/key ownership transition model
