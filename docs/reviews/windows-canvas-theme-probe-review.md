@@ -7,8 +7,10 @@ portable contract test, initially at SHA-256
 `C5E15186D708C9ADC191177D0722C49C57DAC72DAFCBCAB11E92250345E91A68`.
 Read existing theme/native file-workflow decisions first. Inspected the actual
 `WindowsRichEditIsland.AttachAccessibility` and `WM_GETOBJECT` dispatch: the
-Canvas HWND owns the source-backed provider; child 301 is only the bounded
-native input island. No production changes or OS preference mutation were
+Canvas HWND owns the source-backed accessibility bridge; child 301 is only the bounded
+native input island. This initial inspection did not establish whether FromHandle
+returns the logical Document or its fragment-root Pane; hosted evidence later
+resolved that distinction as described below. No production changes or OS preference mutation were
 performed for this review. Hosted target execution remains pending.
 
 ## Initial material findings (owner notified before CI integration)
@@ -162,6 +164,50 @@ fresh-observation stale-state assertion. The owner reported 13 owner + 7 source
 reviewer. No substantive unresolved issue was found within this change. Owner,
 production code and CI were outside this edit; new CI worker pins must be updated
 before execution. Hosted discrimination results remain pending.
+
+## Direct-source-child topology correction
+
+Read the hosted discriminator and companion ordinary-product tree evidence in
+`docs/validation/windows-canvas-live-theme.md` for run `36804628122` before reviewing
+the next change. Both architectures expose a target-owned Canvas Pane root and a
+source Document child. The initial theme observer demanded the child's identity
+on the root; this was a harness node-selection mismatch, not proof of a missing
+product Document. Earlier safety/source-mapping review should not be read as
+certifying that initial root-node assumption.
+
+Reviewed the narrow `Resolve-DirectCanvasSource` correction: start from the exact
+Canvas FromHandle root, gate root PID before identity or traversal, and visit only
+direct RawView children using GetFirstChild/GetNextSibling. At most 32 child
+property sets are inspected; observing another sibling records budget overflow
+and fails. There is no recursive traversal, desktop-root query, root-Document
+fallback, hidden native-text fallback, or selection of the first ambiguous match.
+Every child's PID is checked before its ID/type. Only exactly one same-PID,
+exact-ID `mote.source.document`, Document candidate can proceed; zero/duplicates
+reject before TextPattern/text. Candidate PID/identity/type are rechecked before
+pattern access. Root metadata is separate from candidate metadata.
+
+The exact LF text, TextPattern, Canvas/input visibility and source selection
+requirements remain unchanged. Missing/duplicate/foreign/deep/root-only shapes
+reject; overflow carries safe error stage/HRESULT. Source selection and theme
+notification still follow readiness success. Parent registry owner, 15 s polling
+and 30 s independently killable-worker deadline are unchanged.
+
+Inspected seven additional portable topology cases (none, duplicates, foreign
+child, foreign root, grandchild, root Document, 33-child overflow), including
+throwing foreign identity/type sentinels. The owner reported the existing 13 owner,
+7 source and 11 readiness cases plus these 7 cases passing; no redundant execution
+was performed. Final inspected local worker hash:
+`889C5FA1E8B7B6E05531677E13291B70B8546A11FDE9648A94EB2A6265BF09CD`;
+test hash `A8619449EA92951B209B543ADD67BADD02B17FB43A4E2B9A165F84963BF8FD19`.
+No substantive unresolved issue was found in this scoped harness correction.
+Actual hosted topology/theme acceptance and refreshed CI pins remain pending.
+
+API semantics checked against Microsoft's
+[GetFirstChild](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.treewalker.getfirstchild?view=windowsdesktop-10.0)
+and [GetNextSibling](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.treewalker.getnextsibling?view=windowsdesktop-10.0)
+documentation: this nonrecursive sequence walks one child/sibling level in the
+chosen view. UIA tree membership may change across passes, so no atomic-tree or
+immutable-version claim is made.
 
 ## Positive contracts and interpretation limits
 
