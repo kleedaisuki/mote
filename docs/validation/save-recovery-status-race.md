@@ -65,3 +65,39 @@ Result: **175/175 passed**, zero skipped, 40 seconds. This includes controller e
 ## Verdict and limits
 
 The reported hosted failure revealed a reproducible user-visible recovery-warning ordering defect, not an unreleased Save busy flag or a demonstrated filesystem export failure. The persistent-channel correction satisfies the deterministic ordering and warning lifetime tests on local Windows managed builds, preserving the existing explicit reload and preedit contracts. Cached native analysis replay cannot restore the old warning because the raw cached view contains no controller notice text. Actual native Mac/Windows shell behavior is supported by source inspection, not locally executed GUI validation here. Hosted macOS managed rerun and four-RID Native AOT acceptance remain separate target validation; no release-wide or stochastic reliability conclusion follows from this scoped test set.
+
+## Hosted strict-target audit: run 36800944850
+
+Audited [run 36800944850](https://github.com/kleedaisuki/mote/actions/runs/36800944850) at exact source `99fbe395308816e3d1d2381ace58c3d5800811ec`. Both strict test jobs execute the unchanged unfiltered command `dotnet test mote.sln --configuration Release --no-build`. Target logs were retrieved independently, rather than inferring diagnostic correctness from overall run color:
+
+```powershell
+gh api repos/kleedaisuki/mote/actions/jobs/110174903080/logs > .cache/save-recovery-status-race/ci-36800944850/macos-job.log
+gh api repos/kleedaisuki/mote/actions/jobs/110174903027/logs > .cache/save-recovery-status-race/ci-36800944850/windows-job.log
+```
+
+| Strict target | Observed result | Coverage interpretation |
+| --- | --- | --- |
+| `Test / macos-latest`, job 110174903080 | Completed success; Mote.Tests **1158 passed, 0 failed, 0 skipped**, duration 1m2s; Themes 14/14 and Configuration 9/9 | Full managed suite succeeded on macOS 26.6.2/25G83, `macos-26-arm64` image 20260907.0351.1. Source contains the unchanged original export/Save test and both new deterministic theory cases. |
+| `Test / windows-latest`, job 110174903027 | Completed failure; Mote.Tests test host aborted at native fatal error **0xC0000005**; process exit 1. Only a partial **365 passed** summary was emitted. Themes 14/14 and Configuration 9/9 had completed. | Not a completed Mote.Tests suite. Windows recovery/theme/settings acceptance for this run cannot be claimed from the partial count. |
+
+The default console logger does not emit individual named PASS records. Accordingly, the macOS result establishes the complete, unfiltered suite outcome and the inclusion of these source cases, not an invented per-case raw marker or a reliability rate. No recurrence of the original `NativeSaveRecoveryTests.cs:88` timeout or managed theme/settings assertion appears in the completed macOS log. The two local compatibility regressions documented above are covered by the full successful macOS suite; this does not excuse the Windows abort.
+
+### Windows first exact failure
+
+At 2026-10-01T01:27:36.639Z, the raw Windows log reports:
+
+```text
+The active test run was aborted. Reason: Test host process crashed : Fatal error.
+0xC0000005
+at Mote.Native.Windows.Win32.SetWindowTextW(IntPtr, System.String)
+at Mote.Native.Windows.WindowsEditorShell.ImportPreviewPayload(System.String, Boolean)
+at Mote.Native.Windows.WindowsEditorShell.InstallPreview(Mote.Native.NativeAnalysisView)
+at Mote.Native.Windows.WindowsEditorShell.SetTheme(Mote.Themes.IThemePolicy)
+at Mote.Tests.NativeThemeOverrideWindowsTests.Same_id_override_updates_native_background_without_source_or_history_changes(Boolean)
+```
+
+Target environment: Windows Server 2025 Datacenter 10.0.26100, image `windows-2025-vs2026` version 20260925.250.1. This is an access violation in a native preview/theme path, not the recovery status assertion. The log does not identify which theory Boolean was active, nor prove a root cause such as a particular pointer lifetime, reentrancy, or runner failure. It does not identify whether the recovery cases ran before the abort. The first exact failure was reported immediately for independent diagnosis; no retry or assertion weakening was performed during this audit.
+
+Local artifact SHA-256 values (retrieved text bytes): macOS log `D503C0AEB1D4E9FF660E8C3CFD4869BCB300356ABB9B3F56DEA859D9A31BD8BF`; Windows log `F3BEE6A38AD9A17795B9090F758B4C94192DD32071ECA3D8CBF5ADEBA8303E68`.
+
+**Updated scoped verdict:** the recovery correction now has successful complete hosted macOS managed-suite evidence in addition to the deterministic local red-to-green evidence. The same run does not establish complete Windows managed-suite acceptance, and it does not establish native GUI recovery or four-RID Native AOT release acceptance. The Windows fatal preview/theme failure is a separate material blocker requiring its own causal reproduction; it must not be dismissed as environmental solely because prior runs passed.
