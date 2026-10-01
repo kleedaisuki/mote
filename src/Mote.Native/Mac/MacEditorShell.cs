@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Mote.Engine;
 using Mote.Native.Accessibility;
 using Mote.Native.Mac.Accessibility;
 using Mote.Native.Mac.Canvas;
@@ -18,7 +19,7 @@ namespace Mote.Native.Mac;
 /// the controller remains the sole owner of text, undo history, and file operations.
 /// </summary>
 [SupportedOSPlatform("macos")]
-internal sealed unsafe class MacEditorShell : INativeCanvasShell
+internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEncodingShell
 {
     /// <summary>One source-only endpoint; preview and status draws never complete it.</summary>
     private readonly NativeDrawTrace _sourceDrawTrace = new();
@@ -229,6 +230,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     public event Action? NewRequested;
     /// <inheritdoc />
     public event Action? OpenRequested;
+    /// <inheritdoc />
+    public event Action? OpenWithEncodingRequested;
     /// <inheritdoc />
     public event Action<NativeSaveRequest>? SaveRequested;
     /// <inheritdoc />
@@ -775,6 +778,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
 
     /// <inheritdoc />
+    public DocumentTextEncoding? ChooseOpenEncoding() => MacOpenEncodingPrompt.Choose();
+
+    /// <inheritdoc />
     public string? PickOpenFile()
     {
         if (_probeOpenPath is { } probePath)
@@ -1289,6 +1295,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             ("Quit mote", "moteQuit:", "q")], true);
         AddMenu(main, "File", [
             ("New", "moteNew:", "n"), ("Open…", "moteOpen:", "o"),
+            ("Open with Encoding…", "moteOpenWithEncoding:", ""),
             ("Save", "moteSave:", "s"), ("Save As…", "moteSaveAs:", "S"),
             ("Close", "performClose:", "w")], true);
         AddMenu(main, "Edit", [
@@ -1830,6 +1837,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             "v@:@");
         Add(cls, "moteNew:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&New, "v@:@");
         Add(cls, "moteOpen:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Open, "v@:@");
+        Add(cls, "moteOpenWithEncoding:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&OpenWithEncoding, "v@:@");
         Add(cls, "moteSave:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Save, "v@:@");
         Add(cls, "moteSaveAs:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SaveAs, "v@:@");
         Add(cls, "moteUndo:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Undo, "v@:@");
@@ -2197,6 +2206,17 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Open(nint self, nint selector, nint sender)
     { var shell = s_current; shell?.NotifyAfterComposition(shell.OpenRequested); }
+    /// <summary>Settles composition before dispatch and contains secondary error-dialog failures at the ABI.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OpenWithEncoding(nint self, nint selector, nint sender)
+    {
+        try
+        {
+            var shell = s_current;
+            shell?.NotifyAfterComposition(shell.OpenWithEncodingRequested);
+        }
+        catch { /* Never unwind a managed exception through an AppKit selector. */ }
+    }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Save(nint self, nint selector, nint sender)
     { DispatchSave(NativeSaveKind.Save); }
