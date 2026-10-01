@@ -259,6 +259,119 @@ on x64 and -25205 no-value on ARM; getter correctness alone does not establish
 native menu lifecycle or external accessibility transport. See
 [full target accounting](mac-grid-table-proxy.md#shown-menu-forwarding-target-ci-36792454502).
 
+## Explicit owned native popup after the inherited-action falsifier
+
+The integration owner reports that final CI at `e439942` reproduces the same
+decisive trace on **both** Mac RIDs: `show-enter` followed by `native-return`
+with `result=0`, `configured=1`, `items=12`, `coordinate=1`, `shown=0`,
+`opens=0`, `closes=0`, `key=1`, `active=1`, `first=0`. External AX now refuses
+the menu action (`-25205`) before discovery/relationship/navigation checks.
+This final two-target result confirms the corrected native BOOL is false;
+earlier pointer-width forwarding falsely acknowledged the inherited action.
+It does not identify the private AppKit refusal mechanism. In particular,
+`first=0` is a candidate condition, not a proved first-responder prerequisite.
+
+Giving the physical Table focus solely to satisfy an undocumented inherited
+action would alter independent source focus and possibly composition. The
+correct representation instead implements the custom semantic action using
+Apple's explicit native menu API. It preserves the existing configured NSMenu,
+targets, actions and `menuWillOpen:` as the sole frozen-identity/capture seam.
+
+### Admission and asynchronous display contract
+
+1. The semantic action requires the main thread, live attachment, published
+   frame, non-installing state, exact physical Table/menu, a visible native
+   window, nonempty finite clipped `visibleRect`, and no already-shown menu.
+2. A small value-type state admits one pending installation serial. Duplicate
+   and reentrant requests during native tracking are refused.
+3. `performSelector:withObject:afterDelay:0` schedules the **existing delegate**
+   for the next main run-loop turn. Returning true means this request was
+   successfully queued, as permitted by Apple's triggered-action contract;
+   it does not mean display, selection or a source command completed.
+4. The callback rechecks attachment/frame/menu/visible bounds and consumes the
+   exact still-current installation serial once. Detached/superseded requests
+   do not show a menu. It then invokes the existing NSMenu's
+   `popUpMenuPositioningItem:atLocation:inView:` over the physical Table at the
+   center of its **actual visible rectangle**, not its offscreen full view.
+5. Native BOOL and NSPoint use an exact one-byte return/aggregate-argument
+   bridge on both x64 and ARM. NSMenu's BOOL means selected vs cancelled only;
+   neither outcome certifies acknowledged source mutation.
+6. Actual existing `menuWillOpen:` publishes that same menu as the physical
+   shown-menu relation, then captures the existing frozen coordinate/identity.
+   Matching `menuDidClose:` clears the relation. No configured menu is reported
+   as shown outside these native transitions.
+7. Disposal invalidates only this attachment's pending state, cancels only its
+   exact delegate/selector/object perform request, and cancels only its own
+   actually shown menu before detaching. No nil/broad cancellation target is
+   used. A retained external proxy loses its owner as before.
+
+There is no global event, synthetic keyboard/mouse input, activation, forced
+focus, new menu, helper binary or direct source action. Existing physical
+right-click/keyboard/menu code remains the input implementation. All source
+commands retain their existing identity/controller guards. The opt-in AX path
+changes only how this menu is requested and how its actual transient relation
+is represented.
+
+Apple primary contracts:
+[NSMenu popup](https://developer.apple.com/documentation/appkit/nsmenu/popup(positioning:at:in:)),
+[deferred NSObject selector](https://developer.apple.com/documentation/objectivec/nsobject-swift.class/perform(_:with:afterdelay:)),
+and [AX triggering vs completion](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/accessibilityperformshowmenu()).
+Deferral is necessary because native menu tracking returns only after selection
+or cancellation; holding the originating external AX request inside tracking
+would prevent that same client from discovering and pressing the menu item.
+
+### Discriminating probes, not a weakened oracle
+
+The fixed trace additionally accepts `schedule-return` (admitted vs refused),
+`popup-begin` (entering native tracking) and `popup-return` (native selected vs
+cancelled). Historical `native-return` keeps its original inherited-action
+meaning; it is no longer emitted by the new production path. Boolean results
+are required only on the three return phases; all other phases retain -1.
+The sixteen-event/content-free protocol budget is unchanged, and callback
+transitions remain independent of these return values.
+
+The in-process selector probe now schedules **only the owned NSMenu's**
+`cancelTracking` in ordinary and native event-tracking run-loop modes. It calls
+the semantic action, pumps the process-owned main run loop for 0.5 seconds and
+requires exactly one actual will-open and did-close callback, the correct
+frozen field identity, cleared shown-menu relation and unchanged native first
+responder. Cancellation selects no source command; the existing outer command
+count assertions remain. This is actual native popup/delegate testing when run
+on Mac, not manually invoking the delegates. Its new source bytes must be
+reviewed/pinned before hosted execution. These are proposed target assertions,
+**not** local native results.
+
+Local Windows/.NET SDK 10.0.400 source compilation and focused portable tests
+pass **24/24**: the preceding ten accessibility cases, six lifecycle/protocol
+cases, and eight deferred-request/anchor/ABI cases. The latter cover single-use
+requests, duplicate/reentrant refusal, supersession/detach/cancellation,
+finite clipped anchors, correct Point/BOOL signature and return events not
+inventing open/close transitions. Evidence:
+`.cache/mac-grid-menu-regression/menu-presentation.trx`.
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore `
+  --filter 'FullyQualifiedName~MacGridMenu|FullyQualifiedName~MacGridAccessibility' `
+  --verbosity minimal --logger 'trx;LogFileName=menu-presentation.trx' `
+  --results-directory .cache/mac-grid-menu-regression
+```
+
+Fresh two-target popup/delegate execution and the unchanged separate-client
+unique-item/prompt/navigation/retirement/normal-close assertions are still
+required. No external menu success, screen-reader acceptance or release-ready
+state is inferred from managed tests or successful admission.
+
+Independent [owned-popup review](../reviews/mac-grid-owned-popup-review.md)
+identified a conditional native lifetime risk in nested tracking. It is
+statically addressed: exact delegate/menu/table references are retained over
+the popup call and released in reverse order; disposal detaches retained menu
+delegate and this owner's item targets/actions before releasing the owner.
+The native retained-menu probe requires those old command targets/actions to
+be nil. Callback admission is consumed before fallible native preflight, and
+its presentation flag is cleared in `finally`, so a managed preflight fault
+cannot leave the attachment permanently queued. Actual disposal-during-tracking
+native stress remains separately unclaimed target coverage.
+
 ### Corrected native BOOL lifecycle execution
 
 CI 36794910486 / `e439942` passes the actual in-process combined probes on both

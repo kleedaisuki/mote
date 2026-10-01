@@ -21,6 +21,12 @@ internal sealed unsafe partial class MacCsvGrid
     private const string AccessibilityTableClass = "MoteCsvGridAccessibilityTable";
     /// <summary>One owned root per attachment; child epochs retire independently of this handle.</summary>
     private nint _accessibilityTable;
+    /// <summary>One deferred native popup request per attachment; it carries no source command authority.</summary>
+    private MacCsvGridMenuPresentation _accessibilityMenuPresentation;
+    /// <summary>Target-probe callback observation only; it is not a source operation or display certificate.</summary>
+    private int _accessibilityMenuOpens, _accessibilityMenuCloses;
+    /// <summary>Readback of actual existing menu delegate callbacks for a fresh process-owned probe attachment.</summary>
+    internal (int Opens, int Closes) ProbeMenuTransitions => (_accessibilityMenuOpens, _accessibilityMenuCloses);
     /// <summary>Diagnostic semantic root; physical input continues to use Table.</summary>
     internal nint AccessibilityTable => AccessibilityEnabled ? _accessibilityTable : _table;
     /// <summary>Only current nodes have managed entries; retirement cannot retain a projection.</summary>
@@ -72,6 +78,9 @@ internal sealed unsafe partial class MacCsvGrid
     /// <summary>Native BOOL getters/actions return one byte, not a pointer with unspecified upper bits.</summary>
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
     private static extern byte AccessibilityNativeBool(nint receiver, nint selector);
+    /// <summary>NSMenu's BOOL return and NSPoint argument use their native scalar/aggregate register classes.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern byte AccessibilityPopUpMenu(nint receiver, nint selector, nint item, ObjC.Point location, nint view);
 
     /// <summary>Publishes the Grid group without touching source hierarchy or input views.</summary>
     private void InitializeAccessibility()
@@ -542,7 +551,7 @@ internal sealed unsafe partial class MacCsvGrid
         catch { return default; }
     }
 
-    /// <summary>Only opens the existing native menu; its frozen commands still pass through established controller guards.</summary>
+    /// <summary>Admits an owned next-turn popup, not completed menu tracking or any source command.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static byte AccessibilityShowMenu(nint self, nint selector)
     {
@@ -550,11 +559,134 @@ internal sealed unsafe partial class MacCsvGrid
         {
             if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g) || g._installing || g._accessibilityFrame is null) return 0;
             g.TraceMenu(MacCsvGridMenuPhase.ShowEnter);
-            var result = AccessibilityNativeBool(g._table, ObjC.Sel("accessibilityPerformShowMenu")) != 0;
-            g.TraceMenu(MacCsvGridMenuPhase.NativeReturn, result);
+            var result = g.QueueAccessibilityMenu();
+            g.TraceMenu(MacCsvGridMenuPhase.ScheduleReturn, result);
             return result ? (byte)1 : (byte)0;
         }
         catch { return 0; }
+    }
+
+    /// <summary>Queues after AX reply so native menu tracking cannot hold the external action call open.</summary>
+    private bool QueueAccessibilityMenu()
+    {
+        if (!TryAccessibilityMenu(out _, out _) || !_accessibilityMenuPresentation.TryQueue(_installSerial)) return false;
+        try
+        {
+            ObjC.Send(_delegate, ObjC.Sel("performSelector:withObject:afterDelay:"),
+                ObjC.Sel("moteGridShowMenu:"), 0, 0d);
+            return true;
+        }
+        catch { _accessibilityMenuPresentation.CancelPending(); return false; }
+    }
+
+    /// <summary>Rechecks actual attachment, installed frame, configured menu and clipped native viewport at dispatch.</summary>
+    private bool TryAccessibilityMenu(out nint menu, out ObjC.Point point)
+    {
+        menu = 0; point = default;
+        if (!AccessibilityEnabled || _table == 0 || _delegate == 0 || _accessibilityTable == 0 ||
+            _installing || _accessibilityFrame is null) return false;
+        var window = ObjC.Send(_table, ObjC.Sel("window"));
+        if (window == 0 || AccessibilityNativeBool(window, ObjC.Sel("isVisible")) == 0 ||
+            ObjC.Send(_table, ObjC.Sel("accessibilityShownMenu")) != 0) return false;
+        menu = ObjC.Send(_table, ObjC.Sel("menu"));
+        return menu != 0 && TryAccessibilityMenuAnchor(
+            MacOnScreenCanvasNative.GetRect(_table, ObjC.Sel("visibleRect")), out point);
+    }
+
+    /// <summary>Uses the current physical visible rectangle, never the offscreen center of the full bounded document view.</summary>
+    internal static bool TryAccessibilityMenuAnchor(ObjC.Rect visible, out ObjC.Point point)
+    {
+        point = default;
+        if (!double.IsFinite(visible.Origin.X) || !double.IsFinite(visible.Origin.Y) ||
+            !double.IsFinite(visible.Size.Width) || !double.IsFinite(visible.Size.Height) ||
+            visible.Size.Width <= 0 || visible.Size.Height <= 0) return false;
+        var x = visible.Origin.X + visible.Size.Width / 2;
+        var y = visible.Origin.Y + visible.Size.Height / 2;
+        if (!double.IsFinite(x) || !double.IsFinite(y)) return false;
+        point = new(x, y);
+        return true;
+    }
+
+    /// <summary>Shows the existing menu only after consuming a still-current request; native callbacks remain the freeze seam.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void AccessibilityPresentMenu(nint self, nint selector, nint sender)
+    {
+        try
+        {
+            if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g)) return;
+            var attached = g._accessibilityTable != 0 && g._table != 0 && !g._installing && g._accessibilityFrame is not null;
+            if (!g._accessibilityMenuPresentation.TryBegin(g._installSerial, attached)) return;
+            try { g.PresentAccessibilityMenu(self); }
+            finally { g._accessibilityMenuPresentation.End(); }
+        }
+        catch { /* Never unwind into the run loop; failed presentation is not an acknowledged source command. */ }
+    }
+
+    /// <summary>Native tracking can reenter disposal; exact participant retains span the entire popup invocation.</summary>
+    private void PresentAccessibilityMenu(nint delegateHandle)
+    {
+        if (!TryAccessibilityMenu(out var menu, out var point)) return;
+        var table = _table;
+        ObjC.Send(delegateHandle, ObjC.Sel("retain"));
+        ObjC.Send(menu, ObjC.Sel("retain"));
+        ObjC.Send(table, ObjC.Sel("retain"));
+        try
+        {
+            TraceMenu(MacCsvGridMenuPhase.PopupBegin);
+            var selected = AccessibilityPopUpMenu(menu, ObjC.Sel("popUpMenuPositioningItem:atLocation:inView:"),
+                0, point, table) != 0;
+            TraceMenu(MacCsvGridMenuPhase.PopupReturn, selected);
+        }
+        finally
+        {
+            ObjC.Send(table, ObjC.Sel("release"));
+            ObjC.Send(menu, ObjC.Sel("release"));
+            ObjC.Send(delegateHandle, ObjC.Sel("release"));
+        }
+    }
+
+    /// <summary>Only actual existing menu delegate transitions publish/clear the native current-menu relation.</summary>
+    private void AccessibilityMenuTransition(nint menu, bool opening)
+    {
+        if (!AccessibilityEnabled || menu == 0 || _table == 0) return;
+        if (opening && ObjC.Send(_table, ObjC.Sel("menu")) == menu)
+        {
+            _accessibilityMenuOpens = unchecked(_accessibilityMenuOpens + 1);
+            ObjC.Send(_table, ObjC.Sel("setAccessibilityShownMenu:"), menu);
+        }
+        else if (!opening && ObjC.Send(_table, ObjC.Sel("accessibilityShownMenu")) == menu)
+        {
+            _accessibilityMenuCloses = unchecked(_accessibilityMenuCloses + 1);
+            ObjC.Send(_table, ObjC.Sel("setAccessibilityShownMenu:"), 0);
+        }
+    }
+
+    /// <summary>Cancels only this attachment's queued selector and its actually tracked existing menu before detach.</summary>
+    private void CancelAccessibilityMenu()
+    {
+        if (!AccessibilityEnabled) return;
+        _accessibilityMenuPresentation.CancelPending();
+        if (_delegate != 0)
+            ObjC.Send(ObjC.Class("NSObject"), ObjC.Sel("cancelPreviousPerformRequestsWithTarget:selector:object:"),
+                _delegate, ObjC.Sel("moteGridShowMenu:"), 0);
+        var shown = ObjC.Send(_table, ObjC.Sel("accessibilityShownMenu"));
+        if (shown != 0 && shown == ObjC.Send(_table, ObjC.Sel("menu")))
+            ObjC.Send(shown, ObjC.Sel("cancelTracking"));
+        ObjC.Send(_table, ObjC.Sel("setAccessibilityShownMenu:"), 0);
+    }
+
+    /// <summary>Externally/tracking-retained old menus cannot keep commands aimed at a released delegate.</summary>
+    private void DetachAccessibilityMenuCommands(nint menu)
+    {
+        if (!AccessibilityEnabled) return;
+        var count = ObjC.Send(menu, ObjC.Sel("numberOfItems"));
+        for (nint i = 0; i < count; i++)
+        {
+            var item = ObjC.Send(menu, ObjC.Sel("itemAtIndex:"), i);
+            if (ObjC.Send(item, ObjC.Sel("target")) != _delegate) continue;
+            ObjC.Send(item, ObjC.Sel("setTarget:"), 0);
+            ObjC.Send(item, ObjC.Sel("setAction:"), 0);
+        }
     }
 
     /// <summary>Visibility is measured from current clipped native layout, not ready-value existence.</summary>

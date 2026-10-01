@@ -12,6 +12,12 @@ internal static class MacCsvGridAccessibilityProbe
     /// <summary>Calls the object-return point ABI directly; this is not a CGRect aggregate return.</summary>
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
     private static extern nint HitTest(nint receiver, nint selector, ObjC.Point point);
+    /// <summary>Direct BOOL return for the owned semantic menu action; no global event is posted.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern byte MenuAction(nint receiver, nint selector);
+    /// <summary>Schedules cancellation in native menu-tracking mode as well as the ordinary main run loop.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern void ScheduleInModes(nint receiver, nint selector, nint action, nint value, double delay, nint modes);
     /// <summary>Runs under the existing Mac CSV probe only when experimental Grid AX registration is requested.</summary>
     internal static void Check(MacEditorShell shell)
     {
@@ -140,6 +146,7 @@ internal static class MacCsvGridAccessibilityProbe
             Require(ObjC.Send(table, ObjC.Sel("accessibilityFocusedUIElement")) == Cell(table, 0, 2),
                 "physical native selection clears prior AX focus override");
             ObjC.Send(table, ObjC.Sel("setAccessibilitySelectedCells:"), 0);
+            CheckMenuPopup(shell, grid, table, physicalTable, first);
         }
         finally { ObjC.Send(grid.View, ObjC.Sel("removeFromSuperview")); }
         ObjC.Send(first, ObjC.Sel("retain"));
@@ -158,12 +165,49 @@ internal static class MacCsvGridAccessibilityProbe
         finally { ObjC.Send(first, ObjC.Sel("release")); }
     }
 
+    /// <summary>Exercises an actual owned popup and its delegate callbacks, then cancels without choosing a command.</summary>
+    private static void CheckMenuPopup(MacEditorShell shell, MacCsvGrid grid, nint table, nint physicalTable, nint first)
+    {
+        ObjC.Send(table, ObjC.Sel("setAccessibilitySelectedCells:"), Array(first));
+        var before = grid.ProbeMenuTransitions;
+        var responder = ObjC.Send(shell.ProbeWindow, ObjC.Sel("firstResponder"));
+        var menu = ObjC.Send(physicalTable, ObjC.Sel("menu"));
+        var modes = ObjC.Send(ObjC.Class("NSMutableArray"), ObjC.Sel("array"));
+        ObjC.Send(modes, ObjC.Sel("addObject:"), ObjC.String("NSDefaultRunLoopMode"));
+        ObjC.Send(modes, ObjC.Sel("addObject:"), ObjC.String("NSEventTrackingRunLoopMode"));
+        ScheduleInModes(menu, ObjC.Sel("performSelector:withObject:afterDelay:inModes:"),
+            ObjC.Sel("cancelTracking"), 0, 0.25, modes);
+        try
+        {
+            Require(MenuAction(table, ObjC.Sel("accessibilityPerformShowMenu")) != 0,
+                "owned semantic menu request is admitted for next-turn native presentation");
+            var until = ObjC.Send(ObjC.Class("NSDate"), ObjC.Sel("dateWithTimeIntervalSinceNow:"), 0.5);
+            ObjC.Send(ObjC.Send(ObjC.Class("NSRunLoop"), ObjC.Sel("currentRunLoop")), ObjC.Sel("runUntilDate:"), until);
+            Require(grid.ProbeMenuTransitions == (before.Opens + 1, before.Closes + 1),
+                "actual owned popup produces one native will-open and did-close callback");
+            Require(grid.ProbeMenuCell is { Row: 1000, Column: 16 } captured && captured.Identity == grid.Identity,
+                "actual popup freezes the existing installed field identity without choosing a source command");
+            Require(ObjC.Send(table, ObjC.Sel("accessibilityShownMenu")) == 0 &&
+                ObjC.Send(shell.ProbeWindow, ObjC.Sel("firstResponder")) == responder,
+                "cancelled owned popup clears its relation and preserves physical responder");
+        }
+        finally
+        {
+            ObjC.Send(ObjC.Class("NSObject"), ObjC.Sel("cancelPreviousPerformRequestsWithTarget:selector:object:"),
+                menu, ObjC.Sel("cancelTracking"), 0);
+            ObjC.Send(menu, ObjC.Sel("cancelTracking"));
+            ObjC.Send(table, ObjC.Sel("setAccessibilitySelectedCells:"), 0);
+        }
+    }
+
     /// <summary>Retaining a native root after disposal must not preserve a managed owner, parent or bounded children.</summary>
     private static void CheckDetachedRoot()
     {
         var retiring = new MacCsvGrid(_ => { }, _ => { });
         var root = retiring.AccessibilityTable;
+        var menu = ObjC.Send(retiring.Table, ObjC.Sel("menu"));
         ObjC.Send(root, ObjC.Sel("retain"));
+        ObjC.Send(menu, ObjC.Sel("retain"));
         try
         {
             retiring.Dispose();
@@ -173,8 +217,12 @@ internal static class MacCsvGridAccessibilityProbe
                 ObjC.Send(root, ObjC.Sel("accessibilityRows")) == 0 &&
                 ObjC.Send(root, ObjC.Sel("accessibilityShownMenu")) == 0,
                 "retained detached proxy has no owner, parent, role, rows or transient menu");
+            var item = ObjC.Send(menu, ObjC.Sel("itemAtIndex:"), 9);
+            Require(ObjC.Send(menu, ObjC.Sel("delegate")) == 0 &&
+                ObjC.Send(item, ObjC.Sel("target")) == 0 && ObjC.Send(item, ObjC.Sel("action")) == 0,
+                "retained detached menu has no callback or coordinate-command target");
         }
-        finally { ObjC.Send(root, ObjC.Sel("release")); }
+        finally { ObjC.Send(menu, ObjC.Sel("release")); ObjC.Send(root, ObjC.Sel("release")); }
     }
 
     /// <summary>Tests a native relation marker without displaying a menu or granting source actions.</summary>

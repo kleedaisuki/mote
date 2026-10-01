@@ -9,6 +9,12 @@ internal enum MacCsvGridMenuPhase
     ShowEnter,
     /// <summary>The physical action returned its actual BOOL result.</summary>
     NativeReturn,
+    /// <summary>The custom AX action admitted/queued its request, not completed presentation.</summary>
+    ScheduleReturn,
+    /// <summary>A still-current deferred request is entering native menu tracking.</summary>
+    PopupBegin,
+    /// <summary>NSMenu tracking returned selected vs cancelled, not source-command completion.</summary>
+    PopupReturn,
     /// <summary>AppKit notified the existing menu delegate that its menu will open.</summary>
     WillOpen,
     /// <summary>AppKit notified the existing menu delegate that its menu closed.</summary>
@@ -41,12 +47,15 @@ internal readonly record struct MacCsvGridMenuTrace(MacCsvGridMenuPhase Phase, i
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(facts.Items, -1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(facts.Items, MacCsvGridMenuDiagnostic.Limit);
-        if ((Phase == MacCsvGridMenuPhase.NativeReturn) != result.HasValue)
-            throw new ArgumentException("Only the native return event carries an action result.", nameof(result));
+        if ((Phase is MacCsvGridMenuPhase.NativeReturn or MacCsvGridMenuPhase.ScheduleReturn or MacCsvGridMenuPhase.PopupReturn) != result.HasValue)
+            throw new ArgumentException("Only return events carry their respective admission/native result.", nameof(result));
         var phase = Phase switch
         {
             MacCsvGridMenuPhase.ShowEnter => "show-enter",
             MacCsvGridMenuPhase.NativeReturn => "native-return",
+            MacCsvGridMenuPhase.ScheduleReturn => "schedule-return",
+            MacCsvGridMenuPhase.PopupBegin => "popup-begin",
+            MacCsvGridMenuPhase.PopupReturn => "popup-return",
             MacCsvGridMenuPhase.WillOpen => "will-open",
             MacCsvGridMenuPhase.DidClose => "did-close",
             _ => throw new ArgumentOutOfRangeException(nameof(Phase))
@@ -81,7 +90,10 @@ internal sealed class MacCsvGridMenuDiagnostic
         switch (phase)
         {
             case MacCsvGridMenuPhase.ShowEnter: _requests++; break;
-            case MacCsvGridMenuPhase.NativeReturn: break;
+            case MacCsvGridMenuPhase.NativeReturn:
+            case MacCsvGridMenuPhase.ScheduleReturn:
+            case MacCsvGridMenuPhase.PopupBegin:
+            case MacCsvGridMenuPhase.PopupReturn: break;
             case MacCsvGridMenuPhase.WillOpen: _opens++; _open = true; break;
             case MacCsvGridMenuPhase.DidClose: _closes++; _open = false; break;
             default: return false;

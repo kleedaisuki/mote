@@ -804,6 +804,8 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
         Add(cls, "moteGridGoToCell:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&MenuGoToCell, "v@:@");
         Add(cls, "menuWillOpen:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&MenuWillOpen, "v@:@");
         Add(cls, "menuDidClose:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&MenuDidClose, "v@:@");
+        if (AccessibilityEnabled)
+            Add(cls, "moteGridShowMenu:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&AccessibilityPresentMenu, "v@:@");
         Add(cls, "moteGridCommand:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&MenuCommand, "v@:@");
         Add(cls, "moteGridScroll:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ScrollerAction, "v@:@");
         Add(cls, "moteReveal:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Reveal, "v@:@");
@@ -863,6 +865,7 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void MenuWillOpen(nint self, nint selector, nint menu)
     { try { if (Instances.TryGetValue(self, out var grid)) {
+            grid.AccessibilityMenuTransition(menu, true);
             grid.TraceMenu(MacCsvGridMenuPhase.WillOpen);
             var page = grid.MeasurePage();
             grid._menuNavigation = grid._navigation is { } frame ? new(frame, page.Rows, page.Columns) : null;
@@ -876,11 +879,14 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void MenuDidClose(nint self, nint selector, nint menu)
     {
-        if (MenuDiagnostic is null) return;
+        if (!AccessibilityEnabled) return;
         try
         {
             if (AccessibilityMainThread && Instances.TryGetValue(self, out var grid))
+            {
+                grid.AccessibilityMenuTransition(menu, false);
                 grid.TraceMenu(MacCsvGridMenuPhase.DidClose);
+            }
         }
         catch { /* Diagnostics cannot unwind into AppKit. */ }
     }
@@ -1080,6 +1086,7 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
     /// <summary>Detaches callback targets before removing the managed lookup and owned handles.</summary>
     public void Dispose()
     {
+        CancelAccessibilityMenu();
         SetNavigation(null);
         RetireAccessibility();
         DetachAccessibilityTable();
@@ -1089,7 +1096,9 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
         ObjC.Send(_table, ObjC.Sel("setDelegate:"), 0);
         ObjC.Send(_table, ObjC.Sel("setDataSource:"), 0);
         ObjC.Send(_table, ObjC.Sel("setTarget:"), 0);
-        ObjC.Send(ObjC.Send(_table, ObjC.Sel("menu")), ObjC.Sel("setDelegate:"), 0);
+        var menu = ObjC.Send(_table, ObjC.Sel("menu"));
+        ObjC.Send(menu, ObjC.Sel("setDelegate:"), 0);
+        DetachAccessibilityMenuCommands(menu);
         ObjC.Send(_table, ObjC.Sel("setMenu:"), 0);
         Instances.Remove(View); Instances.Remove(_table); Instances.Remove(_delegate);
         ObjC.Send(_delegate, ObjC.Sel("release"));
