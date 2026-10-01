@@ -409,6 +409,27 @@ def native_menu_inventory(records, *, terminated, normal_exit):
             "endpoint": "independent-native-menu-boundary-not-save-delivery"}
 
 
+def native_input_inventory(records, *, terminated, normal_exit):
+    """Count local monitor positives without inventing input-to-Save parentage.
+
+    Candidate means the local filter matched, not physical input or delivery to
+    a menu or request callback. Missing rows, even on normal exit, prove nothing
+    about execution; bounded transport has no lossless receipt certificate.
+    """
+    counts = {operation: {status: 0 for status in acceptance.STATUSES}
+              for operation in sorted(acceptance.INPUT_OPERATIONS)}
+    for row in records:
+        if row["operation"] in counts:
+            counts[row["operation"]][row["status"]] += 1
+    observed = any(sum(outcomes.values()) for outcomes in counts.values())
+    return {"status": "observed" if observed else "unobserved", "counts": counts,
+            "boundary": "normal-exit-observed" if normal_exit else (
+                "censored" if terminated else "open"),
+            "absence_certified": False, "request_correlation": "none",
+            "candidate_to_menu_edge": "unknown", "menu_to_request_edge": "unknown",
+            "endpoint": "local-monitor-filter-candidate-not-physical-input-or-save-delivery"}
+
+
 def save_chain_evidence(home, *, terminated, normal_exit=False):
     """Retain typed native Save evidence even after failed dispatch or owned kill.
 
@@ -421,6 +442,8 @@ def save_chain_evidence(home, *, terminated, normal_exit=False):
                "absence_certified": False, "requests": [], "trace_sha256": [],
                "native_menu_inventory": native_menu_inventory(
                    [], terminated=terminated, normal_exit=normal_exit),
+               "native_input_inventory": native_input_inventory(
+                   [], terminated=terminated, normal_exit=normal_exit),
                "discarded_partial_files": 0, "endpoint": "target-callback-to-local-ui-not-physical-input-or-pixels"}
     if not files:
         return summary
@@ -429,6 +452,8 @@ def save_chain_evidence(home, *, terminated, normal_exit=False):
             raise ValueError("trace inventory differs")
         records, hashes = acceptance.load_records([str(path) for path in files], discard_partial=terminated)
         summary["native_menu_inventory"] = native_menu_inventory(
+            records, terminated=terminated, normal_exit=normal_exit)
+        summary["native_input_inventory"] = native_input_inventory(
             records, terminated=terminated, normal_exit=normal_exit)
         partial = 0
         for path in files:

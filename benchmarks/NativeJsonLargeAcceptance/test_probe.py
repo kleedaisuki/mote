@@ -186,6 +186,94 @@ class ProbeTests(unittest.TestCase):
             (home / "traces").rmdir()
             home.rmdir()
 
+    def input_row(self, operation, span):
+        """Specify monitor checkpoint shape independently of production constants."""
+        row = record(operation, span)
+        row["duration_us"] = 0
+        if operation in {"native.input.monitor.unavailable", "native.input.monitor.callback_failed",
+                         "native.input.monitor.removal_failed"}:
+            row["status"] = "failure"
+        return row
+
+    def test_input_inventory_does_not_change_complete_save_contract(self):
+        """Monitor and menu evidence remain independent of the request certificate."""
+        operations = ("native.input.monitor.ready", "native.input.monitor.unavailable",
+                      "native.input.monitor.callback_failed", "native.input.monitor.removed",
+                      "native.input.monitor.removal_failed", "native.input.save_family_candidate")
+        rows = self.complete_save_rows()
+        rows += [self.input_row(operation, span) for span, operation in enumerate(operations, 100)]
+        menu = record("native.menu.save_family.entered", 110)
+        menu["duration_us"] = 0
+        rows.append(menu)
+        report = probe.save_chain_evidence(self.write_trace(rows), terminated=True, normal_exit=True)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(len(report["requests"]), 1)
+        self.assertEqual(report["native_menu_inventory"]["counts"]["native.menu.save_family.entered"]["success"], 1)
+        inventory = report["native_input_inventory"]
+        self.assertEqual(set(inventory["counts"]), set(operations))
+        self.assertEqual(inventory["status"], "observed")
+        self.assertEqual(inventory["boundary"], "normal-exit-observed")
+        for operation in operations:
+            status = self.input_row(operation, 200)["status"]
+            self.assertEqual(inventory["counts"][operation][status], 1)
+            self.assertEqual(sum(inventory["counts"][operation].values()), 1)
+        self.assertEqual(inventory["candidate_to_menu_edge"], "unknown")
+        self.assertEqual(inventory["menu_to_request_edge"], "unknown")
+        self.assertEqual(inventory["request_correlation"], "none")
+        self.assertFalse(inventory["absence_certified"])
+
+    def test_input_only_killed_prefix_does_not_fabricate_menu_or_request(self):
+        """Repeated retained candidates do not prove subsequent routing or absence."""
+        rows = [self.input_row("native.input.monitor.ready", 2),
+                self.input_row("native.input.save_family_candidate", 3),
+                self.input_row("native.input.save_family_candidate", 4)]
+        report = probe.save_chain_evidence(self.write_trace(rows, b'{"operation":"'), terminated=True)
+        self.assertEqual(report["status"], "unobserved")
+        self.assertEqual(report["requests"], [])
+        self.assertEqual(report["discarded_partial_files"], 1)
+        self.assertEqual(report["native_menu_inventory"]["status"], "unobserved")
+        inventory = report["native_input_inventory"]
+        self.assertEqual(inventory["boundary"], "censored")
+        self.assertEqual(inventory["counts"]["native.input.save_family_candidate"]["success"], 2)
+        self.assertEqual(inventory["counts"]["native.input.monitor.removed"]["success"], 0)
+        self.assertFalse(inventory["absence_certified"])
+        self.assertEqual(inventory["candidate_to_menu_edge"], "unknown")
+
+    def test_missing_input_inventory_is_unobserved_across_lifecycle_boundaries(self):
+        """Empty evidence is not receipt denial, regardless of process termination."""
+        for terminated, normal, boundary in ((False, False, "open"), (True, False, "censored"),
+                                             (True, True, "normal-exit-observed")):
+            inventory = probe.native_input_inventory([], terminated=terminated, normal_exit=normal)
+            self.assertEqual(inventory["status"], "unobserved")
+            self.assertEqual(inventory["boundary"], boundary)
+            self.assertFalse(inventory["absence_certified"])
+            self.assertTrue(all(not any(outcomes.values()) for outcomes in inventory["counts"].values()))
+
+    def test_no_trace_file_still_has_explicit_unknown_input_inventory(self):
+        """The no-file return must not omit the coverage gap or claim a receipt."""
+        report = probe.save_chain_evidence(self.directory, terminated=True)
+        self.assertEqual(report["status"], "unobserved")
+        self.assertEqual(report["trace_sha256"], [])
+        self.assertEqual(report["native_input_inventory"]["status"], "unobserved")
+        self.assertEqual(report["native_input_inventory"]["boundary"], "censored")
+        self.assertFalse(report["native_input_inventory"]["absence_certified"])
+
+    def test_input_unknown_content_status_and_shape_are_invalid(self):
+        """Complete invalid input rows fail evidence without reflecting private text."""
+        for patch_value in ({"operation": "native.input.private-text"},
+                            {"attributes": {"format": "private-text"}}, {"duration_us": 1},
+                            {"status": "failure"}, {"parent_span_id": None}):
+            row = self.input_row("native.input.monitor.ready", 2)
+            row.update(patch_value)
+            home = self.write_trace([row])
+            report = probe.save_chain_evidence(home, terminated=True)
+            self.assertEqual(report["status"], "invalid", patch_value)
+            self.assertNotIn("private-text", json.dumps(report))
+            for path in (home / "traces").iterdir():
+                path.unlink()
+            (home / "traces").rmdir()
+            home.rmdir()
+
     def test_environment_strips_inherited_witness(self):
         """Default, runtime-control and reopen cannot inherit opt-in instrumentation."""
         with patch.dict(probe.os.environ, {probe.ENVIRONMENT_KEY: "1"}):

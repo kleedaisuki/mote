@@ -77,6 +77,46 @@ menu-only positives in a killed prefix with a partial tail, missing menu coverag
 and privacy/unknown-vocabulary rejection. These are synthetic artifact tests, not
 hosted AppKit or Native AOT runtime observations.
 
+## Independent local input monitor evidence
+
+`save_causal_evidence.native_input_inventory` separately counts the six closed,
+content-free session checkpoints below. Every row has zero duration and empty
+attributes. The status describes the observed monitor outcome, not Save success.
+
+| Operation | Required status | Positive observation only |
+| --- | --- | --- |
+| `native.input.monitor.ready` | `success` | Local observation installation succeeded |
+| `native.input.monitor.unavailable` | `failure` | Installation was unavailable |
+| `native.input.monitor.callback_failed` | `failure` | An observation callback failed |
+| `native.input.monitor.removed` | `success` | Removal completed |
+| `native.input.monitor.removal_failed` | `failure` | Removal failed |
+| `native.input.save_family_candidate` | `success` | The local filter matched a Save-family candidate |
+
+A candidate is **not** proof of a physical key, native menu routing, receipt of
+a typed Save request, or persistence. Input, menu and request evidence remain
+separate: `candidate_to_menu_edge` and `menu_to_request_edge` are always `unknown`,
+and `request_correlation` is `none`. Repeated candidate counts are not paired to
+menu entries or requests by order, timestamp or count. `absence_certified` stays
+false, including normal shutdown. Empty or missing traces are `unobserved`; killed
+prefixes retain complete positives with boundary `censored`. A missing removal,
+menu or request row is not proof that the corresponding callback did not run.
+No sequence, lossless receipt or transport-completeness guarantee is introduced.
+
+The mandatory Save success stages, byte oracle, input attempts and delivery route
+are unchanged. Invalid complete input rows fail the enclosing evidence rather
+than being skipped or echoed into a report. Portable retained fixtures in
+`test_probe.py` cover six operation/status shapes, a complete Save plus independent
+input/menu evidence, repeated candidate-only killed prefixes with partial tails,
+no-file and empty lifecycle boundaries, and privacy/shape rejection. Run:
+
+```powershell
+python -B -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p test_probe.py
+```
+
+The extension passed **43/43** portable tests on Windows, 2026-10-01. These tests
+exercise report reconstruction only; they do not certify an AppKit callback or
+hosted Native AOT runtime path.
+
 ## Workload and independent oracles
 
 Each default run uses one **1 MiB control** and one **100 MiB workload**, in that
