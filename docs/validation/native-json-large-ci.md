@@ -156,3 +156,113 @@ Save attempt or broad retry. The next useful Mac change is retaining the first
 bounded client failure/capability classification without source text, foreign
 metadata or changing TCC. These distinguish causes that the present reports
 collapse; repeating the same opaque pilot would not resolve them.
+
+## Follow-up: current-source title-only Save observation
+
+Independently audited [run 36800944850](https://github.com/kleedaisuki/mote/actions/runs/36800944850),
+source **`99fbe395308816e3d1d2381ace58c3d5800811ec`**, on the same date. This
+supersedes the first pilot's Windows acceptance gap, **not its retained historical
+failure evidence**. It executes freshly published current-source AOT binaries;
+it is not the earlier local stale-binary harness check described in the pilot
+README.
+
+The updated driver waits for owned native chrome to acknowledge a clean document
+before reading the Save target for its byte oracle. Ordinary Python reads on
+Windows can deny DELETE sharing during atomic replacement; the earlier poll
+opened/hashes the target while Save may still be committing. Removing that
+observer interference is a harness correction, not relaxing the exact-byte
+requirement or retrying Save. The new observed success is consistent with that
+mechanism, but the previous empty traces did not capture its actual failure
+HResult, and the source/binary changed between runs. This is not a controlled
+causal proof of every previous failure or a production reliability distribution.
+
+| RID | 1 MiB | 100 MiB | Report / actual nested outcome |
+| --- | --- | --- | --- |
+| win-x64 | complete scoped pass | complete scoped pass | pass / pass marker, no pilot exit-1 |
+| win-arm64 | complete scoped pass | complete scoped pass | pass / pass marker, no pilot exit-1 |
+| osx-x64 | failed at launch-to-source-bound | same | incomplete / exit 1 |
+| osx-arm64 | failed at launch-to-source-bound | same | incomplete / exit 1 |
+
+Portable protocol/artifact tests now pass **12/12 per RID**. The raw logs contain
+the Windows `Ordinary Native AOT JSON source pilot passed` marker after the
+two-case `status=pass` summary. Both Mac steps emit the incomplete summary and
+explicit pilot exit-1 error. Their masked step/job colors remain irrelevant.
+The overall run separately fails the strict `Test / windows-latest` solution-test
+step; that result is not conflated with either successful Windows native pilot
+or failed Mac pilot.
+
+### Current payload and independent bytes/trace checks
+
+Python remains 3.14.7 with native observer architecture matching each RID. All
+four downloaded separate publish-inventory artifacts corroborate exactly one
+payload with zero non-executable payloads and zero bundled native libraries.
+The binary before/after identity matches per report:
+
+| RID | Bytes | SHA-256 |
+| --- | ---: | --- |
+| win-x64 | 7,105,024 | `85d3b300cb1756d5c21a63bb2280a73a06b7d011c903aae7f515c29d93948634` |
+| win-arm64 | 7,244,288 | `f8e6f84a376567b8c801e103b21b6de50797b973f518aaea5933cf7f9378d97f` |
+| osx-x64 | 16,842,720 | `9e60aea84e588339cb9a7ce9d36afb2a9b27629c73463ebe2c4f9a593a3564a1` |
+| osx-arm64 | 16,489,288 | `ec1e61195123ab387558873887cdd90819323ed74b5cf254e6e45f8d52351d5b` |
+
+The independent audit recomputes driver/auditor/Swift source hashes from this
+run's Git blobs and native checkout line endings, reconstructs both fixture
+and edited hashes without trusting report constants, and hashes retained trace
+files. All assertions agree. As before, reported executable hashes and inventories
+are corroborated; no product binary was downloaded/rehashed or rerun locally.
+
+**All four Windows size/architecture cases** have Complete zero-diagnostic native
+status at v0 and v1, exactly one edit attempt, unchanged disk before Save, exact
+saved/final working bytes, unchanged original, normal initial exit, fresh GUI
+reopen with unchanged saved bytes, and normal reopen exit. The independent raw
+trace check verifies single successful terminal roots, successful counted actions,
+v0/v1 progression, unique sessions/spans, correct open/edit draw parents, matching
+trace hashes, and no edit/Save in reopen sessions. Both report causal/endpoint
+audits pass, with no drops. Main/reopen record counts are x64 **26/13** (1 MiB)
+and **31/18** (100 MiB); ARM64 **26/13** and **34/18**. Extra bounded background
+operations do not alter required endpoint counts. The unversioned engine I/O
+limitation remains unchanged; exact bytes and native status remain separate
+witnesses rather than invented I/O revisions.
+
+### Mac capability and failure guard discrimination
+
+Both Mac Swift clients compile and all four Mac samples retain a failure
+observation with **`trusted=true`, `post_event_access=true`**, `guard_stage=window-count`,
+and **`ax_error=-25204`** from `AXUIElementGetAttributeValueCount(..., "AXWindows", ...)`.
+The samples do not establish source binding, full semantics or focus; no input
+events are dispatched and no edit is attempted. Immutable and working hashes
+remain the original. One bounded owned close is attempted, but it also produces
+RuntimeError; forced cleanup is still necessary and no trace files are uploaded.
+
+This is a **failed post-error read-only observation**, not a guaranteed capture
+of the very first failing AX operation. `window_count=0` is the initialized
+out-parameter on an unsuccessful API call and **does not prove there are zero
+actual product windows**. The observed permission preflights are granted, so
+calling this a TCC-denied run is unsupported. Granted preflights also do not prove
+successful AX communication or imply product/source corruption. No TCC mutation,
+activation workaround, foreign metadata read, Save retry or modifying transaction
+occurred. The remaining question is whether the guarded initial AX read raced
+window/server readiness or encountered a persistent communication issue; bounded
+read-only readiness discrimination is appropriate before declaring a product
+defect or broadening permissions.
+
+### Instrumented descriptive endpoints
+
+These single observations retain the same cache/clock/paint exclusions above.
+They are not p95, trace-off baselines, cross-architecture superiority or screen
+presentation measurements. No Mac source-binding duration was achieved.
+
+| Windows case | Parent bound source ms | Parent edit ack ms | Child open→editable ms | Child open→draw return ms | Child edit→draw return ms | Child edit→semantic presentation ms | Child Save ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| x64 / 1 MiB | 169.4535 | 13.1626 | 19.311 | 30.831 | 9.612 | 145.644 | 18.278 |
+| x64 / 100 MiB | 578.2432 | 13.8596 | 421.494 | 429.436 | 9.654 | 518.751 | 881.940 |
+| ARM64 / 1 MiB | 175.2245 | 13.6819 | 16.376 | 25.094 | 9.207 | 132.266 | 39.642 |
+| ARM64 / 100 MiB | 408.1422 | 13.4381 | 306.876 | 313.892 | 9.616 | 514.757 | 1078.867 |
+
+Current run artifacts/logs: `.cache/ci-36800944850-json-<RID>/` and
+`.cache/ci-36800944850-json-all.log`. Independent assertions and output:
+`.cache/ci-36800944850-json-audit.py` and
+`.cache/ci-36800944850-json-independent-summary.json`. The reused assertions are
+bound to **this** run/commit, not the prior results; they pass across all eight
+retained samples while preserving the four Mac failures. Only this document
+was changed for this audit.
