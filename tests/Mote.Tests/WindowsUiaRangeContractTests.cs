@@ -28,6 +28,39 @@ public sealed class WindowsUiaRangeContractTests(ITestOutputHelper output)
     private delegate int SelectAbi(nint self);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int MoveAbi(nint self, int unit, int count, out int moved);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int ProviderOptionsAbi(nint self, out int options);
+
+    /// <summary>The product entry point declares STA ownership for standard COM owner-apartment dispatch.</summary>
+    [Fact]
+    public void Product_entry_point_declares_sta_thread_ownership()
+    {
+        var entryPoint = typeof(Mote.Native.Program).GetMethod("Main",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(entryPoint);
+        Assert.NotNull(Attribute.GetCustomAttribute(entryPoint, typeof(STAThreadAttribute)));
+    }
+
+    /// <summary>Every source provider requests COM apartment dispatch without changing its existing category flags.</summary>
+    [Theory]
+    [InlineData(0, 2 | 32)]
+    [InlineData(1, 2 | 32)]
+    [InlineData(2, 2 | 8 | 16 | 32)]
+    public void Source_provider_options_preserve_categories_and_request_com_threading(int provider, int expected)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new Fixture("abc");
+        var root = new UiaFragmentRootObject(fixture.Core, (nint)1234);
+        object source = provider switch
+        {
+            0 => new UiaEditorObject(fixture.Core),
+            1 => root,
+            _ => root.Document
+        };
+        using var pointer = new RangeLease(UiaComInterface.Pointer(source, typeof(IRawElementProviderSimpleAbi).GUID));
+        Assert.Equal(0, pointer.Call<ProviderOptionsAbi>(3)(pointer.Pointer, out var actual));
+        Assert.Equal(expected, actual);
+    }
 
     /// <summary>A clone initially compares equal, but subsequent endpoint mutations must be independent.</summary>
     [Fact]
