@@ -7,7 +7,7 @@ Scope: embedded native supervisor in
 additive CI steps. The independent client and production focus implementation
 have separate reviews; they were not re-audited here.
 
-## Verdict
+## Initial source verdict (superseded by the hosted follow-up below)
 
 **No remaining substantive source defect found in this scoped integration.**
 Root-identified summary/control contradictions were corrected before freezing;
@@ -99,3 +99,57 @@ GUI and makes no foreground, physical-keyboard, complete provider-entry or
 client-to-server causal certificate. See
 [workflow evidence contract](../validation/windows-grid-focus-provenance-workflow.md)
 for retained runtime obligations.
+
+## Hosted counterexample and shared-deadline correction
+
+Follow-up source review pins
+`2f2d41390ee3c154d4615f3a8caf4d83c3c0bd02`. The initial clean assessment above
+missed a material supervisor-observation hazard: job active-process count zero
+does not supply a signaled process-handle/exit-code witness, and the immediate
+zero-time handle check could leave the timeout control without its required
+numeric exit. The initial verdict is historical, not a claim that this hosted
+failure was impossible or that portable ABI checks certified termination.
+
+Independently read retained x64 artifacts under
+`.cache/ci-36874262096-focus-provenance/artifacts/windows-grid-focus-provenance-win-x64/`
+from [CI 36874262096](https://github.com/kleedaisuki/mote/actions/runs/36874262096):
+
+* Normal control: actual exit **0**, no timeout/forced cleanup, queried empty job,
+  no control error.
+* Timeout control: `TimedOut=true`, `CleanupForced=true`, `JobEmpty=true`,
+  `ErrorClass=timeout`, but **ExitCode=null**. This failed the unchanged control
+  before launching the UIA client; no client/provider execution follows from it.
+* Top-level supervisor: build exit **0**, client exit null, but error class
+  incorrectly remained `build`. This was an additional provenance phase defect,
+  not evidence that compilation failed.
+
+These artifacts demonstrate the missing required numeric witness and incorrect
+phase label. They do not distinguish which half of the original combined
+`WaitForSingleObject(process,0) && GetExitCodeProcess` predicate failed, or prove
+a particular kernel scheduling order. The independently queried empty job is
+still a valid separate fact; it must not be converted into an inferred exit 124.
+
+**No additional substantive defect found in the narrowly corrected source.**
+The cleanup stopwatch now starts at finally entry, before the active query and
+TerminateJob. Job draining and the subsequent wait on the **original retained
+process handle** consume only the remaining part of the same existing ten-second
+budget. There is no second timeout allowance or another process launch. Numeric
+exit is stored only after successful signaling and checked GetExitCodeProcess;
+unproven signaling/readback preserves null and reports cleanup failure. Job
+emptiness remains independently queried. Normal/timeout control predicates, one
+UIA attempt, exact pins and owned-job-only termination are unchanged.
+
+The wrapper enters `supervisor` before native setup and `control` before the
+ownership series; the closed summary vocabulary accepts this fixed new phase.
+Thus a pre-client control failure is no longer mislabeled a build failure.
+
+Inspected newly retained affected checks, without rerunning old or new suites:
+`cleanup-followup/summary-tests.log` reports **19 tests, OK**;
+`managed-supervisor-checks.json` reports final embedded C# compile/layout and
+eight cleanup-budget boundary cases, **zero native invocations**. Independently
+checked retained Supervisor.cs SHA-256:
+`583BF724C55C6ADC888FF89BCAEDF44CDEEE436A94C0A620D0D23A77A88340D2`.
+These portable checks do not certify the corrected native wait. A fresh hosted
+run must still retain both controls' actual numeric exits and successful
+pre-client admission on each RID. No prior green job or old control artifact is
+promoted into that pending execution evidence.
