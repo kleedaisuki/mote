@@ -153,22 +153,43 @@ internal static class MacNativeSourceCapabilityProbe
             Check();
             ArgumentNullException.ThrowIfNull(styles);
             Exact(display);
-            foreach (var style in styles) ValidateRange(display, style.Start, style.Length);
+            var gaps = MacNativeForegroundPublication.UncoveredRanges(display.Length, styles);
             var selected = ObjC.SendRange(_text, ObjC.Sel("selectedRange"));
             var viewport = CaptureViewport();
             var storage = Required(ObjC.Send(_text, ObjC.Sel("textStorage")));
+            var key = ObjC.String("NSColor");
+            var colors = new Dictionary<ThemeColor, nint>();
             ObjC.Send(storage, ObjC.Sel("beginEditing"));
             try
             {
-                Attribute(storage, _foreground, new ObjC.Range(0, (nuint)display.Length));
+                // Reset only uncovered text. Every covered location receives its
+                // original ordered overlay, so a whole reset only destroys runs.
+                foreach (var gap in gaps)
+                    ApplyForeground(storage, key, NativeColor(_foreground), display.Length, gap.Start, gap.Length);
                 foreach (var style in styles)
-                    Attribute(storage, style.Foreground, new ObjC.Range((nuint)style.Start, (nuint)style.Length));
+                    ApplyForeground(storage, key, NativeColor(style.Foreground), display.Length, style.Start, style.Length);
             }
             finally { ObjC.Send(storage, ObjC.Sel("endEditing")); }
+            foreach (var position in MacNativeForegroundPublication.SampleLocations(display.Length, styles, gaps))
+            {
+                var actual = AttributeAt(storage, ObjC.Sel("attribute:atIndex:effectiveRange:"), key,
+                    (nuint)position, 0);
+                var expected = MacNativeForegroundPublication.ExpectedColor(position, _foreground, styles);
+                if (!SameColor(actual, NativeColor(expected)))
+                    throw new InvalidOperationException("Native foreground readback differs from the complete style overlay.");
+            }
             Exact(display);
             if (ObjC.SendRange(_text, ObjC.Sel("selectedRange")) != selected)
                 throw new InvalidOperationException("Attribute publication changed selection.");
             RestoreViewport(viewport);
+
+            // Native storage retains applied values. Borrowed factory values are
+            // used only during this synchronous call and its existing owned pool.
+            nint NativeColor(ThemeColor color)
+            {
+                if (!colors.TryGetValue(color, out var value)) colors.Add(color, value = Color(color));
+                return value;
+            }
         }
 
         /// <summary>Submits owned native layout and drawing; does not certify compositor presentation.</summary>
@@ -256,9 +277,33 @@ internal static class MacNativeSourceCapabilityProbe
         /// <summary>Creates an autoreleased sRGB foreground color in the owned pool.</summary>
         private static nint Color(ThemeColor color) => Required(ObjC.Send(ObjC.Class("NSColor"),
             ObjC.Sel("colorWithSRGBRed:green:blue:alpha:"), color.Red / 255d, color.Green / 255d, color.Blue / 255d, 1d));
-        /// <summary>Mutates only foreground attributes, preserving fonts and all characters.</summary>
-        private static void Attribute(nint storage, ThemeColor color, ObjC.Range range) =>
-            ObjC.Send(storage, ObjC.Sel("addAttribute:value:range:"), ObjC.String("NSColor"), Color(color), range);
+        /// <summary>
+        /// Uses actual native effective runs, not remembered managed colors, to
+        /// skip identical foreground values. Mutation never targets another
+        /// attribute, the selected range or characters. Short native runs are
+        /// valid and every iteration must make strictly positive progress.
+        /// </summary>
+        private static unsafe void ApplyForeground(nint storage, nint key, nint color,
+            int length, int start, int count)
+        {
+            var end = start + count;
+            var selector = ObjC.Sel("attribute:atIndex:effectiveRange:");
+            while (start < end)
+            {
+                ObjC.Range effective;
+                var actual = AttributeAt(storage, selector, key, (nuint)start, (nint)(&effective));
+                var next = MacNativeForegroundPublication.EffectiveEnd(length, start, end,
+                    effective.Location, effective.Length);
+                if (!SameColor(actual, color))
+                    ObjC.Send(storage, ObjC.Sel("addAttribute:value:range:"), key, color,
+                        new ObjC.Range((nuint)start, (nuint)(next - start)));
+                start = next;
+            }
+        }
+        /// <summary>Unknown/missing values differ; native NSColor value equality is not pointer equality.</summary>
+        private static bool SameColor(nint actual, nint expected) => actual != 0 &&
+            SendNativeBool(actual, ObjC.Sel("isKindOfClass:"), ObjC.Class("NSColor")) != 0 &&
+            SendNativeBool(actual, ObjC.Sel("isEqual:"), expected) != 0;
         /// <summary>Releases one owned reference exactly once.</summary>
         private static void Release(ref nint obj)
         {
@@ -283,6 +328,9 @@ internal static class MacNativeSourceCapabilityProbe
     /// <summary>BOOL result bridge avoids interpreting unspecified upper return-register bits.</summary>
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
     private static extern byte SendNativeBool(nint obj, nint selector, nint value);
+    /// <summary>Reads an object attribute using NSUInteger and an optional NSRange pointer on both 64-bit ABIs.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern nint AttributeAt(nint obj, nint selector, nint key, nuint position, nint effectiveRange);
     /// <summary>arm64 CGRect return bridge; never invoked on x64.</summary>
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
     private static extern ObjC.Rect SendRect(nint obj, nint selector);
