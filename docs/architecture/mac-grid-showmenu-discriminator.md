@@ -1,6 +1,7 @@
 # macOS Grid ShowMenu: shared-client identity and request-history discriminator
 
-Date: 2026-10-01. Status: **design only; no product, client, workflow or API change**.
+Date: 2026-10-01. Status: **first pair executed; next experiment proposed only**.
+This document's revisions do not change product, client, workflow or APIs.
 Scope: the original external `AXUIElementPerformAction(..., AXShowMenu)` reply,
 not downstream coordinate navigation, VoiceOver, physical input or release
 acceptance. Implementation of the opt-in observation/cleanup seams below must
@@ -43,7 +44,29 @@ in terms of successfully triggering an action. The experiment therefore keeps
 next-turn admission; it does not substitute synchronous menu completion or
 reinterpret a visible popup as a successful external reply.
 
-## Recommendation: start with two sessions, not a speculative fix
+### Executed checkpoint: CI 36818175897
+
+The [first-pair ledger](../validation/mac-grid-showmenu-first-pair.md) and
+[independent raw audit](../reviews/mac-grid-showmenu-discriminator-review.md)
+establish C0=AX0/P0=AX-25205 on **both** Mac RIDs using the same frozen client
+per RID, fresh owners/clients and no hidden dry-run warmup. All four sessions
+record one action entry, admitted request, dispatch, open, close and detach,
+normal actual target/client exits, no forced cleanup and unchanged fixtures.
+The original external product report remains 40/41, failing ShowMenu.
+
+The product's post-reply rediscovery exhausted its 128-admission ceiling on
+both RIDs: external identity/parent conclusions are **unknown**, not agreed or
+stale. Native current-root/epoch equality is a narrower positive fact. Getter
+observation remains unavailable. The contrast eliminates the original Swift
+client and selection-setter bundle as necessary conditions for this reproduced
+failure; it does not identify a native/managed bridge or graph defect. The pair
+ran C0 then P0 once per RID, not a reversed-order reliability experiment.
+
+The next recommendation below supersedes an immediate broad getter-recorder
+implementation or an automatic graph-prelude matrix. Earlier C0/P0 procedure
+remains its design/provenance; the optional recorder remains a later tool.
+
+## Implemented first-stage procedure: two sessions, not a speculative fix
 
 Compile **one native C/Objective-C external client executable** and use its
 same discovery, admission, read and action functions for both targets. Freeze
@@ -163,7 +186,121 @@ and leave dispatcher discard/overflow fields null. This first stage cannot
 claim that a particular information selector was absent or that request order
 caused the reply.
 
-## Stage 2: optional information-dispatcher history
+## Next smallest experiment: one explicit, truthful shown-menu relation
+
+**Prefer C0 versus C-shown before broad information-dispatcher tracing.** The
+reason is an inspectable representation difference, not the -25205 error name:
+
+- `Control.m::PairTable` has no explicit `accessibilityShownMenu` override. Its
+  existing strong `ownedMenu` and native open/close counters already identify
+  the actually displayed menu; inherited getter behavior is not yet observed.
+- The product explicitly runtime-registers that getter as object-returning
+  `@@:` and forwards through `AccessibilityTableRead` to the physical
+  NSTableView. `AccessibilityMenuTransition` publishes that exact menu on
+  will-open and clears the native relationship on did-close. These are explicit
+  getter/edge/forwarding differences, not proof of a broken contract.
+- Apple's [shown-menu contract](https://developer.apple.com/documentation/appkit/nsaccessibility-c.protocol/accessibilityshownmenu)
+  describes the currently displayed menu and permits nil. Its
+  [protocol overview](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol)
+  explains that a getter override exposes read-only informational access.
+  Thus this override can change AppKit's advertised/readable information even
+  with unchanged ShowMenu admission. Apple does **not** document that it is
+  required for action success or that its absence/presence yields -25205.
+
+### One factor, not a bundled miniature rewrite
+
+Use the existing first-pair control source/client/ready/finish procedure in
+fresh processes. Build one control executable with a fixed variant choice;
+both variants share the same superclass, action IMP, menu, owner Group, graph,
+frame, query history and lifecycle accounting. The sole intended behavior
+difference is whether the runtime Table class has this explicit getter:
+
+| Variant | Explicit getter | Menu creation/publication/cancellation |
+| --- | --- | --- |
+| C-base | Existing inherited behavior; no added getter | Existing control behavior unchanged |
+| C-shown | Object-returning `accessibilityShownMenu`, `@@:` | Same existing control behavior unchanged |
+
+C-shown returns its exact strongly owned menu **only while the already
+recorded native lifecycle is open** (opens > closes and live attachment);
+otherwise nil. It refuses off-main access without reading mutable owner facts.
+Do not always return nil while a real menu is open, or expose a configured but
+not yet shown menu: those introduce a deliberately incorrect relation rather
+than mirror the observable product contract. There is no new setter,
+NSView/NSTableView host, early menu construction, queue logic, selection/focus
+change, expiry timer, synchronous popup or pre-action getter inspection.
+
+This mirrors the product's **observable nil/current-menu/nil relation**, not
+its physical NSTableView forwarding or Native AOT callback implementation.
+Explicit getter presence and its truthful return behavior are the tested
+representation factor; do not claim that this pair isolates presence from
+return value or reproduces every product-specific bridge detail.
+
+Keep the frozen external client unchanged: one action-name read, one action,
+atomic original reply preservation, original bounded post-reply audit and
+finish. In particular, do not request ShownMenu before the action or traverse
+any menu afterward. No pre-action direct getter invocation, Metadata,
+NSInvocation, selector-permission probe or second ShowMenu is allowed.
+
+Add at most a **narrow getter-observation counter/16-sample numeric ledger**
+inside the new getter, if needed: whether it was called; on-main/attached flags;
+requests/opens/closes snapshot; returned nil versus the exact owned menu;
+overflow. No calls are made just to populate those facts. Export after shutdown.
+Untested/inherited calls in C-base remain unobserved, never zero by inference.
+Do not instrument twenty other selectors or allocate two 512-row buffers.
+Action/lifetime instrumentation and its overflow obligations remain unchanged.
+Use a separately versioned narrow-observation artifact extension/strict parser;
+do not relabel it complete dispatcher observation or alter old report schemas.
+
+Run C-base then C-shown once on each RID, with fresh owner/client processes.
+If the reply differs, confirm C-shown then C-base in fresh processes on both
+RIDs. These <=4 control sessions per RID remain within the existing bounded
+invocation ceiling. Keep the unchanged product gate as an independent reference;
+do not modify product behavior or claim a new P0 result from control outcomes.
+
+### Information gain and risk compared with alternatives
+
+| Candidate | What a discriminating outcome would show | Cost/risk and priority |
+| --- | --- | --- |
+| Explicit truthful ShownMenu getter, C-base/C-shown | Whether this representation factor is sufficient to alter the original AX reply in a previously successful native control | One override using existing lifecycle; highest initial causal information per change; recommended |
+| Add a native host, its setter publication and forwarding simultaneously | A bundle involving native graph, relationship ownership, callback/read ordering and getter changes | More realistic-looking but causally ambiguous; reject as the next single-factor test |
+| Direct truthful relation versus native-host forwarding, in two otherwise identical controls | Whether crossing that native getter boundary changes the reply despite matched live relation values | Useful conditional followup if C-shown succeeds; publish/clear host state identically in both arms, establish new baseline, design separately before implementation |
+| FocusedUIElement/Enabled/Help or another arbitrary getter | A particular added method changes behavior, if it does | No current call observation selects those methods; wrong-enabled sufficient-cause hypothesis already failed seven controls; lower priority than action's documented menu relation |
+| Twenty-selector / 1,024-row dispatcher recorder | Correlated query sequence and observed nil/type/guard differences | Larger observer surface, inherited reads still unknown, no causal intervention by itself; reserve for no narrow discriminator or a specific need |
+| Increase post-reply rediscovery budget | More external identity evidence if it completes | Does not discriminate the original action cause; do not manufacture convergence by expanding limits |
+
+Interpret the original reply, admitted effects and getter facts independently:
+
+- **C-base=0/C-shown=-25205**, one admitted/current action and menu in each:
+  after reverse-order confirmation, the explicit truthful relation is a
+  sufficient *control-level* factor for this failure in that environment.
+  A complete observed getter count can say whether its implementation was
+  actually entered; even zero with complete instrumentation does not reveal
+  private AppKit metadata inspection. This is not yet product causation.
+- **Both=0:** adding that observable relation is not sufficient in this tested
+  control. It does not eliminate the product's physical forwarding, nil timing,
+  managed callback ABI, graph or other-method interactions. Next consider a
+  separately matched direct-versus-native-forwarded relation, not a product
+  patch or an unbounded search through getters.
+- **Both fail, different error, incomplete readiness, extra action entry,
+  overflow or forced cleanup:** the former successful baseline or target
+  failure was not cleanly reproduced. Preserve unresolved facts; do not count
+  any failure as -25205 reproduction.
+
+Regardless of outcome, P0's external identity stays unknown. If that question
+becomes necessary, a separate **post-reply** observation experiment can query
+the retained Table's Parent/Window/TopLevel and bounded reciprocal-parent
+membership **before** whole-window rediscovery, within the same 3s/128-call cap.
+Those can yield partial graph facts without establishing global uniqueness or
+retained/current CFEqual; rediscovery exhaustion must keep the latter unknown.
+Keep its client hash/configuration distinct and do not bundle this read-order
+change into the first C-base/C-shown comparison.
+
+No control result licenses removing the product getter, returning nil during a
+live menu or hiding the relation to force action success. Any eventual product
+repair must preserve the truthful shown-menu contract and pass the unchanged
+41-check gate under the patch threshold already stated below.
+
+## Later optional information-dispatcher history
 
 Only after a stable shared-client difference (C0=0/P0=-25205 with admitted,
 current attachment) or another explicit followup requiring selector history,
@@ -172,6 +309,9 @@ It is not a prerequisite for C0/P0 and must not be retroactively described as
 part of its instrumentation. Re-establish the discriminating baseline with
 the recorder enabled before interpreting its sequence; broad instrumentation
 can itself perturb the transport. It does not relax the patch threshold below.
+The executed first pair satisfies that prerequisite, but does **not** make the
+broad recorder the preferred next step over the narrower relation intervention
+specified above.
 
 To inspect request order, instrument **already implemented** information
 dispatchers with fixed selector IDs (Role, Parent, Window, TopLevel, Children,
@@ -201,7 +341,7 @@ processes with one action each:
 
 | Trigger | Next fixed comparison | What it can distinguish |
 | --- | --- | --- |
-| Stable C0 success / P0 failure | C1/P1: minimal discovery plus one fixed read-only graph block before action | Whether explicit graph-query preparation changes the target-specific reply; post-action audit remains identical |
+| Stable C0 success / P0 failure after the recommended narrow relation test does not discriminate | C1/P1: minimal discovery plus one fixed read-only graph block before action | Whether explicit graph-query preparation changes the target-specific reply; post-action audit remains identical |
 | C1/P1 differs from C0/P0 | C2/P2: same graph reads in reversed independent order | Order versus mere presence of reads, only if every read is individually feasible in both targets |
 | Re-discovered Table differs or retained one becomes invalid | P3/P4: identical two-discovery prelude; act on first retained versus second fresh handle | Retained-handle choice; both arms have the same query history and record CFEqual before action |
 | Product minimal succeeds, original established probe still fails | P5: replay the original preparation through the frozen client, then one action | Original preparation bundle versus minimal, **not** read-order causation |
