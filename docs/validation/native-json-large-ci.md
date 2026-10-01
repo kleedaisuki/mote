@@ -826,3 +826,45 @@ the three successful Mac reports' exact bytes/exits/audit status and the failed
 small case's guards, original bytes, one attempted post, failed close and empty
 trace. They do not claim a new deep trace audit or product-binary rehash.
 Only this document was changed; no workflow, product or probe was rerun/modified.
+
+## Follow-up: x64 Save timeout moves to 100 MiB on 6750cd9
+
+2026-10-01: narrowly checked raw Mac artifacts and actual nested logs for
+[run 36815303415](https://github.com/kleedaisuki/mote/actions/runs/36815303415),
+source **`6750cd9a744a8e967b9b1936289ac125a7adebcb`**. Again **3/4 Mac cases**
+pass, but the failing size changes; this is new material evidence against
+reliable repeated synthetic Save acceptance, not a persistent small-file-only
+classification:
+
+| Mac RID | 1 MiB | 100 MiB | Actual nested pilot |
+| --- | --- | --- | --- |
+| osx-x64 | complete pass | failed / save-exact-bytes / TimeoutError | incomplete / exit 1 |
+| osx-arm64 | complete pass | complete pass | pass / actual pass marker |
+
+The three pass reports retain exact saved/final working edited hashes, normal
+initial/reopen exits and successful zero-drop main/reopen trace audits. Those
+report fields were checked without repeating a deep trace audit. X64 raw logs
+explicitly print incomplete and the exit-1 error; ARM prints its real two-case
+pass marker. Overall green CI therefore masks a real non-gating JSON failure.
+The separately owned new Mac Grid diagnostic's typecheck failure is not this
+ordinary JSON outcome and is not used to explain it.
+
+The x64 **104,857,600-byte** failed case has Complete zero-diagnostic v0/v1,
+one acknowledged edit and unchanged disk before Save. One Save attempt posts
+two PID-specific Quartz events with **execution_acknowledged=false**. Before
+the attempt and after timeout, guard reports show granted trust/post capability,
+source ready/Complete/focused/**dirty**, exact length, caret 10/empty selection,
+target active/frontmost/main-window true, window-focused false, and successful
+window count/copy with one window. Final working hash remains original
+`11c596af…`, not edited `f11fa45a…`; no clean/exact Save outcome was reached.
+
+Owned close fails with RuntimeError and forced cleanup follows. There is no
+normal exit or GUI reopen, and the sole retained 100 MiB trace is **0 bytes**;
+drop status, handler delivery and product I/O cause are unavailable, not success
+or a proven replacement/telemetry defect. Previous successful small and large
+cases remain valid scoped evidence but do not remove this uncertainty.
+
+Artifacts and per-Mac raw `job.log` files are retained under
+`.cache/ci-36815303415-json-osx-x64/` and
+`.cache/ci-36815303415-json-osx-arm64/`. No Windows/full successful-case trace
+re-audit, product/probe modification or workflow rerun was performed.
