@@ -193,3 +193,127 @@ The corrected shared execution literal's normalized UTF-8/LF SHA-256 is
 `9b0c02fddab9a11f7e0a681da9bb5f481862e7825b1e5ec2ef868321417e5224`;
 this hashes the parsed YAML literal, not the workflow file or a platform-specific
 CRLF serialization. The only execution change is the ancestor admission block.
+
+## Corrected hosted execution: source `065585ca`, CI `36890601478`
+
+[CI 36890601478](https://github.com/kleedaisuki/mote/actions/runs/36890601478)
+completed on 2026-10-01 at exact source
+`065585ca31db41ad0a0236cefc6a3ced33a58f49`, with all ten jobs successful.
+This closes the previously unexecuted macOS admission/codec checks, **not** the
+native editor product acceptance. The source capability steps remain non-gating;
+their actual results below override any inference from green job badges.
+
+### Managed and strict single-binary results
+
+The Windows and macOS main assemblies each reported **3436 passed, 0 failed,
+0 skipped**. On each platform Themes reported **14/14** and Configuration
+**9/9**, also without failures or skips. The repaired Unix dangling-link cleanup
+tests are included in this successful macOS suite; the old 3434/3436 result
+remains a historical failure, not a result reclassified by this run.
+
+The four native publish inventories each contain exactly one executable, zero
+non-executable payload files and zero bundled native libraries. All four codec
+processes actually launched, exited **0**, retained complete stdout/stderr,
+and emitted exactly `mote-native-encoding-ready`. Independently reading each
+artifact confirmed the closed five-key report, schema 1, success/none,
+correct `X64` or `Arm64` architecture and all seven ordered check labels above.
+Each codec supervisor recorded the same binary SHA before and after execution.
+These checks validate tiny production-engine codec operations in the published
+AOT image, not GUI chooser usability or exhaustive encoding-standard conformance.
+
+| RID | Executable bytes | Codec SHA-256, identical before/after |
+| --- | ---: | --- |
+| `win-x64` | 8,125,440 | `F7034595A0974F62F8A0C433C76C1B91359C363A0EBF8F82AF394486440FF8AD` |
+| `win-arm64` | 8,275,456 | `35C50EF52B00DD5E02C2120DCF9E47837D279D86E6193FF779BB5610BA817445` |
+| `osx-x64` | 18,310,304 | `F18627A93F946E9B38446C67BA8939F514AEE420B0BBB358352B3C18B60ADB00` |
+| `osx-arm64` | 17,950,488 | `0A15660AC0C4DDFECE9AF19EF7DF49CCB05839C3151AF6E6307601A3D4C24CF3` |
+
+### Native source experiment: actual completion and remaining stall
+
+Both macOS adapters recorded backend `textkit2`, normal observed exit **0**,
+unchanged before/after executable identity, all three exact saves and fresh
+document reopens, healthy pre-shutdown telemetry and final `probe/complete`.
+Each report has **301 complete JSONL rows** and **120 entered/completed timed
+phase pairs**, independently checked by fixture, phase and span identity. Both
+reports retain the last fixture name `dense-json` on the global completion row.
+
+Both Windows adapters recorded backend `RichEdit50W`, actual **120-second
+timeouts**, forced termination, exit **-1**, censored process boundaries and
+unknown capability results. Each retained report has **247 complete rows** and
+an unmatched post-edit `dense-json/semantic-publication-verified/entered`.
+Mixed text and novel text completed exact Save/reopen before censoring; dense
+JSON did not. The Windows source supervisor's `binary_sha256_after` is **null**,
+not an unchanged-image witness. Its report identity matches the independently
+successful codec image, but codec stability cannot substitute for the absent
+source-attempt after-image observation.
+
+All platforms used the same fixture inputs: mixed text **2,875 bytes / 1,219
+UTF-16 units**, novel text **3,711,959 bytes / 1,278,983 units**, and dense JSON
+**524,288 bytes / 484,573 units**. The novel is about 3.54 MiB of generated UTF-8
+text, not a user-provided novel or its unknown original encoding. Each finished
+fixture inserts seven UTF-8 bytes; every available exact-save SHA was checked
+against the downloaded saved file. macOS saved hashes agree across architectures.
+
+The following are **single observed synchronous phase durations in milliseconds**,
+not latency distributions, cold-start results or externally observed input-to-pixel
+latency. `native-controlled-insert` includes adapter readback; semantic publication
+includes native attribute application plus text, selection, viewport, version and
+history preservation checks. The four publication measurements per fixture occur
+initially, after edit, after Undo and after Redo.
+
+| macOS phase | x64 | ARM64 |
+| --- | ---: | ---: |
+| Novel initial native import | 5.6820 | 3.0087 |
+| Novel controlled insertion | 11.3287 | 6.4796 |
+| Novel map/diff reconciliation | 6.4310 | 3.2843 |
+| Novel post-edit semantic publication | 4.2965 | 1.9925 |
+| Dense JSON initial full analysis | 73.8009 | 37.7909 |
+| Dense JSON initial semantic publication | 432.8346 | 96.3230 |
+| Dense JSON controlled insertion | 17.9753 | 8.0155 |
+| Dense JSON map/diff reconciliation | 2.2073 | 3.5240 |
+| Dense JSON post-edit full analysis | 56.9804 | 39.9391 |
+| **Dense JSON post-edit semantic publication** | **4,961.0908** | **2,731.7920** |
+| Dense JSON post-Undo semantic publication | 529.7896 | 88.9028 |
+| Dense JSON post-Redo semantic publication | 871.3132 | 98.1715 |
+
+Dense JSON reports **79,433 tokens, zero diagnostics** on all completed analysis
+passes. Windows initial dense-JSON publication was **81,871.6982 ms (x64)** /
+**72,626.0614 ms (ARM64)** before the censored second publication. macOS completes
+the correctness experiment but also demonstrates a **multi-second post-edit
+publication stall**. Fast parsing or successful completion does not establish
+fluent editing. The phase localizes investigation to publication/verification;
+it does not, by itself, isolate attribute mutation from validation readback,
+native layout or a particular internal API. The next useful implementation
+investigation is native style-publication behavior after an edit, preserving all
+content/state predicates and the deadline rather than weakening them. The
+experiment remains separate from the default editing profile.
+
+### Retained trace and reproducibility boundary
+
+Each macOS trace contains **121 complete rows**, exactly one successful
+`mote.session` terminal and no observed `telemetry.dropped`. The x64 trace is
+37,269 bytes, SHA-256
+`23f9aa41a6752fdf7c9804d2df04bfd51e380df9bfd9a24acfb6f3a7140e0fdf`;
+ARM64 is 37,209 bytes, SHA-256
+`31d190751c6ef0913e0b2616fb3dcaec9ec4161a7232fc30a0e2d2f87f465623`.
+Both Windows traces retain **98 complete rows**, no successful session terminal
+and no observed drop row. That is a retained censored prefix, not healthy shutdown
+or proof of no dropped/unwritten events. These are the narrow drain checks above,
+not full strict trace-schema, transport or causal-graph certification.
+
+Evidence and artifact-only reproducibility are retained under
+`.cache/ci-36890601478-codec-source/`: `run.json`, `artifacts.json`, complete
+`run.log`, eight downloaded codec/source and publish-inventory artifact trees,
+`audit.py`, `audit-result.json` and `audit-result.txt`. The log SHA-256 is
+`5EF8391CCEE85C32DAAE8A666AF7D346B84658403E88339027EC7372080E48C6`.
+The macOS report hashes are
+`3ea7bb3e8eee0ce8323df74a0d2c9ce713b4fad716d6756314d1d17a5283963f`
+(x64) and `d892d7b438c97fa5fedf629e997dea8b41fcb920c8681488748a534834345aa2`
+(ARM64). Running `python -B .cache/ci-36890601478-codec-source/audit.py`
+only rereads those downloaded artifacts; it launches no native process.
+
+This inspection used completed-run/artifact APIs only: no dispatch, restart,
+local GUI, changed timeout, repeated model tests or default-profile promotion.
+The complete logs also retain separate inherited non-gating macOS draw-trace
+errors (`exact_terminal_and_session_record_count`); those are not certified by
+the successful source-capability trace and are outside this scoped audit.
