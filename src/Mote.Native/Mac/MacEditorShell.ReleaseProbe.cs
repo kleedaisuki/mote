@@ -1,5 +1,6 @@
 using Mote.Native.Mac.Canvas;
 using Mote.Formats;
+using System.Text.Json;
 
 namespace Mote.Native.Mac;
 
@@ -82,7 +83,82 @@ internal sealed unsafe partial class MacEditorShell
             style.Semantics == _sourceSemanticRevision && ReferenceEquals(style.Theme, _theme);
         return !_sourceUnavailable && !IsTextComposing
             ? MacReleaseSemanticModel.Observe(_sourceInstallation, _sourceSemantics, _pendingAnalysis,
-                styleReady, !_sourceGeometryUnknown, _csvGrid?.AccessibilityFrame, kind)
+                styleReady, !_sourceGeometryUnknown, _csvGrid?.ProbeReleaseRenderedGrid.Frame, kind)
             : null;
+    }
+
+    /// <summary>Freezes refusal facts at the existing deadline; no retry, admission, layout or success sidecar is fabricated.</summary>
+    internal void ProbeReleaseWriteRefusal(string path, DocumentKind kind,
+        NativeAnalysisFailure? lastAnalysisFailure, long currentAnalysisSerial)
+    {
+        MacReleaseWorkflowProbe.ValidateOutput(path);
+        var installation = _sourceInstallation;
+        var semantics = _sourceSemantics;
+        var analysis = _pendingAnalysis;
+        var style = _sourceInstalledStyle;
+        var rendered = _csvGrid?.ProbeReleaseRenderedGrid;
+        var grid = rendered?.Frame;
+        var styleReady = style is { } palette && installation is { } installed &&
+            palette.Stamp == installed.Stamp && palette.Nonce == installed.Nonce &&
+            palette.Semantics == _sourceSemanticRevision && ReferenceEquals(palette.Theme, _theme);
+        var reason = _sourceUnavailable ? "source_unavailable" : IsTextComposing ? "source_composing" :
+            MacReleaseSemanticModel.Refusal(installation, semantics, analysis, styleReady, !_sourceGeometryUnknown, grid, kind);
+        if (reason == "grid_frame_missing" && rendered is { MissingNativeSlots: > 0 }) reason = "grid_missing_native_slots";
+        if (reason == "grid_frame_missing" && rendered is { WindowPending: true }) reason = "grid_native_install_pending";
+        if (reason == "grid_frame_missing" && rendered is { ColumnsInstalled: false }) reason = "grid_columns_uninstalled";
+        if (reason == "grid_frame_missing" && rendered is { RenderShapeMatches: false }) reason = "grid_render_shape";
+        var pending = 0;
+        if (grid is not null)
+            for (var row = 0; row < grid.Rows.Count; row++)
+                for (var column = 0; column < grid.Columns.Count; column++)
+                    if (grid.Cell(grid.Coordinate(row, column)).State == GridValueState.Pending) pending++;
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartObject();
+        writer.WriteNumber("schema_version", 1);
+        writer.WriteString("outcome", "refused");
+        writer.WriteString("reason", reason);
+        writer.WriteString("document_kind", kind.ToString());
+        Stamp("installed", installation?.Stamp);
+        writer.WriteNumber("installation_nonce", installation?.Nonce ?? 0);
+        writer.WriteNumber("source_units", installation?.Snapshot.Length ?? 0);
+        Stamp("semantic", semantics?.Stamp);
+        writer.WriteNumber("semantic_nonce", semantics?.Nonce ?? 0);
+        writer.WriteNumber("semantic_sequence", semantics?.PresentationSequence ?? 0);
+        writer.WriteString("completeness", semantics?.Completeness.ToString() ?? "missing");
+        writer.WriteNumber("coverage_start", semantics?.Coverage.Start ?? 0);
+        writer.WriteNumber("coverage_length", semantics?.Coverage.Length ?? 0);
+        Stamp("analysis", analysis?.Stamp);
+        writer.WriteNumber("analysis_sequence", analysis?.PresentationSequence ?? 0);
+        Stamp("style", style?.Stamp);
+        writer.WriteNumber("style_nonce", style?.Nonce ?? 0);
+        writer.WriteNumber("semantic_revision", _sourceSemanticRevision);
+        writer.WriteNumber("style_revision", style?.Semantics ?? 0);
+        writer.WriteBoolean("style_ready", styleReady);
+        writer.WriteBoolean("geometry_known", !_sourceGeometryUnknown);
+        writer.WriteBoolean("experimental_ax_frame_present", _csvGrid?.AccessibilityFrame is not null);
+        Stamp("grid", grid?.Id.Document);
+        Stamp("grid_ready", grid?.Ready?.Document);
+        writer.WriteNumber("grid_ready_sequence", grid?.Ready?.Sequence ?? 0);
+        writer.WriteNumber("grid_rows", grid?.Rows.Count ?? 0);
+        writer.WriteNumber("grid_columns", grid?.Columns.Count ?? 0);
+        writer.WriteNumber("grid_pending_cells", pending);
+        writer.WriteNumber("grid_native_slots", rendered?.NativeSlots ?? 0);
+        writer.WriteNumber("grid_missing_native_slots", rendered?.MissingNativeSlots ?? 0);
+        writer.WriteBoolean("grid_columns_installed", rendered?.ColumnsInstalled ?? false);
+        writer.WriteBoolean("grid_render_shape_matches", rendered?.RenderShapeMatches ?? false);
+        writer.WriteBoolean("grid_window_pending", rendered?.WindowPending ?? false);
+        Stamp("grid_native_ready", rendered?.NativeIdentity?.Document);
+        writer.WriteNumber("grid_native_ready_sequence", rendered?.NativeIdentity?.Sequence ?? 0);
+        writer.WriteNumber("grid_native_projection_version", rendered?.ProjectionVersion ?? 0);
+        writer.WriteBoolean("grid_navigation_pending", rendered?.NavigationPending ?? false);
+        MacReleaseAnalysisFailureEvidence.WriteFields(writer, lastAnalysisFailure, installation?.Stamp, currentAnalysisSerial);
+        writer.WriteEndObject();
+        void Stamp(string prefix, NativeDocumentStamp? stamp)
+        {
+            writer.WriteBoolean(prefix + "_present", stamp.HasValue);
+            writer.WriteNumber(prefix + "_generation", stamp?.Generation ?? 0);
+            writer.WriteNumber(prefix + "_version", stamp?.Version ?? 0);
+        }
     }
 }

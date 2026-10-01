@@ -47,7 +47,7 @@ internal static class MacReleaseWorkflowProbe
                 ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark), product.Path,
                 product.Profile,
                 () => config with { ThemeId = ThemePolicies.LightId });
-            var workflow = new Workflow(shell, path, destination, original);
+            var workflow = new Workflow(shell, controller, path, destination, original);
             shell.Shown += workflow.Start;
             controller.Run();
             if (!workflow.Succeeded || !SHA256.HashData(File.ReadAllBytes(path)).AsSpan().SequenceEqual(SHA256.HashData(originalBytes)))
@@ -95,7 +95,7 @@ internal static class MacReleaseWorkflowProbe
 
     /// <summary>One UI-thread state machine; watchdogs are liveness bounds, not experience targets.</summary>
     [SupportedOSPlatform("macos")]
-    private sealed class Workflow(MacEditorShell shell, string input, string? output, string original)
+    private sealed class Workflow(MacEditorShell shell, NativeEditorController controller, string input, string? output, string original)
     {
         /// <summary>Finite diagnostic deadline, independent from editor responsiveness criteria.</summary>
         private readonly DateTime _deadline = DateTime.UtcNow.AddSeconds(40);
@@ -173,6 +173,9 @@ internal static class MacReleaseWorkflowProbe
                         if (evidence is null) break;
                         shell.ProbeReleaseCapture(Path.Combine(Path.GetDirectoryName(output!)!, "native-product.png"));
                         evidence.Write(Path.Combine(Path.GetDirectoryName(output!)!, "native-product-semantics.json"));
+                        if (controller.LastAnalysisFailure is { } lastFailure)
+                            MacReleaseAnalysisFailureEvidence.Write(Path.Combine(Path.GetDirectoryName(output!)!, "native-product-analysis-failure.json"),
+                                lastFailure, shell.ProbeDocumentStamp, controller.CurrentAnalysisSerial);
                         shell.ProbeSetMarkedAtEnd("弃");
                         shell.ProbeReleaseCancelClose();
                         _stage = 9;
@@ -214,6 +217,15 @@ internal static class MacReleaseWorkflowProbe
             _done = true;
             Succeeded = success;
             if (!success) Console.Error.WriteLine($"Mac release workflow stage {_stage} did not complete.");
+            if (!success && _stage == 8 && output is not null)
+            {
+                var directory = Path.GetDirectoryName(output)!;
+                try { shell.ProbeReleaseWriteRefusal(Path.Combine(directory, "native-product-refusal.json"), DocumentPolicies.ForPath(input).Kind,
+                    controller.LastAnalysisFailure, controller.CurrentAnalysisSerial); }
+                catch (Exception error) { Console.Error.WriteLine($"Mac release refusal evidence failed: {error.GetType().Name}."); }
+                try { shell.ProbeReleaseCapture(Path.Combine(directory, "native-product-failure.png")); }
+                catch (Exception error) { Console.Error.WriteLine($"Mac release failure capture failed: {error.GetType().Name}."); }
+            }
             shell.Close();
         }
     }

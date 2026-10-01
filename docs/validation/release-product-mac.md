@@ -173,6 +173,58 @@ three-row, three-column window and zero pending cells. Header is an ordinary
 record in this model. Actual hosted success is still required for the new
 post-edit capture/witness path; prior precommit screenshots do not establish it.
 
+### Hosted stage-8 failure: observer depended on disabled experimental AX
+
+The final-candidate hosted run `36928548957` failed the macOS x64 CSV task at
+stage 8. Retained CSV artifacts are under
+`.cache/release-ci-36928548957/evidence/release-evidence-osx-x64/product/csv/`.
+The output file exists with the intended edit; trace includes successful Save v4
+and subsequent current parse/publish/style v4. The old refusal path only reported
+the eventual stage number, which was inadequate runtime evidence.
+
+Source inspection identifies a definite observer mismatch:
+`MacCsvGrid.AccessibilityFrame` is populated only when experimental
+`MOTE_NATIVE_GRID_ACCESSIBILITY=1`; ordinary release tasks do not enable that
+provider. The final-semantic guard therefore always saw a null Grid frame on
+default macOS, irrespective of the actual installed table. This establishes the
+observer's impossible precondition, not a claim that every actual cell was ready
+or that an earlier `analysis.to_presentation` failure in the same trace was benign.
+
+The replacement `ProbeReleaseRenderedGrid` observes the real renderer's installed
+identity/projection, actual row slots, display/installed columns, rendered matrix
+shape and pending-install flag. It does not register experimental AX or fabricate
+its frame. Every native slot must be nonnull, have the correct absolute ordinal,
+and be the exact row object from the installed projection. Missing/stale actual
+slots, uninstalled columns, matrix-shape mismatch or pending installation refuse
+certification. The existing source completeness, style, document/presentation
+identity and nonpending-cell requirements remain unchanged.
+
+At the unchanged stage-8 deadline, failure now freezes a separate
+`native-product-refusal.json` with closed refusal codes and numeric installed/
+semantic/analysis/style identities, coverage, revision, geometry, native Grid
+identity/projection, row-slot counts, missing-slot count, column/shape state,
+navigation pending and whether the experimental AX frame exists. It also attempts
+`native-product-failure.png` of the existing owned content view. Neither output is
+the success sidecar, nor can capture mark a failed workflow successful. No source
+or cell values, paths or exception messages appear in the diagnostic JSON.
+
+Portable source/Grid/refusal guards now include actual-renderer observations with
+AX absent, exact installed row objects, missing/different slots, uninstalled
+columns, wrong matrix shape and pending installation. The first expanded run
+passed **35/35**. Hosted AppKit rerun of the instrumented corrected observer is
+still necessary; do not count this source-level mechanism diagnosis as that run.
+
+The controller now exposes a bounded last analysis-presentation failure record.
+Refusal diagnostics include its closed category, HResult, generation/version,
+analysis serial, current analysis serial and an explicit identity/serial match.
+If final semantics succeeds but such a historical record exists, a separate
+`native-product-analysis-failure.json` preserves it instead of erasing it or
+labeling the newer successful version as failed. No exception/message object is
+retained. Tests verify that a version-3 failure reports `current_match=false`
+against current version 4, while the same current identity/serial reports true.
+The final expanded portable run passes **37/37**, zero compiler/analyzer warnings:
+`.temp/mac-release-guards/mac-release-render-history-qualified.trx`.
+
 No local AppKit runtime execution occurred. The new workflow must run on the
 actual hosted macOS AOT artifacts before it can supply release evidence. Even a
 successful hosted run proves in-process native protocol/menu/window behavior,

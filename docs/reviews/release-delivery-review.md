@@ -265,3 +265,71 @@ was introduced. Polling repeats observations, not edits or Save commands.
 Successful new-default local managed tasks and portable guard tests are not
 relabeled as hosted AOT. The final hosted source/package/visual evidence still
 belongs to the release coordinator. Review ready for the next freeze.
+
+## Mac release observer correction after run 36928548957
+
+Baseline HEAD: `edef3379512332b0fe15b1136622d3ac82e54a40`; this review covers
+only the working Mac renderer/failure observation corrections and tests/docs.
+Read the updated `release-product-mac.md` and previous acceptance scopes first.
+**No substantive defect found in the inspected correction.**
+
+The prior successful source/style version-4 phases do not erase the hosted CSV
+task refusal or the separate older version-3 presentation failure. The old
+observer's dependency on optional experimental AX publication is replaced with
+actual installed renderer facts, not an enabled provider or a success fallback.
+
+`MacCsvGrid.ProbeReleaseRenderedGrid` reads the actual installed identity,
+projection, native slot array, display/installed column ranges, rendered string
+matrix shape, navigation and installation flags. `MacReleaseGridModel` refuses
+missing slots, wrong absolute row ordinals, different row objects from the
+installed projection, uninstalled columns, mismatched matrix shape and unfinished
+installation. The shared `NativeGridAccessibility.Create` call only creates a
+pure bounded value frame: it does not register or query experimental AX, and
+it additionally removes readiness for pending or identity-mismatched navigation.
+The semantic guard still requires exact current document/version/sequence,
+full Complete coverage, installed style, known geometry and nonpending cells.
+This observation certifies retained renderer data, not physical pixel delivery.
+
+The one retained `NativeAnalysisFailure` record contains only the **attempted
+analysis stamp and serial captured before background scheduling**, a closed
+exception category and numeric HResult. It does not retain an exception object,
+message, arbitrary type name, source or path. `PostAnalysis` keeps its prior
+failure/containment flow; no retry or success conversion is added. The current
+observation is qualified separately using installed/current stamp and analysis
+serial. `analysis_failure_current_match` therefore cannot relabel a version-3
+attempt as a current version-4 failure, or transfer the same numeric version
+across document generations. The record describes a caught failure of the
+attempted callback, not a fresh readback of the current document at catch time.
+
+At the unchanged stage-8 deadline, refusal diagnostics write fixed refusal codes
+and numeric attempted/current/installed semantic/style/Grid facts to a separate
+failure sidecar and optionally capture the existing owned content. These are not
+the success sidecar. Diagnostic-write failure does not turn the task green.
+A historical caught failure is also preserved beside a later successful witness
+with an explicit identity/serial match flag. The 40-second watchdog, exact Save,
+current semantic checks and ordinary-task scope are unchanged.
+
+Independently inspected existing tests and read
+`.temp/mac-release-guards/mac-release-render-history-qualified.trx`: **37
+executed/passed, zero failures/not-executed**. Guard cases cover AX-independent
+renderer success, absent/different native slots, columns, shape, pending state,
+stale semantic identities and historical failure qualification. The new
+controller test captures version 3, queues its exception, changes canonical text
+to version 4 and checks the retained attempted stamp without a canonical edit.
+No tests or GUI were rerun by this reviewer; this is not corrected hosted AOT,
+physical Pinyin/VoiceOver/pixel or release qualification.
+
+Selected reviewed source hashes:
+
+| File | SHA-256 |
+| --- | --- |
+| `src/Mote.Native/Mac/MacReleaseGridModel.cs` | `0d0760176e455cd74d3ea1d2fa8cab6ccaa1787751cb455c444d2a111d561f28` |
+| `src/Mote.Native/NativeAnalysisFailure.cs` | `cbb278c28a8719a76fcfa97bb2efcb4896302319ac6ff3b81861dccd9a96ad67` |
+| `src/Mote.Native/NativeEditorController.cs` | `b6d6f4490f14c80736d28f9b208cbe008cb9f258d206f94b09479bf6bd734906` |
+
+Producer freeze confirmed after combined affected validation. Independently read
+`.temp/release-controller/release-mac-observer-final.trx`: **71 executed/passed,
+zero failures/not-executed**. This includes the queued attempted-v3/current-v4
+regression. It overlaps the prior 37-guard result; counts are not added. Source
+hashes above remain unchanged at freeze. Targeted review complete and ready for
+integration; corrected four-RID qualification remains pending.
