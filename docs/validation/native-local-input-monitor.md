@@ -1,8 +1,6 @@
 # Native local input monitor: ABI, ownership and evidence contract
 
-Date: 2026-10-01. Implementation is locally built and portable contracts tested;
-actual macOS x64/ARM64 AOT control and ordinary external-route positives remain
-pending. No local UI/input mutation experiment or new workflow was added.
+Date: 2026-10-01. Hosted macOS x64/ARM64 AOT controls and ordinary external-route positives are established within the scoped contracts below; the promoted blocking Flow step has also executed successfully on both RIDs. Enabled Mac monitoring cost remains unmeasured. No local UI/input mutation experiment was added.
 
 ## Why this second permanent boundary exists
 
