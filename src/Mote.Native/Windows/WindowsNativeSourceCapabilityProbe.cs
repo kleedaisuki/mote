@@ -163,8 +163,7 @@ internal static class WindowsNativeSourceCapabilityProbe
         {
             CheckOwner();
             ValidateDisplay(display);
-            if (!Win32.SetWindowTextW(_source, display))
-                throw new InvalidOperationException("RichEdit complete text import failed.");
+            WindowsNativeTextImporter.Install(_source, display);
             Win32.SendMessageW(_source, EmptyUndoBuffer, 0, 0);
             // This is the intended replica until the runner's separately timed
             // full readback proves installation. Do not hide readback in import.
