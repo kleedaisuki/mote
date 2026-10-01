@@ -11,8 +11,17 @@ The following machine-readable pins were independently reviewed against the froz
 script, final Program route and dedicated job. Changed script bytes fail closed;
 the approving review is `docs/reviews/native-mac-grid-clipboard-safety.md`.
 
-Approved invocation LF SHA256: A351A2C9F173E2F927030B9B82FFE4B2B7451017D9E046EB547489EE29A9058B
-Approved invocation CRLF SHA256: 4055AE25AFE6DFFBC94E474210C2A5BFA86C063BA0935467DFFFB3CAB410B962
+Approved invocation LF SHA256: A0E670D5C8339A746165F89BD995D711CE97490408705F1FA7D176317AF7C8DB
+Approved invocation CRLF SHA256: 83FA3795949F608E77FD8C8EB8850E2C9FF49CF3CC2BC1E7E64A948C45100152
+
+The current source and invocation pins include the unused fake-shell Save event
+declaration migration in `b2f4661`. Independent delta review and immutable source
+hashes are recorded in `../reviews/clipboard-causal-api-pin-review.md`. CI
+36823606282 rejected the stale source pins before any clipboard probe launch;
+that admission failure is not a clipboard runtime result. Only the fixed source
+constants and detached invocation pins changed; all permission checks, oracles,
+timeouts and cleanup constraints remain unchanged. Renewed hosted acceptance is
+still required after this repair.
 
 Pins are detached because putting a file's hash inside that same file creates a
 circular hash dependency. This tracked document is admitted only in an exact clean

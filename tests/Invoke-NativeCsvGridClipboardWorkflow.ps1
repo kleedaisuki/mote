@@ -36,8 +36,8 @@ try {
     # Fixed reviewed byte representations differ ONLY in CRLF versus LF line endings.
     # Any code edit requires renewed independent review; never self-certify current content.
     $reviewedHashes = @(
-        'FE4609F6CBCACF6C02AA40B538695B886E268F4BA3E1A4A7934D26C3DC9B4299', # CRLF
-        '3D3A18BE04C7327869FED237CB4EC7F6E62662981EA812DBB22FD1977C7C04A2'  # LF
+        '7F23EF2EF31C85D6E4177C2B71590B47B4D977014A51D06979B5606BA32BB855', # CRLF
+        '40310CB3B0D8EB1EC68EE29C3BAC8D98EE2F5DB9C40EF55004646C5AB50D0EE8'  # LF
     )
     if ($hash -cnotin $reviewedHashes) { throw 'Clipboard harness differs from reviewed source' }
 

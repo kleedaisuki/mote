@@ -73,8 +73,8 @@ $changes = @(& git status --porcelain --untracked-files=all -- src tests docs/va
 if ($LASTEXITCODE -ne 0 -or $changes.Count -ne 0) { throw 'Reviewed source/test/manifest checkout is not clean' }
 $sourceHash = (Get-FileHash -LiteralPath (Join-Path $root $sourceRelative) -Algorithm SHA256).Hash
 $reviewedSourceHashes = @(
-    'EF9BFB12E55B0EDFC9ED5FC74A1BC0BE4793055AEAAFBCD05CC066263DD11867', # LF
-    '85D42F1DFEBBB5176F7CC735008151C0D1E3C9716B54A5177ADC8F4764B4AD34'  # CRLF
+    'D0E868D78B91D621EB06FEB80923C519E0305A7361761E0546EF88AEAB84E48B', # LF
+    '9E4A5AEF6B39DB38B05396B068514E0F04331FEE59D63231FF5EF0524AB95DDC'  # CRLF
 )
 if ($sourceHash -cnotin $reviewedSourceHashes) { throw 'Probe differs from independently reviewed bytes' }
 
