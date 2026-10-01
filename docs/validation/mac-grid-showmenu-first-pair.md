@@ -1,7 +1,7 @@
 # Lean macOS Grid ShowMenu first pair
 
-Date: 2026-10-01. Status: hosted C0/P0 raw replies observed; aggregate reports
-rejected scalar JSON types. **Schema-only repair awaits hosted verification**.
+Date: 2026-10-01. Status: **schema-only hosted pair completed on both Mac RIDs**;
+C0 reply0/P0 reply-25205 persists. Product external AX remains unaccepted.
 
 ## Question and scope
 
@@ -298,6 +298,149 @@ unchanged source; its six-phase native trace has exactly one admitted request,
 open and close. Raw reference reports are in `reference-{x64,arm64}/`.
 That unchanged independent failure prevents relabeling the instrumented first
 pair or schema repair as product acceptance.
+
+## Scalar-only hosted verification: CI 36818175897 / 1171d0f
+
+[Run 36818175897](https://github.com/kleedaisuki/mote/actions/runs/36818175897)
+finishes both native Mac jobs successfully (x64 job110227725599,
+ARM job110227725690). Actual pair-step logs now print
+**`completed-failure-observed`**, without the former unresolved wrapper error.
+Both raw owner reports have that same status with empty error codes; every
+session is parsed and admitted, not merely contained in a green non-gating job.
+
+Audit procedure `.cache/ci-36818175897-grid-pair/audit.ps1` loads the actual
+driver's strict schema validators without launching targets and accepts **all
+four raw clients and all four raw servers without normalization**. The corrected
+owned-target fields and observed control CFEqual facts are real JSON Booleans.
+`audit.json`, downloaded raw reports, and completed job logs remain under that
+same repository-cache root. Native typecheck/compile/source-unchanged and strict
+one-file inventory all pass on both hosts. This validates the report repair,
+not a change to the product action result.
+
+| Verified session | x64 C0 | x64 P0 | ARM C0 | ARM P0 |
+| --- | --- | --- | --- | --- |
+| Actual session classification | completed-success-observed | completed-failure-observed | completed-success-observed | completed-failure-observed |
+| Original action reply | **0** | **-25205** | **0** | **-25205** |
+| Names error/count/advertised | 0 / 1 / true | same | same | same |
+| Action attempts/begin/end | 1 / true / true | same | same | same |
+| Total entry/queue/dispatch/open/close/detach | **1 / 1 / 1 / 1 / 1 / 1** | same | same | same |
+| Client / owner actual exit | 0 / 0 | same | same | same |
+| Forced cleanup / fixture unchanged | false / true | same | same | same |
+| Ready polls | 1 | 4 | 2 | 5 |
+| Prelude admissions / postreply admissions | 85 / 128 | 257 / 128 | 85 / 107 | 257 / 128 |
+| Identity audit exhausted | false | **true** | false | **true** |
+
+Every client is trusted, ready and exact-owned-target=true. Every server has one
+main-thread entry with owner lookup/current root/attached/frame/baseline/
+attachment equality/epoch equality/queue result/method return=true;
+installing/exception=false. All off-main/entry-overflow/lifetime-overflow counts
+are zero. Lifetime queue/dispatch/open/close facts remain current and attached;
+detach clears current/attached/baseline equality. Ready/finish/normal-close are
+true. Both client cleanup flags and the admitted aggregate finish-after-reply
+fact are true; independent actual exit0 establishes normal owner termination.
+
+C0 x64 again completes the final needed call at128 admissions without exhausting
+the audit; C0 ARM completes at107. Both positively establish retained/current
+Table equality, expected Group/window/top-level equality, one reciprocal child,
+no parent cycle, and parent reachability to the owned window. P0 on both RIDs
+again spends128 admissions on the rediscovery prefix and has **all external
+identity/parent/equality facts null**. Accepted session completion includes
+successful evidence collection of an explicitly exhausted optional observation;
+it is not a claim that every audit field was obtained. No budget was widened.
+
+ARM C0 now opens/closes once with unchanged cleanup/timing code. The previous
+zero-open sample is therefore not an invariant inability to present that menu.
+This run achieves matched observed lifecycle completion on both RIDs, but one
+matched run does not determine the prior sample's scheduling cause, prove the
+scalar change caused it, or establish a lifecycle reliability distribution.
+No inferred preemption or hidden timing correction is recorded.
+
+| SHA256 | osx-x64 | osx-arm64 |
+| --- | --- | --- |
+| Shared client | `B66532377E658DB5D08939F5E05F510BBA8D27E779F30351B5C3EED10D23DDF1` | `2DE2178F8DCF92FF8A27304BC27B963F6ADAB18CB70236B125C99B6420BF80A9` |
+| Control | `369773793D40F2C5269F62D9B90F02605182BC147FA0104E9054F5BCFEC40B2B` | `64FF73113DF69A30A67181BB5C45BC181B82C91C5636DB5514D9C3E8AD74306D` |
+| Product | `B0DCFE216A2947668FAF36D4BE5DEEA86DB6AB3AE3E3420C11209C20E258462D` | `EBF13B339257AEBBE19BF8B8B2E0C600377699A92DC1F0F6B3915BE3863778CD` |
+
+Each RID uses its single frozen compiled client for both fresh sessions. Executed
+Client source is `F3A5790F9427C1BCC290633A31741FEA0B08E8F00767EC2AFC5D3C0BD67FC6C0`;
+Control and driver hashes remain the full corrected hashes recorded above.
+Fixture is still263760 units,1100 records, SHA256
+`8BACC6F97A374853C5F04EE176384738D8BFF7F71B1C7E768D088310C98DD8C2`,
+unchanged in all four sessions.
+
+The unchanged original41-check probe uses these same product hashes and remains
+**failed / Swift exit1 on both RIDs**, exactly40 checks true and only
+`context-menu-accessible=false`, original AX=-25205. Both independent downstream
+objects say completed/phase complete; both wrappers separately observe actual
+normal editor exit0/no forced cleanup/unchanged source. Six-phase native traces
+have one request/open/close each. These fresh reference reports are in
+`reference-{x64,arm64}/`; original gate failure is not superseded by successful
+experimental evidence collection.
+
+**Conclusion:** a schema-valid same-client minimal baseline now preserves
+C0=0/P0=-25205 with admitted current roots and actual matched opening/closing in
+this run. The earlier client's language/selection-setter preparation is not
+necessary for the reproduced product failure. The specific framework mechanism,
+product external identity and unobserved inherited selector history remain
+unresolved; no product correction or release/VoiceOver/input claim follows.
+
+## Proposed next discriminator: existing-selector return history
+
+Status: **proposal only; no code/CI/timing changes started**. The next question
+is whether an already implemented accessibility override returns a different
+kind of value, or observes a different owner lifetime, around the original
+action boundary in the product versus the control. That is more discriminating
+than adding a guessed legacy bridge, selector permission override or another
+menu action.
+
+1. Add a separate opt-in numeric recorder to **existing** product Table/Group/
+   node information dispatchers and existing control overrides. Start with the
+   common contract families: Role, Parent, Window, TopLevel, Children,
+   Identifier, implemented Boolean queries and Frame; include existing
+   Rows/Columns/count/selected/Help/shown-menu overrides only where the target
+   already implements them. Do not add control getters, swizzle AppKit or
+   directly invoke a selector to equalize coverage. Coverage is explicit per
+   target; inherited/private dispatch remains unobserved.
+2. Each already entered callback writes fixed selector-ID/receiver-category/
+   entry-or-return/sequence/result-kind and current/attached/frame/installing/
+   baseline-equality flags into preallocated storage. Result kinds are only
+   nil, known role, owned parent/window/menu, bounded array/count, Boolean,
+   finite frame, exception or string-present. Never serialize strings, text,
+   pointers, revisions, coordinates, hashes of field content or exception
+   descriptions; classification must not request another AX/native attribute.
+   Off-main facts cannot consult the mutable owner map.
+3. Bound storage as the reviewed design: last512 pre-entry rows and first512
+   rows from the first action entry onward, with discarded/overflow counts.
+   Export outside callbacks after normal owned close. Distinguish before entry,
+   inside action IMP and after IMP return; **after IMP return does not mean
+   after the external AX reply**. Client API order is a separate local ledger,
+   not a fabricated synchronized server/client timeline.
+4. Keep the same frozen minimal client and one action per fresh target. For
+   this separate revision explicitly prune AXMenu/AXMenuItem before child
+   enumeration and add a source/behavior guard; retain128 postreply admissions
+   and null identity on exhaustion. Menu pruning is a scoped postreply privacy/
+   coverage correction, not a guess that C0's extra nodes were menus. Compare
+   admission counts with the preserved unmodified baseline and record the
+   changed traversal contract; never increase bounds for convergence.
+5. First run one recorded C0/P0 pair, then a fresh reversed launch-order P0/C0
+   confirmation on each RID (at most four sessions per RID). Preserve the
+   unchanged original41-check gate, baseline action replies, lifecycle/normal
+   exit/fixture/hash accounting. A recorder-instrumented success or overflow
+   cannot repair the ordinary gate or support selector-absence conclusions.
+6. Only if a repeatable **observed** selector/return-kind/lifetime difference
+   points to a concrete documented contract should a separate one-factor
+   mirrored control be constructed. Predict the falsifying outcome beforehand:
+   e.g. reproducing precisely that existing return-kind condition in a fresh
+   native control yields the same -25205 versus its matched original. Unexpected
+   extra graph reads, unmatched lifecycle, different error or unavailable
+   preparation remains unresolved, not a reproduction. A product patch still
+   requires that predictive mechanism and independent ordinary-gate validation.
+
+This plan can reveal observed dispatch/return differences; it cannot prove
+private AppKit behavior absent or erase P0's unknown external identity. Its
+interfaces, output whitelist, off-main safety, instrumentation overhead and
+callback ABI must be independently reviewed **before** implementation/push.
+No speculative product behavior fix is authorized by this ledger.
 
 ## External grounding
 
