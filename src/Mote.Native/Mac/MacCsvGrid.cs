@@ -133,6 +133,7 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
         ObjC.Send(_detail, ObjC.Sel("setAccessibilityLabel:"), ObjC.String("CSV selected cell detail"));
         ObjC.Send(View, ObjC.Sel("addSubview:"), _detail);
         InitializeAccessibility();
+        StartPairDiagnostic();
     }
 
     /// <summary>Retained container used in the established preview split.</summary>
@@ -806,6 +807,11 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
         Add(cls, "menuDidClose:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&MenuDidClose, "v@:@");
         if (AccessibilityEnabled)
             Add(cls, "moteGridShowMenu:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&AccessibilityPresentMenu, "v@:@");
+        if (PairObservation is not null)
+        {
+            Add(cls, "moteGridPairTick:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&PairTick, "v@:@");
+            Add(cls, "moteGridPairClose:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&PairClose, "v@:@");
+        }
         Add(cls, "moteGridCommand:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&MenuCommand, "v@:@");
         Add(cls, "moteGridScroll:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ScrollerAction, "v@:@");
         Add(cls, "moteReveal:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Reveal, "v@:@");
@@ -1090,10 +1096,13 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
     /// <summary>Detaches callback targets before removing the managed lookup and owned handles.</summary>
     public void Dispose()
     {
+        StopPairDiagnostic();
+        CancelPairClose();
         CancelAccessibilityMenu();
         SetNavigation(null);
         RetireAccessibility();
         DetachAccessibilityTable();
+        ExportPairDiagnostic();
         _identity = null;
         foreach (var scroller in new[] { _rowScroller, _columnScroller })
         { ObjC.Send(scroller, ObjC.Sel("setTarget:"), 0); Instances.Remove(scroller); ObjC.Send(scroller, ObjC.Sel("release")); }

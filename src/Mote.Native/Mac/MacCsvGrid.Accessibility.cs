@@ -107,6 +107,7 @@ internal sealed unsafe partial class MacCsvGrid
         var root = _accessibilityTable;
         _accessibilityTable = 0;
         Instances.Remove(root);
+        PairTransition(4);
         ObjC.Send(root, ObjC.Sel("release"));
     }
 
@@ -558,15 +559,26 @@ internal sealed unsafe partial class MacCsvGrid
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static byte AccessibilityShowMenu(nint self, nint selector)
     {
+        var observation = PairObservation;
+        var entry = observation?.Begin(null) ?? -1;
+        var facts = new MacGridPairObservation.Entry();
         try
         {
-            if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g) || g._installing || g._accessibilityFrame is null) return 0;
+            facts.Main = AccessibilityMainThread;
+            if (facts.Main != true) { facts.Returned = false; return 0; }
+            var found = Instances.TryGetValue(self, out var g);
+            if (observation is not null)
+                facts = found ? g!.PairEntry(self, true) : facts with { Owner = false };
+            if (!found || g!._installing || g._accessibilityFrame is null) { facts.Returned = false; return 0; }
             g.TraceMenu(MacCsvGridMenuPhase.ShowEnter);
             var result = g.QueueAccessibilityMenu();
+            facts.Queued = result; facts.Returned = result;
+            if (result) g.PairTransition(0);
             g.TraceMenu(MacCsvGridMenuPhase.ScheduleReturn, result);
             return result ? (byte)1 : (byte)0;
         }
-        catch { return 0; }
+        catch { facts.Exception = true; facts.Returned = false; return 0; }
+        finally { observation?.Complete(entry, facts); }
     }
 
     /// <summary>Queues after AX reply so native menu tracking cannot hold the external action call open.</summary>
@@ -618,6 +630,7 @@ internal sealed unsafe partial class MacCsvGrid
         {
             if (!AccessibilityMainThread || !Instances.TryGetValue(self, out var g)) return;
             var attached = g._accessibilityTable != 0 && g._table != 0 && !g._installing && g._accessibilityFrame is not null;
+            g.PairTransition(1);
             if (!g._accessibilityMenuPresentation.TryBegin(g._installSerial, attached)) return;
             try { g.PresentAccessibilityMenu(self); }
             finally { g._accessibilityMenuPresentation.End(); }
@@ -655,11 +668,13 @@ internal sealed unsafe partial class MacCsvGrid
         if (opening && ObjC.Send(_table, ObjC.Sel("menu")) == menu)
         {
             _accessibilityMenuOpens = unchecked(_accessibilityMenuOpens + 1);
+            PairTransition(2);
             ObjC.Send(_table, ObjC.Sel("setAccessibilityShownMenu:"), menu);
         }
         else if (!opening && ObjC.Send(_table, ObjC.Sel("accessibilityShownMenu")) == menu)
         {
             _accessibilityMenuCloses = unchecked(_accessibilityMenuCloses + 1);
+            PairTransition(3);
             ObjC.Send(_table, ObjC.Sel("setAccessibilityShownMenu:"), 0);
         }
     }
