@@ -247,43 +247,60 @@ public sealed partial class Document : IDisposable
     /// <summary>
     /// Writes a captured snapshot to a temporary file in the target directory, flushes it,
     /// then replaces the document's current target. A different path must be new; use
-    /// <see cref="SaveOverAsync"/> with an explicit target token to replace an existing file.
+    /// <see cref="SaveOverAsync(FileOverwriteToken, CancellationToken)"/> with an explicit target token to replace an existing file.
     /// An edit during save remains marked modified.
     /// </summary>
     /// <remarks>Do not assume this operation preserves target file metadata such as ACLs.</remarks>
-    public async Task SaveAsync(string? path = null, CancellationToken cancellationToken = default)
-    {
-        await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await SaveCoreAsync(path, null, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _saveGate.Release();
-        }
-    }
+    public Task SaveAsync(string? path = null, CancellationToken cancellationToken = default) =>
+        SaveAsync(path, cancellationToken, null);
+
+    /// <summary>Saves with optional content-free observations without changing persistence policy.</summary>
+    /// <remarks>The observer contract forbids blocking or synchronously awaiting another Save.</remarks>
+    /// <example><code>await document.SaveAsync(path, cancellationToken, phaseObserver);</code></example>
+    public Task SaveAsync(string? path, CancellationToken cancellationToken, IDocumentSaveObserver? observer) =>
+        SaveObservedAsync(path, null, cancellationToken, observer);
 
     /// <summary>
     /// Saves over a target that the caller explicitly approved and fingerprinted.
     /// The operation fails rather than overwrites if that target changed since capture.
     /// </summary>
-    public async Task SaveOverAsync(FileOverwriteToken target, CancellationToken cancellationToken = default)
+    public Task SaveOverAsync(FileOverwriteToken target, CancellationToken cancellationToken = default) =>
+        SaveOverAsync(target, cancellationToken, null);
+
+    /// <summary>Saves over an approved target with optional content-free observations.</summary>
+    /// <example><code>await document.SaveOverAsync(approvedTarget, cancellationToken, phaseObserver);</code></example>
+    public async Task SaveOverAsync(FileOverwriteToken target, CancellationToken cancellationToken,
+        IDocumentSaveObserver? observer)
     {
         ArgumentNullException.ThrowIfNull(target);
-        await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await SaveObservedAsync(target.Path, target, cancellationToken, observer).ConfigureAwait(false);
+    }
+
+    /// <summary>Serializes each attempt; observer failures never supply Save policy.</summary>
+    private async Task SaveObservedAsync(string? path, FileOverwriteToken? overwrite,
+        CancellationToken cancellationToken, IDocumentSaveObserver? observer)
+    {
+        var observation = observer is null ? null : new DocumentSaveObservationState(observer);
+        observation?.Begin(DocumentSavePhase.GateWait);
         try
         {
-            await SaveCoreAsync(target.Path, target, cancellationToken).ConfigureAwait(false);
+            await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                observation?.Complete();
+                await SaveCoreAsync(path, overwrite, cancellationToken, observation).ConfigureAwait(false);
+            }
+            finally { _saveGate.Release(); }
         }
-        finally
+        catch (Exception error) when (error is not OutOfMemoryException)
         {
-            _saveGate.Release();
+            observation?.Fail(error);
+            throw;
         }
     }
 
     private async Task SaveCoreAsync(string? path, FileOverwriteToken? overwrite,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, DocumentSaveObservationState? observation)
     {
         TextSnapshot snapshot;
         Encoding encoding;
@@ -292,6 +309,7 @@ public sealed partial class Document : IDisposable
         FileStamp? expectedStamp;
         byte[]? expectedHash;
         string? originalPath;
+        observation?.Begin(DocumentSavePhase.SnapshotCapture);
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -307,6 +325,8 @@ public sealed partial class Document : IDisposable
             expectedHash = _fileHash;
             originalPath = _filePath;
         }
+        observation?.Complete(snapshot.Version);
+        observation?.Begin(DocumentSavePhase.TargetCheck);
         path = Path.GetFullPath(path);
         var samePath = originalPath is not null && string.Equals(path, originalPath,
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
@@ -338,6 +358,7 @@ public sealed partial class Document : IDisposable
             throw;
         }
         var tempPath = GetSaveRecoveryPath(path);
+        observation?.Complete();
         byte[]? savedHash = null;
         var owned = false;
         var commitAttempted = false;
@@ -346,7 +367,7 @@ public sealed partial class Document : IDisposable
             try
             {
                 savedHash = await WriteTempAsync(snapshot, tempPath, encoding, hasBom, cancellationToken,
-                    () => owned = true)
+                    () => owned = true, observation)
                     .ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -355,53 +376,71 @@ public sealed partial class Document : IDisposable
                 throw;
             }
             await CommitTempAsync(tempPath, path, expectedStamp, expectedHash, cancellationToken,
-                () => commitAttempted = true)
+                () => commitAttempted = true, observation)
                 .ConfigureAwait(false);
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
+            observation?.Fail(failure);
             int? cleanupError = null;
             if (owned && !commitAttempted)
             {
-                try { SaveOperations.Delete(tempPath); }
+                observation?.Begin(DocumentSavePhase.FailureCleanup);
+                try { SaveOperations.Delete(tempPath); observation?.Complete(); }
                 catch (Exception cleanup) when (cleanup is not OutOfMemoryException)
                 {
+                    observation?.Fail(cleanup);
                     cleanupError = cleanup.HResult;
                     TrySetSaveFailureData(failure, "Mote.Engine.SaveCleanupHResult", cleanup.HResult);
                 }
             }
+            observation?.Begin(DocumentSavePhase.FailureInspection);
             await RecordSaveOutcomeAsync(failure, path, tempPath, snapshot.Version,
                 expectedHash, savedHash, commitReturned: false,
                 retainOwned: owned && (commitAttempted || cleanupError is not null), cleanupError)
                 .ConfigureAwait(false);
+            observation?.Complete();
             throw;
         }
         FileStamp savedStamp;
+        observation?.Begin(DocumentSavePhase.SavedStamp);
         try
         {
             savedStamp = SaveOperations.ReadSavedStamp(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
+            observation?.Fail(exception);
             AnnotateSaveFailure(exception, SavePhase.SavedStamp);
+            observation?.Begin(DocumentSavePhase.FailureInspection);
             await RecordSaveOutcomeAsync(exception, path, tempPath, snapshot.Version,
                 expectedHash, savedHash, commitReturned: true, retainOwned: false, null).ConfigureAwait(false);
+            observation?.Complete();
             throw;
         }
+        observation?.Complete();
+        observation?.Begin(DocumentSavePhase.Bookkeeping);
+        bool disposed;
         lock (_gate)
         {
-            if (_disposed) return;
-            _filePath = path;
-            _fileStamp = savedStamp;
-            _fileHash = savedHash;
-            _savedStateId = stateId;
+            disposed = _disposed;
+            if (!disposed)
+            {
+                _filePath = path;
+                _fileStamp = savedStamp;
+                _fileHash = savedHash;
+                _savedStateId = stateId;
+            }
         }
+        observation?.Complete(skipped: disposed);
     }
 
     /// <summary>Encodes a snapshot before replacement, then fingerprints the exact bytes written.</summary>
     private static async Task<byte[]> WriteTempAsync(TextSnapshot snapshot, string tempPath, Encoding encoding,
-        bool hasBom, CancellationToken cancellationToken, Action created)
+        bool hasBom, CancellationToken cancellationToken, Action created,
+        DocumentSaveObservationState? observation)
     {
+        observation?.Begin(DocumentSavePhase.TempEncodeWrite);
         await using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
             FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
         {
@@ -410,19 +449,28 @@ public sealed partial class Document : IDisposable
             {
                 foreach (var chunk in snapshot.GetChunks())
                     await writer.WriteAsync(chunk, cancellationToken).ConfigureAwait(false);
+                observation?.Complete();
+                observation?.Begin(DocumentSavePhase.TempFlush);
                 await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
             stream.Flush(flushToDisk: true);
         }
-        await using var saved = new FileStream(tempPath, FileMode.Open, FileAccess.Read,
-            FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        return await SHA256.HashDataAsync(saved, cancellationToken).ConfigureAwait(false);
+        observation?.Complete();
+        observation?.Begin(DocumentSavePhase.TempHash);
+        byte[] hash;
+        await using (var saved = new FileStream(tempPath, FileMode.Open, FileAccess.Read,
+            FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            hash = await SHA256.HashDataAsync(saved, cancellationToken).ConfigureAwait(false);
+        observation?.Complete();
+        return hash;
     }
 
     /// <summary>Rechecks overwrite identity just before replacement; new-file moves never overwrite.</summary>
     private async Task CommitTempAsync(string tempPath, string path, FileStamp? expectedStamp,
-        byte[]? expectedHash, CancellationToken cancellationToken, Action committing)
+        byte[]? expectedHash, CancellationToken cancellationToken, Action committing,
+        DocumentSaveObservationState? observation)
     {
+        observation?.Begin(expectedStamp is null ? DocumentSavePhase.CommitMove : DocumentSavePhase.FinalTargetCheck);
         cancellationToken.ThrowIfCancellationRequested();
         if (expectedStamp is null)
         {
@@ -430,6 +478,7 @@ public sealed partial class Document : IDisposable
             {
                 committing();
                 SaveOperations.Move(tempPath, path);
+                observation?.Complete();
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -449,10 +498,13 @@ public sealed partial class Document : IDisposable
             AnnotateSaveFailure(exception, SavePhase.FinalTargetCheck);
             throw;
         }
+        observation?.Complete();
+        observation?.Begin(DocumentSavePhase.CommitReplace);
         try
         {
             committing();
             SaveOperations.Replace(tempPath, path);
+            observation?.Complete();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
