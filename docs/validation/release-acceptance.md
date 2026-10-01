@@ -178,3 +178,95 @@ assignments and PROFILE assignments; the final suite self-test passed at
 task script was also searched for these parameter/assignment collisions; none
 were found. All writes in the suite were inspected through the AST rule rather
 than treating read-only automatic-variable reads (for example `$PSHOME`) as bugs.
+
+## macOS actual product artifact audit: run 36921665382
+
+Source: **`9fecef2d5ede8b0c593e709bdd6b39d7ad3e6986`**. Both macOS task suites
+completed with `status: passed`, then the workflow step incorrectly threw on
+`$LASTEXITCODE` after the successful PowerShell suite. The failed job conclusion
+must not be replaced with an overall CI success claim; equally, the subsequent
+wrapper failure is not evidence that these completed product tasks failed.
+Windows tasks are not certified by this macOS-only audit.
+
+Independent offline command (no product/test rerun):
+
+```powershell
+python -B .cache/release-ci-36921665382/mac-product-audit/audit.py
+```
+
+The audit reads the immutable downloaded original/output/trace/stdout/report
+files directly, retaining the hosted paths inside those files unchanged. The
+reader receives their **local artifact paths**; no rewritten original trace or
+report is needed. Frozen suite and Mac probe source copies are retained alongside
+the audit. The script derives expected original and edited bytes from separately
+written full literal task samples, not merely trusting child result booleans.
+
+| Native release target | Hosted OS | Exact original/output task pairs | Fresh GUI process reopens | Task trace records |
+| --- | --- | ---: | ---: | ---: |
+| osx-x64 | macOS 15.7.9, build 24G830 | 6/6 | 6/6 | 982 |
+| osx-arm64 | macOS 26.6.2, build 25G83 | 6/6 | 6/6 | 991 |
+
+Executable identities reported by the successful suites:
+
+- x64: `9C1F9095FA9AF5AD3F171A79E793DD87618F62171753C0F119390265A744EA86`.
+- ARM64: `8E6A377DCBF713689D90A63B19AE11910E62512C22BB98FD4DB74537E2452EB8`.
+
+All 12 original inputs equal the independent full-byte expectations; all 12
+saved outputs equal only the specified ranged Unicode value replacement. Input
+and output lengths/hashes match the retained suite reports, including CSV CRLF
+and quoted/escaped-quote fields. All workflow and separate fresh-process GUI
+reopen stdout files contain their exact completion marker, with empty stderr.
+Normal exit 0 is enforced by the frozen `Invoke-Child` implementation before
+each marker is accepted and the suite reports pass; there is no independent
+per-child exit-code sidecar, so this exit evidence is tied to that frozen helper.
+
+Each of the **12 task traces / 1,973 records** independently passes the closed
+schema, complete-record, graph, normal-terminal and no-observed-drop checks.
+Private task markers, original/output filenames, hosted task paths and Chinese
+content sentinels are absent. Each contains exactly one successful, complete
+native Save request chain with **captured/saved version 4**, consistent engine
+phase/completion versions, and correctly linked receipt/terminal ancestry.
+Archived trace-oracle record counts and SHA-256 values match the raw downloaded
+trace bytes, rather than only matching another generated summary.
+
+Every task actually emitted successful source install/readback/reconcile/range
+publication/style publication operations, plus analysis parse/publication. In
+each task, the retained successful counts include 4 installs, 3 reconciliations
+and 3 range publications; other analysis/readback/style counts differ with
+asynchronous scheduling. This certifies those exercised callbacks and engine
+phases, **not complete six-format semantic conformance or physical presentation**.
+
+In particular, not every task publishes analysis at the saved version 4 before
+the probe rapidly runs dirty-close/history/New/Open stages. For example x64 YAML
+and plain text have successful analysis publication at versions 0 and 3, while
+the saved version is 4. The traces include asynchronous discarded analysis;
+mere parse/publication presence therefore must not be described as proof that
+every final saved-version semantic view was rendered correctly. The exact saved
+text is independently proven; final semantic/pixel state has a narrower oracle.
+
+Configuration and CLI side evidence also matches the specified contract on both
+targets: all five CLI cases have expected exits; all three GUI config cases have
+the exact marker and empty stderr; default-off creates no home; both opt-in
+config traces pass the strict graph/privacy oracle. These are runtime placement
+and load/shutdown checks, not rendered-theme verification.
+
+All 12 retained owned-view PNG signatures/dimensions/hashes match the reports:
+x64 captures are 1120×760; ARM64 captures are 1024×642 for Markdown and 1024×645
+for other tasks. The frozen probe captures at stage 6 **before** committing the
+marked Chinese character, so a capture legitimately shows the edited prefix
+without the final `中` suffix. Pixel review belongs to the independent visual
+review, not this artifact audit.
+
+Artifacts:
+
+- `.cache/release-ci-36921665382/evidence/release-evidence-osx-x64/product/`
+- `.cache/release-ci-36921665382/evidence/release-evidence-osx-arm64/product/`
+- `.cache/release-ci-36921665382/mac-product-audit/audit.py`
+- `.cache/release-ci-36921665382/mac-product-audit/result.json`
+- `.cache/release-ci-36921665382/failed.log` (passed suite JSON followed by the
+  workflow's `Packaged product workflow failed` throw).
+
+Supported verdict: **both macOS native-source six-task suites pass the stated
+text/history/Save/reopen/trace contracts for this frozen candidate**. The complete
+release workflow remains failed/unqualified; Windows acceptance and unresolved
+physical input/readers/full semantic view/performance boundaries are not hidden.

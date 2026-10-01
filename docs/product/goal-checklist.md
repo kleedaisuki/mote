@@ -8,14 +8,29 @@ the old literal-binary constraint and unapproved size/latency promotion budgets
 are retired. See the [release acceptance contract](release-acceptance-contract.md)
 and [versioned release page](../releases/v0.1.0.md).
 
-First release candidate `25b897e2bc375c0e36556ff569717843ff2bfa16` is undergoing
-[CI 36915680535](https://github.com/kleedaisuki/mote/actions/runs/36915680535):
-Windows/macOS complete solution tests and four native-architecture extracted
-package product/codec tasks. No published release or default promotion is claimed
-until those actual tasks and final assets are verified. Local affected product
-selection is 85/85, package controls 15 methods, strict trace oracle 7 methods;
-these independent counts are not added into a fabricated complete-suite total.
-Old Canvas/capacity experiments remain explicitly dispatchable, not deleted.
+Latest completed candidate: `9fecef2d5ede8b0c593e709bdd6b39d7ad3e6986`,
+[CI 36921665382](https://github.com/kleedaisuki/mote/actions/runs/36921665382).
+The overall workflow **failed** and no public release/default promotion exists.
+All four actual Native AOT builds, package extraction/inventories and GUI smoke
+checks passed with the pinned SDK. Both macOS six-format task suites passed;
+an independent artifact audit verifies 12 exact saved files, 12 fresh GUI-process
+reopens and 12 version-consistent Save chains. Their enclosing jobs incorrectly
+failed on the script caller's stale/unset exit code; codec/post-task inventory
+steps were not reached. Windows six-format tasks stopped at the first Find
+assertion because the external observer used an invalid cross-process pointer.
+The full Windows main suite passed 3660/3661; the remaining test has a proven
+thread-pool scheduling dependency. The macOS main suite passed 3661/3661.
+
+Corrections are undergoing next-candidate integration: explicit external
+PowerShell process/report protocol, pointer-free bounded selection observation,
+actual prompt-child readiness and an independent caller thread in the test.
+Corrected local Windows **managed** six-format tasks pass; this is not Native AOT
+qualification. Repaired Grid neighbors pass 30/30, with the original failure and
+controlled before/after reproduction retained. A new four-RID hosted run is
+required before promotion. See the release acceptance, Windows product,
+Grid failure and packaging validation records. Old Canvas/capacity experiments
+remain explicitly dispatchable, not deleted. Independent scoped counts are not
+added into a fabricated complete-suite total.
 
 ## Evidence baseline and status rules
 
@@ -66,7 +81,7 @@ runtime acceptance supplies stronger evidence.
 | Mechanism/policy architecture | Established | Engine owns canonical text/lifetime/I/O/history; statically registered format/theme policies and UI adapters are separate modules. |
 | C# Native AOT application packages | Release qualification pending | Four prior AOT architectures established; new Windows directories/macOS .app resources now allowed. Literal-one-executable inventory is historical, not the current delivery gate. |
 | Text model, versioned snapshots and edit history | Established | Immutable chunked text, line indexing, undo/redo, ordered edits and stale-result rejection. |
-| Safe file persistence and default encoding | Established with reliability gaps outside engine | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; real Mac workflow failures remain open. |
+| Safe file persistence and default encoding | Established with scoped native task evidence | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; both Mac six-format AOT task suites prove exact Save/fresh-process reopen. Windows corrected managed tasks pass, hosted AOT acceptance remains open. |
 | Six-format parsing/semantic results | Partial | All six policies exist and produce structural results, diagnostics and conservative formatting/rendering. General semantic completeness and recovery/large-domain boundaries remain format-specific. |
 | Intermediate representation / source projections | Established foundation | Versioned semantic nodes, tokens and source spans; per-format caches/compact summaries. Not a claim of one universal compiler IR or general local incremental parsing. |
 | Incremental analysis and caching | Partial | Actual reuse for CSV, restricted JSON/Markdown domains and TOML statements; YAML still re-streams. Session interface alone is not incrementality. |
@@ -78,20 +93,20 @@ runtime acceptance supplies stronger evidence.
 | Smooth editing and bounded memory | Partial | Chunked engine and bounded visible work exist; actual input-to-visible tails, long-line/native composition and prolonged interaction require stronger evidence. |
 | Large-file capability | Partial | Capacity tests, virtualized projections and correctness-preserving partial status exist; no universal full semantics/fluent large-file certificate. Retain resilience, prioritize actual ordinary workflows. |
 | GitHub Actions cross-platform validation | Established | Managed/native/AOT/inventory/control/artifact jobs execute. Non-gating success is not product acceptance. |
-| Native release-ready product | Open | Product interaction, reliability, performance and accessibility gaps above must be closed; implementation count is not release readiness. |
+| Native release-ready product | Release qualification pending | Product code/manual/packaging exist; Windows hosted tasks, all-four joint qualification, actual default-route promotion and immutable public publication remain open. Do not confuse unverified IME/readers/tail latency with advertised certification. |
 
-## Current parallel delivery (qualified component baseline: 6827cd1a)
+## Historical component checkpoint before active release work (6827cd1a)
 
-The subsequent local `--native-source` integration is implemented and reviewed
-at `76c70fc`, with separately retained portable binding/controller/platform
-qualification. It has no hosted native/AOT/input/IME/reader certificate and has
-not changed ordinary launch. The diagnostic stream-import alternative is also
-local and unmeasured on real controls. Both are held pending the user's decision,
-not promoted on the preceding reference measurements.
+The table below preserves the earlier checkpoint, not the current release
+verdict. NativeSource subsequently gained the product corrections and actual Mac
+task evidence summarized above. Ordinary launch is still not promoted; real
+physical IME/reader and tail-latency certificates remain absent. The diagnostic
+stream-import alternative is local and is not the chosen product mechanism.
 
 Delivery alternatives and an independent standards audit are complete in
-`docs/research/`. Their recommendations do not change the active strict-binary
-contract, approve numerical experience budgets or authorize a UI migration.
+`docs/research/`. The user subsequently allowed multi-file AOT packages; the
+strict-binary delivery contract is historical. This did not approve numerical
+experience budgets or authorize a GUI-framework/runtime rewrite.
 
 | Stream | Actual progress | Remaining qualification |
 | --- | --- | --- |

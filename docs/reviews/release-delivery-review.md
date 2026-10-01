@@ -111,3 +111,50 @@ Hashes below describe source files, not a built executable:
 Review status: **static release-delivery review complete; native qualification
 and actual publication pending**. No production/test/workflow changes, GUI,
 build, test rerun, CI dispatch, commit, push, or credential mutation performed.
+
+## Bounded correction review after first hosted failure
+
+Baseline HEAD: `9fecef2d5ede8b0c593e709bdd6b39d7ad3e6986`.
+Reviewed only the working changes in `release.yml`,
+`Invoke-NativeWindowsReleaseProduct.ps1`, and
+`WindowsGridAccessibilityTests.cs`, plus their relevant existing validation
+records. **No substantive defect found in this correction scope.**
+
+- The external `pwsh -NoProfile -File` gives the workflow an actual suite process
+  exit status. Required JSON report identity, six ordered formats, executable
+  hash, original protection, exact bytes and fresh GUI reopen are checked after
+  exit success. Existing exact oracles and hang watchdogs are unchanged.
+- Native package jobs and managed test jobs run independently after identity;
+  `release-assets` retains `needs: [test, package]` and no unconditional success
+  override. A failed test or package still blocks the complete download set.
+- Failure-only payload artifacts use `release-diagnostic-payload-*`, not the
+  `release-package-*` download pattern. They do not enter the release index or
+  qualified assets. "Private reproduction" means CI-only/non-release evidence,
+  not a confidentiality guarantee for a public repository's workflow artifacts.
+- The Windows external observer no longer sends a client-local CHARRANGE pointer
+  using EM_EXGETSEL to another process. Pointer-free EM_GETSEL reads packed bounds;
+  both signed and unsigned -1 overflow forms are refused and fixtures are bounded
+  below 65,535 UTF-16 units. This is an observer bound, not editor capacity.
+  [Microsoft's EM_GETSEL contract](https://learn.microsoft.com/en-us/windows/win32/controls/em-getsel)
+  and [SendMessage marshalling boundary](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagew)
+  independently support the corrected transport.
+- Prompt observation waits for both edit and accept controls, writes exactly one
+  answer, checks successful text setting and exact readback, then posts exactly
+  one acceptance. No edit/Save retry conceals missing acknowledgments.
+- The Grid regression uses a dedicated caller thread, captures exceptions, joins
+  before examining its result, releases the owner barrier in cleanup and joins
+  both threads. Original Unsupported/Unavailable/no-late-mutation assertions and
+  production timeout remain. This avoids reliance on test-runner pool scheduling
+  without changing production behavior.
+
+Source SHA-256 at this correction checkpoint:
+
+| File | SHA-256 |
+| --- | --- |
+| `.github/workflows/release.yml` | `17753acad71f84cad8f3e1af4b00e8854812487a38838a05b0a8b8406a72aee0` |
+| `tests/Invoke-NativeWindowsReleaseProduct.ps1` | `5c11a6ae2ff054a5b69ae0a7eea87f0902c23fcfb0f8051a936ea7e19a198a24` |
+| `tests/Mote.Tests/WindowsGridAccessibilityTests.cs` | `ea3a5b88da575b88c9a2d6edcc0bb354352ffe4b474c7d8b0a45d0a2d6304cef` |
+
+This source review does not relabel the failed hosted workflow as success.
+Local managed six-format success is not hosted Native AOT or release-default
+qualification. No tests/builds/GUI/full audit were rerun by this reviewer.
