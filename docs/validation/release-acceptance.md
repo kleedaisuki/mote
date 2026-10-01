@@ -130,3 +130,51 @@ local harness check. No product GUI was launched.
 - [Product native-source binding](native-source-product-binding.md)
 - [Product controller contracts](native-source-product-controller.md)
 - [Native-source integration review](../reviews/native-source-product-integration-review.md)
+
+## First hosted qualification and harness regression
+
+Run `36919898449`, source `6778c4a`, built all four AOT targets and passed both
+OS main test jobs. The macOS release product suite failed **before any task**:
+PowerShell parameter/local `$Home` collided case-insensitively with read-only
+automatic `$HOME`. This is an acceptance harness defect, not evidence of an
+AppKit product failure; no six-task macOS verdict follows from that run.
+
+The initial `-SelfTest` only exercised fixtures/oracles and never called the
+real process helper, so it did not detect this defect. The correction renames
+both helper parameters and all config/task locals to `$moteHome`, retaining the
+existing assertions and process/byte/trace contracts.
+
+An isolated copy of the **original actual helper**, with the production strict
+mode/Stop setting, reproduced `Cannot overwrite variable Home` and exit 1 before
+starting the harmless console child. Retained reproduction:
+`.temp/release-home-regression-before/reproduce.ps1` and `reproduction.log`.
+
+The updated self-test now runs the actual `Invoke-Child` helper against a
+repository-local console script. It verifies isolated `MOTE_HOME`/`MOTE_TRACE`,
+reading the intended config by hash, normal exit/stdout, expected exit 2/stderr,
+unchanged config bytes, and the actual `Assert-Traces` helper through a valid
+synthetic session record. An AST-based negative control rejects case-insensitive
+automatic-variable parameters/assignments, including `$hOmE` and `$pId`. Existing
+six byte controls and the real junction guard still run unchanged.
+
+Executed correction command:
+
+```powershell
+pwsh -NoProfile -File tests/NativeReleaseProductWorkflow.ps1 -SelfTest `
+  -OutputDirectory .temp/release-home-regression-fixed
+```
+
+Result: `self-test-passed`, console success exit 0/error exit 2, config/environment
+and trace checks passed, six byte negative controls passed, junction guard passed.
+Output is retained in `.temp/release-home-regression-before/fixed-selftest.log`
+and `.temp/release-home-regression-fixed/release-acceptance.json`. These synthetic
+console records are harness evidence, not product telemetry or GUI validation.
+No local GUI/global setting changes, commit, push or CI dispatch were performed.
+
+The final negative controls separately reject mixed-case HOME parameters, PID
+assignments and PROFILE assignments; the final suite self-test passed at
+`.temp/release-home-regression-final/`, with stdout retained in
+`.temp/release-home-regression-before/final-selftest.log`. The individual Windows
+task script was also searched for these parameter/assignment collisions; none
+were found. All writes in the suite were inspected through the AST rule rather
+than treating read-only automatic-variable reads (for example `$PSHOME`) as bugs.

@@ -80,14 +80,14 @@ function Assert-NativeCapture {
 
 # Capture before exiting; 90 seconds is a hang watchdog, never an experience budget.
 function Invoke-Child {
-    param([string] $File, [string[]] $Arguments, [string] $Home, [string] $Trace,
+    param([string] $File, [string[]] $Arguments, [string] $moteHome, [string] $Trace,
           [string] $EvidencePrefix, [int] $ExpectedExit = 0)
     $start = [Diagnostics.ProcessStartInfo]::new($File)
     $start.UseShellExecute = $false
     $start.WorkingDirectory = $root
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    $start.Environment['MOTE_HOME'] = $Home
+    $start.Environment['MOTE_HOME'] = $moteHome
     $start.Environment['MOTE_TRACE'] = $Trace
     [void]$start.Environment.Remove('MOTE_TRACE_SUBDIR')
     foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
@@ -116,15 +116,43 @@ function Invoke-Child {
 
 # Reuse the closed privacy schema and graph oracle instead of weakening telemetry gates.
 function Assert-Traces {
-    param([string] $Home, [string] $Directory, [string[]] $Private, [string] $Prefix, [switch] $RequireSave)
-    $traceDir = Join-Path $Home $Directory
+    param([string] $moteHome, [string] $Directory, [string[]] $Private, [string] $Prefix, [switch] $RequireSave)
+    $traceDir = Join-Path $moteHome $Directory
     $traces = @(Get-ChildItem -LiteralPath $traceDir -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)
     if ($traces.Count -eq 0) { throw 'Opt-in tracing did not retain a trace.' }
     $arguments = @('-B', (Join-Path $PSScriptRoot 'release_trace_oracle.py'))
     foreach ($trace in $traces) { $arguments += @('--trace', $trace.FullName) }
     foreach ($value in $Private) { $arguments += @('--private', $value) }
     if ($RequireSave) { $arguments += '--require-save' }
-    return Invoke-Child 'python' $arguments $Home '0' $Prefix
+    return Invoke-Child 'python' $arguments $moteHome '0' $Prefix
+}
+
+# PowerShell identifiers are case-insensitive: parameter/local writes must not
+# collide with automatic state such as $HOME, even when a self-test skips GUI code.
+function Assert-NoReservedVariableWrites {
+    param([string] $ScriptPath)
+    $syntaxErrors=$null
+    $tokens=$null
+    $ast=[Management.Automation.Language.Parser]::ParseFile($ScriptPath,[ref]$tokens,[ref]$syntaxErrors)
+    if ($syntaxErrors.Count) { throw 'Release script has PowerShell syntax errors.' }
+    $reserved=@('home','host','pid','profile','pshome','psversiontable','shellid','executioncontext',
+        'true','false','null','args','input','error','matches','psitem','_',
+        'iswindows','ismacos','islinux','pscommandpath','psscriptroot','myinvocation')
+    $writes=$ast.FindAll({param($node)
+        $node -is [Management.Automation.Language.ParameterAst] -or
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -or
+        $node -is [Management.Automation.Language.ForEachStatementAst]
+    },$true)
+    foreach ($write in $writes) {
+        $variables = if ($write -is [Management.Automation.Language.ParameterAst]) { @($write.Name) }
+            elseif ($write -is [Management.Automation.Language.ForEachStatementAst]) { @($write.Variable) }
+            else { @($write.Left.FindAll({param($node) $node -is [Management.Automation.Language.VariableExpressionAst]},$true)) }
+        foreach ($variable in $variables) {
+            if ($reserved -contains $variable.VariablePath.UserPath) {
+                throw "Release script writes reserved PowerShell variable: $($variable.VariablePath.UserPath)."
+            }
+        }
+    }
 }
 
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root ".temp/release-acceptance/$([guid]::NewGuid().ToString('N'))" }
@@ -144,6 +172,53 @@ try {
     $fixtures = @(Get-TaskFixtures)
     if ($fixtures.Count -ne 6) { throw 'Release fixture set must contain six formats.' }
     if ($SelfTest) {
+        Assert-NoReservedVariableWrites $PSCommandPath
+        foreach ($control in @(
+            @{name='home';source='function Collision { param([string] $hOmE) }'},
+            @{name='pid';source='$pId=1'},
+            @{name='profile';source='$PrOfIlE="not a user profile"'}
+        )) {
+            $reservedFixture=Join-Path $output "reserved-$($control.name).ps1"
+            [IO.File]::WriteAllText($reservedFixture, $control.source, $utf8)
+            $caught=$false
+            try { Assert-NoReservedVariableWrites $reservedFixture } catch { $caught=$true }
+            if (-not $caught) { throw 'Reserved-variable oracle accepted case-insensitive automatic writes.' }
+        }
+
+        # Run the real child/trace helpers on a harmless console fixture, not a
+        # GUI stand-in. This catches parameter binding/environment bugs that a
+        # fixture-only self-test cannot see (the first hosted run exposed $HOME).
+        $consoleFixture=Join-Path $output 'console-child.ps1'
+        $consoleSource=@'
+param([int] $ExitCode)
+Set-StrictMode -Version Latest
+$ErrorActionPreference='Stop'
+if ($ExitCode -ne 0) { [Console]::Error.WriteLine('synthetic expected error'); exit $ExitCode }
+$config=[IO.File]::ReadAllBytes((Join-Path $env:MOTE_HOME 'config.toml'))
+$traceDirectory=Join-Path $env:MOTE_HOME 'custom-traces'
+New-Item -ItemType Directory -Path $traceDirectory | Out-Null
+$record=@{schema_version=1;utc_time='2026-10-02T00:00:00Z';session_id=('1'*32);trace_id=('2'*32);
+    span_id='0000000000000001';parent_span_id=$null;operation='mote.session';duration_us=0;status='success';attributes=@{}}
+[IO.File]::WriteAllText((Join-Path $traceDirectory 'console.jsonl'),($record|ConvertTo-Json -Compress)+"`n",[Text.UTF8Encoding]::new($false))
+@{mote_home=$env:MOTE_HOME;trace=$env:MOTE_TRACE;config_sha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($config))}|ConvertTo-Json -Compress
+'@
+        [IO.File]::WriteAllText($consoleFixture,$consoleSource,$utf8)
+        $consoleHome=Join-Path $output 'console-home'
+        New-Item -ItemType Directory -Path $consoleHome | Out-Null
+        $consoleConfig=$utf8.GetBytes("[paths]`ntraces = `"custom-traces`"`n")
+        [IO.File]::WriteAllBytes((Join-Path $consoleHome 'config.toml'),$consoleConfig)
+        $pwshName=if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' }
+        $console=Invoke-Child (Join-Path $PSHOME $pwshName) @('-NoProfile','-File',$consoleFixture,'-ExitCode','0') $consoleHome '1' (Join-Path $output 'console-success')
+        $observed=$console.stdout|ConvertFrom-Json -AsHashtable
+        if ($observed.mote_home -cne $consoleHome -or $observed.trace -cne '1' -or
+            $observed.config_sha256 -cne [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($consoleConfig))) {
+            throw 'Child helper did not preserve isolated environment/config evidence.'
+        }
+        [void](Assert-Traces $consoleHome 'custom-traces' @($consoleHome) (Join-Path $output 'console-trace'))
+        $consoleError=Invoke-Child (Join-Path $PSHOME $pwshName) @('-NoProfile','-File',$consoleFixture,'-ExitCode','2') $consoleHome '0' (Join-Path $output 'console-error') 2
+        if ($consoleError.stderr.Trim() -cne 'synthetic expected error') { throw 'Child helper lost expected stderr.' }
+        Assert-ExactBytes (Join-Path $consoleHome 'config.toml') $consoleConfig
+        $result['console_helpers']=@{success_exit=0;expected_error_exit=2;isolated_environment=$true;config_unchanged=$true;trace_oracle=$true;reserved_write_negative_control=$true}
         foreach ($fixture in $fixtures) {
             if (($fixture.text.Split($originalMarker).Length - 1) -ne 1) { throw 'Each fixture needs exactly one edit target.' }
             $path = Join-Path $output "$($fixture.name).$($fixture.extension)"
@@ -201,18 +276,18 @@ try {
             @{name='configured-light'; config="[appearance]`ntheme = `"mote-light`"`n[paths]`ncache = `"custom-cache`"`ndata = `"custom-data`"`ntraces = `"custom-traces`"`n[telemetry]`nenabled = true`n"; trace='0'; traceDirectory='custom-traces'},
             @{name='environment-optin'; config="[appearance]`ntheme = `"mote-dark`"`n[telemetry]`nenabled = false`n"; trace='1'; traceDirectory='traces'}
         )) {
-            $home = Join-Path $output "$($case.name)-home"
+            $moteHome = Join-Path $output "$($case.name)-home"
             if ($case.config) {
-                New-Item -ItemType Directory -Force -Path $home | Out-Null
-                [IO.File]::WriteAllText((Join-Path $home 'config.toml'), $case.config, $utf8)
+                New-Item -ItemType Directory -Force -Path $moteHome | Out-Null
+                [IO.File]::WriteAllText((Join-Path $moteHome 'config.toml'), $case.config, $utf8)
             }
-            $child = Invoke-Child $exe @('--native-source','--smoke-gui') $home $case.trace (Join-Path $output $case.name)
+            $child = Invoke-Child $exe @('--native-source','--smoke-gui') $moteHome $case.trace (Join-Path $output $case.name)
             if ($child.stdout.Trim() -cne 'mote-native-gui-ready') { throw 'Configured product GUI smoke omitted readiness marker.' }
             if ($case.traceDirectory) {
-                [void](Assert-Traces $home $case.traceDirectory @($home) (Join-Path $output "$($case.name)-trace"))
+                [void](Assert-Traces $moteHome $case.traceDirectory @($moteHome) (Join-Path $output "$($case.name)-trace"))
             }
-            elseif ([IO.Directory]::Exists($home)) { throw 'Default-off product smoke created mutable state.' }
-            if ($case.config) { Assert-ExactBytes (Join-Path $home 'config.toml') $utf8.GetBytes($case.config) }
+            elseif ([IO.Directory]::Exists($moteHome)) { throw 'Default-off product smoke created mutable state.' }
+            if ($case.config) { Assert-ExactBytes (Join-Path $moteHome 'config.toml') $utf8.GetBytes($case.config) }
             $result.configuration += @{name=$case.name; exit_code=$child.exit_code; trace_directory=$case.traceDirectory; theme_rendering_verified=$false}
         }
         foreach ($fixture in $fixtures) {
@@ -224,14 +299,14 @@ try {
             $original = $utf8.GetBytes($fixture.text)
             $expected = $utf8.GetBytes($fixture.text.Replace($originalMarker, $editedMarker))
             [IO.File]::WriteAllBytes($inputPath, $original)
-            $home = Join-Path $area 'home'
+            $moteHome = Join-Path $area 'home'
             if ($IsWindows) {
                 $arguments = @('-NoProfile','-File',(Join-Path $PSScriptRoot 'Invoke-NativeWindowsReleaseProduct.ps1'),
                     '-ExecutablePath',$exe,'-InputPath',$inputPath,'-OutputPath',$outputPath,'-EvidenceDirectory',$area)
-                [void](Invoke-Child (Join-Path $PSHOME 'pwsh.exe') $arguments $home '1' (Join-Path $area 'workflow'))
+                [void](Invoke-Child (Join-Path $PSHOME 'pwsh.exe') $arguments $moteHome '1' (Join-Path $area 'workflow'))
             }
             else {
-                $child = Invoke-Child $exe @('--check-native-mac-release-workflow',$inputPath,$outputPath) $home '1' (Join-Path $area 'workflow')
+                $child = Invoke-Child $exe @('--check-native-mac-release-workflow',$inputPath,$outputPath) $moteHome '1' (Join-Path $area 'workflow')
                 if ($child.stdout.Trim() -cne 'mote-native-mac-release-workflow-ready') { throw 'AppKit release workflow omitted completion marker.' }
                 $reopen = Invoke-Child $exe @('--check-native-mac-release-reopen',$outputPath) (Join-Path $area 'reopen-home') '0' (Join-Path $area 'reopen')
                 if ($reopen.stdout.Trim() -cne 'mote-native-mac-release-reopen-ready') { throw 'Fresh AppKit GUI reopen omitted completion marker.' }
@@ -239,7 +314,7 @@ try {
             Assert-ExactBytes $inputPath $original
             Assert-ExactBytes $outputPath $expected
             $capture = Assert-NativeCapture (Join-Path $area 'native-product.png')
-            [void](Assert-Traces $home 'traces' @($originalMarker,$editedMarker,$inputPath,$outputPath,$home) (Join-Path $area 'trace-oracle') -RequireSave)
+            [void](Assert-Traces $moteHome 'traces' @($originalMarker,$editedMarker,$inputPath,$outputPath,$moteHome) (Join-Path $area 'trace-oracle') -RequireSave)
             $result.fixtures += @{name=$fixture.name; original_bytes=$original.Length; saved_bytes=$expected.Length;
                 original_sha256=(Get-FileHash -LiteralPath $inputPath).Hash; saved_sha256=(Get-FileHash -LiteralPath $outputPath).Hash;
                 exact_bytes=$true; original_protected=$true; fresh_gui_process_reopen=$true; fixture_origin='self-created representative task, not market evidence'}
