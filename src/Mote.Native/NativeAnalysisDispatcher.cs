@@ -58,8 +58,8 @@ internal sealed class NativeAnalysisDispatcher : IDisposable
 
     /// <summary>Enqueues the latest content or viewport interest, replacing only its own slot.</summary>
     public Task<NativeFormatPresentation> AnalyzeAsync(TextSnapshot snapshot, AnalysisRequest request,
-        CancellationToken cancellation, CsvGridRequest? gridRequest = null, bool content = false, int delayMilliseconds = 0) =>
-        Enqueue(snapshot, request, cancellation, gridRequest, content, full: false, delayMilliseconds);
+        CancellationToken cancellation, CsvGridRequest? gridRequest = null, bool content = false, int delayMilliseconds = 0, int? gridVisibleRows = null) =>
+        Enqueue(snapshot, request, cancellation, gridRequest, content, full: false, delayMilliseconds, gridVisibleRows);
 
     /// <summary>Reserves Full ahead of all same-version viewport interests without a quiet delay.</summary>
     public Task<NativeFormatPresentation> ReserveFullAsync(TextSnapshot snapshot,
@@ -69,7 +69,7 @@ internal sealed class NativeAnalysisDispatcher : IDisposable
 
     /// <summary>Atomically replaces one bounded slot and retires obsolete version interests.</summary>
     private Task<NativeFormatPresentation> Enqueue(TextSnapshot snapshot, AnalysisRequest request,
-        CancellationToken cancellation, CsvGridRequest? grid, bool content, bool full, int delayMilliseconds)
+        CancellationToken cancellation, CsvGridRequest? grid, bool content, bool full, int delayMilliseconds, int? gridVisibleRows = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentOutOfRangeException.ThrowIfNegative(delayMilliseconds);
@@ -89,7 +89,7 @@ internal sealed class NativeAnalysisDispatcher : IDisposable
             if (full && _running is { Full: true } active && active.Snapshot.Version == snapshot.Version)
                 return active.Completion.Task;
             if (full && _full is { } reserved) return reserved.Completion.Task;
-            var work = new Work(snapshot, request, cancellation, grid, full, delayMilliseconds);
+            var work = new Work(snapshot, request, cancellation, grid, full, delayMilliseconds, gridVisibleRows);
             if (content) { Retire(ref _content); _content = work; }
             else if (full) _full = work;
             else { Retire(ref _viewport); _viewport = work; }
@@ -123,7 +123,7 @@ internal sealed class NativeAnalysisDispatcher : IDisposable
                 if (work.Full && !_fullAdmission(work.Snapshot))
                     throw new NativeFullAnalysisDeferredException();
                 var result = await _driver.AnalyzePresentationAsync(work.Snapshot, work.Request,
-                    work.Cancellation.Token, work.Grid).ConfigureAwait(false);
+                    work.Cancellation.Token, work.Grid, work.GridVisibleRows).ConfigureAwait(false);
                 work.Cancellation.Token.ThrowIfCancellationRequested();
                 work.Completion.TrySetResult(result);
             }
@@ -169,7 +169,7 @@ internal sealed class NativeAnalysisDispatcher : IDisposable
 
     /// <summary>One retained interest; no driver Task is created until dispatch.</summary>
     private sealed class Work(TextSnapshot snapshot, AnalysisRequest request,
-        CancellationToken token, CsvGridRequest? grid, bool full, int delayMilliseconds) : IDisposable
+        CancellationToken token, CsvGridRequest? grid, bool full, int delayMilliseconds, int? gridVisibleRows = null) : IDisposable
     {
         /// <summary>Immutable version owner retained only while queued or running.</summary>
         public TextSnapshot Snapshot { get; } = snapshot;
@@ -177,6 +177,8 @@ internal sealed class NativeAnalysisDispatcher : IDisposable
         public AnalysisRequest Request { get; } = request;
         /// <summary>Optional bounded projection request, sharing this one policy turn.</summary>
         public CsvGridRequest? Grid { get; } = grid;
+        /// <summary>Native page geometry captured on the UI thread, never read from background delivery.</summary>
+        public int? GridVisibleRows { get; } = gridVisibleRows;
         /// <summary>Requires resource recheck immediately before dispatch.</summary>
         public bool Full { get; } = full;
         /// <summary>Monotonic edit-derived deadline captured once, unaffected by viewport submissions.</summary>

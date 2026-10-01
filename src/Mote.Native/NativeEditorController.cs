@@ -1786,7 +1786,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         // Register mandatory content before returning to native dispatch. A
         // demand Full must not overtake an edit merely because Task.Run started later.
         var csvTurn = csv && dispatcher is not null ? dispatcher.AnalyzeAsync(snapshot, request,
-            workToken, gridRequest, content, content ? 80 : 0) : null;
+            workToken, gridRequest, content, content ? 80 : 0, _gridVisibleRows) : null;
         _ = Task.Run(async () =>
         {
             try

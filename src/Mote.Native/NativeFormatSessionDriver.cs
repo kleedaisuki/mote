@@ -105,11 +105,19 @@ internal sealed class NativeFormatSessionDriver : IDisposable
     /// unsupported sessions retain their ordinary Flow presentation.
     /// </summary>
     public Task<NativeFormatPresentation> AnalyzePresentationAsync(TextSnapshot snapshot,
-        AnalysisRequest request, CancellationToken cancellationToken, CsvGridRequest? gridRequest = null) =>
-        QueueAnalysis(snapshot, request, cancellationToken, render: true, gridRequest);
+        AnalysisRequest request, CancellationToken cancellationToken, CsvGridRequest? gridRequest = null, int? gridVisibleRows = null) =>
+        QueueAnalysis(snapshot, request, cancellationToken, render: true, gridRequest, gridVisibleRows);
 
+    /// <summary>Normalizes only source-follow delivery against certified totals and captured native page geometry.</summary>
+    private static int? NormalizedSourceRow(GridRenderProjection grid, CsvGridRequest request, int? visibleRows)
+    {
+        if (request.Anchor is not CsvGridAnchor.Source || visibleRows is not > 0 ||
+            grid.Extent.ExactRowCount is not { } count) return null;
+        var first = Math.Max(0, count - Math.Min(count, visibleRows.Value));
+        return grid.RequestedRows.Start > first ? first : null;
+    }
     private Task<NativeFormatPresentation> QueueAnalysis(TextSnapshot snapshot, AnalysisRequest request,
-        CancellationToken cancellationToken, bool render, CsvGridRequest? gridRequest = null)
+        CancellationToken cancellationToken, bool render, CsvGridRequest? gridRequest = null, int? gridVisibleRows = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         lock (_gate)
@@ -117,11 +125,11 @@ internal sealed class NativeFormatSessionDriver : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             ++_pendingAnalyses;
         }
-        return Task.Run(() => AnalyzeCoreAsync(snapshot, request, cancellationToken, render, gridRequest));
+        return Task.Run(() => AnalyzeCoreAsync(snapshot, request, cancellationToken, render, gridRequest, gridVisibleRows));
     }
 
     private async Task<NativeFormatPresentation> AnalyzeCoreAsync(TextSnapshot snapshot,
-        AnalysisRequest request, CancellationToken cancellationToken, bool render, CsvGridRequest? gridRequest)
+        AnalysisRequest request, CancellationToken cancellationToken, bool render, CsvGridRequest? gridRequest, int? gridVisibleRows)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
             _lifetime.Token);
@@ -149,6 +157,19 @@ internal sealed class NativeFormatSessionDriver : IDisposable
                 if (render && gridRequest is not null && _session is ICsvGridFormatSession gridSession)
                 {
                     var bundle = gridSession.AnalyzeGrid(snapshot, changes, gridRequest, linked.Token);
+                    if (NormalizedSourceRow(bundle.Grid, gridRequest, gridVisibleRows) is { } first)
+                    {
+                        // The first query committed policy state. Retire that state if the
+                        // composite delivery cannot complete, so old edit baselines cannot replay.
+                        try
+                        {
+                            var normalized = new CsvGridRequest(gridRequest.SourceInterests,
+                                new CsvGridAnchor.Row(first), gridRequest.RowLimit, gridRequest.Columns, gridRequest.Scope);
+                            bundle = gridSession.AnalyzeGrid(snapshot, [], normalized, linked.Token);
+                            linked.Token.ThrowIfCancellationRequested();
+                        }
+                        catch { RetireSession(); throw; }
+                    }
                     var source = bundle.Source;
                     // The legacy source contract certifies one interval, never
                     // the convex hull of independent source interests.
