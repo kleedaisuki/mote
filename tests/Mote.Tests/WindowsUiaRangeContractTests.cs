@@ -234,20 +234,66 @@ public sealed class WindowsUiaRangeContractTests(ITestOutputHelper output)
         Assert.Equal("e\u0301😀", range.Text());
     }
 
-    /// <summary>A grapheme operation exceeding the provider budget fails atomically, not with partial movement.</summary>
+    /// <summary>A pathological combining cluster exceeding the local segmentation budget fails atomically.</summary>
     [Fact]
     public void Oversized_character_navigation_fails_without_endpoint_changes()
     {
         if (!OperatingSystem.IsWindows()) return;
-        using var fixture = new Fixture(new string('x', 65_537));
+        using var fixture = new Fixture("a" + new string('\u0301', 65_537));
         using var range = fixture.Range(1, 3);
         Assert.Equal(WindowsTextResult.UIA_E_INVALIDOPERATION,
             range.Call<MoveUnitAbi>(14)(range.Pointer, 1, 0, 1, out var moved));
         Assert.Equal(0, moved);
-        Assert.Equal("xx", range.Text());
+        Assert.Equal("\u0301\u0301", range.Text());
         Assert.Equal(WindowsTextResult.UIA_E_INVALIDOPERATION,
             range.Call<ExpandAbi>(6)(range.Pointer, 0));
+        Assert.Equal("\u0301\u0301", range.Text());
+    }
+
+    /// <summary>Remote character movement on a large ASCII line requires only bounded local source context.</summary>
+    [Fact]
+    public void Remote_character_movement_and_selection_work_on_fifty_mebibyte_ascii_line()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        const int remote = 32 * 1024 * 1024;
+        var selection = new SelectionStub(AccessibleSelectionResult.Selected);
+        using var fixture = new Fixture(new string('x', 50 * 1024 * 1024), selection);
+        using var range = fixture.Range(remote, remote);
+        Assert.Equal(0, range.Call<MoveUnitAbi>(14)(range.Pointer, 1, 0, 1, out var moved));
+        Assert.Equal(1, moved);
+        Assert.Equal("x", range.Text());
+        Assert.Equal(0, range.Call<SelectAbi>(16)(range.Pointer));
+        Assert.Equal(remote, selection.Last.Start);
+        Assert.Equal(remote + 1, selection.Last.End);
+        Assert.Equal(0, range.Call<MoveUnitAbi>(14)(range.Pointer, 0, 0, -1, out moved));
+        Assert.Equal(-1, moved);
         Assert.Equal("xx", range.Text());
+        Assert.Equal(0, range.Call<SelectAbi>(16)(range.Pointer));
+        Assert.Equal(remote - 1, selection.Last.Start);
+        Assert.Equal(remote + 1, selection.Last.End);
+        Assert.Equal(2, selection.Calls);
+    }
+
+    /// <summary>Bounded context preserves non-ASCII graphemes far beyond the full-line materialization budget.</summary>
+    [Theory]
+    [InlineData("邻")]
+    [InlineData("🇨🇳")]
+    [InlineData("👩‍💻")]
+    [InlineData("e\u0301")]
+    public void Long_line_local_character_navigation_preserves_unicode_clusters(string cluster)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        const int remote = 70_000;
+        using var fixture = new Fixture(new string('x', remote) + cluster + new string('x', remote));
+        using var range = fixture.Range(remote, remote);
+        Assert.Equal(0, range.Call<MoveUnitAbi>(14)(range.Pointer, 1, 0, 1, out var moved));
+        Assert.Equal(1, moved);
+        Assert.Equal(cluster, range.Text());
+        Assert.Equal(0, range.Call<MoveUnitAbi>(14)(range.Pointer, 1, 0, -1, out moved));
+        Assert.Equal(-1, moved);
+        Assert.Equal("", range.Text());
+        Assert.Equal(0, range.Call<ExpandAbi>(6)(range.Pointer, 0));
+        Assert.Equal(cluster, range.Text());
     }
 
     /// <summary>Select delegates the mutated absolute interval and exposes failure rather than false success.</summary>
