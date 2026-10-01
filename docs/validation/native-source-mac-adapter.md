@@ -70,6 +70,18 @@ BOOL setters/results use byte ABI, `pthread_main_np` returns int, and CGRect
 Existing ObjC NSRange and CGFloat argument bridges are reused. Both target
 executions remain necessary to establish runtime correctness.
 
+### Frozen BOOL bridge review checkpoint
+
+The committed adapter (`a86e049`, retained through import-phase correction
+`9331107`) already routes `Responds` through private `SendNativeBool`, whose
+`objc_msgSend` declaration returns `byte` and takes three `nint` arguments.
+It does not reinterpret `respondsToSelector:` through the shared native-word
+return bridge. This closes the concrete upper-register-bit ambiguity before
+commit, not through a subsequent change to shared ObjC interop. The frozen
+source SHA-256 is
+`735BE81D281F2178043200AF1411966D9374EFE74EA06391D26C64DC97B21ED8`.
+This is source/ABI evidence only, not native target execution.
+
 ## Primary documentation
 
 * [Apple TextKit overview](https://developer.apple.com/documentation/appkit/textkit)
