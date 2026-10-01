@@ -10,12 +10,11 @@ is not evidence for the ordinary Continuous Canvas route.
 
 The new diagnostic launches the published executable with only its disposable
 fixture filename. It does not select a legacy, experimental Canvas or test-only
-product route. Its current status is **portable contracts passed; the corrected
-owner reached both native targets, but the source-readiness observer addresses
-the Canvas Pane root rather than the ordinary source Document child; restoration
-and unchanged-file cleanup passed on both RIDs**.
-No live palette or source-selection acceptance has yet been established. No
-registry setting was changed on the local developer machine, and no product
+product route. Its current status is **both native targets now pass unique-child
+source readiness, but source-range setup fails on an unimplemented product UIA
+operation; registry restoration, unchanged-file hash and normal close pass**.
+No selection-preservation or live palette acceptance has yet been established.
+No registry setting was changed on the local developer machine, and no product
 implementation was modified to satisfy the checks.
 
 ## Acceptance basis
@@ -513,3 +512,99 @@ run must produce a unique source child, exact source selection/text preservation
 all three palette phases and rasters, normal exit, unchanged disk hash, and
 verified registry restoration. Editing history, immutable engine-version,
 physical presentation and real IME remain outside this diagnostic.
+
+## Source-child correction hosted audit: run 36806841387
+
+Run [36806841387](https://github.com/kleedaisuki/mote/actions/runs/36806841387),
+head `48a3711`, passed reviewed source-byte pins and all portable
+`13 + 7 + 11 + 7` contracts on both Windows RIDs. The native observer now resolves
+the correct source child immediately. The actual native diagnostic and worker
+still return **exit 1**, at a later standard source-range operation, despite
+green Native AOT/non-gating step conclusions.
+
+| RID | Job ID | Theme artifact ID | Readiness attempt / elapsed | Nested exit-1 time (UTC) |
+| --- | --- | --- | --- | --- |
+| win-x64 | 110192968337 | 11138266539 | 1 / 5 ms | 2026-10-01 02:42:39.3712783 |
+| win-arm64 | 110192968461 | 11137947584 | 1 / 9 ms | 2026-10-01 02:42:25.8251341 |
+
+These elapsed values are observer-attempt-start samples, **not startup, paint or
+presentation latency measurements**. Both phase observations establish:
+
+- Canvas root: target process match, Pane type, empty ID; initial target-owner
+  guards and Canvas/input native visibility true.
+- Exactly **one direct child visited and one source candidate**; no foreign child
+  or budget overflow.
+- Source child: target process match, expected source ID, Document control type,
+  TextPattern available.
+- Bounded source length **11 UTF-16 units**, exact synthetic LF true; exact CRLF
+  and CR false. No source text is serialized by the readiness discriminator.
+- No readiness API error or timeout. The original root/source observer mismatch
+  is therefore resolved for both actual targets in this fixture.
+
+Published executable SHA-256:
+
+- win-x64: `7261DDD62CD4F34CB963C618B2A9732256BED4F7C70497939C1AB2A13EAEADE0`.
+- win-arm64: `B6F7F3DEF82DD3EC3BE3DC51076A316C48057AC4164670BF0B9A37246C8DB6C2`.
+
+### First remaining failure: product text-range operation
+
+After successful readiness, the worker obtains/clones the source DocumentRange
+and tries to collapse its end to its start before creating `[1,3)`. Both phase
+reports and worker stderr identify the exact failing call:
+
+`MoveEndpointByRange(End, sourceRange, Start)` throws a MethodInvocationException
+whose inner message is `The method or operation is not implemented.`
+
+The inspected product implementation
+`src/Mote.Native/Windows/Accessibility/WindowsUiaBridgePrototype.cs::UiaRangeObject`
+corroborates the mechanism: `MoveEndpointByRange` directly returns
+`E_NOTIMPL` (`0x80004001`). This HRESULT is **implementation evidence**, not a
+newly serialized source-operation HRESULT in the phase report (the existing
+structured HRESULT fields cover readiness only). Nearby `MoveEndpointByUnit`,
+`CompareEndpoints`, `Select`, and `Compare` are also explicit E_NOTIMPL stubs.
+This exposes an actual product TextPattern range-operation gap on the ordinary
+route, rather than another source-node lookup, text-normalization, color or
+foreground failure. The diagnostic uses the semantic source provider's standard
+range API; substituting local native RichEdit selection would not test that
+source contract.
+
+Neither source selection nor its preservation has been established:
+`sourceRange.Select()` is never reached, `Assert-SourceState` is never accepted,
+`launch_observation=null`, and both phase/owner `cases=[]`. Likewise the target
+`WM_SETTINGCHANGE`, Canvas color checks and PrintWindow occur later and are not
+executed. There are no PNG, light, or dark-after outputs. A successful read of the
+initial exact fixture is not proof of an accepted dark palette, theme transition,
+unchanged selection, editing history, immutable engine version, draw callback,
+physical presentation, screen-reader workflow or real IME.
+
+Both owner reports again supply independent actual cleanup evidence:
+`registry_restored=true`, `source_sha256_unchanged=true`, `normal_exit=true`,
+original Personalize key/value present with kind DWord, and first worker
+`completed=true`, `exit_code=1`. Thus the range failure returned through the
+verified restoration/normal-close path, rather than a worker timeout or forced
+editor termination.
+
+### Next implementation/validation boundary
+
+Do not relax source selection assertions or route around the advertised provider
+to make the palette test appear green. The next consequential work is a coherent
+product range contract and its COM ABI implementation, including the operations
+this workflow requires: range-to-range endpoint movement, Character-unit endpoint
+movement, endpoint comparison, and source-coordinate Select. Implementing only
+the first stub merely moves the same missing-contract failure to the next call.
+
+Independent tests should cover same-provider/snapshot range identity, stale or
+foreign ranges, endpoint crossing/collapse, exact ASCII `[1,3)` and Unicode
+Character-unit semantics, selection routing to the controller, and no source-byte
+mutation from range navigation. The existing native hosted probe should then
+remain unchanged and demonstrate the full source setup and all three theme
+phases. Keep bounded text extraction and stale-document guards; pure managed
+range tests alone cannot establish exported Native AOT COM behavior.
+
+No product, driver, or CI file was edited for this audit. All evidence is under
+`.cache/canvas-theme-36806841387/`: raw `win-x64.log`/`win-arm64.log`, the two owner
+reports, and nonce-specific `dark-before.json`/stderr/empty stdout. Retrieval uses
+`gh run download 36806841387 --name native-canvas-theme-<RID> --dir
+.cache/canvas-theme-36806841387/<RID>` and the job IDs above with
+`gh api repos/kleedaisuki/mote/actions/jobs/<JOB-ID>/logs`. Use the raw nested exits
+and phase/owner reports, not green non-gating conclusions, as verdict inputs.
