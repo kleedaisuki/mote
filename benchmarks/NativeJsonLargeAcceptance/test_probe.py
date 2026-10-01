@@ -374,13 +374,38 @@ class ProbeTests(unittest.TestCase):
         raw = {"status": "observed", "requested_pid": 42, "guard_stage": "save-dispatch",
                "ax_error": 0, "window_copy_error": 0, "dispatched_events": 2,
                "trusted": True, "post_event_access": True, "ready": True, "focused": True,
-               "selection_start": 10, "selection_length": 0}
+               "selection_start": 10, "selection_length": 0,
+               "target_app_active": False, "frontmost_is_target": False,
+               "window_main": True, "window_focused": None,
+               "foreign_frontmost_pid": 99999, "foreign_app_name": "must not escape"}
         with patch.object(probe, "bounded_command", return_value=SimpleNamespace(stdout=json.dumps(raw).encode())):
             result = driver.save()
         self.assertEqual(result["attempted_events"], 2)
         self.assertEqual(result["status"], "attempted-posts-no-delivery-acknowledgement")
         self.assertFalse(result["execution_acknowledged"])
         self.assertEqual(result["guard_report"]["guard_stage"], "save-dispatch")
+        self.assertFalse(result["guard_report"]["target_app_active"])
+        self.assertFalse(result["guard_report"]["frontmost_is_target"])
+        self.assertTrue(result["guard_report"]["window_main"])
+        self.assertIsNone(result["guard_report"]["window_focused"])
+        self.assertNotIn("foreign_frontmost_pid", result["guard_report"])
+        self.assertNotIn("must not escape", json.dumps(result))
+
+    def test_mac_routing_facts_are_nullable_booleans_not_focus_aliases(self):
+        """True/false/unavailable activity facts stay separate from responder focus."""
+        names = ("target_app_active", "frontmost_is_target", "window_main", "window_focused")
+        template = {"status": "observed", "requested_pid": 42, "guard_stage": "ready", "focused": True}
+        for value in (True, False, None):
+            result = probe.mac_report({**template, **dict.fromkeys(names, value)})
+            self.assertTrue(result["focused"])
+            for name in names:
+                self.assertIs(result[name], value)
+        omitted = probe.mac_report(template)
+        self.assertTrue(all(omitted[name] is None for name in names))
+        for name in names:
+            for invalid in (1, 0, "true", "foreign identity"):
+                with self.assertRaises(ValueError):
+                    probe.mac_report({**template, name: invalid})
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -24,6 +25,10 @@ private struct Report: Codable {
     var window_copy_error: Int32?
     var window_copy_count: Int?
     var modified: Bool?
+    var target_app_active: Bool?
+    var frontmost_is_target: Bool?
+    var window_main: Bool?
+    var window_focused: Bool?
 }
 
 /// Retrieve only one bounded metadata attribute with an element-local timeout.
@@ -55,6 +60,12 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
     var report = Report(requested_pid: pid)
     report.trusted = AXIsProcessTrusted()
     report.post_event_access = CGPreflightPostEventAccess()
+    // Read target-only activity and redact the global foreground identity to a
+    // Boolean comparison. Neither observation activates an app or admits input.
+    report.target_app_active = NSRunningApplication(processIdentifier: pid)?.isActive
+    report.frontmost_is_target = NSWorkspace.shared.frontmostApplication.map {
+        $0.processIdentifier == pid
+    }
     guard report.trusted else { report.status = "blocked"; report.guard_stage = "ax-trust"; return (report, nil, nil) }
     guard owned(app, pid) else { report.status = "failed"; report.guard_stage = "app-ownership"; return (report, nil, nil) }
     _ = AXUIElementSetMessagingTimeout(app, 0.15)
@@ -106,6 +117,10 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
                 report.guard_stage = "window-title"; return (report, nil, nil)
             }
             report.modified = title.contains(" •")
+            // These are the owned window's AX attributes, not a relabeling of
+            // the source proxy's first-responder-only AXFocused implementation.
+            report.window_main = (attribute(element, "AXMain") as? NSNumber)?.boolValue
+            report.window_focused = (attribute(element, "AXFocused") as? NSNumber)?.boolValue
             window = element
         }
         if role == "AXTextArea", attribute(element, "AXDescription") as? String == "Mote editor" {

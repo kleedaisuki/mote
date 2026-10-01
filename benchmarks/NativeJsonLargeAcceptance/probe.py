@@ -330,7 +330,8 @@ def mac_report(data):
               "edit-ack", "save-selection", "save-dispatch", "close-window", "close-button", "complete"}
     if data.get("status") not in ("observed", "blocked", "failed") or data.get("guard_stage") not in stages:
         raise ValueError("unknown Mac report classification")
-    boolean = ("trusted", "post_event_access", "ready", "complete", "focused", "tree_bounded", "modified")
+    boolean = ("trusted", "post_event_access", "ready", "complete", "focused", "tree_bounded", "modified",
+               "target_app_active", "frontmost_is_target", "window_main", "window_focused")
     numeric = ("requested_pid", "source_candidates", "source_units", "selection_start", "selection_length",
                "dispatched_events", "window_count", "ax_error", "window_copy_error", "window_copy_count")
     result = {"status": data["status"], "guard_stage": data["guard_stage"]}
