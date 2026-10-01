@@ -108,6 +108,32 @@ jobs:
           $path = Join-Path $directory 'publish-inventory.json'
           $inventory | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path -Encoding utf8
           Get-Content -LiteralPath $path
+      # Native focus tests use owned offscreen HWNDs, with no global input or
+      # clipboard. Run the managed user32 seam on the actual x64/ARM64 runner;
+      # published-executable UIA evidence remains an independent AOT contract.
+      - name: Verify Windows Grid passive publication and pane focus
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $arch = $rid.Substring(4)
+          dotnet --info
+          dotnet test tests/Mote.Tests/Mote.Tests.csproj --configuration Release `
+            --arch $arch -p:PublishAot=false `
+            --filter FullyQualifiedName~WindowsGridPaneFocusTests `
+            --logger 'trx;LogFileName=grid-pane-focus.trx' `
+            --results-directory ".cache/ci-inventory/$rid/grid-pane-focus"
+          if ($LASTEXITCODE -ne 0) { throw "Native HWND Grid focus regression failed on $rid." }
+      - name: Retain Windows Grid native focus results
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-grid-pane-focus-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/grid-pane-focus/**
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       - name: Verify macOS imports use system libraries
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh
