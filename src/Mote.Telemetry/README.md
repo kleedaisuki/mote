@@ -190,3 +190,25 @@ sink. Legacy Activity-backed `StartChild` behavior is unchanged; use the new
 explicit methods for request lifetimes. `MarkChild` alone is an unpersisted mark;
 use `BeginPhase` for any work whose entry must survive in a recoverable prefix.
 Callers end each phase once; only request terminal selection is internally atomic.
+
+## Independent native menu observation
+
+Healthy opt-in tracing enables an owned `NSMenu` subclass on macOS. Tracing off
+keeps the stock menu with no new managed key callback. It observes only matching
+key-down Command-S-family candidates; it neither binds commands nor initiates
+Save. The exact event is sent once to the superclass and its exact Boolean
+result is returned. Shift/Caps Lock do not classify Save versus Save As.
+
+`RecordNativeMenuCheckpoint` accepts only five appended fixed events:
+`native.menu.observation.ready`, `native.menu.observation.unavailable`,
+`native.menu.save_family.entered`, `native.menu.save_family.returned_true`, and
+`native.menu.save_family.returned_false`. Each is a unique, zero-duration success
+checkpoint under the **current session**, ignoring ambient Activities and
+accepting no caller dimensions. A false return is successful observation of
+false, not failed Save. Readiness proves installation only.
+
+These are independent positives, not a menu-entry/return pair or an input-to-Save
+causal chain. Nested calls and reconfiguration do not require event retention or
+cross-callback state. No characters, native pointers, event timestamps, modifiers
+or key codes are serialized. A missing checkpoint never certifies nonexecution;
+forced-exit evidence remains censored and bounded-queue loss still applies.

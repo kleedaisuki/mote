@@ -94,6 +94,16 @@ public enum TelemetryEvent
     SaveUiStarted,
     /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
     SaveUiDeferred,
+    /// <summary>Owned observed main menu installed; not universal input coverage.</summary>
+    NativeMenuObservationReady,
+    /// <summary>Optional menu instrumentation setup failed; not command failure.</summary>
+    NativeMenuObservationUnavailable,
+    /// <summary>Owned menu received a Save-family candidate, not a Save request.</summary>
+    NativeMenuSaveFamilyEntered,
+    /// <summary>Superclass handled this menu call; not successful Save.</summary>
+    NativeMenuSaveFamilyReturnedTrue,
+    /// <summary>Superclass did not handle this menu call; not failed Save.</summary>
+    NativeMenuSaveFamilyReturnedFalse,
 }
 
 /// <summary>Normalized document format; filenames and extensions are never accepted.</summary>

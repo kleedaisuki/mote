@@ -317,6 +317,11 @@ public static partial class MoteTelemetry
         TelemetryEvent.SaveUiPostReturned => "save.ui_post_returned",
         TelemetryEvent.SaveUiStarted => "save.ui_started",
         TelemetryEvent.SaveUiDeferred => "save.ui_deferred",
+        TelemetryEvent.NativeMenuObservationReady => "native.menu.observation.ready",
+        TelemetryEvent.NativeMenuObservationUnavailable => "native.menu.observation.unavailable",
+        TelemetryEvent.NativeMenuSaveFamilyEntered => "native.menu.save_family.entered",
+        TelemetryEvent.NativeMenuSaveFamilyReturnedTrue => "native.menu.save_family.returned_true",
+        TelemetryEvent.NativeMenuSaveFamilyReturnedFalse => "native.menu.save_family.returned_false",
 
         _ => "unknown"
     };

@@ -1278,7 +1278,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
 
     private void CreateMenu()
     {
-        var main = ObjC.New("NSMenu");
+        var main = MacMenuObservation.Create();
         AddMenu(main, "mote", [
             ("About mote", "orderFrontStandardAboutPanel:", ""),
             ("Reload Settings", "moteReloadSettings:", ""),
@@ -1300,6 +1300,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             ("Previous Page", "motePreviousPage:", ""),
             ("Next Page", "moteNextPage:", "")], true);
         ObjC.Send(_application, ObjC.Sel("setMainMenu:"), main);
+        MacMenuObservation.Installed(main);
     }
 
     private void AddMenu(nint main, string title, (string Label, string Action, string Key)[] items,

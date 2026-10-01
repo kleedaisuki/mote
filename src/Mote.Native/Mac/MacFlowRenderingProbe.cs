@@ -36,6 +36,7 @@ internal static class MacFlowRenderingProbe
 
     private static void Check(MacEditorShell shell)
     {
+        MacMenuObservationProbe.VerifyForwarding();
         var text = "Heading\nbold italic code link\n• nested\nquote\n" +
             string.Concat(Enumerable.Repeat("scrollable body line\n", 65));
         var heading = new TextSpan(0, 8);
