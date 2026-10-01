@@ -81,7 +81,7 @@ or Save actions. No native workflow was rerun for this artifact audit.
 | Endpoint (ms) | win-x64 1 MiB | win-arm64 1 MiB |
 | --- | ---: | ---: |
 | Parent launch → bounded source acknowledgement | 162.0263 | 154.2519 |
-| Child startup → editable (after configuration) | 94.615 | 81.548 |
+| Child post-configuration → **initial blank shell**, not requested file | 94.615 | 81.548 |
 | Child open → editable v0 | 18.086 | 13.410 |
 | Child open → source draw callback return v0 | 26.925 | 20.580 |
 | Parent edit dispatch → bounded source acknowledgement | 13.3568 | 13.9150 |
@@ -99,6 +99,12 @@ foreground user responsiveness, tracing-off baseline or p95 is established.
 **CPU time and RSS/working-set were not sampled by this pilot.** No CPU/RSS,
 allocation or memory-pressure claim follows from these artifacts. The parser's
 managed benchmark evidence remains separate.
+
+Later source/raw-trace audit clarified that `mote.startup_to_editable` ends on
+the initial blank document **before StartOpen(startupPath)**. Its version0 must
+not be equated with the separately opened JSON version0. The table is corrected
+accordingly; see the exact 100 MiB counterexample in the
+[second-hosted record](native-json-large-second-hosted.md).
 
 ## Discriminating the Windows observer, not blaming the product
 

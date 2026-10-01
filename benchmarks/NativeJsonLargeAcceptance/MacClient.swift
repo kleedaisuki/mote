@@ -21,6 +21,8 @@ private struct Report: Codable {
     var guard_stage = "observe"
     var ax_error: Int32?
     var window_count: Int?
+    var window_copy_error: Int32?
+    var window_copy_count: Int?
     var modified: Bool?
 }
 
@@ -59,15 +61,26 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
     var windowCount = 0
     let countError = AXUIElementGetAttributeValueCount(app, "AXWindows" as CFString, &windowCount)
     report.ax_error = countError.rawValue
-    report.window_count = windowCount
+    // An unsuccessful count call does not establish an empty window list.
+    report.window_count = countError == .success ? windowCount : nil
+    if countError == .cannotComplete {
+        // Startup AX messaging can race the application's run loop. This one
+        // read-only pending state belongs to the parent's existing 60s wait;
+        // it never authorizes a key/Save/close action or extends that deadline.
+        report.guard_stage = "window-count"
+        return (report, nil, nil)
+    }
     guard countError == .success, windowCount <= 1 else {
         report.status = "failed"; report.guard_stage = "window-count"; return (report, nil, nil)
     }
     if windowCount == 0 { return (report, nil, nil) }
     var rawWindows: CFArray?
-    guard AXUIElementCopyAttributeValues(app, "AXWindows" as CFString, 0, 1, &rawWindows) == .success,
-          let windows = rawWindows as? [AXUIElement], windows.count == 1 else {
-        report.guard_stage = "window-read"; return (report, nil, nil)
+    let copyError = AXUIElementCopyAttributeValues(app, "AXWindows" as CFString, 0, 1, &rawWindows)
+    report.window_copy_error = copyError.rawValue
+    let windows = rawWindows as? [AXUIElement]
+    report.window_copy_count = copyError == .success ? windows?.count : nil
+    guard copyError == .success, let windows, windows.count == 1 else {
+        report.status = "failed"; report.guard_stage = "window-read"; return (report, nil, nil)
     }
     var queue: [(AXUIElement, Int)] = [(windows[0], 0)]
     var cursor = 0
@@ -170,6 +183,11 @@ private func main() throws {
     guard ["observe", "edit", "save", "close"].contains(operation) else { exit(2) }
     let app = AXUIElementCreateApplication(pid)
     var (report, source, window) = observe(app, pid, size, version)
+    if operation != "observe", report.ax_error == AXError.cannotComplete.rawValue {
+        report.status = "failed"
+        emit(report)
+        return
+    }
     if operation == "edit" || operation == "save" {
         guard report.trusted && report.post_event_access else {
             report.status = "blocked"

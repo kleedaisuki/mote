@@ -155,6 +155,9 @@ class ProbeTests(unittest.TestCase):
             def observe(self, version):
                 """Certify the inexpensive source/semantic control."""
                 return {"ready": True, "complete": True}
+            def observation_summary(self):
+                """Keep the Mac diagnostic interface inert in this shared fake driver."""
+                return {"attempts": 1}
             def edit(self):
                 """Fail once after one dispatch rather than invite a retry."""
                 Driver.attempts += 1
@@ -226,6 +229,55 @@ class ProbeTests(unittest.TestCase):
         self.assertNotIn("must never", json.dumps(result))
         with self.assertRaises(ValueError):
             probe.mac_report({**raw, "guard_stage": "arbitrary AX text"})
+
+    def test_initial_mac_count_cannot_complete_then_ready(self):
+        """A read-only startup pending response reaches the existing liveness-checked wait."""
+        pending = {"status": "observed", "requested_pid": 42, "guard_stage": "window-count",
+                   "ax_error": -25204, "window_count": None, "ready": False,
+                   "trusted": True, "post_event_access": True}
+        ready = {**pending, "guard_stage": "ready", "ax_error": 0, "window_count": 1,
+                 "window_copy_error": 0, "window_copy_count": 1, "ready": True}
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        results = [SimpleNamespace(stdout=json.dumps(row).encode()) for row in (pending, ready)]
+        def condition():
+            """Poll one read-only observation, not a modifying retry."""
+            data = driver.observe(0)
+            return data if data["ready"] else None
+        with patch.object(probe, "bounded_command", side_effect=results), patch.object(probe.time, "sleep"):
+            result = probe.wait(SimpleNamespace(poll=lambda: None), condition, 60)
+        self.assertTrue(result["ready"])
+        summary = driver.observation_summary()
+        self.assertEqual(summary["attempts"], 2)
+        self.assertEqual(summary["first_ax_error"], -25204)
+        self.assertEqual(summary["last_ax_error"], 0)
+        self.assertIsNotNone(summary["first_ready_ms"])
+        self.assertEqual(result["window_copy_count"], 1)
+
+    def test_persistent_mac_count_cannot_complete_times_out(self):
+        """Persistent messaging refusal remains a censored failure, never empty-window success."""
+        pending = {"status": "observed", "requested_pid": 42, "guard_stage": "window-count",
+                   "ax_error": -25204, "window_count": None, "ready": False}
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        result = SimpleNamespace(stdout=json.dumps(pending).encode())
+        with patch.object(probe, "bounded_command", return_value=result), patch.object(probe.time, "sleep"), \
+             patch.object(probe.time, "monotonic", side_effect=[0, 0, 0.2, 0.4]):
+            with self.assertRaises(TimeoutError):
+                probe.wait(SimpleNamespace(poll=lambda: None), lambda: driver.observe(0)["ready"], 0.3)
+        summary = driver.observation_summary()
+        self.assertEqual(summary["attempts"], 2)
+        self.assertEqual(summary["first_ax_error"], -25204)
+        self.assertEqual(summary["last_ax_error"], -25204)
+        self.assertIsNone(summary["first_ready_ms"])
+        self.assertIsNone(driver.failure_observation()["window_count"])
+
+    def test_nontransient_mac_count_errors_remain_fatal(self):
+        """Only the explicitly pending count response is retried; other guards fail closed."""
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        failed = {"status": "failed", "requested_pid": 42, "guard_stage": "window-count", "ax_error": -25205}
+        with patch.object(probe, "bounded_command", return_value=SimpleNamespace(stdout=json.dumps(failed).encode())):
+            with self.assertRaises(RuntimeError):
+                driver.observe(0)
+        self.assertEqual(driver.observation_summary()["attempts"], 1)
 
 
 if __name__ == "__main__":

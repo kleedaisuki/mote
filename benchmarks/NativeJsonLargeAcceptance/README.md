@@ -21,7 +21,11 @@ compiled the initial Swift client on both Mac architectures, but both failed
 before source acknowledgement. Windows ARM64 and x64 passed the complete 1 MiB
 workflow; both 100 MiB Save oracles timed out under an observer that could obstruct
 atomic replacement. Updated observer/failure metadata target evidence is pending;
-none of these failures is disguised as four-RID acceptance.
+none of these failures is disguised as four-RID acceptance. The
+[second run](../../docs/validation/native-json-large-second-hosted.md) passed
+both sizes' full exact-byte/normal-exit/reopen/raw-trace contract on **both Windows
+RIDs**. Both Mac clients compiled but failed their first window-count call with
+CannotComplete (-25204); actual Mac readiness/edit/Save remains unaccepted.
 
 ## Workload and independent oracles
 
@@ -111,9 +115,11 @@ may prevent a report and is an incomplete diagnostic, never success.
 
 ## Endpoint interpretation
 
-Child traces retain their own monotonic durations for startup-to-editable,
+Child traces retain their own monotonic durations for initial-shell startup,
 open-to-editable, open-to-draw-submission, edit-to-draw-submission and Save.
-The startup interval begins after configuration; parent launch-to-source includes
+**`mote.startup_to_editable` ends on the initial blank document before the requested
+file's StartOpen, not on requested-file readiness.** It begins after configuration;
+parent launch-to-requested-source includes
 launcher/observer overhead. The two clocks are **never subtracted**. Draw records
 must have the appropriate causal parent and exact accepted version. Callback
 return is not compositor presentation, photons, or a whole-window render.
@@ -131,7 +137,7 @@ green job or masked step conclusion does not certify this pilot.
 
 ## Completed local evidence (2026-10-01)
 
-- Portable artifact/protocol tests: **12/12** passed, Python 3.14.6, Windows x64.
+- Portable artifact/protocol tests: **15/15** passed, Python 3.14.6, Windows x64.
   Tests do not execute OS input/native processes. They cover exact valid corpus
   and one-byte oracle, wrong edit witness, causal count/version endpoint audit,
   mismatched/cancelled draw rejection, reopen mutation refusal, one-attempt
@@ -152,8 +158,8 @@ green job or masked step conclusion does not certify this pilot.
   normal close/terminal traces and fresh GUI reopen all passed. Artifact:
   `.cache/native-json-large/local-stale-small-pilot.json`; scratch ID
   `3d4a384b9a6841f998eac462295babe6`.
-  Parent source acknowledgement was 391.4002 ms; separate child startup-to-
-  editable 320.084 ms, open-to-editable 24.494 ms, open draw-return 36.708 ms,
+  Parent source acknowledgement was 391.4002 ms; separate child initial-blank-shell
+  startup 320.084 ms, file-open-to-editable 24.494 ms, open draw-return 36.708 ms,
   edit draw-return 17.196 ms. These single noisy instrumented **harness evidence**
   observations are not a new current-source baseline and are not compared across
   OS/size. A subsequent field-only rename changed `edit_actions` to the more
@@ -176,6 +182,14 @@ green job or masked step conclusion does not certify this pilot.
   current-source/page-performance evidence. Three new tests enforce no target
   read until clean acknowledgement, exact bytes after acknowledgement, and
   sanitized Mac failure metadata retention. Updated hosted outcomes remain pending.
+- Second hosted run: both Windows RIDs passed both 1/100 MiB workflows, including
+  independently audited original/reopen raw traces. Mac guard metadata showed
+  first-count messaging failure (-25204), not denied trust or a proven empty
+  window list. The narrow read-only readiness correction allows only that count
+  error to remain pending within the existing deadline; other guards fail closed
+  and no modifying command may use unresolved readiness. Three additional tests
+  cover transient recovery, persistent timeout and fatal other errors. Actual
+  updated Mac recovery remains pending; no timing claim follows from the mocks.
 
 ## Grounding and why the boundaries matter
 

@@ -226,6 +226,12 @@ class MacDriver:
         """Retain only process identity, ASCII character count and compiled client."""
         self.pid, self.size, self.client = pid, size, client
         self.last_report = None
+        self.observation_started_ns = time.perf_counter_ns()
+        self.observation_attempts = 0
+        self.first_ax_error = None
+        self.last_ax_error = None
+        self.first_ready_ms = None
+        self.last_observation_elapsed_ms = None
 
     def command(self, operation, version):
         """A 6-second outer watchdog bounds each client's 0.15-second AX calls."""
@@ -245,7 +251,29 @@ class MacDriver:
 
     def observe(self, version):
         """Return content-free source/focus/semantic certification observations."""
-        return self.command("observe", version)
+        self.observation_attempts += 1
+        try:
+            data = self.command("observe", version)
+            return data
+        finally:
+            # Retain count/copy guard metadata even on a fatal read. These parent
+            # clock measurements include client launch/IPC; they are not child
+            # render timings and do not alter the outer endpoint deadline.
+            self.last_observation_elapsed_ms = (time.perf_counter_ns() - self.observation_started_ns) / 1e6
+            if self.last_report is not None:
+                error = self.last_report.get("ax_error")
+                if self.observation_attempts == 1:
+                    self.first_ax_error = error
+                self.last_ax_error = error
+                if self.last_report.get("ready") and self.first_ready_ms is None:
+                    self.first_ready_ms = self.last_observation_elapsed_ms
+
+    def observation_summary(self):
+        """Expose bounded counts/first-last metadata without an unbounded polling history."""
+        return {"attempts": self.observation_attempts, "first_ax_error": self.first_ax_error,
+                "last_ax_error": self.last_ax_error, "first_ready_ms": self.first_ready_ms,
+                "last_observation_elapsed_ms": self.last_observation_elapsed_ms,
+                "clock_scope": "parent-driver-attach-to-observation-return-including-client-overhead"}
 
     def edit(self):
         """Each navigation/edit action is sent once; failures never resend an edit."""
@@ -274,7 +302,7 @@ def mac_report(data):
         raise ValueError("unknown Mac report classification")
     boolean = ("trusted", "post_event_access", "ready", "complete", "focused", "tree_bounded", "modified")
     numeric = ("requested_pid", "source_candidates", "source_units", "selection_start", "selection_length",
-               "dispatched_events", "window_count", "ax_error")
+               "dispatched_events", "window_count", "ax_error", "window_copy_error", "window_copy_count")
     result = {"status": data["status"], "guard_stage": data["guard_stage"]}
     for name in boolean + numeric:
         value = data.get(name)
@@ -385,6 +413,8 @@ def sample(executable, case, directory, client):
             observed = driver.observe(version)
             return observed if observed.get("ready") else None
         result["source_observation"] = wait(child, lambda: ready(0), 60)
+        if isinstance(driver, MacDriver):
+            result["source_readiness_observation_summary"] = driver.observation_summary()
         result["parent_launch_to_source_bound_ms"] = (time.perf_counter_ns() - started) / 1e6
         result["phase"] = "initial-whole-document-semantics"
         wait(child, lambda: driver.observe(0).get("complete"), 60)
@@ -447,6 +477,8 @@ def sample(executable, case, directory, client):
         result["status"] = "blocked" if isinstance(error, PermissionError) else "failed"
         result["error_class"] = type(error).__name__
         if driver is not None:
+            if isinstance(driver, MacDriver):
+                result["failed_readiness_observation_summary"] = driver.observation_summary()
             try:
                 result["failure_observation"] = driver.failure_observation()
             except Exception as failure:
