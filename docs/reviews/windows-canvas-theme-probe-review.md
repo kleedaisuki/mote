@@ -124,6 +124,45 @@ configured pins match the final whitespace-normalized scripts:
 No unresolved substantive issue in the reviewed CI insertion. Actual hosted
 runtime behavior remains unverified.
 
+## Content-free readiness discriminator follow-up
+
+The initial hosted failure described in
+`docs/validation/windows-canvas-live-theme.md` stopped at the combined readiness
+predicate before selection or palette sampling; it did not identify the failing
+conjunct. Reviewed the subsequent test-only worker metadata change and 11 new
+portable readiness cases, not a product fix or weakened acceptance rule.
+
+The exact source automation ID, Document control type, LF fixture and visible
+Canvas/input requirements remain conjunctive. CRLF and CR are recorded as
+booleans but still fail acceptance. Each observation starts with unknown values;
+foreign-provider PID mismatch exits before reading its identity, pattern or text.
+Unknown IDs become `other` rather than raw strings. Source reads remain bounded
+to 256 UTF-16 units, and only length/newline-match booleans are serialized. Control
+type is the standard .NET UIA ControlType programmatic name with a bounded format,
+not the provider's localized description. API failure records stage and base
+HRESULT, not the provider exception message. Exceptions are immediately rethrown,
+with no new retry or expanded deadline. Source selection and target appearance
+notification still occur only after readiness passes.
+
+Found and resolved a metadata provenance defect before commit: original new
+fields claimed current target ownership on every attempt, despite HWND ownership
+checks occurring only before polling. Final fields are explicitly
+`canvas_initial_owner_verified` and `input_initial_owner_verified`, with an
+initial-only comment. Per-attempt visibility and provider PID match remain
+separate facts. This corrects evidence semantics without adding an acceptance
+gate or changing the existing guard behavior.
+
+Final inspected local hashes: worker
+`D5BBD79F82D8219E04F71257413AF769B9346384116F6E67617D24EE5BE750EA`;
+portable test `B42104317E4E4873554FC454628D8F4882175AA754A1BB4A554A54B47195C376`.
+Inspected 11 readiness cases (foreign/unknown/empty identity, wrong type,
+newline variants, wrong text, visibility failures, unavailable pattern) and a
+fresh-observation stale-state assertion. The owner reported 13 owner + 7 source
++ 11 readiness cases passing; no completed test was redundantly rerun by the
+reviewer. No substantive unresolved issue was found within this change. Owner,
+production code and CI were outside this edit; new CI worker pins must be updated
+before execution. Hosted discrimination results remain pending.
+
 ## Positive contracts and interpretation limits
 
 - Ordinary one-file launch, no legacy/experimental flag, exact launched PID HWND
