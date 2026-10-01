@@ -51,7 +51,44 @@ The **osx-x64 in-process Canvas AX selector/lifecycle** report is a distinct unr
 
 ## Active gates
 
-### Current hosted checkpoint — CI 36863766458 / 5d0fcb6
+### Current hosted checkpoint — CI 36874262096 / 3a0552a
+
+[CI 36874262096](https://github.com/kleedaisuki/mote/actions/runs/36874262096)
+completes all ten jobs, with actual main suites **3253/3253** on both OSes,
+Themes 14/14, Configuration 9/9, four strict one-executable inventories and both
+blocking Mac controls. The green aggregate does **not** qualify the new focus
+observation or close ordinary Save reliability:
+
+- Both Windows new ownership timeout controls retain a started descendant,
+  timeout/forced cleanup and queried empty job, but **null process exit**. The
+  strict expected-exit predicate fails before UIA client launch. Client/native
+  adapter evidence is **unobserved**, not callback absence; the initial `build`
+  phase label is stale even though compilation succeeds. Follow-up `2f2d413`
+  shares the original ten-second cleanup budget with process-signaling/exit
+  observation and adds the exact `control` phase; fresh hosted proof is pending
+  ([counterexamples and correction](validation/windows-grid-focus-provenance-workflow.md)).
+- The original external Grid remains **product-fail / exit 1** on both Windows
+  RIDs. Supplemental infrastructure neither replaces its oracle nor fixes it.
+- Ordinary JSON is **7/8**, not 8/8: Mac x64 100 MiB times out at Save, editor
+  **-9**, no reopen. Its 36-row complete trace prefix retains monitor/menu-ready,
+  but no candidate/menu-entry/Save request/normal session terminal. The censored
+  prefix cannot locate a delivery failure or certify callback absence.
+
+The automatically selected [Benchmarks 36874262133](https://github.com/kleedaisuki/mote/actions/runs/36874262133)
+qualifies a separate 20-pair/40-return series for binary `731f76ef…fb362b1`.
+The enabled-minus-disabled process-CPU median is **+15.625 ms**, conditional rank
+interval **[+15.625, +46.875] ms**; it is not a zero-cost result. Other endpoint
+intervals include zero. Different runner CPU and binary prevent pooling or a
+cross-version regression conclusion ([scoped audit](performance/causal-trace-overhead.md)).
+
+[Direct user evidence](product/large-file-demand-and-experience.md) puts ordinary
+sub-1-MB files and few-MiB reading first. Existing large-file capacity regressions
+remain; further giant-format specialization needs task value. Mac current-frame
+ribbon-label correction `132e49c` is locally qualified, not part of this hosted
+source. A single native editing-locus design is [specified](architecture/ordinary-editing-locus.md),
+not implemented/promoted; current label/font fixes do not resolve that product gap.
+
+### Previous clean-tree hosted checkpoint — CI 36863766458 / 5d0fcb6
 
 [CI 36863766458](https://github.com/kleedaisuki/mote/actions/runs/36863766458)
 at `5d0fcb6` completes **all ten jobs**. Windows/macOS main suites each pass
