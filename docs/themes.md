@@ -269,3 +269,27 @@ Local regression command `pwsh -NoProfile -File tests/Test-NativeThemeWorkflowWi
 Default Windows Canvas live-theme coverage remains a separate open target-host gate. Existing Continuous open/edit/Save probes do not assert dark→light→dark palette transitions. A bounded future probe should launch the ordinary default mode, establish exact source/active input ownership, sample policy-backed Canvas/status pixels on each transition, and check source plus global selection/history preservation through the source-backed controller contract. The bounded RichEdit input island is not a full-source legacy editor and must not be substituted into the old pixel/selection assertions. Real IME and physical presentation/screen-reader claims remain separate.
 
 Evidence: `.cache/ci-36792454502-triage/win-x64.log` and `theme/ci-inventory/win-x64/native-theme.json`. The baseline external UIA artifact in the same directory has unchanged **19/19** behavior checks, zero failures, one known duplicate-Document release blocker and zero inconclusive cases; no new UIA regression was found. Download with `gh run download 36792454502 --name native-theme-win-x64 --dir .cache/ci-36792454502-triage/theme` (baseline UIA artifact name `windows-ax-external-win-x64`).
+
+#### Corrected legacy target-host result (CI 36794910486)
+
+[CI 36794910486](https://github.com/kleedaisuki/mote/actions/runs/36794910486) at `e43994278aa121cbe579eb10cda8aeaeb480c42a` **actually passed** the corrected win-x64 legacy-page live-theme probe. This verdict uses its raw step log plus `native-theme-win-x64` JSON, not the non-gating step's displayed conclusion. The log emits `status=passed`, proceeds directly to artifact upload without an exception/nonzero-exit annotation in the theme step, and the report reaches `stage=dark-after`, `error=null`, with all three cases. Earlier run 36794858729 was cancelled during Native AOT restore before this probe ran; it has no theme artifact and is not a theme verdict.
+
+The launch discriminator now shows **visible** ID 101 `RICHEDIT50W`, **no** direct Canvas host, exact synthetic **CRLF** text of 13 UTF-16 units, and selection **1..3** as requested. Title/readback timestamps are 176/191 ms; these are setup observations, not editor startup performance results. The report explicitly states `source_mode=legacy-page`.
+
+| Case | Editor background | Matching foreground pixels | Status / Win11 caption background | Selection / source units |
+| --- | --- | --- | --- | --- |
+| dark-before | `#1F2023` | 27 at `#D8DADF` | `#27292D` / `#27292D` | 1..3 / 13 |
+| light | `#FFFFFF` | 32 at `#26282E` | `#F6F7F9` / `#F6F7F9` | 1..3 / 13 |
+| dark-after | `#1F2023` | 27 at `#D8DADF` | `#27292D` / `#27292D` | 1..3 / 13 |
+
+All cases report `caption_status=verified-win11-pixel` and `status_notice=false`; source content/selection assertions passed. `registry_restored=true` and `source_sha256_unchanged=true` close the disposable fixture/restoration checks. Independently hashing the three retained PNGs matches the JSON hashes; dark-before/dark-after share SHA-256 `063846B6B7AF601F41AD3A90F50118E50C086ED231DDE30C7F99120D220596A9`, light is `EB2A93F0BC4BA283FC3DA3EE89EE17D81F3CBA5F4734511ED9AB745063BD1753`. Published executable SHA-256 is `9FF531651ED116C509FF21696B7BAF0BAC6599120886093D510F5AD634E086E9`; Windows build 26100.
+
+This closes the corrected **legacy Windows x64 synthetic theme** workflow gate, with no remaining assertion failure in that scope. It does **not** close the separately documented default Continuous Canvas palette/selection/history gate, Windows ARM theme, real IME, OS high-contrast activation, native menu contrast, or physical-presentation claims. No product/harness change or rerun was needed for this audit.
+
+Reproduction/evidence:
+
+```powershell
+gh run download 36794910486 --name native-theme-win-x64 --dir .cache/ci-36794910486-theme/artifact
+gh api repos/kleedaisuki/mote/actions/jobs/110156619598/logs > .cache/ci-36794910486-theme/win-x64.log
+Get-ChildItem .cache/ci-36794910486-theme/artifact -Recurse -Filter *.png | Get-FileHash -Algorithm SHA256
+```
