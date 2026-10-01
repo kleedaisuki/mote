@@ -12,6 +12,95 @@ namespace Mote.Tests;
 /// <summary>Portable whole-source controller workflows against an independently maintained native replica.</summary>
 public sealed class NativeSourceControllerTests
 {
+    /// <summary>OS-delivered paths use ordinary dirty/marked-input admission and never a file picker.</summary>
+    [Fact]
+    public async Task External_open_preserves_rejected_input_and_uses_canonical_open()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("external.txt");
+        await File.WriteAllTextAsync(path, "opened");
+        var shell = new SourceShell();
+        using var controller = Create(shell, temp.Path);
+        controller.Run();
+        shell.EditSource("unsaved");
+        shell.CanCommit = false;
+        Assert.False(shell.ExternalOpen(path));
+        Assert.Equal(0, shell.DiscardCalls);
+        shell.CanCommit = true;
+        shell.Discard = () => false;
+        Assert.False(shell.ExternalOpen(path));
+        Assert.Equal("unsaved", Canonical(controller).Snapshot.GetText());
+        shell.Discard = () => true;
+        Assert.True(shell.ExternalOpen(path));
+        await shell.Until(() => shell.Buffer == "opened");
+        Assert.Equal(0, shell.PickerCalls);
+        Assert.False(Canonical(controller).IsModified);
+    }
+
+    /// <summary>A nested edit during discard confirmation cannot authorize losing the newer text.</summary>
+    [Fact]
+    public void External_open_rejects_stale_discard_consent()
+    {
+        using var temp = new RepoTemp();
+        var shell = new SourceShell();
+        using var controller = Create(shell, temp.Path);
+        controller.Run();
+        shell.EditSource("first");
+        shell.Discard = () => { shell.EditSource("newer"); return true; };
+        Assert.False(shell.ExternalOpen(temp.File("unused.txt")));
+        Assert.Equal("newer", Canonical(controller).Snapshot.GetText());
+    }
+
+    /// <summary>Native source respects the policy layout convention before explicit configuration.</summary>
+    [Theory]
+    [InlineData("txt", false)]
+    [InlineData("md", true)]
+    [InlineData("toml", true)]
+    [InlineData("json", true)]
+    [InlineData("yaml", true)]
+    [InlineData("csv", true)]
+    public async Task Native_source_auto_preview_uses_format_convention(string extension, bool preview)
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("source." + extension);
+        await File.WriteAllTextAsync(path, "source");
+        var shell = new SourceShell();
+        using var controller = Create(shell, temp.Path, path);
+        controller.Run();
+        await shell.Until(() => shell.Buffer == "source");
+        Assert.Equal(preview, (bool)typeof(NativeEditorController).GetMethod("PreviewVisible", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(controller, null)!);
+    }
+
+    /// <summary>A queued Find cannot replace a newer native selection; viewport-only updates retain it.</summary>
+    [Fact]
+    public async Task Native_selection_cancels_queued_find_but_viewport_does_not()
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("find.txt");
+        await File.WriteAllTextAsync(path, "start\nTARGET\nend");
+        var shell = new SourceShell();
+        using var controller = Create(shell, temp.Path, path);
+        controller.Run();
+        await shell.Until(() => shell.Buffer == "start\nTARGET\nend");
+        shell.Find("TARGET");
+        await shell.WaitForPosted();
+        var serial = FindSerial(controller);
+        shell.Observe(new(0, 0, 0), new(0, 2), 1);
+        Assert.Equal(serial, FindSerial(controller));
+        shell.Observe(new(2, 2, 2), new(0, 2), 2);
+        Assert.True(FindSerial(controller) > serial);
+        await shell.Until(() => true);
+        Assert.DoesNotContain(shell.Selections, x => x.Anchor == 6 && x.Active == 12);
+        var binding = (NativeSourceBinding)typeof(NativeEditorController).GetField("_sourceBinding", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(controller)!;
+        Assert.Equal(2, binding.Installation.Active);
+        shell.Find("TARGET");
+        await shell.Until(() => shell.Selections.Any(x => x.Anchor == 6 && x.Active == 12));
+    }
+
+    /// <summary>Reads the cancellation generation without exposing a production-only test hook.</summary>
+    private static long FindSerial(NativeEditorController controller) =>
+        (long)typeof(NativeEditorController).GetField("_findSerial", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(controller)!;
+
     /// <summary>Whole-source import and offscreen emoji editing create exactly one canonical history entry.</summary>
     [Fact]
     public async Task Offscreen_edit_is_one_commit_and_history_uses_ranges_not_imports()
@@ -392,7 +481,7 @@ public sealed class NativeSourceControllerTests
         var configuration = MoteConfigLoader.Load(new MoteConfigLoadOptions { UserHomeDirectory = home, UseEnvironmentOverride = false });
         return new NativeEditorController(shell, configuration, ThemePolicies.Get(configuration.ThemeId), startup, EditorPresentationProfile.NativeSource);
     }
-    private sealed class SourceShell : INativeEditorShell, INativeSourceShell
+    private sealed class SourceShell : INativeEditorShell, INativeSourceShell, INativeExternalOpenShell
     {
         /// <summary>Only controller-posted actions enter this queue.</summary>
         private readonly ConcurrentQueue<Action> _posted = new();
@@ -425,6 +514,8 @@ public sealed class NativeSourceControllerTests
         /// <inheritdoc />
         public event Action? OpenRequested;
         /// <inheritdoc />
+        public event Func<string, bool>? ExternalOpenRequested;
+        /// <inheritdoc />
         public event Action<NativeSaveRequest>? SaveRequested;
         /// <inheritdoc />
         public event Action? UndoRequested;
@@ -448,9 +539,9 @@ public sealed class NativeSourceControllerTests
         /// <inheritdoc />
         public event Action? PageNextRequested { add { } remove { } }
         /// <inheritdoc />
-        public event Action? FindRequested { add { } remove { } }
+        public event Action? FindRequested;
         /// <inheritdoc />
-        public event Action? FindNextRequested { add { } remove { } }
+        public event Action? FindNextRequested;
         /// <inheritdoc />
         public event Action? GoToLineRequested;
         /// <inheritdoc />
@@ -485,7 +576,7 @@ public sealed class NativeSourceControllerTests
         /// <inheritdoc />
         public void FocusSource() { }
         /// <inheritdoc />
-        public string? PromptFind() => null;
+        public string? PromptFind() => FindQuery;
         /// <inheritdoc />
         public int? PromptGoToLine() => GoToLine;
         /// <inheritdoc />
@@ -506,6 +597,8 @@ public sealed class NativeSourceControllerTests
         public void Close() { }
         /// <summary>Dispatches ordinary Open.</summary>
         public void Open() => OpenRequested?.Invoke();
+        /// <summary>Delivers an OS open request with synchronous admission acknowledgement.</summary>
+        public bool ExternalOpen(string path) => ExternalOpenRequested?.Invoke(path) == true;
         /// <summary>Dispatches New.</summary>
         public void New() => NewRequested?.Invoke();
         /// <summary>Dispatches one native edit.</summary>
@@ -514,6 +607,22 @@ public sealed class NativeSourceControllerTests
         public void Undo() => UndoRequested?.Invoke();
         /// <summary>Dispatches the actual Save receipt route.</summary>
         public void Save() => NativeSaveRequest.Receive(NativeSaveKind.Save).Dispatch(SaveRequested);
+        /// <summary>Dispatches an actual Find prompt result through the subscribed controller event.</summary>
+        public void Find(string query) { FindQuery = query; FindRequested?.Invoke(); }
+        /// <summary>Dispatches the retained-query Find Next command.</summary>
+        public void FindNext() => FindNextRequested?.Invoke();
+        /// <summary>Prompt response is explicit rather than an inert event stub.</summary>
+        public string? FindQuery { get; private set; }
+        /// <summary>Queued callbacks permit deterministic withholding of asynchronous completions.</summary>
+        public int PendingCallbacks => _posted.Count;
+        /// <summary>Waits for completion delivery without executing the queued UI callback.</summary>
+        public async Task WaitForPosted()
+        {
+            var clock = Stopwatch.StartNew();
+            while (PendingCallbacks == 0 && clock.Elapsed < TimeSpan.FromSeconds(10))
+                await Task.Delay(10);
+            Assert.True(PendingCallbacks > 0, "No asynchronous callback was posted.");
+        }
         /// <summary>Drains only fake queued completions until the independently defined postcondition holds.</summary>
         public async Task Until(Func<bool> condition)
         {

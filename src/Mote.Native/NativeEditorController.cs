@@ -169,6 +169,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         shell.GridGeometryChanged += GridGeometryChanged;
         shell.NewRequested += New;
         shell.OpenRequested += Open;
+        if (shell is INativeExternalOpenShell externalOpenShell)
+            externalOpenShell.ExternalOpenRequested += OpenExternal;
         if (shell is INativeOpenEncodingShell encodingShell)
             encodingShell.OpenWithEncodingRequested += OpenWithEncoding;
         shell.SaveRequested += StartSave;
@@ -535,6 +537,17 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         if (path is not null) StartOpen(path);
     }
 
+    /// <summary>Admits OS-delivered single-document paths without bypassing pending text or discard consent.</summary>
+    private bool OpenExternal(string path)
+    {
+        if (_disposed || string.IsNullOrWhiteSpace(path)) return false;
+        if (!CanReplace(out var previous, out var version, out var serial) ||
+            _disposed || serial != _openSerial ||
+            !ReferenceEquals(previous, _document) || version != _document.Snapshot.Version) return false;
+        StartOpen(path);
+        return true;
+    }
+
     /// <summary>Explicit choice also admits BOM-less files that happen to be valid under another codec.</summary>
     private void OpenWithEncoding()
     {
@@ -560,9 +573,18 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         }
     }
 
-    private bool CanReplace()
+    private bool CanReplace() => CanReplace(out _, out _, out _);
+
+    /// <summary>Captures the version after input settlement but before potentially reentrant discard dialogs.</summary>
+    private bool CanReplace(out Document previous, out long version, out long serial)
     {
+        previous = _document;
+        version = previous.Snapshot.Version;
+        serial = _openSerial;
         if (!_shell.CommitPendingText()) return false;
+        previous = _document;
+        version = previous.Snapshot.Version;
+        serial = _openSerial;
         if (_saving)
         {
             _shell.ShowError("Wait for the current save to finish before replacing this document.");
@@ -2350,7 +2372,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     {
         PreviewLayoutPreference.Split => true,
         PreviewLayoutPreference.SourceOnly => false,
-        PreviewLayoutPreference.Auto when _productProfile != EditorPresentationProfile.Continuous => true,
+        PreviewLayoutPreference.Auto when _productProfile is null or EditorPresentationProfile.LegacyPage => true,
         PreviewLayoutPreference.Auto => DocumentPresentation.ForPolicy(_policy) ==
             DocumentPresentationDefault.SourceAndPreview,
         _ => throw new InvalidOperationException("Unknown preview layout preference.")

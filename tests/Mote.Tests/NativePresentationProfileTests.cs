@@ -10,6 +10,29 @@ namespace Mote.Tests;
 /// </summary>
 public sealed class NativePresentationProfileTests
 {
+    /// <summary>Unknown options refuse before any native shell or file I/O is created.</summary>
+    [Theory]
+    [InlineData("--unknown")]
+    [InlineData("-x")]
+    public void Unknown_options_are_not_file_paths(string option)
+    {
+        Assert.False(NativeLaunchParser.TryParse([option], out var route, out var error));
+        Assert.Null(route);
+        Assert.Contains("Unknown option", error);
+    }
+
+    /// <summary>End-of-options makes option-looking filenames explicit, including the smoke flag.</summary>
+    [Theory]
+    [InlineData("--native-source")]
+    [InlineData("--smoke-gui")]
+    public void Literal_option_looking_path_is_preserved(string path)
+    {
+        Assert.True(NativeLaunchParser.TryParse(["--", path], out var route, out var error), error);
+        var product = Assert.IsType<NativeLaunchRoute.Product>(route);
+        Assert.Equal(path, product.Path);
+        Assert.False(product.Smoke);
+    }
+
     /// <summary>The explicit full native product stays separate from default and diagnostic routing.</summary>
     [Theory]
     [InlineData(null, null, false)]

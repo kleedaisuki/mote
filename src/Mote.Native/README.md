@@ -1,6 +1,6 @@
 # mote native desktop shell
 
-`Mote.Native` is the static composition root for a **single native executable** on
+`Mote.Native` is the static composition root for a **Native AOT desktop application** on
 Windows and macOS. `Mote.Engine` owns the file and undo history; `Mote.Formats`
 owns semantic analysis; `Mote.Themes` supplies UI-neutral palette policies;
 `Mote.Configuration` resolves conventional `~/.mote` paths; and
@@ -8,15 +8,41 @@ owns semantic analysis; `Mote.Themes` supplies UI-neutral palette policies;
 language server, runtime plugin loading, web service, or bundled UI library is
 used. Windows uses the OS RichEdit control. macOS uses AppKit `NSTextView` via
 the Objective-C runtime. All files remain separate at build time and are
-Native AOT-linked into one executable per architecture.
+Native AOT-linked into an executable per architecture. Release delivery permits
+an application directory or macOS `.app` with documentation, notices and reviewed
+companion resources; it does not require a user-installed .NET runtime. This is
+single-document editing, not a project/workspace or multi-document requirement.
 
 The macOS linker embeds `Info.plist` into the Mach-O `__TEXT,__info_plist`
-section so Launch Services can open the naked executable, not a companion
-`.app` bundle. The published directory must be inventoried: only `mote.exe`
-on Windows or `mote` on macOS is a distributable artifact. The executable
-still dynamically uses system Windows DLLs or Apple frameworks; strict
-single-binary means no **shipped** companion library or resource, not a
-statically linked operating system.
+section so the underlying Mach-O remains directly launchable; packaged delivery
+may wrap it in a standard `.app` for Finder and application integration. The
+published/package directory must be inventoried. The executable dynamically uses
+system Windows DLLs or Apple frameworks; application packaging is not a
+statically linked operating system or a switch to CoreCLR/JIT.
+
+## First-release qualification
+
+The release goal is a usable ordinary single-document editor. Candidate-specific
+qualification uses valid small Markdown/TOML/JSON/YAML/CSV/TXT tasks, not a 100-MiB
+performance promotion gate. `tests/NativeReleaseProductWorkflow.ps1` independently
+checks saved bytes and original-file protection around actual native product
+workflows and a **fresh GUI process** reopen. Windows automation targets the real
+RichEdit controls and modal prompts. AppKit diagnostics call the production
+NSTextView/menu/responder protocols; they are not external keyboard delivery,
+real Pinyin input, physical screen presentation, or screen-reader certification.
+
+The new Windows release workflow covers selected Unicode replacement, global
+Find and Go to Line, engine and native history, dirty-close Cancel, Save and
+new-process reopen. Its PNG is a window-owned `PrintWindow` capture, not a
+display-latency observation. The macOS product workflow also exercises marked
+text settlement before Save, configuration/theme reload, New/Open and dirty-close
+Cancel; its PNG caches the real AppKit content view, not the physical display.
+See `docs/validation/release-product-*.md` for scope and retained evidence.
+
+`mote --version` reports the product assembly version. Unknown options fail before
+opening a GUI; use `mote -- <path>` for an option-looking filename. `--native-source`
+selects the full native product candidate during qualification; promotion to the
+ordinary launch default requires all supported architecture release gates.
 
 ```
 dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r win-x64 --self-contained true -o .cache/native-publish/win-x64

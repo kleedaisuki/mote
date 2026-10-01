@@ -151,10 +151,16 @@ internal sealed partial class NativeEditorController
             observation.ViewportSequence < _sourceViewportSequence) return;
         if (!NativeSourceBinding.TrySelection(_sourceBinding.Installation.Projection,
             observation.Selection, out var anchor, out var active, out var known)) return;
+        // A delayed Find belongs to the selection from which it started, not
+        // to a newer native caret. Scrolling alone must not cancel the search.
+        var selectionChanged = anchor != _navigation.Anchor || active != _navigation.Active;
+        var showedSearch = selectionChanged && _operationStatus == "Searching document…";
+        if (selectionChanged) InvalidateFind();
         _sourceViewportSequence = observation.ViewportSequence;
         _sourceBinding = _sourceBinding.Select(anchor, active, known);
         _navigation.SetSelection(_document.Snapshot, anchor, active);
         if (UpdateSourceInterest(observation.VisibleDisplay)) ScheduleAnalysis();
+        if (showedSearch) ShowDocument();
     }
 
     /// <summary>Maps native visible interest to a bounded canonical analysis/preview span, not a text page.</summary>

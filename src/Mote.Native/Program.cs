@@ -11,6 +11,15 @@ internal static class Program
     [STAThread] // Windows source UIA providers use standard COM owner-apartment dispatch.
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--version")
+        {
+            Console.WriteLine($"mote {typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "unknown"}");
+            return 0;
+        }
+        if (args.Length == 3 && args[0] == "--check-native-mac-release-workflow")
+            return RunMacReleaseProbe(args[1], args[2]);
+        if (args.Length == 2 && args[0] == "--check-native-mac-release-reopen")
+            return RunMacReleaseProbe(args[1], null);
         if (args.Length == 2 && args[0] == "--check-native-encoding")
             return NativeEncodingRuntimeProbe.Run(args[1]);
         if (args.Length == 2 && args[0] == "--check-native-source-capability")
@@ -130,7 +139,8 @@ internal static class Program
         }
         if (args.Length == 1 && args[0] is "--help" or "-h")
         {
-            Console.WriteLine("Usage: mote [path] | mote --legacy-page [path]");
+            Console.WriteLine("Usage: mote [path] | mote --native-source [path] | mote --legacy-page [path]");
+            Console.WriteLine("Version: mote --version; option-looking file path: mote -- <path>");
             Console.WriteLine("Default: continuous source-backed editor (under validation); --legacy-page restores the established page view.");
             Console.WriteLine("GUI startup diagnostic: mote [--legacy-page] --smoke-gui");
             Console.WriteLine("Historical canvas A/B diagnostic: mote --canvas-experimental [path]");
@@ -215,6 +225,25 @@ internal static class Program
         app.Dispose(); // Close pending intervals before draining the process-local writer.
         MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
         return 0;
+    }
+
+    /// <summary>Qualifies the actual native source product on AppKit with opt-in, content-free traces.</summary>
+    private static int RunMacReleaseProbe(string input, string? output)
+    {
+        if (!OperatingSystem.IsMacOS()) return 3;
+        var config = MoteConfigLoader.Load();
+        if (config.TraceEnabled || Environment.GetEnvironmentVariable("MOTE_TRACE") == "1")
+            MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = config.TraceDirectory });
+        try
+        {
+            var result = output is null
+                ? Mac.MacReleaseWorkflowProbe.RunReopen(input)
+                : Mac.MacReleaseWorkflowProbe.Run(input, output);
+            if (result == 0) Console.WriteLine(output is null
+                ? "mote-native-mac-release-reopen-ready" : "mote-native-mac-release-workflow-ready");
+            return result;
+        }
+        finally { MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); }
     }
 
     /// <summary>

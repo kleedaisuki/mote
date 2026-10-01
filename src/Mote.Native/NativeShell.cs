@@ -16,6 +16,17 @@ internal enum NativeLineEndingMode
 /// <summary>Closed persistence commands sharing one admission and lifetime contract.</summary>
 internal enum NativeSaveKind { Save, SaveAs }
 
+/// <summary>Optional OS document-open delivery, independent of the application's modal file picker.</summary>
+internal interface INativeExternalOpenShell
+{
+    /// <summary>
+    /// Requests one path through canonical pending-input and discard admission.
+    /// True means admitted for asynchronous open, not proof that I/O succeeded.
+    /// The adapter must reject multi-file delivery rather than silently replace documents.
+    /// </summary>
+    event Func<string, bool>? ExternalOpenRequested;
+}
+
 /// <summary>Target-owned receipt; no native pointer, path, input text, or document is retained.</summary>
 internal readonly record struct NativeSaveRequest(NativeSaveKind Kind, TelemetryRequest? Trace)
 {

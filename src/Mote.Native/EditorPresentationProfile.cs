@@ -72,13 +72,17 @@ internal static class NativeLaunchParser
             args[index] == "--uia-fragment-experimental";
         if (fragment) index++;
 
+        // End-of-options preserves literal paths which resemble editor flags.
+        var literalPath = index < args.Length && args[index] == "--";
+        if (literalPath) index++;
+
         var remaining = args.AsSpan(index);
-        if (remaining.Contains("--uia-fragment-experimental"))
+        if (!literalPath && remaining.Contains("--uia-fragment-experimental"))
         {
             error = "The UIA fragment diagnostic requires Windows canvas mode.";
             return false;
         }
-        if (remaining.Contains("--legacy-page") || remaining.Contains("--native-source") || remaining.Contains("--canvas-experimental"))
+        if (!literalPath && (remaining.Contains("--legacy-page") || remaining.Contains("--native-source") || remaining.Contains("--canvas-experimental")))
         {
             error = "Presentation modes cannot be combined.";
             return false;
@@ -89,7 +93,14 @@ internal static class NativeLaunchParser
             return false;
         }
 
-        var smoke = remaining.Length == 1 && remaining[0] == "--smoke-gui";
+        if (!literalPath && remaining.Length == 1 && remaining[0] != "--smoke-gui" &&
+            remaining[0].StartsWith('-'))
+        {
+            error = "Unknown option. Use mote --help, or -- before a literal file path.";
+            return false;
+        }
+
+        var smoke = !literalPath && remaining.Length == 1 && remaining[0] == "--smoke-gui";
         var path = remaining.Length == 1 && !smoke ? remaining[0] : null;
         route = diagnostic
             ? new NativeLaunchRoute.CanvasDiagnostic(fragment, path, smoke)

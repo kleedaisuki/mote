@@ -19,7 +19,7 @@ namespace Mote.Native.Mac;
 /// the controller remains the sole owner of text, undo history, and file operations.
 /// </summary>
 [SupportedOSPlatform("macos")]
-internal sealed unsafe partial class MacEditorShell : INativeCanvasShell, INativeOpenEncodingShell, INativeSourceShell
+internal sealed unsafe partial class MacEditorShell : INativeCanvasShell, INativeOpenEncodingShell, INativeSourceShell, INativeExternalOpenShell
 {
     /// <summary>One source-only endpoint; preview and status draws never complete it.</summary>
     private readonly NativeDrawTrace _sourceDrawTrace = new();
@@ -707,6 +707,7 @@ internal sealed unsafe partial class MacEditorShell : INativeCanvasShell, INativ
     /// <inheritdoc />
     public string? PromptFind()
     {
+        if (_releaseFindQuery is { } supplied) { _releaseFindQuery = null; _findQuery = supplied; return supplied; }
         var value = PromptText("Find in document", "Search text", _findQuery);
         if (string.IsNullOrEmpty(value)) return null;
         _findQuery = value;
@@ -716,6 +717,7 @@ internal sealed unsafe partial class MacEditorShell : INativeCanvasShell, INativ
     /// <inheritdoc />
     public int? PromptGoToLine()
     {
+        if (_releaseGoToLine is { } supplied) { _releaseGoToLine = null; return supplied; }
         var value = PromptText("Go to line", "One-based line number", "1");
         if (value is null) return null;
         if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var line) && line > 0)
@@ -827,6 +829,12 @@ internal sealed unsafe partial class MacEditorShell : INativeCanvasShell, INativ
     /// <inheritdoc />
     public bool ConfirmDiscard()
     {
+        if (_releaseDiscardAnswer is { } answer)
+        {
+            _releaseDiscardAnswer = null;
+            _releaseDiscardObserved = true;
+            return answer;
+        }
         if (_probeConfirmDiscardOnce)
         {
             _probeConfirmDiscardOnce = false;
@@ -1833,6 +1841,10 @@ internal sealed unsafe partial class MacEditorShell : INativeCanvasShell, INativ
         var existing = ObjC.Class("NSObject");
         var cls = ObjC.AllocateClassPair(existing, className, 0);
         if (cls == 0) return className;
+        Add(cls, "application:openFile:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, nint, byte>)&ApplicationOpenFile, "c@:@@");
+        Add(cls, "application:openFiles:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, nint, void>)&ApplicationOpenFiles, "v@:@@");
         Add(cls, "moteSourceBoundsChanged:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SourceBoundsChanged, "v@:@");
         Add(cls, "textDidChange:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&TextDidChange, "v@:@");
