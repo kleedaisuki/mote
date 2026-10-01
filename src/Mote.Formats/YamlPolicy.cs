@@ -302,7 +302,13 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
                     if (entry.Children.Count != 2) continue;
                     var key = entry.Children[0];
                     if (_diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error &&
-                        d.Span.Start >= key.Span.Start && d.Span.End <= key.Span.End)) continue;
+                        d.Span.Start >= key.Span.Start && d.Span.End <= key.Span.End))
+                    {
+                        // Skipping an invalid key is not a completed uniqueness proof.
+                        _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "yaml.key-equality-unsupported",
+                            "Cannot verify this mapping key's uniqueness: key contains a semantic error.", key.Span));
+                        continue;
+                    }
                     var canonical = IdentifyKey(key, new HashSet<SemanticNode>(ReferenceEqualityComparer.Instance), out var reason);
                     if (canonical is null)
                         _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "yaml.key-equality-unsupported", $"Cannot verify this mapping key's uniqueness: {reason}.", key.Span));
