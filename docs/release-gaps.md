@@ -1,6 +1,6 @@
 # Release gap audit — strict one-binary product
 
-Audit date: 2026-10-01 (new scoped evidence through [CI 36831903238](https://github.com/kleedaisuki/mote/actions/runs/36831903238) at `a13a9b0`; current verdict below; historical checkpoints retain their original scope). This is a **moving source audit**, not a claim about a shipped release. `P0` means the hard user contract cannot yet be met; `P1` means substantial verification or integration remains. Owners and decisive experiments are included so a gap can be closed by evidence. Target architecture: [architecture.md](architecture.md); incremental migration: [incremental-plan.md](incremental-plan.md); local-path/theme contracts: [configuration.md](configuration.md), [themes.md](themes.md).
+Audit date: 2026-10-01 (new scoped evidence through [CI 36836309613](https://github.com/kleedaisuki/mote/actions/runs/36836309613) at `b4093b8`; current verdict below; historical checkpoints retain their original scope). This is a **moving source audit**, not a claim about a shipped release. `P0` means the hard user contract cannot yet be met; `P1` means substantial verification or integration remains. Owners and decisive experiments are included so a gap can be closed by evidence. Target architecture: [architecture.md](architecture.md); incremental migration: [incremental-plan.md](incremental-plan.md); local-path/theme contracts: [configuration.md](configuration.md), [themes.md](themes.md).
 
 ## What is already established
 
@@ -51,7 +51,33 @@ The **osx-x64 in-process Canvas AX selector/lifecycle** report is a distinct unr
 
 ## Active gates
 
-### Current source verdict — CI 36831903238 / a13a9b0
+### Current source verdict — CI 36836309613 / b4093b8
+
+All ten jobs succeed. Actual Windows/macOS strict suites each pass **1369/1369**,
+Themes 14/14 and Configuration 9/9, with no failures/skips; all four Native AOT
+inventories preserve the one-binary payload. All **eight ordinary JSON Save/reopen
+samples** pass exact-byte and captured-version-1 causal contracts with numeric
+editor/reopen exits 0/0. All 16 separate synthetic recovery controls pass.
+
+Both Mac RIDs actually execute the global Block ABI/install/remove and primary/
+reporter posted-fault continuation controls before Flow-ready. **That Flow step
+was non-gating in this run**; raw markers plus the successful script's exit-0
+predicate, not a green job alone, support this scoped runtime result. Each of the
+four Mac edited traces independently retains input ready/candidate/removed =
+1/1/1 and menu entry/returned-true = 1/1; fresh reopen retains ready/removed but
+no candidate. Empty-attribute session observations do not create an input-to-menu
+or menu-to-request edge. Historical censored failures remain reliability
+counterexamples, not repaired by this eight-case pass
+([scoped hosted evidence](validation/native-local-input-monitor.md)).
+
+Next: preserve the bounded native ABI/fault controls as a blocking future gate,
+then measure current-binary trace-off/on startup and editing on qualified
+disposable desktops. Enabled Mac monitor cost remains unmeasured. Mac Grid's
+original failing AX reply, Windows ARM inconclusive workflows, historical
+Windows AV, arbitrary-format semantic domains, physical presentation and real
+IME/reader coexistence remain open. No signing work or Gatekeeper acceptance.
+
+### Historical source verdict — CI 36831903238 / a13a9b0
 
 All ten strict jobs pass; Windows and macOS each report **Mote.Tests 1362/1362**,
 Themes 14/14 and Configuration 9/9, zero failed/skipped. Four Native AOT
