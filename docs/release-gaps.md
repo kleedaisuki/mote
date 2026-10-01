@@ -51,7 +51,35 @@ The **osx-x64 in-process Canvas AX selector/lifecycle** report is a distinct unr
 
 ## Active gates
 
-### Current hosted checkpoints — through CI 36841148496 / c19f4c6
+### Current hosted checkpoint — CI 36858899063 / c856816
+
+[CI 36858899063](https://github.com/kleedaisuki/mote/actions/runs/36858899063)
+at `c856816` completes **all ten jobs**. Windows/macOS main suites each pass
+**3132/3132**, Themes 14/14 and Configuration 9/9, with four one-executable
+Native AOT inventories. Both Mac blocking Flow/ABI/fault controls execute their
+actual markers, and ordinary JSON summaries retain **8/8**, numeric editor/reopen
+exits 0/0. This integrates the normative TOML/scanner/cache/public-recovery/scalar
+source checkpoint; it does not independently certify arbitrary TOML native GUI
+semantics or physical edit latency.
+
+Both Windows architectures actually execute the new blocking owned-HWND pane
+checks: **2/2 per RID**, with correct native host/test architecture. Source-first
+passive publication and bidirectional pane traversal hold in that bounded test.
+The **unchanged external AOT Grid** reports nevertheless remain `product-fail`,
+actual exit 1 on both RIDs, with the original physical-focus/scroller/off-owner
+assertions. They lack a serialized initial Source→Table or callback-thread
+witness; managed/native-HWND success is not external UIA acceptance or a causal
+historical fix ([actual reports and scope](validation/windows-grid-accessibility-ci.md)).
+
+The automatically selected [Benchmarks 36858899230](https://github.com/kleedaisuki/mote/actions/runs/36858899230)
+qualifies a separate declared 20-pair/40-indexed-return checkpoint for changed
+binary `4d12c303…538a51a8` (7,211,008 bytes). All five endpoint intervals contain
+zero; unchanged classifier/hash results and 40 normal-process reports were checked
+without repeating the prior raw 60-chain audit. No pooling of the different-binary
+series or zero-cost/tail claim follows
+([current-binary study](performance/causal-trace-overhead.md)).
+
+The following foundational checkpoints retain their original scopes.
 
 The foundation run **CI 36836309613 / b4093b8** has all ten jobs succeed. Actual Windows/macOS strict suites each pass **1369/1369**,
 Themes 14/14 and Configuration 9/9, with no failures/skips; all four Native AOT
@@ -92,7 +120,7 @@ zero overhead, tail latency or generalized nonregression. Companion CI
 inventories retain 8/8 with numeric exits 0/0
 ([raw-study interpretation](performance/causal-trace-overhead.md#first-hosted-foreground-paired-study--cibenchmarks-c19f4c6)).
 
-**Local product implementation checkpoint, hosted integration pending:** TOML
+**Product source checkpoint integrated by c856816, not release acceptance:** TOML
 now uses normative table ownership and a stateful logical-statement scanner, with
 one committed source snapshot plus validated statement summaries for actual edit
 reuse. This removes three false Complete control/trivia cases and the blanket
@@ -125,8 +153,21 @@ Source-first phase checks and complete bidirectional pane-focus tests are prepar
 for both Windows architectures in CI. Historical external `sourceFocus` labels
 actually include a Table HWND, and fixed off-owner prose is not a thread witness;
 this changes what the old failures establish, not their retained failure status.
-The mechanism is reviewed, **not yet a demonstrated historical bug fix**
+The mechanism is reviewed and both owned native controls pass, **not a demonstrated historical external-probe fix**
 ([focus review](reviews/windows-grid-focus-review.md)).
+
+**Subsequent local clean-tree candidate, hosted verification pending:** `a813852`
+removes the second grammar construction only after full read-only tree certification;
+all unknown/invalid paths retain the existing uniform recovery. Independent controls
+pass **915/915** plus **48/48**, and all **703 decoded** frozen corpus outputs match
+exactly including messages, tokens, recursive semantics and Format. A new 50-row
+qualified managed comparison reduces valid cumulative allocation **39.9–44.9%**;
+retained result medians stay unchanged. Late semantic failure adds **1.368 MiB**
+before fallback, while grammar-error allocation remains equal; overlapping invalid
+timing ranges do not prove equivalence. This resolves much of the measured valid
+public double-parse cost without deleting checks, not arbitrary semantic/GUI
+completeness or native latency ([tree evidence](validation/toml-tree-certification.md),
+[costs and qualification](performance/toml-statement-cost.md)).
 
 Next: quantify current Mac monitor cost and pursue real IME/accessibility
 coexistence and larger semantic workloads without replaying the completed
