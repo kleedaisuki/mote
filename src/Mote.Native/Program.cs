@@ -11,6 +11,10 @@ internal static class Program
     [STAThread] // Windows source UIA providers use standard COM owner-apartment dispatch.
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--check-native-encoding")
+            return NativeEncodingRuntimeProbe.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--check-native-source-capability")
+            return NativeSourceCapabilityProbe.Run(args[1]);
         if (args.Length == 1 && args[0] == "--check-runtime")
         {
             Console.WriteLine("mote-native-ready");
