@@ -246,6 +246,108 @@ execution per RID with raw report/traces and numeric exits is the next required
 evidence; no local GUI execution or production implementation was performed by
 this review.
 
+## Bounded implementation and temporary client review
+
+Reviewed the actual pending native implementation alongside the fixed producer
+API (`9e80a66`), boundary clarification (`333f100`), reader changes (`c1255b4`,
+`873d7cd`) and explicit graph construction (`4a00852`). The temporary client's
+`Program.cs` and README were inspected under
+`.temp/windows-grid-focus-provenance/client/`. No native execution, repeated tests,
+production/test/workflow edits or push occurred in this review.
+
+### Necessary correction found and resolved: top-level control-ID validation
+
+The initial `CaptureFocusEvidence` implementation called
+`FocusRoleMatches(_parent, 0, 0, "MoteNativeEditorWindow", ...)` before and after
+sampling. That child-role helper required `GetDlgCtrlID(main) == 0`. Microsoft's
+[GetDlgCtrlID contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgctrlid)
+explicitly says top-level windows have no identifiers and any returned value is
+not valid. The actual shell also installs a native menu before the client runs;
+using an invalid top-level control-ID value can reject a valid menu-bearing main
+capability and collapse the intended observations to unavailable/unknown.
+
+Priority: P1 for observability correctness, not a demonstrated product focus
+failure. Confidence: high for the native contract violation; no claim of a
+locally executed failure. The implementation owner promptly replaced both main
+checks with `FocusMainMatches`, checking visibility, native owner, unowned
+top-level parent and shipped class **without GetDlgCtrlID**. Independent source
+reinspection confirms the fix. Exact control IDs remain checked only for child
+roles. The temporary client already validates main separately without this
+invalid control-ID assumption. Finding resolved; do not reopen absent new evidence.
+
+### Implementation assessment
+
+- Disabled/faulted tracing reads value-type health and directly calls the
+  original action; evidence cast, query, request allocation and no captured
+  lambda are outside that path. Native identity fields are assigned at existing
+  Grid construction, not queried on a disabled request.
+- The observed path calls the original adapter once and captures its precise
+  result before unchanged HRESULT translation. Optional Begin/End/capture errors
+  are contained separately. The original nonfatal action exception is rethrown
+  with `throw;`, even if fault-terminal observation fails. OutOfMemoryException
+  remains excluded from nonfatal containment, consistent with the stated fatal
+  policy; there is no claim of transparent recovery from fatal faults.
+- The two persisted operations describe **adapter invocation only**. Node stale/
+  unsupported early returns remain outside the helper and are not silently
+  certified. A missing action yields the existing Unavailable result. Receipt
+  and fresh terminal anchor retain the original sink without ambient Activity,
+  native handles or a long producer lease; invalid outcome does not fabricate
+  an alternate action return.
+- Native and managed thread relations are independent. Main/group/Table and
+  source capabilities use shipped classes, actual parents, child IDs and native
+  owner identity. Actual source input IDs 101/301 are selected by shell mode;
+  missing Canvas source never falls back to legacy source. Disposal advances
+  installation and clears source before retiring providers/native callbacks;
+  post-sample installation/main/Table checks refuse superseded evidence.
+- `GetGUIThreadInfo` samples the explicit GUI owner queue and requires its active
+  window to remain main for a certified production sample. It is not global
+  foreground or physical keyboard focus. Missing role capability can only yield
+  an anonymous owned-other pane, not a source label. Native class strings use
+  stack storage and fixed comparisons; no text, paths, native identity numbers
+  or cell coordinates are serialized.
+- GUITHREADINFO is sequential: two 32-bit values, six pointer-sized HWNDs and a
+  four-int RECT (72 bytes on the two 64-bit RIDs). Native imports use DWORD uint,
+  HWND nint, BOOL marshalling and UTF-16 class-name stack buffer. This is source
+  ABI inspection, not a runtime interop certificate.
+
+No further substantive blocker found within this scoped source review after
+the top-level validation correction. Concurrent role destruction/reuse cannot
+be made an atomic Windows identity transaction by these read calls; the evidence
+is an installation/lifetime-checked sample, not a permanent capability or proof
+about arbitrary reentrant windows. Preserve that limited claim.
+
+### Independent temporary client assessment
+
+Native discovery certifies the launched process, owner GUI thread and shipped
+Canvas/source/Grid role structure before UIA queries. Source is the actual input
+island, not Canvas parent. Per-sample validations, closed pane/exception reporting
+and in-memory selection/reference checks do not serialize raw native identity,
+fixture content, names or paths. Report output uses CreateNew in checkout-root
+cache/temp paths with existing reparse ancestors refused. No legacy oracle or
+pin is edited.
+
+The sequence performs one F6 post to an owned admitted pane, one Go-to Invoke/
+submission and one distant cell SetFocus. Read polling does not resend input.
+Client operation receipts have explicit local terminal parents; server graph
+edges are independent and `CrossProcessEdge=unjoined` is unconditional. A
+descriptive F6 successor relation is not substituted for the old failing oracle.
+SetFocus refusal is recorded as an actual exception outcome, not a constant
+off-owner explanation. Numeric editor exit, forced cleanup, fixture hash and
+boundary survive normal nonfatal failures. Zero client exit requires observed
+sequence, unchanged fixture and normal editor exit without forced cleanup.
+
+The polling loops have finite elapsed-time bounds, but individual synchronous
+UIA/SendMessage calls are not cancellable by the surrounding Stopwatch. The
+1000-query limit is checked **after** each call returns. Hosted external process
+timeout/cleanup must remain responsible for a hung call; neither README nor
+summary should describe these loops as a hard per-call deadline or guaranteed
+in-process recovery. This is a limit, not a reason to add repeated UIA actions.
+
+Remaining proof is actual published-AOT execution on both Windows RIDs with raw
+trace/report and numerical process outcomes. Portable action/serializer/graph
+tests and successful native compilation cannot prove that callback delivery or
+the suspected initial-focus transition occurred.
+
 ## Addendum: scoped dual-architecture hosted focus step
 
 Independent workflow-only review on 2026-10-01 examined the additive 26-line
