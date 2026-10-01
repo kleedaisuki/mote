@@ -64,7 +64,7 @@ def series(n=2):
 
 def record(span, operation, parent=None, **attributes):
     """Build schema-v1 transport records, without deriving expected stages from code."""
-    return dict(schema_version=1, utc_time="2026-10-01T00:00:00Z", session_id="fixture",
+    return dict(schema_version=1, utc_time="2026-10-01T00:00:00Z", session_id="2" * 32,
                 trace_id="1" * 32, span_id=f"{span:016x}", parent_span_id=parent,
                 operation=operation, duration_us=0, status="success", attributes=attributes)
 
@@ -84,8 +84,6 @@ def native_records():
                     for i, operation in enumerate(operations, 1))
         rows.append(record(anchor + 90, "command.save", f"{anchor:016x}", version=version))
     rows.append(record(900, "mote.session"))
-    for sequence, row in enumerate(rows, 1):
-        row["attributes"]["record_sequence"] = sequence
     return rows
 
 
@@ -224,7 +222,7 @@ class ArtifactTests(unittest.TestCase):
         evidence = subject.trace_evidence(self.trace_row(), ROOT)
         self.assertEqual([1, 2, 3], [request["saved_version"] for request in evidence["requests"]])
         self.assertFalse(evidence["absence_certified"])
-        self.assertEqual("health_not_certified", evidence["transport_health"])
+        self.assertEqual("legacy_health_unknown", evidence["transport_health"])
         self.assertFalse(subject.trace_evidence(sample("off"), ROOT)["requests"])
         row = self.trace_row()
         row["trace_mode"] = "off"
@@ -342,6 +340,54 @@ class ArtifactTests(unittest.TestCase):
                 for output in directory.glob("*/many-1-1"):
                     self.assertTrue(output.exists(), "Rejected evidence must not be deleted by the CLI")
 
+    def test_cli_corrupt_owned_evidence_is_retained_rejection(self):
+        for defect in ("null-sha", "integer-trace-files", "list-row", "malformed-manifest", "malformed-index"):
+            with self.subTest(defect=defect):
+                directory = self.directory / defect
+                directory.mkdir()
+                manifest, entries = series(1)
+                entry = entries[0]
+                row = entry.pop("row")
+                output = directory / "off"
+                output.mkdir()
+                report = output / "screen-observations.jsonl"
+                if defect == "null-sha": row["executable_sha256"] = None
+                if defect == "integer-trace-files": row["trace_files"] = 1
+                if defect == "list-row": row = []
+                report.write_text(json.dumps(row) + "\n", encoding="utf-8")
+                entry["report"] = report.relative_to(ROOT).as_posix()
+                (directory / "manifest.json").write_text(
+                    "{PRIVATE-FIXTURE-BROKEN" if defect == "malformed-manifest" else json.dumps(manifest),
+                    encoding="utf-8")
+                (directory / "index.jsonl").write_text(
+                    "{PRIVATE-FIXTURE-BROKEN\n" if defect == "malformed-index" else json.dumps(entry) + "\n",
+                    encoding="utf-8")
+                command = [sys.executable, "-B", str(Path(subject.__file__)), "--series", str(directory)]
+                completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(2, completed.returncode, completed.stderr)
+                summary = json.loads((directory / "summary.json").read_text())
+                self.assertEqual("not_qualified", summary["comparison"])
+                self.assertIsNone(summary["paired_estimate"])
+                self.assertNotIn("PRIVATE-FIXTURE", summary["reason"])
+                self.assertNotIn("Traceback", completed.stderr)
+
+    def test_cli_summary_redirect_is_refused_without_writing_target(self):
+        target = self.directory / "protected.json"
+        target.write_text("protected-fixture", encoding="utf-8")
+        summary = self.directory / "summary.json"
+        try:
+            summary.symlink_to(target)
+        except OSError as error:
+            self.skipTest(f"Symlink creation unavailable: {error}")
+        manifest, _ = series(1)
+        (self.directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (self.directory / "index.jsonl").write_text("", encoding="utf-8")
+        command = [sys.executable, "-B", str(Path(subject.__file__)), "--series", str(self.directory)]
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("artifact_reparse_point", completed.stderr)
+        self.assertEqual("protected-fixture", target.read_text(encoding="utf-8"))
+
     def test_receipt_must_link_actual_session_root(self):
         rows = native_records()
         rows[0]["parent_span_id"] = f"{999:016x}"
@@ -355,6 +401,38 @@ class ArtifactTests(unittest.TestCase):
                 if defect == "cycle": rows[0]["parent_span_id"] = rows[1]["span_id"]
                 if defect == "session_identity": rows[-1]["session_id"] = "other-session"
                 with self.assertRaises(ValueError): subject.trace_evidence(self.trace_row(rows), ROOT)
+
+    def test_fixed_native_vocabulary_privacy_and_checkpoint_shapes(self):
+        for defect in ("unknown_operation", "raw_content", "extra_attribute", "invalid_format",
+                       "invalid_size_bucket", "input_duration", "input_attributes", "input_status",
+                       "menu_duration", "menu_attributes", "menu_status"):
+            with self.subTest(defect=defect):
+                rows = native_records()
+                if defect == "unknown_operation": rows[1]["operation"] = "unexpected.user-content"
+                if defect == "raw_content": rows[1]["content"] = "PRIVATE-FIXTURE-CONTENT"
+                if defect == "extra_attribute": rows[1]["attributes"]["document_path"] = "PRIVATE-FIXTURE-PATH"
+                if defect == "invalid_format": rows[1]["attributes"]["format"] = "PRIVATE-FIXTURE-FORMAT"
+                if defect == "invalid_size_bucket": rows[1]["attributes"]["size_bucket"] = "PRIVATE-FIXTURE-SIZE"
+                if defect.startswith(("input_", "menu_")):
+                    operation = ("native.input.save_family_candidate" if defect.startswith("input_")
+                                 else "native.menu.save_family.entered")
+                    checkpoint = record(1000, operation, f"{900:016x}")
+                    if defect.endswith("duration"): checkpoint["duration_us"] = 1
+                    if defect.endswith("attributes"): checkpoint["attributes"]["version"] = 1
+                    if defect.endswith("status"): checkpoint["status"] = "failure"
+                    rows.append(checkpoint)
+                with self.assertRaises(ValueError) as caught:
+                    subject.trace_evidence(self.trace_row(rows), ROOT)
+                self.assertNotIn("PRIVATE-FIXTURE", str(caught.exception))
+
+    def test_allowed_native_dimensions_and_independent_checkpoints_remain_accepted(self):
+        rows = native_records()
+        rows[1]["attributes"].update(format="plain_text", size_bucket="1-4MiB", count=1, hresult=0)
+        rows.extend((record(1000, "native.input.save_family_candidate", f"{900:016x}"),
+                     record(1001, "native.menu.save_family.entered", f"{900:016x}")))
+        evidence = subject.trace_evidence(self.trace_row(rows), ROOT)
+        self.assertEqual(3, len(evidence["requests"]))
+        self.assertFalse(evidence["absence_certified"])
 
 
 class DriverSourceTests(unittest.TestCase):
