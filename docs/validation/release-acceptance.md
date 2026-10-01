@@ -577,3 +577,68 @@ Reproduction/evidence:
 Supported verdict: Windows's new six-task default/final-view contracts pass;
 Mac's first four do too, but **neither Mac CSV nor Mac plain-text completion is
 certified, and the release remains failed**. No gate was waived or hidden.
+
+## Corrected Mac render witness, remaining Windows observer failure: 36931198293
+
+Source **`a86121ea4a1477796b3174332b921e3efb716a89`**; run conclusion remains
+**failure**. Artifact-only audit:
+
+```powershell
+python -B .cache/release-ci-36931198293/product-audit/audit.py
+```
+
+| Target | Completed tasks | Completed-task trace rows | Remaining scope failure |
+| --- | ---: | ---: | --- |
+| win-x64 | 6/6 | 727 | None within this task contract |
+| win-arm64 | 4/6 | 472 | CSV premature file read; plain text not started |
+| osx-x64 | 6/6 | 1,009 | None within this task contract |
+| osx-arm64 | 6/6 | 1,030 | None within this task contract |
+
+All **22 completed tasks /32 process traces /3,238 rows** satisfy the previously
+specified independent bytes, protected-original, fresh GUI reopen and strict
+Save/current-semantic-sidecar contracts. All CLI/config cases match their
+recorded bare/default source-surface witness requirements. These findings do not
+certify physical input, reader behavior, pixel colors or broad format conformance.
+
+Both Mac CSV tasks now have actual final sidecars and post-Save captures, complete
+source coverage of **89 UTF-16 units**, Save/current version **4**, 3 rows ×3
+columns, **9 ready cells /0 pending**, complete analysis with **2 tokens /0
+diagnostics**, and current admitted style/geometry identities. Each has a
+successful separate GUI reopen. Frozen code now reads the installed render
+observation (`ProbeReleaseRenderedGrid.Frame`) rather than the optionally
+registered AX frame; the experimental AX flag remains off. Thus this is actual
+runtime evidence for the corrected ordinary-product observer, not a gate bypass
+by enabling an experimental provider. Optional historical refusal JSON is absent
+on success and is **not** a required product artifact.
+
+Windows ARM64's incomplete CSV is not silently counted as a completed task:
+
+- Original input bytes are exact; the retained output eventually equals the
+  independent expected **95-byte** edited CSV.
+- The native driver report is `failed`, stage `save`; stderr reports a
+  `ReadAllText` sharing violation while the save operation still owns the file.
+- The retained **93-row** trace has a captured version **5** and committed bytes,
+  but the Save request is **censored**: last positive stage is
+  `save.ui_post_returned`, required UI-start/completion acknowledgements and
+  request/session terminal evidence are absent. Graph integrity is incomplete
+  (`missing-causal-parent`, `normal-session-shutdown-not-certified`).
+- No final sidecar/PNG or fresh reopen exists; the plain-text task was not reached.
+  Eventual correct file bytes do not repair the missing lifecycle evidence.
+
+The frozen external driver read the file before waiting for the native Save
+completion acknowledgement; its failure cleanup terminates the child. The
+product owner is correcting this observation order without adding retries,
+changing timeouts or reducing byte/semantic checks. This evidence does not
+establish a product Save corruption failure, nor does it certify the incomplete
+task. Corrected Windows ARM64 runtime completion is still required.
+
+The six TRX collections were enumerated without rerun: both OS main suites
+**3,695/3,695**, Themes **14/14**, Configuration **9/9**, no failed/unexecuted
+results. Complete artifact audit and counters are retained in
+`.cache/release-ci-36931198293/product-audit/{audit.py,result.json,test-counters.json}`;
+frozen Mac render/semantic observer and Windows driver copies are stored there.
+
+Supported verdict: both Mac six-task final-view contracts and Windows x64 pass;
+Windows ARM64's first four pass, but **CSV completion and plain text remain
+unqualified, and the overall release is still failed**. No GUI/test rerun,
+original artifact rewrite or production change was performed by this audit.
