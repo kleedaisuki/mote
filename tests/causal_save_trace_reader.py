@@ -35,6 +35,8 @@ class SaveContract:
     successful_required: frozenset[str] = frozenset()
     successful_one_of: frozenset[str] = frozenset()
     receipt_is_anchor: bool = False
+    successful_groups: tuple[frozenset[str], ...] = ()
+    native_saved_identity: bool = False
 
 
 SAVE_PHASES = (
@@ -54,10 +56,41 @@ MOTE_SAVE_CONTRACT = SaveContract(
     frozenset({"command.save", "command.save_as"}), ("command.save.received", "command.save_as.received"),
     SAVE_EVENTS + SAVE_PHASES + tuple(phase + ".entered" for phase in SAVE_PHASES),
     frozenset({"save.admitted", "save.worker_started", "save.snapshot_captured",
-               "document.save", "save.ui_started"}),
+               "document.save", "save.ui_started", "save.gate_wait", "save.snapshot_capture",
+               "save.target_check", "save.temp_encode_write", "save.temp_flush",
+               "save.temp_hash", "save.saved_stamp", "save.bookkeeping"}),
     frozenset({"save.completed", "save.ui_deferred"}),
     True,
+    (frozenset({"save.commit_move", "save.commit_replace"}),),
+    True,
 )
+RECOVERY_SAVE_CONTRACT = SaveContract(
+    MOTE_SAVE_CONTRACT.request_operations, MOTE_SAVE_CONTRACT.receipt_operation,
+    MOTE_SAVE_CONTRACT.stage_operations,
+    frozenset({"save.admitted", "save.worker_started", "save.snapshot_captured",
+               "document.save", "save.ui_started", "save.completed"}),
+    receipt_is_anchor=True,
+)
+
+
+def _saved_identity_errors(stage_records: list[dict], terminal: dict | None) -> tuple[int | None, list[str]]:
+    """Check the authoritative capture against saved-phase and completion versions."""
+    captures = [row["attributes"].get("version") for row in stage_records
+                if row["operation"] == "save.snapshot_captured" and row["status"] == "success"]
+    if not captures or any(not _integer(version) for version in captures) or len(set(captures)) != 1:
+        return None, ["missing_or_conflicting_captured_version"]
+    version = captures[0]
+    versioned = {"document.save", "save.snapshot_capture", "save.target_check",
+                 "save.temp_encode_write", "save.temp_flush", "save.temp_hash",
+                 "save.final_target_check", "save.commit_move", "save.commit_replace",
+                 "save.saved_stamp", "save.bookkeeping", "save.ui_started",
+                 "save.completed", "save.ui_deferred"}
+    errors = ["saved_version_mismatch:" + row["operation"] for row in stage_records
+              if row["operation"] in versioned and row["status"] == "success"
+              and row["attributes"].get("version") != version]
+    if terminal and terminal["status"] == "success" and terminal["attributes"].get("version") != version:
+        errors.append("saved_version_mismatch:request_terminal")
+    return version, errors
 
 
 def _integer(value: object, minimum: int = 0) -> bool:
@@ -184,7 +217,8 @@ def classify_requests(records: Iterable[dict], contract: SaveContract, *, termin
             parent_record = index.get(key)
             parent = parent_record.get("parent_span_id") if parent_record else None
         if not attached:
-            orphan_stages.append({"span_id": row["span_id"], "operation": row["operation"]})
+            orphan_stages.append({"session_id": row["session_id"], "trace_id": row["trace_id"],
+                                  "span_id": row["span_id"], "operation": row["operation"]})
     result = []
     for key, request in requests.items():
         terminal = request["terminal"]
@@ -195,6 +229,18 @@ def classify_requests(records: Iterable[dict], contract: SaveContract, *, termin
         missing = sorted(contract.successful_required - observed)
         if contract.successful_one_of and not observed.intersection(contract.successful_one_of):
             missing.append("one_of:" + "|".join(sorted(contract.successful_one_of)))
+        for group in contract.successful_groups:
+            if not observed.intersection(group):
+                missing.append("one_of:" + "|".join(sorted(group)))
+        if contract.native_saved_identity and "save.commit_replace" in observed and "save.final_target_check" not in observed:
+            missing.append("save.final_target_check")
+        saved_version, identity_errors = _saved_identity_errors(request["stage_records"], terminal) if contract.native_saved_identity else (None, [])
+        session_rows = [row for row in rows if (row["session_id"], row["trace_id"]) == key[:2]]
+        session_normal = any(row["operation"] == "mote.session" and row["status"] == "success" for row in session_rows)
+        session_drops = any(row["operation"] == "telemetry.dropped" or row["attributes"].get("dropped_total", 0) > 0 for row in session_rows)
+        session_orphans = any((orphan["session_id"], orphan["trace_id"]) == key[:2] for orphan in orphan_stages)
+        degraded = session_drops or session_orphans or terminal is None or receipt is None or not session_normal
+        degraded = degraded or bool(terminal and terminal["status"] == "success" and (missing or identity_errors))
         result.append({
             "request_span_id": key[2], "session_id": key[0], "trace_id": key[1],
             "receipt_observed": request["receipt"] is not None,
@@ -205,8 +251,12 @@ def classify_requests(records: Iterable[dict], contract: SaveContract, *, termin
             "unsuccessful_stages": [{"operation": row["operation"], "status": row["status"]}
                                     for row in request["stage_records"] if row["status"] != "success"],
             "last_positive_stage": request["stages"][-1] if request["stages"] else (receipt["operation"] if receipt else None),
-            "successful_chain_complete": bool(terminal and terminal["status"] == "success" and request["receipt"] and not missing),
+            "successful_chain_complete": bool(terminal and terminal["status"] == "success" and request["receipt"] and not missing and not identity_errors),
             "missing_required_stages": missing,
+            "saved_version": saved_version, "saved_identity_errors": identity_errors,
+            "normal_session_terminal_observed": session_normal,
+            "dropped_records_observed": session_drops,
+            "coverage": "degraded" if degraded else "instrumented_chain_only",
         })
     return {"requests": result, "transport_health": "legacy_health_unknown" if not sequences else "health_not_certified",
             "unlinked_positive_stages": orphan_stages,

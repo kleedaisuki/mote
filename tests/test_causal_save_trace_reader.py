@@ -26,6 +26,20 @@ def encode(rows):
     return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
 
 
+def native_success(commit="save.commit_move"):
+    """Specify full engine success exits independently of the reader's contract."""
+    operations = ("save.admitted", "save.worker_started", "save.gate_wait", "save.snapshot_capture",
+                  "save.snapshot_captured", "save.target_check", "save.temp_encode_write",
+                  "save.temp_flush", "save.temp_hash", commit, "save.saved_stamp",
+                  "save.bookkeeping", "document.save", "save.ui_started", "save.completed")
+    if commit == "save.commit_replace":
+        operations += ("save.final_target_check",)
+    rows = [record(1, "command.save.received", 90)]
+    rows += [record(index, operation, 1, version=7) for index, operation in enumerate(operations, 2)]
+    rows += [record(50, "command.save", 1, version=7), record(90, "mote.session")]
+    return rows
+
+
 class CausalReaderTests(unittest.TestCase):
     """Check positive evidence, compatibility, integrity, and independent requests."""
 
@@ -185,6 +199,57 @@ class CausalReaderTests(unittest.TestCase):
         report = classify_requests(rows, CONTRACT, terminated=True)
         self.assertEqual("health_not_certified", report["transport_health"])
         self.assertFalse(report["absence_certified"])
+
+    def test_full_native_move_and_replace_chains_pass(self):
+        for commit in ("save.commit_move", "save.commit_replace"):
+            request = classify_requests(native_success(commit), MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
+            self.assertTrue(request["successful_chain_complete"])
+            self.assertEqual(7, request["saved_version"])
+            self.assertEqual("instrumented_chain_only", request["coverage"])
+
+    def test_each_missing_native_phase_prevents_complete_chain(self):
+        phases = ("save.gate_wait", "save.snapshot_capture", "save.target_check", "save.temp_encode_write",
+                  "save.temp_flush", "save.temp_hash", "save.commit_move", "save.saved_stamp", "save.bookkeeping")
+        for phase in phases:
+            rows = [row for row in native_success() if row["operation"] != phase]
+            request = classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
+            self.assertFalse(request["successful_chain_complete"], phase)
+
+    def test_replace_requires_final_target_check_but_move_does_not(self):
+        rows = [row for row in native_success("save.commit_replace") if row["operation"] != "save.final_target_check"]
+        request = classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
+        self.assertFalse(request["successful_chain_complete"])
+        self.assertIn("save.final_target_check", request["missing_required_stages"])
+
+    def test_missing_capture_and_saved_version_mismatches_prevent_complete_chain(self):
+        for operation in ("save.snapshot_captured", "save.snapshot_capture", "save.temp_flush", "save.commit_move", "save.completed", "command.save"):
+            rows = native_success()
+            for row in rows:
+                if row["operation"] == operation:
+                    row["attributes"]["version"] = 8
+            request = classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
+            self.assertFalse(request["successful_chain_complete"], operation)
+            self.assertTrue(request["saved_identity_errors"])
+        rows = native_success()
+        next(row for row in rows if row["operation"] == "save.snapshot_captured")["attributes"] = {}
+        self.assertFalse(classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]["successful_chain_complete"])
+
+    def test_unrelated_normal_session_does_not_certify_request_drain(self):
+        rows = native_success()
+        rows[-1]["session_id"] = "other-session"
+        request = classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
+        self.assertTrue(request["successful_chain_complete"])
+        self.assertFalse(request["normal_session_terminal_observed"])
+        self.assertEqual("degraded", request["coverage"])
+
+    def test_scoped_drop_and_orphan_degrade_without_erasing_positive_chain(self):
+        for extra in (record(70, "telemetry.dropped", count=1), record(70, "save.temp_flush.entered", 69)):
+            request = classify_requests(native_success() + [extra], MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
+            self.assertTrue(request["successful_chain_complete"])
+            self.assertEqual("degraded", request["coverage"])
+        extra = record(70, "telemetry.dropped", count=1)
+        extra["session_id"] = "other-session"
+        self.assertEqual("instrumented_chain_only", classify_requests(native_success() + [extra], MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]["coverage"])
 
 
 if __name__ == "__main__":

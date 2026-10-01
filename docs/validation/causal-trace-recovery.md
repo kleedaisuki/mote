@@ -95,6 +95,38 @@ case's positive before-kill prefix and retained censored evidence. No terminal
 is fabricated for receipt-only kills. The Save As receipt remains
 `command_operation: command.save_as` without needing a terminal or new attribute.
 
+### Native completeness versus synthetic transport recovery
+
+The current reader separates `MOTE_SAVE_CONTRACT` from
+`RECOVERY_SAVE_CONTRACT`. The recovery child intentionally emits only selected
+synthetic phases; its success is never promoted to complete real Save evidence.
+Native completeness requires successful gate, snapshot capture, target check,
+temporary encode/write, flush, hash, saved stamp and bookkeeping exits, plus
+exactly an observed successful commit alternative (move or replace). Replace
+also requires a successful final target check. The captured numeric snapshot
+version must agree with successful saved-phase, UI completion and request
+terminal versions; later unrelated UI versions are not used as substitutes.
+
+Normal drain and observed loss are evaluated against each request's own
+`(session_id, trace_id)`. An unrelated successful session terminal cannot
+certify that request. Missing terminals, observed scoped drops, unlinked stage
+records or incomplete successful chains are degraded coverage. Positive chain
+completion remains separate from transport-health certification, which this
+schema slice still cannot supply.
+
+The extended independent fixtures now pass **28/28**, including every missing
+native phase, absent commit, replace-only final check, version disagreement,
+opposite-session normal drain, and scoped drops/unlinked stages. The existing
+typed win-x64 AOT binary was reused (no production changes), and all four
+recovery cases passed with the split contract:
+
+```powershell
+python -B -m unittest discover -s tests -p test_causal_save_trace_reader.py
+python -B tests/Invoke-CausalTraceRecovery.py --binary .cache/causal-recovery-probe/typed-win-x64/CausalTraceRecoveryProbe.exe --output .temp/causal-recovery-contract-split-win-x64-20261001
+```
+
+The report is `.temp/causal-recovery-contract-split-win-x64-20261001/report.json`.
+
 ## Coverage limits
 
 This is evidence of OS-readable buffered prefix recovery after owned process

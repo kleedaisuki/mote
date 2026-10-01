@@ -11,7 +11,7 @@ import subprocess
 import time
 import uuid
 
-from causal_save_trace_reader import MOTE_SAVE_CONTRACT, classify_requests, read_prefix
+from causal_save_trace_reader import RECOVERY_SAVE_CONTRACT, classify_requests, read_prefix
 
 
 def read_directory(directory, terminated):
@@ -19,7 +19,7 @@ def read_directory(directory, terminated):
     records = []
     for path in sorted(directory.glob("*.jsonl")):
         records.extend(read_prefix(path.read_bytes(), terminated=terminated).records)
-    return classify_requests(records, MOTE_SAVE_CONTRACT, terminated=terminated)
+    return classify_requests(records, RECOVERY_SAVE_CONTRACT, terminated=terminated)
 
 
 def run_case(binary, directory, mode):
@@ -34,7 +34,7 @@ def run_case(binary, directory, mode):
                 report = read_directory(directory, True)
                 requests = report["requests"]
                 passed = exit_code == 0 and len(requests) == 1 and requests[0]["successful_chain_complete"]
-                passed = passed and report["normal_session_terminal_observed"] and not report["dropped_records_observed"]
+                passed = passed and requests[0]["normal_session_terminal_observed"] and not requests[0]["dropped_records_observed"]
                 return {"mode": mode, "passed": passed, "exit_code": exit_code, "evidence": report}
             deadline = time.monotonic() + 20
             before = None
