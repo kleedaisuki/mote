@@ -381,3 +381,69 @@ queries an explicit GUI thread without adopting foreground/global focus;
 [ProviderOptions](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-provideroptions)
 documents COM threading/focus responsibilities but is not itself delivery proof.
 Existing CHI/TVCG motivation and reader/IME release gates remain unchanged.
+
+### Approved adapter-specific implementation and portable evidence
+
+Root approved the lean adapter boundary. The implemented names are exactly
+`native.grid.focus.adapter.received` / `native.grid.focus.adapter`, not the
+earlier unqualified proposal. `WindowsGridUiaBridge.Focus` calls
+`WindowsGridFocusOperation.Invoke` before its existing HRESULT map. Earlier
+`WindowsGridUiaNode.SetFocus` stale/header refusals remain outside coverage.
+No client/server graph edge exists; both readers preserve `unjoined` even when
+there is only one server receipt inside a client interval.
+
+`focus_before` and `focus_after` mean the explicit owner **GUI-queue** pane
+(`GetGUIThreadInfo(ownerThread).hwndFocus`), not global keyboard focus, desktop
+foreground, actual key delivery, or photons. A background ARM64 window can retain
+queue focus while UIA global HasKeyboardFocus is correctly false. Neither fact
+is inferred from the other. The production sample requires the checked main as
+its queue's active window; modal/unavailable active context yields unavailable
+pane evidence without changing the adapter result.
+
+`WindowsGridFocusEvidence.cs` validates main/group/table/source/scroller/button
+capabilities with native PID/thread, live parent, fixed class, child control ID
+and adapter installation/lifetime checks. The shell supplies the actual source
+input capability and mode-specific control ID (301 Canvas / 101 legacy), never
+falls back from absent Canvas input, and clears it before disposal. Native class
+comparisons use UTF-16 stack storage. Native identity numbers and strings remain
+process-local. The independent reviewer found one consequential contract defect
+before hosted execution: top-level `GetDlgCtrlID` has no valid meaning, so main
+must not use the child ID==0 validator. The owner split main validation from child
+validation; both checks now omit top-level ID. See the resolved finding in
+[independent review](reviews/windows-grid-focus-review.md) and the
+[Microsoft contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgctrlid).
+
+The disabled/faulted sink path allocates nothing, queries no evidence, creates
+no capturing delegate, and calls the original adapter exactly once. Enabled
+query faults become unknown samples; optional Begin/End failures cannot change
+the original result or exception. Original action faults preserve the same
+exception and produce `focus_result=fault` when observation succeeds, never an
+invented adapter result. OutOfMemoryException remains outside the nonfatal guard.
+Unknown original adapter enum values keep their existing return/HRESULT behavior
+and leave incomplete evidence rather than manufacturing a supported result.
+
+| Retained verification | Result | Scope |
+| --- | --- | --- |
+| Telemetry producer + prior telemetry regression (`9e80a66`) | 58/58, zero failed/skipped | Dedicated typed payload, exact closed fields/statuses, nonambient receipt/terminal, original sink, once-only terminal; no native callback proof |
+| Strict NativeAcceptance reader (`c1255b4`, `873d7cd`) | 14/14 | New fields allowed only on the two operations; all standard dimension/menu/input/Save policies unchanged; shared full row validator |
+| Independent server graph (`4a00852`) | 29/29 | Explicit edges, privacy, missing/drop/censored distinctions, no temporal client join |
+| Portable native wrapper/classifier (`56e05dc`) | 21/21, zero skipped | Exact eight results/HRESULT map, same action exception, observer/writer faults, unknown result, role reduction; no native DLL/HWND calls |
+| Default-off warmed wrapper | 1000 calls, 0 managed allocated bytes, 0 evidence captures, 0 files | Allocation/query evidence only; not a zero-CPU or startup performance claim |
+| Native Release compile | Zero warnings/errors | Source/build compatibility, not AOT/UIA execution |
+
+Telemetry TRX is `.cache/validation/focus-telemetry/focus-telemetry-regression.trx`;
+graph log is `.cache/focus-graph-validation/focus-graph-tests.log`; portable wrapper
+TRX is `.cache/validation/windows-grid-focus-observation/portable-focus-observation-corrected.trx`.
+The initial writer-fault fixture failed because it never enqueued a record into
+the lazy writer. The validator added a seed receipt, then observed the actual
+directory-create fault and the no-query direct action path. Both failed and
+corrected TRXs remain retained; this was a fixture correction, not a product retry.
+No local GUI/native focus/input/clipboard experiment was executed.
+
+Independent review `86440cc` found no remaining substantive blocker after the
+top-level correction and inspected the temporary sequential client. Individual
+synchronous UIA calls have no in-process hard timeout: finite polling/Stopwatch
+checks do not cancel a hung call. Hosted process timeout and exact owned-tree
+cleanup must retain this limitation. Supplemental client promotion, workflow
+integration and both-RID published-AOT runtime evidence remain pending; prior
+green CI and managed-HWND controls do not certify this new boundary.

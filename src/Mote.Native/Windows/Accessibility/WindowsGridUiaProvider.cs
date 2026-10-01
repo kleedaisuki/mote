@@ -130,7 +130,7 @@ internal sealed partial class WindowsGridUiaBridge
     /// <summary>Invokes the sole adapter selection owner and translates its actual result.</summary>
     internal int Mutate(GridAccessibilityId id, GridSelectionMutation mutation) => Result(_actions?.MutateSelection(id, mutation) ?? GridAccessibilityResult.Unavailable);
     /// <summary>Focus is admitted by the adapter, not inferred from native message dispatch.</summary>
-    internal int Focus(GridAccessibilityId id, GridCoordinate? cell) => Result(_actions?.Focus(id, cell) ?? GridAccessibilityResult.Unavailable);
+    internal int Focus(GridAccessibilityId id, GridCoordinate? cell) => Result(WindowsGridFocusOperation.Invoke(_actions, id, cell));
     /// <summary>Maps closed admission outcomes without false success.</summary>
     internal static int Result(GridAccessibilityResult result) => result switch
     {

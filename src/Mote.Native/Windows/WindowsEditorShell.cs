@@ -1119,7 +1119,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private void EnsureGrid()
     {
         if (_grid is not null) return;
-        _grid = new WindowsCsvGrid(_window, 104, _theme, () => IsTextComposing);
+        _grid = new WindowsCsvGrid(_window, 104, _theme, () => IsTextComposing,
+            sourceHandle: _experimentalCanvas ? _canvasIsland?.InputHandle ?? 0 : _editor,
+            sourceControlId: _experimentalCanvas ? 301 : EditorId);
         _grid.IntentRequested += intent => GridIntentRequested?.Invoke(intent);
         _grid.WindowRequested += request => GridWindowRequested?.Invoke(request);
         _grid.GestureBeginning += begin => GridGestureBeginning?.Invoke(begin);

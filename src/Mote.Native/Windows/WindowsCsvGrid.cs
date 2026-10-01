@@ -14,7 +14,7 @@ namespace Mote.Native.Windows;
 /// never access the engine, parse CSV, decode source, or retain a whole-file mirror.
 /// </summary>
 [SupportedOSPlatform("windows")]
-internal sealed class WindowsCsvGrid : IDisposable, IGridAccessibilityActions
+internal sealed partial class WindowsCsvGrid : IDisposable, IGridAccessibilityActions, IWindowsGridFocusEvidence
 {
     private static readonly Win32.SubclassProcedure Procedure = Dispatch;
     private GCHandle _root;
@@ -46,6 +46,12 @@ internal sealed class WindowsCsvGrid : IDisposable, IGridAccessibilityActions
     private NativeGridWindowRequest? _requested;
     private IThemePolicy _theme;
     private readonly nint _parent;
+    /// <summary>Actual shell input capability; cleared before disposal and never serialized.</summary>
+    private nint _sourceHandle;
+    /// <summary>Expected shell input control identity; zero means no source capability was supplied.</summary>
+    private readonly int _sourceControlId;
+    /// <summary>Native control identity used to validate this Grid's roles without guessing from focus.</summary>
+    private readonly int _controlId;
     private int _columns, _row, _column, _anchorRow, _anchorColumn;
     private GridRange _nativeColumns;
     private GridRange Columns => _navigation?.RequestedColumns ?? _grid?.RequestedColumns ?? new(0, 0);
@@ -88,10 +94,12 @@ internal sealed class WindowsCsvGrid : IDisposable, IGridAccessibilityActions
     private (NativeDocumentStamp Document, long BeginSerial, long? RequestSerial, int Row, int Column)? _coordinateSelection;
 
     /// <summary>Creates a hidden report table; its parent forwards WM_NOTIFY to HandleNotify.</summary>
-    internal WindowsCsvGrid(nint parent, int id, IThemePolicy theme, Func<bool>? isCompositionActive = null, bool? accessibilityEnabled = null)
+    internal WindowsCsvGrid(nint parent, int id, IThemePolicy theme, Func<bool>? isCompositionActive = null,
+        bool? accessibilityEnabled = null, nint sourceHandle = 0, int sourceControlId = 0)
     {
         _theme = theme;
         _parent = parent;
+        _sourceHandle = sourceHandle; _sourceControlId = sourceControlId; _controlId = id;
         _isCompositionActive = isCompositionActive ?? (() => false);
         _accessibilityEnabled = accessibilityEnabled ?? Environment.GetEnvironmentVariable("MOTE_NATIVE_GRID_ACCESSIBILITY") == "1";
         try
@@ -1094,6 +1102,8 @@ internal sealed class WindowsCsvGrid : IDisposable, IGridAccessibilityActions
     /// <summary>Removes the native callback before releasing its root; no caller-owned buffer survives.</summary>
     public void Dispose()
     {
+        ++_installation;
+        _sourceHandle = 0;
         foreach (var request in _accessibleRequests.Values) Volatile.Write(ref request.Cancelled, 1);
         _accessibleRequests.Clear();
         _uia?.Detach(); _accessibleGroup?.Detach(); _accessibleStatus?.Detach(); _accessibleRowScroller?.Detach(); _accessibleColumnScroller?.Detach(); _accessibleFrame = null;
