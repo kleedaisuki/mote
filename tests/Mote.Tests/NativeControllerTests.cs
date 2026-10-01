@@ -701,7 +701,9 @@ public sealed partial class NativeControllerTests
         var value = new string('x', 100);
         var source = "title = 'start'\n" + string.Concat(Enumerable.Range(0, 40_000)
             .Select(index => $"k{index:D5} = '{value}'\n")) +
-            "[[items]]\nname = 'x'\n[[items.child]]\ny = 1\n[[items]]\nname = 'later'\n";
+            // A parent AoT append after a nested header is valid TOML. Keep this
+            // presentation-preservation control genuinely uncertain via syntax.
+            "uncertain = [1,\n";
         await File.WriteAllTextAsync(path, source);
         var shell = new FakeShell(NativeLineEndingMode.Preserve);
         using var controller = NewController(shell, temp.Path, path);

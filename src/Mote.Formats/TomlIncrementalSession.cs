@@ -22,9 +22,9 @@ namespace Mote.Formats;
 /// only at top-level newlines outside strings/collections, and the trie holds every key binding.
 /// Scalar and inline-table bindings seal their path. Header-created implicit parents may
 /// become explicit tables or be defined by a dotted assignment, but never both. Nested
-/// array-table headers may be certified while each parent element is current; reopening
-/// an array table after a nested header remains Provisional because Tomlyn's validated
-/// source-order behavior conflicts with independent TOML oracles in that sequence.
+/// array-table headers always bind to the latest independently owned parent element,
+/// including parent re-entry after nested headers. The normative ownership index, not
+/// Tomlyn's whole-file array index, resolves those source-order transitions.
 /// </remarks>
 internal sealed class TomlIncrementalSession : IFormatSession
 {
@@ -123,7 +123,7 @@ internal sealed class TomlIncrementalSession : IFormatSession
     }
 
     /// <summary>Combines bounded lexical output with either certification or one proved error.</summary>
-    private static DocumentAnalysis AnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
+    internal static DocumentAnalysis AnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
     {
         var outcome = TryAnalyzeLarge(snapshot, visible, ct);
         var lexical = AnalyzeVisible(snapshot, visible, ct);
@@ -193,12 +193,14 @@ internal sealed class TomlIncrementalSession : IFormatSession
     private static StatementOutcome ProcessStatement(string source, int start, TextSpan visible,
         TomlOwnershipIndex ownership, List<SemanticNode> nodes)
     {
-        if (string.IsNullOrWhiteSpace(source) || source.TrimStart().StartsWith('#')) return new(true, null);
         if (!ownership.IsExhaustive || !ownership.IsCertifiable) return default;
         var syntax = SyntaxParser.Parse(source, validate: true);
         if (syntax.Diagnostics.Count != 0) return default;
         var pairs = syntax.KeyValues.ToArray();
         var tables = syntax.Tables.ToArray();
+        // Only the parser may certify trivia. C# whitespace includes form feed and
+        // vertical tab, and blindly skipping comments also admitted a trailing bare CR.
+        if (pairs.Length + tables.Length == 0) return new(true, null);
         if (pairs.Length + tables.Length != 1) return default;
         if (pairs.Length == 1)
         {

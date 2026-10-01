@@ -20,6 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Fixtures/Toml/toml-test-1.1.jsonl" LogicalName="Mote.Tests.TomlConformance" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../../src/Mote.Formats/Mote.Formats.csproj" />
     <ProjectReference Include="../../src/Mote.Configuration/Mote.Configuration.csproj" />
     <ProjectReference Include="../../src/Mote.Themes/Mote.Themes.csproj" />

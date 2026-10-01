@@ -1,5 +1,48 @@
 # TOML large-file ownership certification
 
+## Normative ownership correction (2026-10-01)
+
+The large Full path now uses the complete table/key ownership transition model
+within its existing syntax/resource domain. Parent array-of-tables re-entry after
+nested headers appends an independent latest-element scope; it is no longer
+blanket Provisional. Dotted traversal through an explicitly declared table or an
+array-of-tables is a proved `TOML_OWNERSHIP` error, not unsupported uncertainty.
+Implicit header parents retain the previously correct `ImplicitHeader → Dotted`
+transition. The [TOML 1.1 table and array rules](https://toml.io/en/v1.1.0#table)
+are authoritative where Tomlyn's whole-document nested-array validator disagrees.
+Individual statements still receive Tomlyn syntax/inline-ownership validation.
+
+All trivia now receives parser validation **before** a no-key/table shortcut.
+The prior C# `IsNullOrWhiteSpace` / unvalidated-comment branch falsely certified
+form feed, vertical tab and trailing bare CR. The complete pinned toml-test 1.1
+manifest exposed these actual production defects: before, 214/218 valid Complete
+and 3/485 decoded-invalid Complete; after, **218/218 valid Complete and 0/485
+decoded-invalid Complete**. Nine ill-formed UTF-8 fixtures are separately refused
+by the fixture decoder, not counted as analyzer rejections. Invalid decoded files
+remain **Provisional**, not complete diagnostic enumeration. Exact 712 fixture byte
+sequences and the upstream license are embedded in the test assembly.
+
+The retained 40,000-case Python/Rust corpora were replayed for the changed ownership
+model: seed 6451 gives 3,301 Complete, seed 7741 gives 5,706 Complete, zero false
+Complete and zero oracle disagreement. These finite validity checks do not verify
+expected parsed values or prove all grammar. Full modeling, cache invariants,
+source references and corpus provenance are in
+[`architecture/toml-statement-semantic-reuse.md`](architecture/toml-statement-semantic-reuse.md).
+
+The first focused run had **795/796** passing tests: the one failed controller
+control used now-proved-valid nested AoT re-entry as an uncertainty fixture. Its
+suffix was replaced with a genuinely unclosed array outside the viewport; all
+presentation/lifecycle assertions remained unchanged, and that sole failed test
+then passed **1/1**. Results are `.cache/toml-normative/{toml-normative,
+toml-idle-correction}.trx`. The 712 passing corpus cases were not rerun solely
+for the controller fixture edit. Independent review found no material production
+defect (`reviews/toml-normative-ownership-review.md`).
+
+Statement/binding/line/length resource caps, small-file Tomlyn behavior, cold Visible
+provisional semantics and full re-streaming after edits are unchanged at this
+checkpoint. The following 2026-09-30 section records the earlier restricted model
+and measurements; its explicit-table/AoT uncertainty claims are superseded above.
+
 ## Decision and boundary (2026-09-30)
 
 `TomlIncrementalSession` can now certify a valid source-order pattern that it previously

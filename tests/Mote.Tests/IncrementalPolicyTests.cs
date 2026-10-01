@@ -443,11 +443,9 @@ public sealed class IncrementalPolicyTests
         Assert.True(actual.Root.Children.Count < 5_000);
     }
 
-    /// <summary>A duplicate or nested-header parent re-entry cannot be certified.</summary>
+    /// <summary>A duplicate in the latest array element cannot be certified.</summary>
     [Theory]
     [InlineData("v = 'again'\n")]
-    [InlineData("[item.child]\ny = 1\n[[item]]\nv = 'new'\n")]
-    [InlineData("[[item.child]]\ny = 1\n[[item]]\nv = 'new'\n")]
     public void Toml_large_array_table_conflicts_or_nested_scopes_downgrade(string suffix)
     {
         var source = RootArrayTableCorpus() + suffix;
@@ -460,10 +458,12 @@ public sealed class IncrementalPolicyTests
         Assert.True(actual.Coverage.Length < source.Length);
     }
 
-    /// <summary>Nested headers bind to the current element until the parent array is reopened.</summary>
+    /// <summary>Nested headers bind to the latest element; parent re-entry creates a fresh independent scope.</summary>
     [Theory]
     [InlineData("[item.child]\ny = 1\n")]
     [InlineData("[[item.child]]\ny = 1\n[[item.child]]\ny = 2\n")]
+    [InlineData("[item.child]\ny = 1\n[[item]]\nv = 'new'\n")]
+    [InlineData("[[item.child]]\ny = 1\n[[item]]\nv = 'new'\n")]
     public void Toml_large_nested_array_tables_without_parent_reentry_are_complete(string suffix)
     {
         var source = RootArrayTableCorpus() + suffix;

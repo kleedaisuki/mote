@@ -25,11 +25,8 @@ internal sealed class TomlOwnershipIndex
     internal bool IsExhaustive { get; private set; } = true;
 
     /// <summary>
-    /// Whether source-order features stayed in the subset whose ownership is certified by
-    /// this trie and Tomlyn's statement parser. A dotted key may define an implicit header
-    /// parent, but dotted traversal of an explicit header remains outside this subset.
-    /// Reopening an array element after declaring a nested header is also excluded because
-    /// Tomlyn's whole-document validator disagrees with independent TOML parsers there.
+    /// Whether source-order ownership is fully represented. Syntax validation belongs to
+    /// the caller; every supported table/key transition is normative TOML ownership.
     /// </summary>
     internal bool IsCertifiable { get; private set; } = true;
 
@@ -51,9 +48,9 @@ internal sealed class TomlOwnershipIndex
         }
         if (array && binding.Origin == Origin.ArrayTable)
         {
-            if (binding.HasChildHeader) IsCertifiable = false;
+            // References can only reach the latest element. Earlier element namespaces
+            // cannot be revisited, even when they contain nested table/array headers.
             binding.Scope = new Scope();
-            binding.HasChildHeader = false;
             _current = binding.Scope;
             return null;
         }
@@ -106,10 +103,11 @@ internal sealed class TomlOwnershipIndex
             {
                 if (binding.Origin == Origin.ImplicitHeader) binding.Origin = Origin.Dotted;
                 else if (binding.Origin is Origin.ExplicitTable or Origin.ArrayTable)
-                    IsCertifiable = false;
+                {
+                    problem = Conflict($"Key '{parts[i]}' cannot redefine an explicitly defined table.", key, sourceOffset);
+                    return null;
+                }
             }
-            if (newParentOrigin != Origin.Dotted && binding.Origin == Origin.ArrayTable)
-                binding.HasChildHeader = true;
             scope = binding.Scope!;
         }
         return scope;
@@ -159,8 +157,6 @@ internal sealed class TomlOwnershipIndex
     {
         internal Origin Origin = origin;
         internal Scope? Scope = scope;
-        /// <summary>Marks a nested header in the current array element, not prior elements.</summary>
-        internal bool HasChildHeader;
     }
 
     /// <summary>Only implicit header parents may later become explicit tables.</summary>

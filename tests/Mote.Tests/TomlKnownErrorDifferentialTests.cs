@@ -39,10 +39,8 @@ public sealed class TomlKnownErrorDifferentialTests
         Assert.Equal(lexical.Tokens, actual.Tokens);
     }
 
-    /// <summary>Unknown prefix and same-transition certificate loss must suppress later tempting conflicts.</summary>
+    /// <summary>Unknown syntax must suppress later tempting ownership conflicts.</summary>
     [Theory]
-    [InlineData("unknown-before", "[a.x]\n[a]\nx.z=1\n", "x.z=2\n")]
-    [InlineData("unknown-during", "[a.x]\nz=1\n[a]\n", "x.z=2\n")]
     [InlineData("syntax-before", "a=???\n", "a=1\na=2\n")]
     [InlineData("unclosed-eof", "a=1\n", "b=[1,\na=2")]
     public void Uncertified_prefix_does_not_publish_an_ownership_witness(string name, string prefix, string suffix)
@@ -50,6 +48,22 @@ public sealed class TomlKnownErrorDifferentialTests
         var source = prefix + Padding + suffix;
         Export(name, source);
         AssertUnknownWithoutWitness(source);
+    }
+
+    /// <summary>Dotted traversal of an explicit header is a proved violation, not an uncertain prefix.</summary>
+    [Theory]
+    [InlineData("[a.x]\n[a]\n", "x.z=1\n")]
+    [InlineData("[[a.x]]\n[a]\n", "x.z=1\n")]
+    public void Dotted_redefinition_has_exact_first_ownership_witness(string prefix, string suffix)
+    {
+        var source = prefix + Padding + suffix;
+        using var document = new Document(source);
+        using var session = new TomlPolicy().CreateSession();
+        var result = Full(session, document.Snapshot);
+        AssertProvisional(result, document.Snapshot);
+        var error = Assert.Single(result.Diagnostics);
+        Assert.Equal("TOML_OWNERSHIP", error.Code);
+        Assert.Equal(new TextSpan(prefix.Length + Padding.Length, 3), error.Span);
     }
 
     /// <summary>Implicit parents may be defined once without manufacturing a conflict.</summary>
