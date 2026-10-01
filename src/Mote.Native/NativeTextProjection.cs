@@ -90,25 +90,15 @@ internal sealed class NativeTextProjection
 
     /// <summary>
     /// Computes a single engine replacement from an edited native page. Unchanged source
-    /// outside the replacement keeps its exact original newline spelling.
+    /// outside the replacement keeps its exact original newline spelling. Replacement
+    /// endpoints include whole surrogate pairs; inserted text is not Unicode-normalized
+    /// or repaired, so malformed input remains subject to the engine's rejection contract.
     /// </summary>
     public TextChange? Difference(string editedDisplay)
     {
         ArgumentNullException.ThrowIfNull(editedDisplay);
-        var commonPrefix = 0;
-        var prefixLimit = Math.Min(Display.Length, editedDisplay.Length);
-        while (commonPrefix < prefixLimit && Display[commonPrefix] == editedDisplay[commonPrefix])
-            commonPrefix++;
+        var (commonPrefix, oldEnd, newEnd) = ReplacementBounds(Display, editedDisplay);
         if (commonPrefix == Display.Length && commonPrefix == editedDisplay.Length) return null;
-
-        var oldEnd = Display.Length;
-        var newEnd = editedDisplay.Length;
-        while (oldEnd > commonPrefix && newEnd > commonPrefix &&
-               Display[oldEnd - 1] == editedDisplay[newEnd - 1])
-        {
-            oldEnd--;
-            newEnd--;
-        }
 
         var sourceStart = _displayToSourceFloor[commonPrefix];
         var sourceEnd = _displayToSourceCeiling[oldEnd];
@@ -233,17 +223,41 @@ internal sealed class NativeTextProjection
         if (!string.Equals(new NativeTextProjection(desired, _mode).Display,
             editedDisplay, StringComparison.Ordinal))
             throw new InvalidOperationException("The native edit cannot be mapped to canonical text without loss.");
+        var (start, oldEnd, newEnd) = ReplacementBounds(Source, desired);
+        return new TextChange(start, oldEnd - start, desired[start..newEnd]);
+    }
+
+    /// <summary>
+    /// Finds one replacement whose endpoints do not bisect a Unicode scalar in either
+    /// string. Equal code units inside a surrogate pair are included in the replacement;
+    /// malformed input remains unchanged for the engine's validation to reject.
+    /// </summary>
+    private static (int Start, int OldEnd, int NewEnd) ReplacementBounds(string before, string after)
+    {
         var start = 0;
-        while (start < Source.Length && start < desired.Length && Source[start] == desired[start]) start++;
-        var oldEnd = Source.Length;
-        var newEnd = desired.Length;
-        while (oldEnd > start && newEnd > start && Source[oldEnd - 1] == desired[newEnd - 1])
+        var limit = Math.Min(before.Length, after.Length);
+        while (start < limit && before[start] == after[start]) start++;
+        if (SplitsScalar(before, start) || SplitsScalar(after, start)) start--;
+
+        var oldEnd = before.Length;
+        var newEnd = after.Length;
+        while (oldEnd > start && newEnd > start && before[oldEnd - 1] == after[newEnd - 1])
         {
             oldEnd--;
             newEnd--;
         }
-        return new TextChange(start, oldEnd - start, desired[start..newEnd]);
+        if (SplitsScalar(before, oldEnd) || SplitsScalar(after, newEnd))
+        {
+            oldEnd++;
+            newEnd++;
+        }
+        return (start, oldEnd, newEnd);
     }
+
+    /// <summary>Whether a UTF-16 boundary lies between a paired high and low surrogate.</summary>
+    private static bool SplitsScalar(string value, int offset) =>
+        offset > 0 && offset < value.Length && char.IsHighSurrogate(value[offset - 1]) &&
+        char.IsLowSurrogate(value[offset]);
 
     private bool Same(Atom source, Atom display, string edited) =>
         source.IsNewline == display.IsNewline &&
