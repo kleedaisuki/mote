@@ -754,3 +754,75 @@ binary rehashed locally, and no product/probe was edited for the audit. This
 remains a trace-on, just-written/cache-resident root-array capability result,
 not disk-cold/tail-latency/physical-paint/real-IME or repeated-run reliability
 certification.
+
+## Follow-up: both Mac100 saves pass; x64 small Save remains intermittent
+
+2026-10-01: narrow raw-artifact follow-up of completed
+[run 36814164862](https://github.com/kleedaisuki/mote/actions/runs/36814164862),
+source **`874a7ecaec291af12b2501fc815024271fbb08c3`**. Both Mac 100 MiB samples
+remain complete pass with exact Save/final edited hash, normal initial/reopen
+exits and reported successful zero-drop trace audits. There is **no observed
+100 MiB Save-outcome regression** relative to `36811953139`. However, a material
+x64 **1 MiB Save timeout** makes the complete Mac pilot only **3/4 cases**, not
+a wholly passed or stable two-architecture pilot:
+
+| Mac RID | 1 MiB | 100 MiB | Actual nested pilot |
+| --- | --- | --- | --- |
+| osx-x64 | failed / save-exact-bytes / TimeoutError | complete pass | incomplete / exit 1 |
+| osx-arm64 | complete pass | complete pass | pass / actual pass marker |
+
+The x64 raw log explicitly emits `status=incomplete,samples=2` and the pilot
+exit-1 error, even though overall CI/job color is green. ARM emits the actual
+post-execution two-case pass marker. This audit was intentionally limited to
+Mac Save outcomes and the newly identified failing small case: no Windows or
+full successful-case raw-trace re-audit was repeated.
+
+### Failed x64 small case: exact guards and outcome
+
+The **1,048,576-byte** source was initially observed clean, focused, exact-length,
+caret 0 with empty selection. It subsequently reached Complete zero-diagnostic
+v0, one acknowledged edit, Complete v1, and unchanged disk before Save. The
+Save guard and post-timeout observation both retain:
+
+- Same target PID, `trusted=true`, `post_event_access=true`, `ready=true`,
+  `complete=true`, source `focused=true`, and **`modified=true`**.
+- `target_app_active=true`, `frontmost_is_target=true`, `window_main=true`,
+  **`window_focused=false`**; one window, count/copy error 0 and copy count 1.
+- One exact-length source, caret **10**, selection length **0**.
+
+The distinct source-focus and window-focus metadata must not be conflated.
+`window_focused=false` also appears on successful prior Save observations, so
+it is not by itself a demonstrated explanation of this timeout. The probe did
+not activate another app, mutate TCC or post global keys to force acceptance.
+
+Only **one** Save attempt was made: `CGEvent.postToPid`, **two attempted events**,
+`execution_acknowledged=false`. The client returned after **108.007119 ms**;
+this does not certify delivery, handler entry or I/O completion. The clean-title
+wait timed out. Original and final working hashes both remain the known
+original **`9004bc81…`**, not the expected edited **`7fb64708…`**. Thus no exact
+Save outcome was achieved despite the successful source/semantic guards.
+
+One owned normal-close attempt fails with RuntimeError; forced cleanup follows.
+`normal_exit=false` and `reopen_normal_exit=false`, with no GUI reopen. Exactly
+one retained small-case trace exists and is **0 bytes**. There is no terminal,
+Save or drop evidence available: do not call that zero drops, normal-shutdown
+telemetry regression, TCC denial, product replacement failure or proof that
+Command-S reached the handler. It remains an unacknowledged-post/Save-outcome
+failure whose delivery versus product-I/O cause is unresolved.
+
+### Release implication and retained evidence
+
+The prior `36811953139` 8/8 scoped success is preserved, but this later failure
+reinforces that ordinary Mac synthetic Save acceptance is **not demonstrated
+repeatably reliable**. Both successful large-case observations cannot erase
+the failed small case; a production Save defect is equally not established
+without delivery/handler evidence. The next useful diagnostic separates that
+owned command boundary from I/O without resending writes or weakening oracles.
+
+Artifacts: `.cache/ci-36814164862-json-osx-x64/` and
+`.cache/ci-36814164862-json-osx-arm64/`, with respective raw `job.log` files.
+The focused assertions in `.cache/ci-36814164862-json-narrow-audit.py` corroborate
+the three successful Mac reports' exact bytes/exits/audit status and the failed
+small case's guards, original bytes, one attempted post, failed close and empty
+trace. They do not claim a new deep trace audit or product-binary rehash.
+Only this document was changed; no workflow, product or probe was rerun/modified.
