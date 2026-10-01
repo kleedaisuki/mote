@@ -912,7 +912,11 @@ internal sealed unsafe partial class MacCsvGrid : IDisposable, IGridAccessibilit
                 ObjC.Send(_table, ObjC.Sel("accessibilityShownMenu")) != 0,
                 AccessibilityNativeBool(window, ObjC.Sel("isKeyWindow")) != 0,
                 _table != 0 && ObjC.Send(window, ObjC.Sel("firstResponder")) == _table,
-                AccessibilityNativeBool(ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication")), ObjC.Sel("isActive")) != 0);
+                AccessibilityNativeBool(ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication")), ObjC.Sel("isActive")) != 0,
+                AccessibilitySelectorPermission(_accessibilityTable, ObjC.Sel("isAccessibilitySelectorAllowed:"),
+                    ObjC.Sel("accessibilityPerformShowMenu")) != 0,
+                AccessibilitySelectorPermission(_accessibilityTable, ObjC.Sel("isAccessibilitySelectorAllowed:"),
+                    ObjC.Sel("accessibilityShownMenu")) != 0);
             Console.WriteLine(trace.Format(facts, result));
         }
         catch { /* Diagnostic faults must not alter native menu behavior or escape its delegate. */ }

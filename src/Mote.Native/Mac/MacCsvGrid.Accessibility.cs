@@ -78,6 +78,9 @@ internal sealed unsafe partial class MacCsvGrid
     /// <summary>Native BOOL getters/actions return one byte, not a pointer with unspecified upper bits.</summary>
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
     private static extern byte AccessibilityNativeBool(nint receiver, nint selector);
+    /// <summary>Reads the existing modern selector permission with an exact BOOL return and SEL argument.</summary>
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern byte AccessibilitySelectorPermission(nint receiver, nint selector, nint subject);
     /// <summary>NSMenu's BOOL return and NSPoint argument use their native scalar/aggregate register classes.</summary>
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
     private static extern byte AccessibilityPopUpMenu(nint receiver, nint selector, nint item, ObjC.Point location, nint view);

@@ -436,3 +436,69 @@ action refusal. Nevertheless the separate client receives AX=-25205 for the
 action and aborts at the unchanged action assertion, before menu relation or
 navigation queries. No graceful close occurs before forced cleanup. See
 [precise target accounting](mac-grid-table-proxy.md#owned-next-turn-popup-target-ci-36796725674).
+
+## Read-only selector permission discriminator
+
+Hosted CI `36797859586` / `833ef48` falsifies the previously presumed
+modern-versus-Carbon wire-key distinction: both AppKit constants produce the
+same `AXShownMenuUIElement` key. The x64 Table relation actually transports the
+owned AXMenu with 12 children and one exact coordinate-command title, even
+while the original AXShowMenu reply remains `-25205`. Both hosts advertise one
+action, exactly showMenu. ARM's earlier snapshot has no supported relation;
+timing is still a hypothesis, not a mechanism. These facts do not support
+another guessed wire key, a legacy action-name override or a blanket property
+advertisement change. Full evidence remains in
+[the read-only target record](mac-grid-table-proxy.md#read-only-action-discriminator-ci-36797859586).
+
+The next narrow production change is **diagnostic reads only**. Each admitted
+fixed lifecycle row now ends with:
+
+```text
+active=1 allowaction=0 allowshown=0
+```
+
+Those last two booleans call the live semantic proxy's existing
+`isAccessibilitySelectorAllowed:` with exactly
+`accessibilityPerformShowMenu` and `accessibilityShownMenu`. An exact
+one-byte BOOL return and pointer-sized SEL argument are used. The normal menu
+operation is not invoked by these reads, and no override grants or denies any
+selector. The actual `will-open` row observes these permissions while the
+existing native menu transition has published its shown state. Entry/return
+rows remain separate observations; a permission fact is not inferred from an
+advertised action, callback count, shown state or failed external reply.
+
+Apple's
+[selector-allowed contract](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/isaccessibilityselectorallowed(_:))
+provides the explicit accessor-permission seam. If an actual target denies
+one of these exact selectors, a scoped permission change may be investigated;
+if both are allowed, that explanation is falsified. Neither result alone
+proves the cause of external `attributeUnsupported`.
+
+Both opt-ins, main-thread/current-owner admission, process-wide sixteen-event
+ceiling, source-free fixed fields and normal-path absence of diagnostic output
+remain unchanged. The capture helper requires both fields, in exact order,
+on every accepted phase; missing/reordered/nonboolean fields are rejected.
+No new native library, source permission, global event, focus transfer,
+readiness wait, external assertion change or legacy method was added. The
+existing in-process popup probe source is unchanged and keeps its exact pin.
+
+Local Windows/.NET SDK 10.0.400 focused portable tests pass **11/11**:
+the original six lifecycle/format/ABI cases, four independent permission
+combinations, and one all-phase tail/bound case. The ABI metadata test now
+also verifies the permission getter's byte return and three pointer-sized
+arguments. Evidence remains under
+`.cache/mac-grid-menu-regression/menu-permission-diagnostic.trx`.
+This compilation/format validation does not observe AppKit's actual permission
+decisions; both native targets must supply those values before a policy fix.
+The independent [permission diagnostic review](../reviews/mac-grid-menu-permission-diagnostic-review.md)
+found no substantive defect. A late popup-return observation after disposal
+can query a nil root and return false; it must not be interpreted as denial
+by a live semantic proxy. Actual will-open observations retain their separate
+live attachment/menu facts.
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore `
+  --filter 'FullyQualifiedName~MacGridMenuDiagnostic' --verbosity minimal `
+  --logger 'trx;LogFileName=menu-permission-diagnostic.trx' `
+  --results-directory .cache/mac-grid-menu-regression
+```

@@ -29,8 +29,10 @@ internal enum MacCsvGridMenuPhase
 /// <param name="Key">The physical Table's window is key.</param>
 /// <param name="First">The physical Table is its window's first responder.</param>
 /// <param name="Active">The process's NSApplication is active.</param>
+/// <param name="AllowAction">The live semantic proxy allows the exact modern perform-show-menu selector.</param>
+/// <param name="AllowShown">The live semantic proxy allows the exact modern shown-menu getter selector.</param>
 internal readonly record struct MacCsvGridMenuFacts(bool Configured, int Items, bool Coordinate,
-    bool Shown, bool Key, bool First, bool Active);
+    bool Shown, bool Key, bool First, bool Active, bool AllowAction = false, bool AllowShown = false);
 
 /// <summary>One fixed-format lifecycle sample, bounded independently of source/document size.</summary>
 /// <param name="Phase">The admitted native action/delegate event.</param>
@@ -61,7 +63,7 @@ internal readonly record struct MacCsvGridMenuTrace(MacCsvGridMenuPhase Phase, i
             _ => throw new ArgumentOutOfRangeException(nameof(Phase))
         };
         return string.Create(CultureInfo.InvariantCulture,
-            $"mote-grid-menu-v1 phase={phase} seq={Sequence} requests={Requests} opens={Opens} closes={Closes} open={(Open ? 1 : 0)} result={(result is null ? -1 : result.Value ? 1 : 0)} configured={(facts.Configured ? 1 : 0)} items={facts.Items} coordinate={(facts.Coordinate ? 1 : 0)} shown={(facts.Shown ? 1 : 0)} key={(facts.Key ? 1 : 0)} first={(facts.First ? 1 : 0)} active={(facts.Active ? 1 : 0)}");
+            $"mote-grid-menu-v1 phase={phase} seq={Sequence} requests={Requests} opens={Opens} closes={Closes} open={(Open ? 1 : 0)} result={(result is null ? -1 : result.Value ? 1 : 0)} configured={(facts.Configured ? 1 : 0)} items={facts.Items} coordinate={(facts.Coordinate ? 1 : 0)} shown={(facts.Shown ? 1 : 0)} key={(facts.Key ? 1 : 0)} first={(facts.First ? 1 : 0)} active={(facts.Active ? 1 : 0)} allowaction={(facts.AllowAction ? 1 : 0)} allowshown={(facts.AllowShown ? 1 : 0)}");
     }
 }
 

@@ -65,3 +65,20 @@ Expected useful output is action-name membership, modern/legacy relationship
 type/error/ownership, and exact coordinate-item counts while preserving the
 original failed action verdict. No legacy product action-name override or
 proxy-backed-menu setter change is justified before these observations.
+
+## Target follow-up: wire-key hypothesis falsified
+
+Actual two-RID CI `36797859586` / `833ef48` compiles and executes this candidate.
+Both hosts resolve AppKit's shownMenu raw value to the same
+`AXShownMenuUIElement` literal; the source-origin categories are duplicate
+queries, **not independent wire relationships**. The differing API descriptions
+above did not justify assuming distinct wire names. That investigative
+hypothesis is falsified and must not guide further product patches.
+
+x64 returns the exact owned AXMenu, 12 bounded children and one known coordinate
+title through its Table relation, independently of the original action reply
+still being attributeUnsupported. ARM's faster snapshot lacks that relation;
+no lifetime-wide absence or timing mechanism is established. The action-name
+read confirms one advertised showMenu action on both targets. The unchanged
+failed verdict remains correct. See the full
+[target accounting](../validation/mac-grid-table-proxy.md#read-only-action-discriminator-ci-36797859586).

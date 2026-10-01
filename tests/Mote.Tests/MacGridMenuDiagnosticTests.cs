@@ -62,13 +62,43 @@ public sealed class MacGridMenuDiagnosticTests
             CultureInfo.CurrentCulture = new CultureInfo("ar-SA");
             var sample = new MacCsvGridMenuTrace(MacCsvGridMenuPhase.ShowEnter, 1, 1, 0, 0, false);
             var line = sample.Format(new(true, 12, true, false, true, false, true));
-            Assert.Equal("mote-grid-menu-v1 phase=show-enter seq=1 requests=1 opens=0 closes=0 open=0 result=-1 configured=1 items=12 coordinate=1 shown=0 key=1 first=0 active=1", line);
+            Assert.Equal("mote-grid-menu-v1 phase=show-enter seq=1 requests=1 opens=0 closes=0 open=0 result=-1 configured=1 items=12 coordinate=1 shown=0 key=1 first=0 active=1 allowaction=0 allowshown=0", line);
             Assert.True(line.Length < 384);
             Assert.Throws<ArgumentOutOfRangeException>(() => sample.Format(new(true, 17, false, false, false, false, false)));
             Assert.Throws<ArgumentOutOfRangeException>(() => sample.Format(new(true, -2, false, false, false, false, false)));
             Assert.Throws<ArgumentException>(() => sample.Format(new(false, 0, false, false, false, false, false), true));
         }
         finally { CultureInfo.CurrentCulture = culture; }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void PermissionObservationsRemainIndependentFromMenuTransition(bool action, bool shown)
+    {
+        var counter = new MacCsvGridMenuDiagnostic();
+        Assert.True(counter.TryNext(MacCsvGridMenuPhase.WillOpen, out var trace));
+        var line = trace.Format(new(true, 12, true, true, true, false, true, action, shown));
+        Assert.EndsWith($"allowaction={(action ? 1 : 0)} allowshown={(shown ? 1 : 0)}", line);
+        Assert.Contains("opens=1 closes=0 open=1 result=-1", line);
+        Assert.True(line.Length < 384);
+    }
+
+    [Fact]
+    public void EveryAdmittedPhaseCarriesBothPermissionFacts()
+    {
+        var counter = new MacCsvGridMenuDiagnostic();
+        foreach (var phase in Enum.GetValues<MacCsvGridMenuPhase>())
+        {
+            Assert.True(counter.TryNext(phase, out var trace));
+            bool? result = phase is MacCsvGridMenuPhase.NativeReturn or MacCsvGridMenuPhase.ScheduleReturn or
+                MacCsvGridMenuPhase.PopupReturn ? true : null;
+            var line = trace.Format(new(true, 12, true, true, true, false, true, true, true), result);
+            Assert.EndsWith("active=1 allowaction=1 allowshown=1", line);
+            Assert.True(line.Length < 384);
+        }
     }
 
     [Fact]
@@ -80,5 +110,11 @@ public sealed class MacGridMenuDiagnosticTests
         Assert.Equal(typeof(byte), bridge.ReturnType);
         Assert.Equal([typeof(nint), typeof(nint)], bridge.GetParameters().Select(p => p.ParameterType));
         Assert.Equal("objc_msgSend", bridge.GetCustomAttribute<DllImportAttribute>()!.EntryPoint);
+#pragma warning disable CA1416 // Metadata inspection does not call the macOS permission getter.
+        var permission = typeof(MacCsvGrid).GetMethod("AccessibilitySelectorPermission", BindingFlags.NonPublic | BindingFlags.Static)!;
+#pragma warning restore CA1416
+        Assert.Equal(typeof(byte), permission.ReturnType);
+        Assert.Equal([typeof(nint), typeof(nint), typeof(nint)], permission.GetParameters().Select(p => p.ParameterType));
+        Assert.Equal("objc_msgSend", permission.GetCustomAttribute<DllImportAttribute>()!.EntryPoint);
     }
 }
