@@ -227,3 +227,40 @@ of diagnostic completeness for arbitrary invalid input. Source/token highlightin
 behavior beyond these existing comparisons, native execution and performance are
 separate investigations. Integer checks compare the editor's exact textual number
 node, not Tomlyn's runtime numeric model or an upstream decoded-value oracle.
+
+### Diagnostic-anchor regression exposed by expanded assertions
+
+The subsequent recovery coverage adds four illegal-trivia header prefixes
+(FF, VT, NBSP, NUL) and asserts that **every** public diagnostic and token span
+lies inside the current UTF-16 source for all 703 decoded corpus examples and
+all formatted valid outputs. The same checks cover directed malformed recovery.
+This exposes a real implementation defect, unlike the earlier expectation fixes:
+`.cache/toml-uniform/toml-recovery-anchors.trx` reports **773 passed / 28 failed /
+801 executed**, zero skipped, process exit 1. All 28 failing cases are malformed
+published fixtures, including `invalid/array/no-close-01.toml`,
+`invalid/key/single-open-bracket.toml` and `invalid/string/no-close-10.toml`.
+The failure is a length-one parser-recovery diagnostic at `Start == source.Length`,
+outside the editor's half-open source bounds. The new statement-local diagnostic
+conversion did not preserve the original public span-clamping contract. The four
+illegal-trivia quarantine cases and all existing 57 cache cases pass this run.
+Assertions are not relaxed; the production owner has been notified to fix the
+conversion and the identical failing cases must subsequently pass.
+
+The production owner corrected `TomlStatementSummary`'s local diagnostic conversion
+to clamp both start and length before shifting to absolute coordinates, preserving
+zero-width EOF witnesses. The **same 801 assertions now pass**, including the exact
+28 previously failing fixtures; no bounds assertion or fixture was removed.
+Final run command is the combined filter above with
+`--logger 'trx;LogFileName=toml-recovery-anchors-fixed.trx'`. Observed final result:
+**801 executed / 801 passed / 0 failed / 0 not executed**, process exit 0, about
+14 seconds test duration. Final independently inspected result is
+`.cache/toml-uniform/toml-recovery-anchors-fixed.trx`; the failed anchors TRX remains
+available to demonstrate detection of the original regression.
+
+The final set is **744 public-policy/decoder cases + 57 bounded reuse cases**;
+nine public-suite entries still concern only strict byte decoding. Final production
+`TomlStatementSummary.cs` SHA-256 is
+`E957DD69D9A49ABEA789C18C201B51C0ABCB0B928C7D9F08A7608A5162918145`
+on worktree parent HEAD `f226a28848735e159597074f20571c57fbd2a546`.
+This closes the demonstrated local recovery-span regression. It does not claim
+all untested parser recovery shapes, GUI rendering or native execution are verified.

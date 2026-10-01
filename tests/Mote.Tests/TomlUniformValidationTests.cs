@@ -25,6 +25,7 @@ public sealed class TomlUniformValidationTests
         }
         var policy = new TomlPolicy();
         var analysis = policy.Analyze(source);
+        AssertAnchored(source, analysis);
         Assert.Equal(valid, !analysis.Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error));
         string formatted = policy.Format(source);
         if (!valid)
@@ -33,6 +34,7 @@ public sealed class TomlUniformValidationTests
             return;
         }
         var reparsed = policy.Analyze(formatted);
+        AssertAnchored(formatted, reparsed);
         Assert.Empty(reparsed.Diagnostics);
         Assert.Equal(formatted, policy.Format(formatted));
         EqualSemanticValueTree(analysis.Root, reparsed.Root);
@@ -222,6 +224,26 @@ public sealed class TomlUniformValidationTests
         Assert.Equal(source, policy.Format(source));
     }
 
+    /// <summary>Illegal leading trivia does not conceal an invalid header and revive the prior root scope.</summary>
+    [Theory]
+    [InlineData("\f")]
+    [InlineData("\v")]
+    [InlineData("\u00a0")]
+    [InlineData("\0")]
+    public void Invalid_header_trivia_quarantines_previous_scope(string trivia)
+    {
+        string source = "a=1\n" + trivia + "[b]\na=2\n[c]\nz=1\nz=2\n";
+        var policy = new TomlPolicy();
+        var result = policy.Analyze(source);
+        AssertAnchored(source, result);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Span.Start < source.IndexOf("a=2", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics,
+            diagnostic => diagnostic.Span == new TextSpan(source.IndexOf("z=2", StringComparison.Ordinal), 1));
+        Assert.DoesNotContain(result.Diagnostics.Except(GrammarDiagnostics(source)),
+            diagnostic => diagnostic.Span == new TextSpan(source.IndexOf("a=2", StringComparison.Ordinal), 1));
+        Assert.Equal(source, policy.Format(source));
+    }
+
     /// <summary>Local inline ownership errors do not suppress a later independent global duplicate.</summary>
     [Fact]
     public void Local_inline_error_and_later_namespace_error_are_both_retained()
@@ -229,6 +251,7 @@ public sealed class TomlUniformValidationTests
         const string source = "bad={x=1,x=2}\n[b]\ny=1\ny=2\n";
         var policy = new TomlPolicy();
         var result = policy.Analyze(source);
+        AssertAnchored(source, result);
         Assert.Equal(2, result.Diagnostics.Count);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Span.Start < source.IndexOf('[', StringComparison.Ordinal));
         Assert.Contains(result.Diagnostics,
@@ -246,6 +269,7 @@ public sealed class TomlUniformValidationTests
     {
         var policy = new TomlPolicy();
         var result = policy.Analyze(source);
+        AssertAnchored(source, result);
         AssertWholeGrammarWitnessesPreserved(source, result);
         Assert.Equal(source, policy.Format(source));
     }
@@ -267,6 +291,7 @@ public sealed class TomlUniformValidationTests
     /// <summary>The unvalidated lossless parser is an independent reference only for preserved grammar diagnostics.</summary>
     private static void AssertWholeGrammarWitnessesPreserved(string source, FormatAnalysis analysis)
     {
+        AssertAnchored(source, analysis);
         var grammar = GrammarDiagnostics(source);
         Assert.NotEmpty(grammar);
         foreach (var expected in grammar) Assert.Contains(expected, analysis.Diagnostics);
@@ -281,6 +306,16 @@ public sealed class TomlUniformValidationTests
             return new Diagnostic(witness.Kind == DiagnosticMessageKind.Error ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
                 "TOML_PARSE", witness.Message, new(start, Math.Clamp(witness.Span.Length, 0, source.Length - start)));
         }).ToArray();
+
+    /// <summary>Recovery and EOF may not expose spans outside the current UTF-16 source.</summary>
+    private static void AssertAnchored(string source, FormatAnalysis analysis)
+    {
+        foreach (TextSpan span in analysis.Diagnostics.Select(error => error.Span).Concat(analysis.Tokens.Select(token => token.Span)))
+        {
+            Assert.InRange(span.Start, 0, source.Length);
+            Assert.InRange(span.Length, 0, source.Length - span.Start);
+        }
+    }
 
     /// <summary>67,000 independent three-component paths require 201,000 namespace bindings.</summary>
     private static string ManyBindings()
