@@ -937,16 +937,22 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         {
             var error = NativePostedCallback.Invoke(action);
             if (error is not null)
-                NativePostedCallback.Report(error, failure => ReportCallbackFailure("Posted", failure));
+                NativePostedCallback.Report(error, _ => SetCallbackFailureNotice("Editor"));
         }
     }
 
     private void ReportCallbackFailure(string kind, Exception error)
     {
         _ = error; // Never display exception text: it may contain a user path.
-        if (_statusNotice is not null) return; // Preserve the controller's actionable notice.
-        try { SetStatusNotice($"{kind} update unavailable; editing remains available."); }
+        try { SetCallbackFailureNotice(kind); }
         catch { /* Optional UI notification must not unwind through user32. */ }
+    }
+
+    /// <summary>Preserves actionable notices; the caller owns optional presentation fault containment.</summary>
+    private void SetCallbackFailureNotice(string kind)
+    {
+        if (_statusNotice is not null) return; // Preserve the controller's actionable notice.
+        SetStatusNotice($"{kind} update unavailable; editing remains available.");
     }
 
     private nint WindowMessage(nint window, uint message, nuint wParam, nint lParam)

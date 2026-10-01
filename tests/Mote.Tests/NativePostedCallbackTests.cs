@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Reflection;
 using System.Text.Json;
 using Mote.Native;
 using Mote.Telemetry;
@@ -9,6 +10,37 @@ namespace Mote.Tests;
 [Collection("Telemetry")]
 public sealed class NativePostedCallbackTests
 {
+    /// <summary>The actual Windows drain installs a generic notice or preserves an actionable one without native UI.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Windows_uncreated_shell_drain_preserves_notice_policy(bool existingNotice)
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        var type = typeof(NativePostedCallback).Assembly.GetType("Mote.Native.Windows.WindowsEditorShell")!;
+        var shell = type.GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic, null,
+            [typeof(bool), typeof(bool)], null)!.Invoke([false, false]);
+        var field = type.GetField("_statusNotice", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        if (existingNotice) field.SetValue(shell, "Preserve actionable notice");
+        var calls = 0;
+        try
+        {
+            var post = type.GetMethod("Post")!;
+            post.Invoke(shell, [(Action)(() => { calls++; throw new HostileException(); })]);
+            post.Invoke(shell, [(Action)(() => calls++)]);
+            type.GetMethod("DrainPosted", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(shell, null);
+            Assert.Equal(2, calls);
+            Assert.Equal(existingNotice ? "Preserve actionable notice" :
+                "Editor update unavailable; editing remains available.", field.GetValue(shell));
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var records = Read(temp.Path);
+        Assert.Single(records, row => row.GetProperty("operation").GetString() == "native.posted.callback.failed");
+        Assert.DoesNotContain(records, row => row.GetProperty("operation").GetString() ==
+            "native.posted.callback.report_failed");
+    }
+
     /// <summary>A primary fault and a reporting fault leave later queue work available without retry.</summary>
     [Fact]
     public void Ordered_callbacks_continue_and_preserve_original_exception()

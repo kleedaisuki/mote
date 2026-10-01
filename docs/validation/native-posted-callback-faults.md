@@ -22,10 +22,14 @@ contains secondary nonfatal exceptions. `OutOfMemoryException` is excluded
 from primary, reporting, and observability containment. No retries, global
 WndProc catch, synchronization changes, or rollback semantics were added.
 
-Windows retains its existing path-free `ReportCallbackFailure("Posted", error)`
-and preserves an existing actionable status notice. That reporter already
-absorbs failures from its optional status update; these absorbed failures are
-not retrospectively observable as `report_failed`. macOS retains its existing
+Windows uses the shared path-free `SetCallbackFailureNotice("Editor")`
+installer and preserves an existing actionable status notice. Posted reporting
+calls that installer directly through `NativePostedCallback.Report`, so a
+secondary nonfatal notice fault reaches the shared guard and emits
+`report_failed`. The compatibility `ReportCallbackFailure` wrapper still
+absorbs optional notice faults for nonposted callbacks, preserving their
+existing behavior. This closes the initial implementation's hidden secondary
+posted-fault gap without duplicating notice policy. macOS retains its existing
 error-message presentation, but message-getter and `ShowError` faults cannot
 escape this posted boundary. Exception text is **not** read by telemetry.
 
@@ -78,3 +82,22 @@ tests ran once because their internal session writer changed.
 These are portable executable helper tests and source-backed adapter wiring,
 not actual fault-injected user32/AppKit runtime evidence. Four-RID AOT and hosted
 native runs remain integration checks owned by the root agent.
+
+## Windows reporting follow-up
+
+The shared notice-installer extraction has two additional portable cases using
+the actual Windows shell before any window is created. They enqueue a throwing
+callback and later successful callback, then invoke the real drain. They verify
+exactly-once continuation, the fixed generic Editor notice, preservation of an
+existing actionable notice, and primary-only failure telemetry on successful
+reporting. Zero handles ensure `Post` and `RenderStatus` return without native
+calls. The existing enabled-tracing helper test injects a throwing reporter and
+certifies the secondary failure event; no artificial production fault seam was
+added to force `SetStatusNotice` to fail.
+
+Follow-up verification: Release `NativePostedCallbackTests` with
+`PublishAot=false`, `TreatWarningsAsErrors=true`, and `--no-restore` passed
+**8/8**, zero failed/skipped. Retained TRX:
+`.cache/validation/posted-callbacks/posted-callbacks-windows-notice.trx`.
+The shared session writer and menu implementation are unchanged in this
+follow-up, so the already-passing menu cases were not repeated.
