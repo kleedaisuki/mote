@@ -632,6 +632,37 @@ jobs:
           path: .cache/windows-ax-external/${{ matrix.rid }}/report.json
           if-no-files-found: warn
           retention-days: 14
+      # Supplemental observations never replace or relabel the original Grid probe.
+      # Atomic job ownership bounds synchronous UIA calls outside the client process.
+      - name: Diagnose independent Windows Grid focus provenance (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          & ./tests/Invoke-WindowsGridFocusProvenanceWorkflow.ps1 -RuntimeIdentifier '${{ matrix.rid }}'
+      - name: Classify independent Windows Grid focus evidence
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          python -B -m unittest discover -s tests -p test_summarize_windows_grid_focus_provenance.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Grid provenance summary fixtures failed.' }
+          python -B tests/summarize_windows_grid_focus_provenance.py `
+            --directory '.cache/ci-inventory/${{ matrix.rid }}/grid-focus-provenance' `
+            --step-summary $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { throw 'Grid focus evidence is incomplete or unknown, not a product pass.' }
+      - name: Retain complete Windows Grid focus provenance artifacts
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: windows-grid-focus-provenance-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/grid-focus-provenance/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
       # The separate MTA client uses only a synthetic CSV and target-owned messages.
       # Its opt-in bounded-window evidence is not reader/IME/focus release acceptance.
       - name: Diagnose external Windows CSV Grid accessibility (non-gating)
