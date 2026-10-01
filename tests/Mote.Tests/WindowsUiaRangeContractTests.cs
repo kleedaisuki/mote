@@ -140,6 +140,49 @@ public sealed class WindowsUiaRangeContractTests(ITestOutputHelper output)
         Assert.Equal("ab\r\ncd\nef", range.Text());
     }
 
+    /// <summary>Expansion preserves the original quantity when both ends already delimit complete units.</summary>
+    [Theory]
+    [InlineData(0, "e\u0301😀Z", 0, 4, "e\u0301😀")]
+    [InlineData(3, "ab\ncd\nef", 0, 6, "ab\ncd\n")]
+    public void Expand_preserves_aligned_multiple_complete_units(
+        int unit, string source, int start, int end, string expected)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new Fixture(source);
+        using var range = fixture.Range(start, end);
+        Assert.Equal(0, range.Call<ExpandAbi>(6)(range.Pointer, unit));
+        Assert.Equal(expected, range.Text());
+    }
+
+    /// <summary>A misaligned interval normalizes to the single enclosing unit at its start.</summary>
+    [Theory]
+    [InlineData(0, "e\u0301😀Z", 1, 4, "e\u0301")]
+    [InlineData(3, "ab\ncd\nef", 1, 6, "ab\n")]
+    public void Expand_normalizes_misaligned_range_to_start_unit(
+        int unit, string source, int start, int end, string expected)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new Fixture(source);
+        using var range = fixture.Range(start, end);
+        Assert.Equal(0, range.Call<ExpandAbi>(6)(range.Pointer, unit));
+        Assert.Equal(expected, range.Text());
+    }
+
+    /// <summary>Move normalizes a nonempty range to one unit, unlike aligned multi-unit Expand.</summary>
+    [Theory]
+    [InlineData(0, "e\u0301😀Z", 0, 4, "😀")]
+    [InlineData(3, "ab\ncd\nef", 0, 6, "cd\n")]
+    public void Move_normalizes_aligned_multiple_units_to_one_target_unit(
+        int unit, string source, int start, int end, string expected)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new Fixture(source);
+        using var range = fixture.Range(start, end);
+        Assert.Equal(0, range.Call<MoveAbi>(13)(range.Pointer, unit, 1, out var moved));
+        Assert.Equal(1, moved);
+        Assert.Equal(expected, range.Text());
+    }
+
     /// <summary>Endpoint movement reports actual units after clipping to the document boundary.</summary>
     [Fact]
     public void Endpoint_line_and_document_movement_reports_actual_units()
