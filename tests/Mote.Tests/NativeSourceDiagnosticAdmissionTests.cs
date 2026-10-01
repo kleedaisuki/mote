@@ -89,9 +89,10 @@ public sealed class NativeSourceDiagnosticAdmissionTests(ITestOutputHelper outpu
         }
         finally
         {
-            // The known owned link alone is deleted, never its target or descendants.
-            Directory.Delete(link, recursive: false);
+            DeleteOwnedDirectoryLink(link);
         }
+        if (dangling) Assert.False(Directory.Exists(target));
+        else Assert.Empty(Directory.GetFileSystemEntries(target));
     }
 
     /// <summary>A linked output itself is rejected, even if its target does not exist.</summary>
@@ -107,7 +108,19 @@ public sealed class NativeSourceDiagnosticAdmissionTests(ITestOutputHelper outpu
             AssertFailure(link, "artifact-ancestor-linked");
             Assert.False(Directory.Exists(target));
         }
-        finally { Directory.Delete(link, recursive: false); }
+        finally { DeleteOwnedDirectoryLink(link); }
+        Assert.False(Directory.Exists(target));
+    }
+
+    /// <summary>Deletes only the known owned link, using Unix unlink for links with missing targets.</summary>
+    private static void DeleteOwnedDirectoryLink(string link)
+    {
+        Assert.True((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0);
+        // Windows directory links require directory deletion; Unix links are unlinked as files.
+        // Directory.Delete on Unix follows target classification and rejects dangling links.
+        if (OperatingSystem.IsWindows()) Directory.Delete(link, recursive: false);
+        else File.Delete(link);
+        Assert.DoesNotContain(link, Directory.GetFileSystemEntries(Path.GetDirectoryName(link)!));
     }
 
     /// <summary>Discovers the real repository without changing the test process working directory.</summary>
