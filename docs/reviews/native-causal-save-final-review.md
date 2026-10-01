@@ -5,9 +5,9 @@ preceding independent review `be56c4a`, and dedicated follow-up tests `370de8a`.
 This document owns no production changes. Scope is the native Save request,
 worker and completion lifecycle, not a repeated Engine or transport audit.
 
-## Required correction: contain completion-time callback failures
+## Completion-time callback failure finding: closed
 
-**P2 — `CompleteSave` rethrows a nonfatal failure into the native dispatch pump.**
+**Initial P2 — `CompleteSave` rethrew a nonfatal failure into the native dispatch pump.**
 Location: `src/Mote.Native/NativeEditorController.Save.cs:148–151`.
 
 Trigger: after the worker posts its completion, a synchronous UI operation
@@ -82,9 +82,41 @@ not a request to rerun all completed regression tests.
 ## Review limits
 
 No previously completed tests were rerun. Reviewed test bodies are not a new
-execution certificate. The empty current `.cache/causal-integration-tests`
-directory did not provide final test output at inspection time. Hosted
+execution certificate. Retained local results were inspected in the closure
+below. Hosted
 four-RID Native AOT, real macOS intermittent Save timeout attribution,
 physical key/IME delivery, native wake acknowledgement, compositor output,
 crash/power-loss durability and current-binary overhead remain integration
 acceptance, not conclusions of this source review.
+
+## Narrow closure: `5ebbdaf`
+
+The follow-up changes only the completion catch's propagation behavior and
+its contract documentation. Nonfatal exceptions still select exactly one
+`failure / callback_failed` terminal, but do not rethrow or recursively invoke
+another error dialog. The existing pre-catch busy release and captured-version
+handling are preserved; Engine disk results are not relabeled or retried.
+`OutOfMemoryException` remains outside the catch. This resolves the initial
+P2 for the inspected Save completion path. It does not certify all unrelated
+callbacks in the shared native pumps.
+
+Inspected `NativeSaveCompletionContainmentTests` exercises the actual typed
+request, worker and queued completion Action directly, avoiding reflection's
+exception wrapper. Its four cases cover successful disk commit followed by
+presentation failure, and failed commit followed by error-reporting failure,
+with tracing enabled and disabled. Assertions verify no callback escape,
+released busy/request ownership, exact committed bytes or absent target,
+correct modified state, no recursive error reporting, truthful Engine and
+commit phases, one version-1 receipt-linked callback-failure terminal, no
+`save.completed`, and no secret text in records.
+
+Retained execution evidence was read, not rerun:
+
+| Artifact | Actual TRX counters | Scope |
+| --- | --- | --- |
+| `.cache/save-completion-containment/save-completion-containment.trx` | 4 executed, 4 passed; zero failed, aborted or not-executed | New completion containment fault cases |
+| `.cache/causal-integration-tests/causal-integration.trx` | 1329 executed, 1329 passed; zero failed, aborted or not-executed | Root integration baseline, before the new containment slice |
+
+These runs are not summed into an independently verified final full-suite
+count. The focused follow-up closes the source-backed finding; hosted
+platform-native acceptance and full current-HEAD integration remain separate.
