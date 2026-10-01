@@ -237,4 +237,3 @@ internal sealed partial class NativeEditorController
         };
     }
 }
-
