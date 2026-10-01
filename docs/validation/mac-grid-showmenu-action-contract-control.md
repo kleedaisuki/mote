@@ -82,7 +82,12 @@ tracking-mode cancellation. Dry-run direct objc_msgSend/NSInvocation inspection
 has no queued effect. The external exact-PID child performs exactly one
 advertised ShowMenu per variant and reads only fixed counter states from AXHelp.
 Actual native modern/legacy dispatch counters and menu will-open/did-close
-counters independently retain any duplicate dispatch or missing effect.
+counters independently retain any duplicate external dispatch or missing effect.
+`Metadata()` invokes the modern action twice before external execution, once
+through direct objc_msgSend and once through NSInvocation. The `inspecting`
+flag suppresses both dispatch counters and menu admission/scheduling for those
+dry runs. Consequently modernCalls=1 records one external dispatch, not the
+total number of IMP invocations; these controls are metadata-prewarmed.
 
 Only the synthetic owned window is ordered front; the probe never calls app
 activation, system-wide AX roots, global mouse/key injection or TCC mutation/prompt. It
@@ -189,7 +194,10 @@ In **every cell below**, the external action-name call returns error 0 with
 exactly one advertised action; the actual AXShowMenu returns error **0** and
 the independent external lifecycle predicate sees one opened and closed menu.
 Final native counters are requests=1, opens=1, closes=1, modernCalls=1,
-legacyCalls=0. The legacy override is present in the two bridge variants but is
+legacyCalls=0. Here modernCalls=1 is the one admitted external action route,
+not total IMP invocations: the two earlier `Metadata()` dry-run invocations
+are deliberately uncounted and schedule no menu effects. The legacy override
+is present in the two bridge variants but is
 **not invoked** in the observed external action route.
 
 | Variant | x64 action encoding / AX reply | ARM64 action encoding / AX reply | External AXEnabled, both targets |
@@ -252,6 +260,8 @@ Supported conclusions are deliberately scoped:
 Use one frozen external AX client/action function for both a single native
 `runtime-B` control and the product's current semantic Table, each in a fresh
 exact-PID process with **one** action attempt and the original error preserved.
+The fresh minimal control must omit the `Metadata()` action prewarm; a fresh
+process that still runs its two dry-run actions is not an uninvoked baseline.
 The current control uses native C while the original product probe uses Swift;
 both call AXUIElementPerformAction, but this audit has not isolated client
 language/preparatory-query history. Sharing a client removes that difference
