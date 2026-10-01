@@ -347,6 +347,41 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(summary["validated_observations"], 1)
         self.assertEqual(summary["window_copy_attempts"], 1)
 
+    def test_save_command_report_survives_ack_timeout_without_retry(self):
+        """Posted transaction metadata remains even when the product never acknowledges Save."""
+        report = {}
+        calls = []
+        transaction = {"method": "CGEvent.postToPid", "status": "attempted-posts-no-delivery-acknowledgement",
+                       "execution_acknowledged": False, "attempted_events": 2, "target_pid": 42}
+        def save():
+            """Model one returned transaction rather than target delivery."""
+            calls.append("save")
+            return transaction
+        driver = SimpleNamespace(observe=lambda version: {"modified": True}, save=save)
+        with patch.object(probe, "wait", side_effect=TimeoutError()), patch.object(probe, "digest") as read:
+            with self.assertRaises(TimeoutError):
+                probe.save_exact(None, driver, None, 100, "expected", report)
+        self.assertEqual(calls, ["save"])
+        self.assertTrue(report["save_command_attempted"])
+        self.assertEqual(report["save_command_report"], transaction)
+        self.assertFalse(report["save_command_report"]["execution_acknowledged"])
+        self.assertGreaterEqual(report["save_command_return_elapsed_ms"], 0)
+        read.assert_not_called()
+
+    def test_mac_save_labels_posting_not_delivery(self):
+        """A successful client return supplies guard metadata, not a Save-handler acknowledgment."""
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        raw = {"status": "observed", "requested_pid": 42, "guard_stage": "save-dispatch",
+               "ax_error": 0, "window_copy_error": 0, "dispatched_events": 2,
+               "trusted": True, "post_event_access": True, "ready": True, "focused": True,
+               "selection_start": 10, "selection_length": 0}
+        with patch.object(probe, "bounded_command", return_value=SimpleNamespace(stdout=json.dumps(raw).encode())):
+            result = driver.save()
+        self.assertEqual(result["attempted_events"], 2)
+        self.assertEqual(result["status"], "attempted-posts-no-delivery-acknowledgement")
+        self.assertFalse(result["execution_acknowledged"])
+        self.assertEqual(result["guard_report"]["guard_stage"], "save-dispatch")
+
 
 if __name__ == "__main__":
     unittest.main()

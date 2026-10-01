@@ -78,6 +78,14 @@ text, title, source path, raw exception message, screenshot, clipboard data or
 input-source identity. Local traces already use mote's content-free schema and
 are separately validated by the reused artifact auditor before interpretation.
 Original and final working hashes are retained even on failed/blocked samples.
+The separate `save_command_report` is captured immediately after the single
+returned modifying transaction, before read-only polling replaces the last
+observation. Mac `CGEvent.postToPid` is labeled attempted posts with **no delivery
+or execution acknowledgement**; Windows `PostMessageW` is labeled queued with
+**no command-execution acknowledgement**. The report, if available, survives a
+later timeout; it does not certify that mote invoked or completed Save. Missing
+report after a client error does not prove that no event was attempted. No Save
+retry or target file read is introduced by this diagnostic.
 
 ## Driver contracts and exclusions
 
@@ -141,7 +149,7 @@ green job or masked step conclusion does not certify this pilot.
 
 ## Completed local evidence (2026-10-01)
 
-- Portable artifact/protocol tests: **19/19** passed, Python 3.14.6, Windows x64.
+- Portable artifact/protocol tests: **21/21** passed, Python 3.14.6, Windows x64.
   Tests do not execute OS input/native processes. They cover exact valid corpus
   and one-byte oracle, wrong edit witness, causal count/version endpoint audit,
   mismatched/cancelled draw rejection, reopen mutation refusal, one-attempt
@@ -204,6 +212,11 @@ green job or masked step conclusion does not certify this pilot.
   fail-closed modifying guards; four more portable regressions cover transient/
   persistent/fatal copy cases and stale-report accounting. Updated target evidence
   is still pending, and it is not a fix for the separate Save timeout.
+- Separate Save action-report diagnostic: two additional tests preserve a
+  returned posted-transaction report across acknowledgement timeout with exactly
+  one Save/no target read, and verify the Mac API-return label never claims
+  delivery or execution. This does not resolve the x64 small-case Save failure;
+  a future action report plus independent result/trace evidence is required.
 
 ## Grounding and why the boundaries matter
 

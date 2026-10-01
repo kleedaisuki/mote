@@ -105,6 +105,12 @@ No automatic Save retry or target read during Save is allowed. Actual product
 Save attribution still requires a valid flushed trace or another independent
 owned UI witness; a posted report alone cannot supply it. This proposal/change
 is separate from the copy-readiness fix and is not claimed to solve the failure.
+The separate implementation now retains that report and client-return duration
+even when later acknowledgement times out. Windows queueing is also explicitly
+not command execution. Two new portable regressions (total21/21) prove report
+retention with one Save/no file read and the no-delivery label; no native target
+rerun was performed for this reporting-only slice. A missing returned report
+after a client failure still cannot prove that no modifying post occurred.
 
 ## Passing-case timing, not tails or initial-shell confusion
 

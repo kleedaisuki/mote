@@ -211,6 +211,8 @@ class WindowsDriver:
         self.owned(self.main)
         if not self.api.PostMessageW(self.main, 0x0111, 203, 0):
             raise RuntimeError("owned Save dispatch failed")
+        return {"method": "owned-HWND-WM_COMMAND", "status": "queued-not-execution-acknowledged",
+                "target_pid": self.pid, "queued_messages": 1, "execution_acknowledged": False}
 
     def close(self):
         """Request normal close only on the owned editor window."""
@@ -306,7 +308,10 @@ class MacDriver:
 
     def save(self):
         """Only the exact process receives Command-S; source focus is rechecked."""
-        self.command("save", 1)
+        data = self.command("save", 1)
+        return {"method": "CGEvent.postToPid", "status": "attempted-posts-no-delivery-acknowledgement",
+                "target_pid": self.pid, "attempted_events": data.get("dispatched_events"),
+                "execution_acknowledged": False, "guard_report": data}
 
     def close(self):
         """Press the exact owned window's AX close button, without keyboard/global focus."""
@@ -351,7 +356,7 @@ def wait(child, condition, seconds):
     raise TimeoutError("endpoint observation timed out")
 
 
-def save_exact(child, driver, working, size, expected_sha256):
+def save_exact(child, driver, working, size, expected_sha256, sample_report=None):
     """Observe Save without opening its target until native chrome acknowledges clean.
 
     Ordinary Python readers on Windows deny DELETE sharing and can obstruct
@@ -360,7 +365,16 @@ def save_exact(child, driver, working, size, expected_sha256):
     """
     if driver.observe(1).get("modified") is not True:
         raise ValueError("Save requires observed dirty source")
-    driver.save()
+    started = time.perf_counter_ns()
+    if sample_report is not None:
+        sample_report["save_command_attempted"] = True
+    command_report = driver.save()
+    if sample_report is not None:
+        # Persist the transaction report before polling overwrites last_report.
+        # Posting/queueing has no product Save acknowledgement: only subsequent
+        # clean chrome, exact bytes and normal trace/reopen establish acceptance.
+        sample_report["save_command_report"] = command_report
+        sample_report["save_command_return_elapsed_ms"] = (time.perf_counter_ns() - started) / 1e6
     wait(child, lambda: driver.observe(1).get("modified") is False, 60)
     if working.stat().st_size != size or digest(working) != expected_sha256:
         raise ValueError("native clean acknowledgement failed exact Save bytes")
@@ -460,7 +474,7 @@ def sample(executable, case, directory, client):
             raise ValueError("edit wrote disk before Save")
         result["disk_unchanged_before_save"] = True
         result["phase"] = "save-exact-bytes"
-        save_exact(child, driver, working, case["size_bytes"], case["expected_saved_sha256"])
+        save_exact(child, driver, working, case["size_bytes"], case["expected_saved_sha256"], result)
         def saved():
             try:
                 return working.stat().st_size == case["size_bytes"] and digest(working) == case["expected_saved_sha256"]
