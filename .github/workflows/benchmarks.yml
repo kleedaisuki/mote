@@ -1,20 +1,10 @@
-# Scheduled/manual, non-gating Native AOT measurements; never compare runner labels as identical hardware.
+# Explicit manual capacity/mechanism measurements; not an automatic ordinary-release requirement.
 name: Benchmarks
 
 permissions:
   contents: read
 
 on:
-  # A changed benchmark contract can validate itself on a feature branch; manual
-  # dispatch and schedules require this workflow to exist on the default branch.
-  push:
-    paths:
-      - '.github/workflows/benchmarks.yml'
-      - 'tests/Mote.Benchmarks/**'
-      - 'tests/Measure-NativeStartup.ps1'
-      - 'benchmarks/Mote.MarkdownBenchmarks/**'
-      - 'benchmarks/NativePaintLatency/**'
-      - 'benchmarks/NativeAcceptance/**'
   workflow_dispatch:
     inputs:
       suite:
@@ -28,8 +18,6 @@ on:
           - markdown
           - startup
           - trace
-  schedule:
-    - cron: '15 2 * * 1'
 
 jobs:
   suites:
