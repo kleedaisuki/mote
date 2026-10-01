@@ -232,6 +232,12 @@ class MacDriver:
         self.last_ax_error = None
         self.first_ready_ms = None
         self.last_observation_elapsed_ms = None
+        self.copy_observation_attempts = 0
+        self.first_copy_error = None
+        self.last_copy_error = None
+        self.count_pending_observations = 0
+        self.copy_pending_observations = 0
+        self.validated_observations = 0
 
     def command(self, operation, version):
         """A 6-second outer watchdog bounds each client's 0.15-second AX calls."""
@@ -247,11 +253,14 @@ class MacDriver:
             raise PermissionError("Mac capability blocked")
         if data.get("status") != "observed":
             raise RuntimeError("Mac source contract failed")
+        if operation != "observe" and -25204 in (data.get("ax_error"), data.get("window_copy_error")):
+            raise RuntimeError("unresolved Mac read cannot certify a modifying transaction")
         return data
 
     def observe(self, version):
         """Return content-free source/focus/semantic certification observations."""
         self.observation_attempts += 1
+        previous_report = self.last_report
         try:
             data = self.command("observe", version)
             return data
@@ -260,11 +269,22 @@ class MacDriver:
             # clock measurements include client launch/IPC; they are not child
             # render timings and do not alter the outer endpoint deadline.
             self.last_observation_elapsed_ms = (time.perf_counter_ns() - self.observation_started_ns) / 1e6
-            if self.last_report is not None:
+            if self.last_report is not None and self.last_report is not previous_report:
                 error = self.last_report.get("ax_error")
-                if self.observation_attempts == 1:
+                if self.validated_observations == 0:
                     self.first_ax_error = error
+                self.validated_observations += 1
                 self.last_ax_error = error
+                if error == -25204:
+                    self.count_pending_observations += 1
+                copy_error = self.last_report.get("window_copy_error")
+                if copy_error is not None:
+                    if self.copy_observation_attempts == 0:
+                        self.first_copy_error = copy_error
+                    self.copy_observation_attempts += 1
+                    self.last_copy_error = copy_error
+                    if copy_error == -25204:
+                        self.copy_pending_observations += 1
                 if self.last_report.get("ready") and self.first_ready_ms is None:
                     self.first_ready_ms = self.last_observation_elapsed_ms
 
@@ -273,6 +293,11 @@ class MacDriver:
         return {"attempts": self.observation_attempts, "first_ax_error": self.first_ax_error,
                 "last_ax_error": self.last_ax_error, "first_ready_ms": self.first_ready_ms,
                 "last_observation_elapsed_ms": self.last_observation_elapsed_ms,
+                "window_copy_attempts": self.copy_observation_attempts,
+                "first_window_copy_error": self.first_copy_error, "last_window_copy_error": self.last_copy_error,
+                "count_pending_observations": self.count_pending_observations,
+                "copy_pending_observations": self.copy_pending_observations,
+                "validated_observations": self.validated_observations,
                 "clock_scope": "parent-driver-attach-to-observation-return-including-client-overhead"}
 
     def edit(self):

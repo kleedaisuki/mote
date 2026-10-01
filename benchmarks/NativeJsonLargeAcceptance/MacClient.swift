@@ -79,6 +79,14 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
     report.window_copy_error = copyError.rawValue
     let windows = rawWindows as? [AXUIElement]
     report.window_copy_count = copyError == .success ? windows?.count : nil
+    if copyError == .cannotComplete {
+        // Count success does not guarantee the following bounded read can
+        // complete while the app is busy. Keep this read pending only; main
+        // rejects it before every modifying branch and the parent keeps its
+        // existing phase deadline and liveness checks.
+        report.guard_stage = "window-read"
+        return (report, nil, nil)
+    }
     guard copyError == .success, let windows, windows.count == 1 else {
         report.status = "failed"; report.guard_stage = "window-read"; return (report, nil, nil)
     }
@@ -183,7 +191,8 @@ private func main() throws {
     guard ["observe", "edit", "save", "close"].contains(operation) else { exit(2) }
     let app = AXUIElementCreateApplication(pid)
     var (report, source, window) = observe(app, pid, size, version)
-    if operation != "observe", report.ax_error == AXError.cannotComplete.rawValue {
+    if operation != "observe", report.ax_error == AXError.cannotComplete.rawValue ||
+        report.window_copy_error == AXError.cannotComplete.rawValue {
         report.status = "failed"
         emit(report)
         return

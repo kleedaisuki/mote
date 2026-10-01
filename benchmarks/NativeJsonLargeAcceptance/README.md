@@ -25,7 +25,11 @@ none of these failures is disguised as four-RID acceptance. The
 [second run](../../docs/validation/native-json-large-second-hosted.md) passed
 both sizes' full exact-byte/normal-exit/reopen/raw-trace contract on **both Windows
 RIDs**. Both Mac clients compiled but failed their first window-count call with
-CannotComplete (-25204); actual Mac readiness/edit/Save remains unaccepted.
+CannotComplete (-25204). The [third run](../../docs/validation/native-json-large-third-hosted.md)
+passed ARM64 1 MiB and x64 100 MiB including exact Save/normal exit/reopen;
+ARM64 100 MiB hit a later bounded window-copy messaging error, while x64 1 MiB
+had a distinct Save-acknowledgement timeout. Both Mac sizes/RIDs remain unaccepted
+as a whole; neither failure is generalized into the other.
 
 ## Workload and independent oracles
 
@@ -137,7 +141,7 @@ green job or masked step conclusion does not certify this pilot.
 
 ## Completed local evidence (2026-10-01)
 
-- Portable artifact/protocol tests: **15/15** passed, Python 3.14.6, Windows x64.
+- Portable artifact/protocol tests: **19/19** passed, Python 3.14.6, Windows x64.
   Tests do not execute OS input/native processes. They cover exact valid corpus
   and one-byte oracle, wrong edit witness, causal count/version endpoint audit,
   mismatched/cancelled draw rejection, reopen mutation refusal, one-attempt
@@ -190,6 +194,16 @@ green job or masked step conclusion does not certify this pilot.
   and no modifying command may use unresolved readiness. Three additional tests
   cover transient recovery, persistent timeout and fatal other errors. Actual
   updated Mac recovery remains pending; no timing claim follows from the mocks.
+- Third Mac execution: count startup messaging recovered in all cases; ARM64
+  1 MiB and x64 100 MiB full ordinary workflows and independent raw traces passed.
+  ARM64 100 MiB hit only a read-only window-copy CannotComplete before its15s
+  idle Full certification; normal cleanup retained a valid no-edit terminal trace.
+  x64 1 MiB instead timed out awaiting Save clean acknowledgement, leaving dirty
+  source/original working bytes and an unflushed trace. These causes stay separate.
+  The subsequent copy-only pending correction retains existing deadlines and
+  fail-closed modifying guards; four more portable regressions cover transient/
+  persistent/fatal copy cases and stale-report accounting. Updated target evidence
+  is still pending, and it is not a fix for the separate Save timeout.
 
 ## Grounding and why the boundaries matter
 

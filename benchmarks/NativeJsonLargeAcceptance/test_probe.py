@@ -279,6 +279,74 @@ class ProbeTests(unittest.TestCase):
                 driver.observe(0)
         self.assertEqual(driver.observation_summary()["attempts"], 1)
 
+    def test_mac_copy_cannot_complete_then_ready(self):
+        """Count success and temporary copy messaging refusal are distinct read-only facts."""
+        pending = {"status": "observed", "requested_pid": 42, "guard_stage": "window-read",
+                   "ax_error": 0, "window_count": 1, "window_copy_error": -25204,
+                   "window_copy_count": None, "ready": False}
+        ready = {**pending, "guard_stage": "ready", "window_copy_error": 0,
+                 "window_copy_count": 1, "ready": True}
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        results = [SimpleNamespace(stdout=json.dumps(row).encode()) for row in (pending, ready)]
+        def condition():
+            """Require a completed owned-source observation rather than copy-call return."""
+            observed = driver.observe(0)
+            return observed if observed["ready"] else None
+        with patch.object(probe, "bounded_command", side_effect=results), patch.object(probe.time, "sleep"):
+            result = probe.wait(SimpleNamespace(poll=lambda: None), condition, 60)
+        self.assertTrue(result["ready"])
+        summary = driver.observation_summary()
+        self.assertEqual(summary["window_copy_attempts"], 2)
+        self.assertEqual(summary["first_ax_error"], 0)
+        self.assertEqual(summary["first_window_copy_error"], -25204)
+        self.assertEqual(summary["last_window_copy_error"], 0)
+        self.assertEqual(summary["copy_pending_observations"], 1)
+        self.assertEqual(summary["count_pending_observations"], 0)
+
+    def test_persistent_mac_copy_cannot_complete_times_out(self):
+        """A successful count cannot turn a persistently unsuccessful copy into readiness."""
+        pending = {"status": "observed", "requested_pid": 42, "guard_stage": "window-read",
+                   "ax_error": 0, "window_count": 1, "window_copy_error": -25204,
+                   "window_copy_count": None, "ready": False}
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        result = SimpleNamespace(stdout=json.dumps(pending).encode())
+        with patch.object(probe, "bounded_command", return_value=result), patch.object(probe.time, "sleep"), \
+             patch.object(probe.time, "monotonic", side_effect=[0, 0, 0.2, 0.4]):
+            with self.assertRaises(TimeoutError):
+                probe.wait(SimpleNamespace(poll=lambda: None), lambda: driver.observe(0)["ready"], 0.3)
+        self.assertEqual(driver.observation_summary()["copy_pending_observations"], 2)
+        self.assertIsNone(driver.observation_summary()["first_ready_ms"])
+        self.assertIsNone(driver.failure_observation()["window_copy_count"])
+
+    def test_mac_other_copy_failure_and_pending_modification_are_fatal(self):
+        """Neither other copy errors nor pending modifying transactions receive a retry."""
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        failed = {"status": "failed", "requested_pid": 42, "guard_stage": "window-read",
+                  "ax_error": 0, "window_count": 1, "window_copy_error": -25205}
+        with patch.object(probe, "bounded_command", return_value=SimpleNamespace(stdout=json.dumps(failed).encode())):
+            with self.assertRaises(RuntimeError):
+                driver.observe(0)
+        pending = {**failed, "status": "observed", "window_copy_error": -25204}
+        with patch.object(probe, "bounded_command", return_value=SimpleNamespace(stdout=json.dumps(pending).encode())) as command:
+            for operation in ("edit", "save", "close"):
+                with self.assertRaises(RuntimeError):
+                    driver.command(operation, 0)
+            self.assertEqual(command.call_count, 3)
+
+    def test_failed_client_does_not_count_stale_copy_report_again(self):
+        """A tool timeout retains last validated metadata without claiming another AX copy."""
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        ready = {"status": "observed", "requested_pid": 42, "guard_stage": "ready", "ax_error": 0,
+                 "window_count": 1, "window_copy_error": 0, "window_copy_count": 1, "ready": True}
+        with patch.object(probe, "bounded_command", side_effect=[SimpleNamespace(stdout=json.dumps(ready).encode()), TimeoutError()]):
+            driver.observe(0)
+            with self.assertRaises(TimeoutError):
+                driver.observe(0)
+        summary = driver.observation_summary()
+        self.assertEqual(summary["attempts"], 2)
+        self.assertEqual(summary["validated_observations"], 1)
+        self.assertEqual(summary["window_copy_attempts"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
