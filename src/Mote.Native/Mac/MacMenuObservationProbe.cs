@@ -90,7 +90,7 @@ internal static unsafe class MacMenuObservationProbe
         MacMenuObservation.Forward(self, selector, originalEvent, s_controlClass);
 
     /// <summary>Creates one autoreleased synthetic event; native key code is never persisted.</summary>
-    private static nint CreateKey(string character)
+    internal static nint CreateKey(string character)
     {
         var text = ObjC.String(character);
         var result = KeyEvent(ObjC.Class("NSEvent"), ObjC.Sel(

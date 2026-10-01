@@ -1,6 +1,7 @@
 # Native Save input provenance: the next permanent boundary
 
-Date: 2026-10-01. Status: **design only; no implementation or experiment**.
+Date: 2026-10-01. Status: **menu-first shipped; conditional local monitor implemented locally,
+pending both-macOS-RID hosted ABI and ordinary-route evidence**.
 Owner: architecture. Scope: macOS target-owned Save-family input boundaries,
 not an input recorder, command framework, or change to Save routing.
 
@@ -15,6 +16,16 @@ Keep the existing selector receipt as the first actual Save request. The monitor
 recognizes only the shipped Command-S family and returns the identical event.
 The menu override calls its superclass exactly once with the identical event and
 returns the identical Boolean. Neither boundary initiates Save.
+
+The second slice is now justified by the independently audited menu-only
+[CI 36831903238](https://github.com/kleedaisuki/mote/actions/runs/36831903238)
+at `a13a9b0`: the macOS x64/100 MiB forced-exit trace retains 32 complete rows /
+11,167 bytes, one menu-ready checkpoint, zero menu entry/return checkpoints and
+zero Save requests. [Audit commit `783062e`](../validation/native-menu-observation-hosted.md)
+is the authority for that observation. This unresolved target-receipt gap
+authorizes the passive local monitor; it does not establish callback absence
+or diagnose the Save timeout.
+See [the focused ABI/lifecycle contract](../validation/native-local-input-monitor.md).
 
 The menu-only slice adds useful native-route visibility using an established
 interop mechanism; a retained menu positive already proves a target-owned
@@ -85,7 +96,7 @@ local AppKit monitor                               [conditional second slice]
 mote main-menu performKeyEquivalent(event)
     native.menu.save_family.entered                 [anchor M, session parent]
     +-- super.performKeyEquivalent(same event)       [exactly once]
-    +-- native.menu.save_family.returned_true/false  [child of M]
+    native.menu.save_family.returned_true/false      [independent session parent]
     :                                              [edge unknown]
 existing moteSave: / moteSaveAs:
     command.save.received / command.save_as.received [R, unchanged session parent]
@@ -95,9 +106,11 @@ existing moteSave: / moteSaveAs:
 **Choose independent positive boundaries for this slice.** A monitor returns
 before normal dispatch, so it has no lexical ownership of the later selector.
 Do not keep a pending event pointer, retain NSEvent objects, install an ambient
-Activity, or hold a producer lease across that boundary. A menu call owns only
-its local mark and return record; it holds no telemetry state in the shell after
-return. Nested calls naturally have distinct local marks.
+Activity, or hold a producer lease across that boundary. A menu call holds no
+telemetry state in the shell after return. Shipped entry/return observations are
+independent session checkpoints with distinct IDs, not a parent/child pair.
+Nested calls are not correlated in persisted evidence; count and timestamp
+proximity do not create such an edge.
 
 `eventNumber` alone is not a documented globally unique keyboard-delivery ID;
 timestamps, `NSApplication.currentEvent`, and nearest observed candidates are
@@ -144,6 +157,9 @@ Proposed operation strings are closed constants, not caller-provided strings:
 | `native.input.monitor.ready` | Monitor installed and owned instrumented main menu installed | Future input completeness or delivery |
 | `native.input.monitor.unavailable` | Instrumentation setup could not complete | Editor command failure |
 | `native.input.save_family_candidate` | Local handler observed a matching candidate | External helper delivery identity, physical keystroke, Save request |
+| `native.input.monitor.callback_failed` | A nonfatal observation guard failed | Event consumed, command failed, complete failure inventory |
+| `native.input.monitor.removed` | Removal and owned-reference release completed | Loss-free input history |
+| `native.input.monitor.removal_failed` | Removal or owned-reference release failed; owner permanently passive | Monitor definitely absent, any later reinstall |
 | `native.menu.save_family.entered` | Owned main-menu method received a matching-family event | Menu item enabled/matched, selector invocation |
 | `native.menu.save_family.returned_true` | Superclass returned true for this menu call | Which item it handled, successful Save |
 | `native.menu.save_family.returned_false` | Superclass returned false for this menu call | Event globally ignored, no other responder handled it |
@@ -151,6 +167,9 @@ Proposed operation strings are closed constants, not caller-provided strings:
 
 All instantaneous positives use zero duration/success to denote the checkpoint,
 not enclosing operation success. A false menu return is not a failed Save.
+The input monitor unavailable/callback-failed/removal-failed guards use failure;
+ready/candidate/removed use success. Existing menu unavailable remains its
+established successful observation status, unchanged by this added vocabulary.
 If duration is useful, emit a distinct child terminal under the entry anchor,
 never reuse its SpanId. The ready/unavailable row belongs to the session, not a
 fictional Save request. Input-only evidence must not appear as `requests=[]`
@@ -208,8 +227,11 @@ Create the owned instrumented main menu before any conditional monitor; emit
 both steps succeed. On setup failure preserve a normal NSMenu
 and existing selector tracing; report unavailable if the sink still works.
 Remove the monitor on the UI thread before native views/pool/shell are torn
-down; retain no candidate events or ambient frames. Use `removeMonitor:` and the
-documented token ownership, not an invented release of the non-owned token.
+down; retain no candidate events or ambient frames. The token returned by Apple
+is borrowed. Take one explicit retain for shell ownership and release only that
+reference after successful `removeMonitor:`. Removal or release failure leaves
+the owner/token passive and permanently occupies the admission slot; no retry
+or duplicate installation is allowed. Block storage remains alive.
 Keep the no-capture block storage process-lifetime so callbacks cannot reference
 freed descriptor memory during teardown. It is a fixed one-time enabled cost.
 

@@ -31,6 +31,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     private const string StatusBackgroundClass = "MoteStatusBackgroundView";
     private const string ObjcRuntime = "/usr/lib/libobjc.A.dylib";
     private static MacEditorShell? s_current;
+    /// <summary>Enabled-only local observer, removed before any native shell teardown.</summary>
+    private MacLocalInputMonitor? _inputMonitor;
 
     [DllImport(ObjcRuntime, EntryPoint = "objc_msgSendSuper")]
     private static extern void SendSuperNoArgument(ref MacOnScreenCanvasNative.Super receiver,
@@ -313,6 +315,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             {
                 // The AX element retains AppKit view references. Tear it down
                 // on this UI thread before either native view or pool goes away.
+                _inputMonitor?.Dispose();
+                _inputMonitor = null;
                 _accessibility?.Dispose();
                 _accessibility = null;
                 _canvas?.Dispose();
@@ -1300,7 +1304,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
             ("Previous Page", "motePreviousPage:", ""),
             ("Next Page", "moteNextPage:", "")], true);
         ObjC.Send(_application, ObjC.Sel("setMainMenu:"), main);
-        MacMenuObservation.Installed(main);
+        var observationReady = MacMenuObservation.Installed(main);
+        _inputMonitor = MacLocalInputMonitor.TryInstall(observationReady);
     }
 
     private void AddMenu(nint main, string title, (string Label, string Action, string Key)[] items,

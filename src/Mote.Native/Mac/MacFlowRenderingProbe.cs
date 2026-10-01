@@ -22,14 +22,19 @@ internal static class MacFlowRenderingProbe
     internal static int Run()
     {
         var shell = new MacEditorShell();
+        var postedFault = new MacPostedCallbackProbe();
         var passed = false;
-        shell.Shown += () => shell.Post(() =>
+        shell.Shown += () =>
         {
-            try { Check(shell); passed = true; }
-            catch (Exception error) when (error is not OutOfMemoryException)
-            { Console.Error.WriteLine($"Mac Flow check failed: {error.Message}"); }
-            finally { shell.Close(); }
-        });
+            postedFault.Queue(shell);
+            shell.Post(() =>
+            {
+                try { postedFault.VerifyContinuation(); Check(shell); passed = true; }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                { Console.Error.WriteLine($"Mac Flow check failed: {error.Message}"); }
+                finally { shell.Close(); }
+            });
+        };
         shell.Run();
         return passed ? 0 : 1;
     }
@@ -37,6 +42,7 @@ internal static class MacFlowRenderingProbe
     private static void Check(MacEditorShell shell)
     {
         MacMenuObservationProbe.VerifyForwarding();
+        MacLocalInputMonitorProbe.Verify();
         var text = "Heading\nbold italic code link\n• nested\nquote\n" +
             string.Concat(Enumerable.Repeat("scrollable body line\n", 65));
         var heading = new TextSpan(0, 8);
