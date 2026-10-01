@@ -269,3 +269,83 @@ Exact source `c85681628552ea73f84d3fa8b42a0baf5710627d`, [automatic Benchmarks 3
 | Whole-process lifetime | +7.8837 | [-40.9935, +45.7780] |
 
 These are the new summary's conditional sample-specific estimates, not an aggregation with earlier pairs or a before/after performance regression test. All intervals include zero; coarse CPU and synthetic screen-capture endpoint limitations persist. Foreground hosted workload does not measure physical/user-tail or AppKit monitor cost. Companion CI 36858899063 reports strict suites **3132/3132** on Windows/macOS, four single-binary payloads and ordinary JSON summaries **8/8 / exits0/0**; new owned-HWND Grid focus tests pass on both RIDs, while original external Grid probes still fail. Thus a qualified tracing-cost study does not certify accessibility acceptance.
+
+### Changed-product/schema checkpoint — Benchmarks 36874262133
+
+Exact pushed source `3a0552a691e46470ac88ef65ce3c621276ec852c`,
+[automatic Benchmarks 36874262133](https://github.com/kleedaisuki/mote/actions/runs/36874262133).
+The existing changed-path selector runs only trace pairs; engine, 100 MiB Markdown
+and GUI-startup jobs **skip**. This audit consumes that already-running workflow's
+artifacts; no dispatch, restart, local GUI or additional workload was initiated.
+The actual 22 paired-series and nine strict-reader fixtures pass. Warning-strict
+AOT publication and enforced payload inventory yield only `mote.exe`,
+**7,232,000 bytes**, SHA-256
+`731f76ef92984f40befa89acee706cbeccd05492d649edfed2b2c81d2fb362b1`.
+
+Series `58534e8ef1284c55a43c8c262206b4d8` is **qualified**, with all declared
+**20 pairs / 40 indexed driver-return samples**. The measure, qualification and
+artifact-upload steps actually succeed; job success alone is not the evidence.
+Every original target and driver has actual numeric exit **0**, normal termination
+observed and no forced cleanup. All 40 reports retain the same frozen executable,
+exact-foreground observations, profile/environment, quiet control, unchanged-
+before-Save source and exact X/Undo/Redo disk/screen oracles. The index remains a
+driver-return count, not proof that no unindexed launch/in-flight process existed.
+
+Evidence lives in `.cache/benchmarks-36874262133-focus-provenance/`: run/job metadata
+and log, artifact inventory, original downloaded manifest/index/summary/reports/
+traces, `audit.py`, `audit.log` and `independent-qualified-audit.json`. The strict
+schema reader hash changed to
+`a16e0822922a2ce00ac64aa1da370c72c75935ce15ee8698e793c060e5349260`, so this
+**new artifact's** 40 reports and 20 traces were independently reclassified with
+the established classifier plus current strict schema/privacy/integrity reader.
+No previous series' raw 60-chain audit was replayed. All eight manifest harness/
+reader hashes exactly match the frozen source's hosted **CRLF** checkout; current
+local LF-normalized contents match those Git blobs. Line-ending differences are
+recorded, not mistaken for different classifier semantics.
+
+The 20 enabled traces total **892,341 bytes**, each **135 complete valid records**
+and one successful normal session. Exactly **60 current native Save chains**
+qualify, three per enabled process, with captured versions **1/2/3**, required
+persistence phases, route-aware commit coverage and UI completion; no emitted
+drop/orphan stage degrades their instrumented-chain evidence. Actual disabled
+inventories are empty in all 20 samples. These positive checks do not certify
+complete transport, absence, physical delivery or durability.
+
+Host: Windows 10.0.26100, image `20260925.250.1`, PowerShell 7.6.6,
+**Intel Xeon Platinum 8573C**, four logical processors, 17,174,360,064 RAM bytes,
+1024×768 display / 96 DPI, 668×659 canvas and 256×32 ROI. The fixed 1 MiB fixture/
+profile and existing activation/foreground protocol remain unchanged. This CPU
+differs from the earlier AMD EPYC runner: **do not pool series or interpret the
+following as an inter-version performance regression comparison**.
+
+Independent on-minus-adjacent-off subtraction, medians and rank-6/15 intervals
+exactly reproduce this series' hosted estimates:
+
+| Endpoint (ms), on − off | Current paired median | Conditional median interval |
+| --- | ---: | --- |
+| Input acknowledgement | -0.0148 | [-0.0877, +0.0672] |
+| Launch to source ready | +1.68345 | [-9.5907, +6.2112] |
+| First changed screen capture | -0.33275 | [-15.8855, +0.1935] |
+| Whole-process CPU | **+15.625** | **[+15.625, +46.875]** |
+| Whole-process lifetime | +48.1488 | [-28.0985, +84.9328] |
+
+Conditional coverage remains **95.8610534668%**, assuming independent stationary
+paired sampling; hosted metadata does not prove those assumptions. Unlike the
+earlier checkpoints, the **CPU interval excludes zero**: this sample resolves a
+positive enabled whole-workload CPU cost under that model. All 40 CPU observations
+are available; their coarse 15.625 ms accounting must remain visible. Fifteen pair
+deltas are positive and five negative; mode CPU medians are OFF **218.75 ms** and
+ON **234.375 ms**. The +15.625 ms paired median is about 7.1% of the OFF mode median
+as context, not a confidence interval for a percentage or a per-key CPU attribution.
+Outlying pair deltas, including +140.625 ms, remain in the retained observations.
+
+The other endpoint intervals include zero and do not resolve a directional median
+effect; they do **not** prove zero latency overhead or tail safety. This result
+must not be summarized as "tracing is free". Whole-process CPU includes startup,
+edit, three Saves, Undo/Redo, drawing and writer/shutdown work; no component profile
+separates producer identities, serialization or flushing. It supports retaining an
+explicit opt-in CPU cost, not speculative checkpoint removal or an unmeasured
+optimization. The bounded foundation audit is complete; real ordinary-file focus,
+IME, default rendering and sustained-user workflows remain separate priorities.
+No p95/p99, physical display, AppKit-monitor cost or accessibility acceptance is
+certified by this synthetic Windows Canvas checkpoint.
