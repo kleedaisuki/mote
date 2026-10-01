@@ -13,6 +13,8 @@ on:
       - 'tests/Mote.Benchmarks/**'
       - 'tests/Measure-NativeStartup.ps1'
       - 'benchmarks/Mote.MarkdownBenchmarks/**'
+      - 'benchmarks/NativePaintLatency/**'
+      - 'benchmarks/NativeAcceptance/**'
   workflow_dispatch:
     inputs:
       suite:
@@ -25,6 +27,7 @@ on:
           - engine
           - markdown
           - startup
+          - trace
   schedule:
     - cron: '15 2 * * 1'
 
@@ -36,6 +39,7 @@ jobs:
       engine: ${{ steps.select.outputs.engine }}
       markdown: ${{ steps.select.outputs.markdown }}
       startup: ${{ steps.select.outputs.startup }}
+      trace: ${{ steps.select.outputs.trace }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name == 'push'
@@ -48,33 +52,36 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
-            printf 'engine=true\nmarkdown=true\nstartup=true\n' >> "$GITHUB_OUTPUT"
+            printf 'engine=true\nmarkdown=true\nstartup=true\ntrace=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [[ "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE^{commit}"; then
-            printf 'engine=true\nmarkdown=true\nstartup=true\n' >> "$GITHUB_OUTPUT"
+            printf 'engine=true\nmarkdown=true\nstartup=true\ntrace=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           engine=false
           markdown=false
           startup=false
+          trace=false
           workflow=false
           while IFS= read -r path; do
             case "$path" in
               tests/Mote.Benchmarks/*) engine=true ;;
               benchmarks/Mote.MarkdownBenchmarks/*) markdown=true ;;
               tests/Measure-NativeStartup.ps1) startup=true ;;
+              benchmarks/NativePaintLatency/*|benchmarks/NativeAcceptance/*) trace=true ;;
               .github/workflows/benchmarks.yml) workflow=true ;;
             esac
           done < <(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           # A workflow-only change may affect any suite; a new Markdown project
-          # plus workflow change is still Markdown-only rather than rerunning JSON.
-          if [[ "$workflow" == true && "$engine" == false && "$markdown" == false && "$startup" == false ]]; then
+          # plus workflow change remains focused; a trace harness change is trace-only.
+          if [[ "$workflow" == true && "$engine" == false && "$markdown" == false && "$startup" == false && "$trace" == false ]]; then
             engine=true
             markdown=true
             startup=true
+            trace=true
           fi
-          printf 'engine=%s\nmarkdown=%s\nstartup=%s\n' "$engine" "$markdown" "$startup" >> "$GITHUB_OUTPUT"
+          printf 'engine=%s\nmarkdown=%s\nstartup=%s\ntrace=%s\n' "$engine" "$markdown" "$startup" "$trace" >> "$GITHUB_OUTPUT"
 
   engine:
     name: Native AOT engine open/edit / ${{ matrix.rid }}
@@ -249,4 +256,121 @@ jobs:
           name: native-aot-markdown-${{ matrix.rid }}
           path: .cache/benchmarks/markdown-large.jsonl
           if-no-files-found: error
+          retention-days: 30
+
+  native-trace-pairs:
+    name: Native AOT paired trace overhead / win-x64
+    needs: suites
+    if: needs.suites.outputs.trace == 'true' && (github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'trace')
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate paired-series and strict trace-reader fixtures
+        shell: pwsh
+        run: |
+          python -B benchmarks/NativePaintLatency/test_trace_pairs.py
+          if ($LASTEXITCODE -ne 0) { throw 'Paired-series fixtures failed.' }
+          python -B benchmarks/NativeAcceptance/test_acceptance.py
+          if ($LASTEXITCODE -ne 0) { throw 'Strict trace-reader fixtures failed.' }
+      - name: Publish current editor once with strict AOT warnings
+        shell: pwsh
+        run: |
+          dotnet publish src/Mote.Native/Mote.Native.csproj `
+            --configuration Release --runtime win-x64 --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true `
+            -p:TreatWarningsAsErrors=true -p:ILLinkTreatWarningsAsErrors=true `
+            -p:DebugType=none -p:GenerateDocumentationFile=false -p:StripSymbols=false `
+            -o .cache/benchmarks/trace-publish-win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Current editor Native AOT publish failed.' }
+      - name: Retain and enforce exactly one executable payload
+        shell: pwsh
+        run: |
+          $publish = (Resolve-Path '.cache/benchmarks/trace-publish-win-x64').Path
+          $files = @(Get-ChildItem -LiteralPath $publish -File -Recurse -Force | ForEach-Object {
+            [pscustomobject]@{
+              path = [IO.Path]::GetRelativePath($publish, $_.FullName)
+              bytes = $_.Length
+            }
+          })
+          $directory = '.cache/benchmarks/native-trace-pairs'
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          [pscustomobject]@{ rid = 'win-x64'; executable = 'mote.exe'; payload_files = $files } |
+            ConvertTo-Json -Depth 6 | Set-Content -LiteralPath "$directory/publish-inventory.json" -Encoding utf8
+          if ($files.Count -ne 1 -or $files[0].path -cne 'mote.exe') {
+            throw 'Single-binary contract failed: expected only root mote.exe.'
+          }
+      # A rejected desktop/series is retained evidence, not a performance regression.
+      # No rescue, activation repair, second publish, or replacement sample is scheduled.
+      - name: Measure one predeclared 20-pair hosted series
+        id: measurement
+        continue-on-error: true
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          & ./benchmarks/NativePaintLatency/Measure-WindowsTracePairs.ps1 `
+            -ExecutablePath .cache/benchmarks/trace-publish-win-x64/mote.exe -Pairs 20
+      - name: Surface qualification independently of job success
+        if: always()
+        shell: pwsh
+        env:
+          MEASUREMENT_OUTCOME: ${{ steps.measurement.outcome }}
+        run: |
+          # Read only the one owned series, never arbitrary paths/text from evidence.
+          $comparison = 'unknown'
+          $planned = $attempted = $completed = 'unknown'
+          try {
+            $root = '.cache/benchmarks/native-trace-pairs'
+            foreach ($ancestor in @('.cache', '.cache/benchmarks', $root)) {
+              if ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe root.' }
+            }
+            $series = @(Get-ChildItem -LiteralPath $root -Directory -Force)
+            if ($series.Count -ne 1 -or $series[0].Name -cnotmatch '^[0-9a-f]{32}$' -or
+                ($series[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe series.' }
+            $path = Join-Path $series[0].FullName 'summary.json'
+            $file = Get-Item -LiteralPath $path
+            if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                $file.Length -gt 4194304) { throw 'Unsafe summary.' }
+            $summary = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            if (($summary.schema_version -isnot [int] -and $summary.schema_version -isnot [long]) -or
+                $summary.schema_version -ne 1 -or $summary.comparison -cnotin @('qualified', 'not_qualified', 'incomplete')) { throw 'Invalid summary.' }
+            foreach ($key in @('planned_pairs', 'attempted_samples', 'completed_equivalent_pairs')) {
+              $value = $summary.$key
+              if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 60) { throw 'Invalid counter.' }
+            }
+            if ($summary.planned_pairs -ne 20 -or $summary.attempted_samples -gt 40 -or
+                $summary.completed_equivalent_pairs -gt 20 -or
+                2 * $summary.completed_equivalent_pairs -gt $summary.attempted_samples) { throw 'Inconsistent counters.' }
+            if ($summary.comparison -ceq 'qualified' -and
+                ($env:MEASUREMENT_OUTCOME -cne 'success' -or $summary.attempted_samples -ne 40 -or
+                 $summary.completed_equivalent_pairs -ne 20 -or $null -eq $summary.paired_estimate)) { throw 'Incomplete qualification.' }
+            $comparison = $summary.comparison
+            $planned = $summary.planned_pairs
+            $attempted = $summary.attempted_samples
+            $completed = $summary.completed_equivalent_pairs
+          } catch {
+            # Missing/unsafe/censored evidence is unknown, never a qualified green job.
+          }
+          $outcome = if ($env:MEASUREMENT_OUTCOME -cin @('success', 'failure', 'cancelled', 'skipped')) { $env:MEASUREMENT_OUTCOME } else { 'unknown' }
+          @(
+            '## Hosted paired trace qualification'
+            "Measurement step outcome: **$outcome** (non-gating)."
+            "Comparison: **$comparison**; declared pairs: $planned; indexed driver-return samples: $attempted; completed equivalent pairs: $completed."
+            'Job success does not certify qualification, absence of regression, AppKit cost, physical input, or presentation.'
+            'Inspect the retained manifest, index, summary, driver logs, and traces before making a performance claim.'
+          ) | Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Retain complete series evidence even after rejection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-trace-pairs-win-x64
+          path: .cache/benchmarks/native-trace-pairs/**
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 30
