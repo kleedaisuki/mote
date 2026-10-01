@@ -359,13 +359,35 @@ working bytes are unchanged.
 
 The ARM64 failure's owned cleanup **does exit normally** (`failure_cleanup_normal_exit=true`),
 retaining a 4,838-byte, **14-record** trace with one successful terminal root,
-successful open/editable/open-draw and successful 100 MiB parse/publish/semantic
-presentation at v0, diagnostic count 0, and no edit or Save. Independent checks
-confirm unique identities, valid parents, no drops and successful statuses.
-Thus it is unsupported to call this observed parser failure: internal analysis
-did succeed, while external Complete observation was interrupted by AX window
-copy communication. Cleanup-only normal exit still **does not** certify the
-unexecuted edit/Save/reopen workload or turn its sample into pass.
+successful open/editable/open-draw and one successful initial **Visible**
+parse/publish/presentation sequence for the 100 MiB document at v0,
+`analysis.published.count=0`, and no edit or Save. Independent checks confirm
+unique identities, valid parents, no drops and successful statuses. The source
+size bucket describes the document, **not the extent parsed**; delivered count 0
+does not establish an exact whole-document diagnostic total. The trace has no
+analysis-scope or completeness attribute and does **not certify Full completion**.
+
+This interpretation was independently checked against the run's `c453506`
+sources, not the subsequently edited worktree. `NativeEditorController` uses
+`FullAnalysisLimit=2 * 1024 * 1024`, so the initial 100 MiB request is Visible.
+`NativeIdleFullAnalysis.DelayFor` waits **15 seconds** above its 32 Mi-unit
+medium limit before opportunistic Full work, unless explicitly promoted. This
+sample dispatches no demand/navigation/edit action. The failed observer summary
+ends at **13.5937575 seconds** from driver attachment; the successful terminal
+session lasts **13.723412 seconds**. Both are earlier than the idle delay itself,
+which starts after the initial visible result is offered. The only 100 MiB
+parse span lasts **2,216 microseconds** and its presentation span **450 microseconds**;
+they occur near opening, consistent with the initial bounded Visible work, not
+the later certified idle Full pass.
+
+Therefore the trace establishes successful initial Visible work and cleanup,
+**not successful global/full analysis**. It also does not establish a parser
+failure: the external Complete wait was interrupted by AX window-copy
+communication before the idle Full opportunity. `initial_complete_zero_diagnostics_version`
+is absent, and whole-document Complete was never observed. Cleanup-only normal
+exit still **does not** certify the unexecuted edit/Save/reopen workload or turn
+its sample into pass. The correction changes interpretation, not the retained
+raw trace facts or the sample's failed verdict.
 
 ### Endpoint boundaries and reproducibility
 
