@@ -67,6 +67,12 @@ do not need a separate .NET installation.
 
 ## Publication records
 
-- [v0.1.0 release reference](v0.1.0.md)
+- [v0.1.0 release reference](v0.1.0.md): published 2026-10-02 Asia/Singapore;
+  [public release](https://github.com/kleedaisuki/mote/releases/tag/v0.1.0),
+  source `ed96fe4f29278e633e10421c89e2ce1f5b0536ae`,
+  [qualified workflow 36938529836](https://github.com/kleedaisuki/mote/actions/runs/36938529836).
+  All 11 public assets independently downloaded without authentication and matched
+  the qualified bytes. Repository post-publication documentation is additive;
+  tagged packages/source remain unchanged.
 - [User manual](../user/manual.md)
 - [Root changelog](../../CHANGELOG.md)

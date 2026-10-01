@@ -23,11 +23,20 @@ creating a project or starting a language server.
 [Installation](docs/user/installation.md) · [User manual](docs/user/manual.md) ·
 [Configuration](docs/user/configuration.md) · [Release notes](CHANGELOG.md)
 
-**Version 0.1.0:** see the [versioned release reference](docs/releases/v0.1.0.md)
-for package names, installation and qualification boundaries. GitHub's release
-page determines download availability; CI artifacts alone are not public
-releases. Packages are unsigned; macOS is not notarized. Read the installation
-instructions before running a downloaded application.
+**v0.1.0 is published** (2026-10-02). Download the matching Native AOT package:
+[Windows x64](https://github.com/kleedaisuki/mote/releases/download/v0.1.0/mote-0.1.0-win-x64.zip) ·
+[Windows Arm64](https://github.com/kleedaisuki/mote/releases/download/v0.1.0/mote-0.1.0-win-arm64.zip) ·
+[macOS Intel](https://github.com/kleedaisuki/mote/releases/download/v0.1.0/mote-0.1.0-osx-x64.tar.gz) ·
+[macOS Apple silicon](https://github.com/kleedaisuki/mote/releases/download/v0.1.0/mote-0.1.0-osx-arm64.tar.gz).
+
+[Checksums](https://github.com/kleedaisuki/mote/releases/download/v0.1.0/SHA256SUMS) ·
+[Corresponding source](https://github.com/kleedaisuki/mote/releases/download/v0.1.0/mote-0.1.0-source.tar.gz) ·
+[Qualification and screenshots](docs/releases/v0.1.0.md).
+All four packages passed the extracted-product release workflow, and public
+anonymous downloads were verified against the qualified bytes. Packages remain
+unsigned; macOS is not notarized. Read the installation guide before launch.
+This repository's post-publication documentation updates do not replace tagged
+binaries or alter the immutable release packages.
 
 ```powershell
 # Windows, after extracting a release package
