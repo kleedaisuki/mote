@@ -1,6 +1,6 @@
 # Release gap audit — strict one-binary product
 
-Audit date: 2026-10-01 (new scoped evidence through [CI 36824892264](https://github.com/kleedaisuki/mote/actions/runs/36824892264) at `da3fcb6`; current verdict below; historical checkpoints retain their original scope). This is a **moving source audit**, not a claim about a shipped release. `P0` means the hard user contract cannot yet be met; `P1` means substantial verification or integration remains. Owners and decisive experiments are included so a gap can be closed by evidence. Target architecture: [architecture.md](architecture.md); incremental migration: [incremental-plan.md](incremental-plan.md); local-path/theme contracts: [configuration.md](configuration.md), [themes.md](themes.md).
+Audit date: 2026-10-01 (new scoped evidence through [CI 36831903238](https://github.com/kleedaisuki/mote/actions/runs/36831903238) at `a13a9b0`; current verdict below; historical checkpoints retain their original scope). This is a **moving source audit**, not a claim about a shipped release. `P0` means the hard user contract cannot yet be met; `P1` means substantial verification or integration remains. Owners and decisive experiments are included so a gap can be closed by evidence. Target architecture: [architecture.md](architecture.md); incremental migration: [incremental-plan.md](incremental-plan.md); local-path/theme contracts: [configuration.md](configuration.md), [themes.md](themes.md).
 
 ## What is already established
 
@@ -51,7 +51,50 @@ The **osx-x64 in-process Canvas AX selector/lifecycle** report is a distinct unr
 
 ## Active gates
 
-### Current source verdict — CI 36824892264 / da3fcb6
+### Current source verdict — CI 36831903238 / a13a9b0
+
+All ten strict jobs pass; Windows and macOS each report **Mote.Tests 1362/1362**,
+Themes 14/14 and Configuration 9/9, zero failed/skipped. Four Native AOT
+inventories preserve one executable, zero sidecars and zero bundled libraries.
+The queued-Save test now uses an asynchronously observed entry and joins its
+owned saves during cleanup, without enlarging its timeout or changing production
+scheduling. The posted-only callback guard contains primary and reporting
+faults without retrying an action; real created-native fault injection is still
+unverified, and normal native regression does not supply it.
+
+**Ordinary JSON GUI acceptance is 7/8 despite green non-gating jobs.** Seven
+1/100 MiB samples retain exact saved bytes, unchanged fixtures, fresh reopen,
+numeric original/reopen exits 0/0, and complete native Save chains with captured
+version 1. macOS x64 100 MiB times out at `save-exact-bytes`, exits -9 after owned
+forced cleanup, leaves original disk bytes and has no reopen (numeric exit null).
+Its 11,167-byte trace contains **32 valid complete rows**, one menu-ready
+checkpoint, no observed menu entry/return or Save request, and no session
+terminal. This is **censored**, not evidence of callback nonexecution or a
+Save-engine root cause. Sixteen separate synthetic recovery controls pass,
+but do not certify document persistence or input delivery.
+
+**The permanent owned-menu boundary now has actual hosted evidence.** Both Mac
+RIDs execute its forwarding/BOOL ABI controls. The three passing Mac edited
+samples retain independent ready/entry/returned-true checkpoints; the failed
+sample retains ready only. Empty-attribute session checkpoints, typed Save
+requests and disk/reopen outcomes remain separate evidence. Numeric exits and
+fixed menu counts are now retained and rendered by the CI summary, including
+the failed sample; the historical eight-case pass is not a current 8/8 claim.
+See the [independent raw-artifact audit](validation/native-menu-observation-hosted.md#repaired-strict-suite-and-posted-guard-followup--ci-36831903238).
+
+**Next decisive work:** implement and independently validate the already
+designed, trace-opt-in application-local key-down monitor, since the menu-only
+failure still leaves the earlier boundary unknown. Preserve one external Save
+attempt, identical-event return, no keyboard content, no global monitor,
+no invented event/request edges, and the strict one-binary contract. This
+second slice is not hosted evidence yet. Mac Grid remains **40/41** with the
+original AX error -25205 and normal exits; C0/P0 remain 0/-25205. Windows ARM
+Continuous/many-100MiB remain inconclusive. Current tracing overhead still has
+zero equivalent inferential pairs; real IME/readers, physical presentation,
+arbitrary-format semantics and the historical Windows AV remain open. No
+signing/certificate work or Gatekeeper acceptance is claimed.
+
+### Historical source verdict — CI 36824892264 / da3fcb6
 
 [CI 36824892264](https://github.com/kleedaisuki/mote/actions/runs/36824892264)
 at `da3fcb688c58d9b08d2443968deb86931d4ae2d2` completes **all ten strict jobs
