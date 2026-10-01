@@ -22,6 +22,31 @@ error is a diagnostic, not permission to rewrite or discard text. Use Find for a
 literal whole-document text query, Find Next to advance, and Go to Line for whole-document
 navigation. Search is not a regular-expression or workspace search facility.
 
+### Command-line entry points
+
+```text
+mote [path]                 Open one full native source editor
+mote --native-source [path] Explicit equivalent of the default
+mote --continuous [path]    Earlier source-backed canvas presentation
+mote --legacy-page [path]   Historical bounded native text-page presentation
+mote --help                Show invocation help
+mote --version             Print the application version
+mote -- <path>             Open a literal path that resembles an option
+```
+
+The release-default source uses Windows RichEdit or macOS NSTextView as one
+full-native editing surface. It retains the engine's canonical history, I/O and
+versioned format analysis. The earlier Continuous and LegacyPage routes are
+explicit compatibility/rollback choices, not automatic large-file modes or
+independently certified substitutes for the release-default workflow.
+
+Presentation is fixed for a window's lifetime. To use a different route, Save
+and close the current application, then restart with the chosen flag. Do not
+transfer a dirty document or active composition between profiles. The historical
+`--canvas-experimental` flags and `--check-*` probes are engineering diagnostics,
+not user settings. Full-native residency does not promise bounded memory for
+arbitrary large files or long lines.
+
 ## Keyboard commands
 
 These shortcuts are taken from the native menu definitions. Menu commands remain
@@ -84,11 +109,14 @@ source region checked), or **Complete** (the policy's global check completed).
 A provisional result with no visible error does **not** mean the whole file has
 zero problems. Some resource-limited files remain provisional even after an idle
 full-analysis request. Structure previews can be bounded rather than enumerating
-all nodes in a giant file.
+all nodes in a giant file. A Complete CSV grammar result certifies the document
+analysis, not by itself that every visible table cell has been materialized;
+table viewport publication has its own current-version coverage contract.
 
-The default preview convention is full-width plain text and split source/preview
-for structured formats; release profile-specific behavior is recorded on the
-release page. `[editor].preview` can select `auto`, `source`, or `split`.
+The full-native-source default uses split source/preview under `auto`. The
+earlier Continuous route uses full-width plain text and split structured formats;
+LegacyPage retains split layout. These are layout conventions, not different
+analysis or Save guarantees. `[editor].preview` can select `auto`, `source`, or `split`.
 
 ## Encodings
 
@@ -159,9 +187,9 @@ This is still diagnostic metadata: review trace files before sharing them.
 
 ## Known limitations
 
-- v0.1.0 qualification and the release-default source profile must be confirmed
-  on the versioned release page; diagnostic flags are not alternate supported
-  products.
+- Exact final-package qualification and download identity are recorded by the
+  versioned release page and release manifests; diagnostic flags are not alternate
+  release products.
 - The Windows and macOS packages are not publisher-signed; macOS is not
   notarized. Security prompts and installation are real user-facing limitations.
 - Complete semantics are not exhaustive independent conformance certification.
@@ -172,7 +200,7 @@ This is still diagnostic metadata: review trace files before sharing them.
 - Real CJK composition and attended screen-reader behavior need platform-specific
   evidence. A smoke launch, synthetic text injection, palette contrast check or
   accessibility tree is not proof of all IME/assistive-technology combinations.
-- The full-native-source candidate cannot edit embedded NUL safely in its native
+- The full-native-source editor cannot edit embedded NUL safely in its native
   text surface; canonical content is retained and the surface becomes protected
   rather than silently truncating it. Follow its recovery notice.
 - Preview is bounded native rendering, not browser feature parity. No workspace,

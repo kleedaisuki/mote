@@ -4,7 +4,14 @@ User-visible release history. Final release entries refer to published tags and
 matching assets; engineering test counts and transient CI investigations belong
 in validation documents, not here.
 
-## Unreleased — planned v0.1.0
+## Unreleased
+
+No post-v0.1.0 changes recorded yet.
+
+## 0.1.0 — 2026-10-02
+
+Public download availability is determined by the
+[versioned release page](docs/releases/v0.1.0.md) and its GitHub release assets.
 
 ### Added
 
@@ -22,15 +29,23 @@ in validation documents, not here.
 - Product landing page, installation guide, user manual and versioned release
   documentation.
 
+### Presentation
+
+- Ordinary launch uses the full-native source editor. `--native-source` remains
+  an explicit equivalent; additive `--continuous` preserves the earlier canvas
+  route, and `--legacy-page` preserves the historical native page route.
+- Presentation is fixed for the window lifetime; file size does not switch a
+  dirty document or active composition into another representation.
+
 ### Delivery
 
 - Native AOT remains the execution model; users need no .NET installation.
 - Application delivery may contain multiple files or a macOS `.app` bundle.
   This does not introduce workspaces or multi-document editing sessions.
 
-### Not yet a release claim
+### Known limitations
 
-v0.1.0 publication and final profile/artifact qualification are pending. Unsigned
-platform trust, analysis resource limits, real IME/reader coverage, and large-file
-capacity remain explicitly scoped in the
-[versioned release page](docs/releases/v0.1.0.md).
+Unsigned platform trust, analysis resource limits, real IME/reader coverage, and
+large-file capacity remain explicitly scoped in the
+[versioned release page](docs/releases/v0.1.0.md). Hosted qualification does not
+certify every composition, assistive-technology or physical display workflow.

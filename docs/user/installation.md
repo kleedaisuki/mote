@@ -1,8 +1,8 @@
 # Installing mote
 
 See the [GitHub releases page](https://github.com/kleedaisuki/mote/releases)
-for published downloads. The [v0.1.0 page](../releases/v0.1.0.md) is a preparation
-record until its artifacts and checksums are published. Do not mistake CI
+for published downloads. The [v0.1.0 reference](../releases/v0.1.0.md) describes
+its package layout, installation and verification boundaries. Do not mistake CI
 artifacts, experimental profiles, or the Avalonia prototype for a supported
 release download.
 

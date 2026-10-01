@@ -42,7 +42,9 @@ enabled = false
 
 All keys are optional. The defaults above are the ordinary conventions. `preview`
 accepts `auto`, `source`, or `split`: auto follows the format/profile convention;
-source hides preview without disabling analysis; split requests both panes.
+the full-native-source default uses split layout. Source hides preview without
+disabling analysis; split requests both panes. The earlier Continuous route
+defaults to source-only plain text, while LegacyPage retains split layout.
 
 ## Themes and color overrides
 

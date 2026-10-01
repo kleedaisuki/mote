@@ -23,11 +23,11 @@ creating a project or starting a language server.
 [Installation](docs/user/installation.md) · [User manual](docs/user/manual.md) ·
 [Configuration](docs/user/configuration.md) · [Release notes](CHANGELOG.md)
 
-**Release preparation:** v0.1.0 is being qualified. The versioned
-[release page](docs/releases/v0.1.0.md) explicitly separates planned artifacts
-from published downloads. A build or green unit-test suite is not itself a
-published release. macOS builds are unsigned and not notarized; read the
-installation instructions before downloading.
+**Version 0.1.0:** see the [versioned release reference](docs/releases/v0.1.0.md)
+for package names, installation and qualification boundaries. GitHub's release
+page determines download availability; CI artifacts alone are not public
+releases. Packages are unsigned; macOS is not notarized. Read the installation
+instructions before running a downloaded application.
 
 ```powershell
 # Windows, after extracting a release package

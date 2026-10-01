@@ -17,9 +17,12 @@ contains the practical manual. Each published release has its own page here.
 4. Inventory each complete package and calculate archive SHA-256. Keep matching
    notices, GPL license, source tag and build provenance. Check that relative
    manual links work in packaged documentation.
-5. Replace the versioned page's preparation status with actual published state
-   only after downloads/checksums exist. Update the README release status and
-   move the changelog's Unreleased entry to the dated version.
+5. Keep immutable packaged documentation valid both before and after publication:
+   describe the version and routes, and defer availability to the GitHub release.
+   Do not ship a permanent candidate/pending banner. Confirm public availability
+   on the repository landing page only after downloads/checksums exist; a later
+   documentation-only status update does not rebuild or replace tagged assets.
+   Keep a fresh Unreleased section alongside the dated version entry.
 6. Use the same user-facing summary, assets, limitations and installation links
    in the GitHub release body. Never claim signing/notarization or universal
    IME/accessibility/performance without its own evidence.
@@ -40,6 +43,6 @@ contains the practical manual. Each published release has its own page here.
 
 ## Publication records
 
-- [v0.1.0 preparation page](v0.1.0.md)
+- [v0.1.0 release reference](v0.1.0.md)
 - [User manual](../user/manual.md)
 - [Root changelog](../../CHANGELOG.md)
