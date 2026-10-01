@@ -123,3 +123,72 @@ visible first-pair slice.** Approval is for running this bounded experiment,
 not for the unresolved product AX contract, selector-history absence, Native AOT
 causality, VoiceOver, physical input or release readiness. The original two
 findings above are retained as resolved review history, not current blockers.
+
+## Scalar schema repair review: 597317a / 0159a6b
+
+The second hosted first-pair execution,
+[CI 36816778414](https://github.com/kleedaisuki/mote/actions/runs/36816778414),
+compiled and ran both fresh sessions on both Mac RIDs, but its strict client
+report parser rejected all four final client JSON files. This does not revise
+the earlier implementation review into an executed acceptance claim: raw
+artifact audit exposed a concrete observation-schema defect missed by portable
+source checks.
+
+The review independently ran the repository-cache reproduction
+`.cache/ci-36816778414-grid-pair/schema-repro.ps1`: all four unmodified client
+reports are rejected; fresh parsed in-memory copies pass the same parser after
+converting only `owned_target` and the four nullable CFEqual-derived identity
+fields to Boolean scalars. All four raw server reports already pass. No raw
+file was rewritten, and these copies are not acceptance artifacts.
+
+`597317a` adds `PairBoolean(BOOL value)`, returning the canonical `@YES` or
+`@NO` object, and uses it only for owned-target classification and `EqualObject`.
+Failed/unknown identity still remains `NSNull`; original AX calls, actions,
+returns, discovery, 128-call audit bound, timing, cleanup and product code are
+unchanged. This is a coherent serialization fix, not numeric coercion in the
+strict parser. Clang's [Objective-C literal documentation](https://clang.llvm.org/docs/ObjectiveCLiterals.html)
+distinguishes Boolean literals from type-dependent boxed scalar expressions;
+Google's [Objective-C production style guide](https://google.github.io/styleguide/objcguide.html)
+explicitly warns about boxing general integral/conditional expressions as
+Boolean values. These support the repair rationale; only another native
+execution can certify emitted JSON on both hosted toolchains.
+
+`0159a6b` adds rejection tests for numeric owned-target and equality fields,
+positive false/null identity cases, and source-contract checks for the canonical
+helper/call sites. Reviewer independently ran the final guard suite: **37/37**.
+The source-contract regex checks are intentionally structural, not a Foundation
+serialization experiment. No unresolved material defect was found in this
+scalar-only repair. Workflow pin updates remain with the integration owner;
+this reviewer did not modify the concurrently edited workflow.
+
+### Separate cleanup-timing proposal: design only
+
+The same raw server ledger records C0 ARM as one entry/request/dispatch, zero
+opens/closes, normal shutdown and one detach. C0 x64 records one open/close;
+both P0 sessions record one open/close and the original external error -25205.
+C0 ARM's raw external error is zero. These observed facts are sufficient to
+identify incomplete control popup lifecycle, not to infer the exact instant of
+finish consumption or prove a particular scheduling cause. The control's
+`present` refusal after `finishConsumed` makes early cleanup a concrete possible
+mechanism. AX success remains the original triggered-action reply, not a claim
+that the complete visible popup lifecycle passed.
+
+Keep the next execution **scalar-only**, so report repair is not confounded
+with a changed cleanup intervention. If a separate paired timing discriminator
+is later authorized, prefer one fixed common 250 ms observation hold after the
+primary reply/identity audit and before publishing finish, subject to the same
+55-second client deadline. Preserve the original reply on disk first. Apply
+the identical hold to C0 and P0; no readiness retry, action retry, event injection
+or global input is needed. If insufficient deadline remains, record unresolved
+rather than exceed the budget or fabricate lifecycle completion.
+
+This is leaner than adding a new owner event marker and polling it up to one
+second: event-conditioned cleanup changes the intervention time according to
+the outcome and expands the observer protocol. Such a handshake can be useful
+later if the fixed hold leaves lifecycle unresolved, but is not required for
+the next narrow discriminator. A 250 ms hold is a deliberately tested timing
+condition, **not a guaranteed scheduling bound**. Continue reporting exact
+entry/request/dispatch/open/close/detach counts, and do not label a zero-open
+control as full lifecycle acceptance merely because its external AX reply or
+aggregate diagnostic completion is successful. No timing code was changed by
+this review.
