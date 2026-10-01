@@ -162,3 +162,68 @@ cancellation latency during the synchronous whole-source grammar parse, all
 possible values, memory/latency distributions, AOT/macOS or GUI behavior. The
 resource checks establish absence of those four cache caps in this public path,
 not that every arbitrarily large source can be processed within finite resources.
+
+## Follow-up: public multi-witness diagnostic recovery
+
+The public validation implementation subsequently gained recoverable independent
+diagnostics rather than stopping after its first local/global witness. The bounded
+large-file cache still stops at its first proved ownership witness; these are
+different recovery contracts and must not be conflated.
+
+Eight additional public-policy cases retain these independent expectations:
+
+- Two different valid tables each contribute their duplicate-assignment key span.
+- A conflicting header contributes its own key span and quarantines following
+  assignments; after a valid new header, a new duplicate is diagnosed, without
+  falsely attributing quarantined assignments to the preceding table.
+- A failed dotted assignment rolls back an implicit parent's ownership origin,
+  allowing the later valid parent header; its own failure and a later duplicate
+  remain visible, without a manufactured parent-header error.
+- A malformed one-line header permits valid-header recovery; local inline ownership
+  failure does not suppress a later independent global duplicate.
+- Malformed plain/collection/multiline values retain every independent whole-parser
+  grammar diagnostic, including exact severity, message and clamped absolute span.
+  Exact duplicate diagnostic records are not emitted twice.
+
+For grammar-valid ownership examples, literal expected span sets establish the
+entire expected diagnostic set. For grammar-invalid examples, the independently
+invoked lossless `SyntaxParser.Parse(validate:false)` establishes grammar witnesses
+that must be retained; additional namespace claims are checked separately.
+The first run (**796/797**) exposed a test expectation bug: the malformed-header
+test banned any error at a quarantined `x` key, but the whole grammar parser
+legitimately emitted an unexpected-token error at exactly that span. The assertion
+now subtracts exact reference grammar records before checking for a false namespace
+witness; all grammar records and the later real duplicate must still be present.
+The original failed `.cache/toml-uniform/toml-recovery-final.trx` is retained.
+
+Both existing suites were rerun because the actual reader/index algorithms changed,
+not to accumulate test counts:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore `
+  --filter 'FullyQualifiedName~TomlUniformValidationTests|FullyQualifiedName~TomlStatementReuseTests' `
+  --logger 'trx;LogFileName=toml-recovery-corrected.trx' `
+  --results-directory .cache/toml-uniform
+```
+
+Observed 2026-10-01: **797/797 executed and passed**, zero failed/skipped/not executed,
+process exit 0, approximately 15 seconds test duration; inspected TRX counters.
+This is **740 public-policy/decoder cases plus the existing 57 bounded cache cases**.
+The preceding source snapshots/results are historical checkpoints, not current
+source fingerprints. Final recovery validation used parent HEAD
+`35823c4b1c045e80a3a0858dc35bb3dad9d08c54` plus these production worktree bytes:
+
+| File under `src/Mote.Formats/` | SHA-256 |
+| --- | --- |
+| `TomlPolicy.cs` | `9CE5E57F9F23ADC8143EC36EAEE50EE40E3332D077CD590477EC2ED01ABD200D` |
+| `TomlDocumentValidation.cs` | `57FE854D23E14FA0767A0CFF3D9888DE8B9D85A2EC4F750F92B24707C16A5867` |
+| `TomlStatementReader.cs` | `B4B2D4A02A5CC26D363AC302B50D743D6C00442307F48ADB86C8FBE501AA12A8` |
+| `TomlOwnershipIndex.cs` | `FE6270DB3EA022BA092518A15961A37D394805151B0B6DBA3CBB640EC7374CB4` |
+
+Verdict: the retained examples preserve independent public witnesses and avoid the
+tested false scope/origin errors; the existing bounded cache behavior still passes.
+This is not exhaustive recovery of every malformed multiline suffix or a promise
+of diagnostic completeness for arbitrary invalid input. Source/token highlighting
+behavior beyond these existing comparisons, native execution and performance are
+separate investigations. Integer checks compare the editor's exact textual number
+node, not Tomlyn's runtime numeric model or an upstream decoded-value oracle.

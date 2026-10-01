@@ -1,5 +1,7 @@
 using System.Text;
 using Mote.Formats;
+using Tomlyn.Parsing;
+using Tomlyn.Syntax;
 
 namespace Mote.Tests;
 
@@ -169,6 +171,116 @@ public sealed class TomlUniformValidationTests
         cancellation.Cancel();
         Assert.Throws<OperationCanceledException>(() => new TomlPolicy().Analyze("a=1\n", cancellation.Token));
     }
+
+    /// <summary>Independent table scopes each retain their later duplicate witness.</summary>
+    [Fact]
+    public void Independent_duplicate_witnesses_survive_recovery()
+    {
+        const string source = "[a]\nx=1\nx=2\n[b]\ny=1\ny=2\n";
+        AssertExactOwnershipErrors(source,
+            new(source.IndexOf("x=2", StringComparison.Ordinal), 1),
+            new(source.IndexOf("y=2", StringComparison.Ordinal), 1));
+    }
+
+    /// <summary>An invalid header cannot rebind assignments to the previous valid table.</summary>
+    [Fact]
+    public void Conflicting_header_quarantines_scope_until_next_valid_header()
+    {
+        const string source = "[a]\nx=1\n[a]\nx=2\n[b]\nx=1\nx=2\n";
+        AssertExactOwnershipErrors(source,
+            new(source.LastIndexOf("[a]", StringComparison.Ordinal) + 1, 1),
+            new(source.LastIndexOf("x=2", StringComparison.Ordinal), 1));
+    }
+
+    /// <summary>A failed dotted traversal must roll back a previously implicit parent's origin.</summary>
+    [Fact]
+    public void Failed_assignment_rolls_back_implicit_origin_before_later_header()
+    {
+        const string source = "[a.x.y]\n[a]\nx.y.z=1\n[a.x]\nw=1\nw=2\n";
+        AssertExactOwnershipErrors(source,
+            new(source.IndexOf("x.y.z", StringComparison.Ordinal), 5),
+            new(source.IndexOf("w=2", StringComparison.Ordinal), 1));
+    }
+
+    /// <summary>A malformed one-line header leaves assignment scope unknown but permits valid-header recovery.</summary>
+    [Fact]
+    public void Malformed_header_recovers_without_previous_scope_false_positive()
+    {
+        const string source = "[a]\nx=1\n[broken\nx=2\n[b]\ny=1\ny=2\n";
+        var policy = new TomlPolicy();
+        var result = policy.Analyze(source);
+        var grammarWitnesses = GrammarDiagnostics(source);
+        Assert.Contains(result.Diagnostics,
+            diagnostic => diagnostic.Span == new TextSpan(source.IndexOf("y=2", StringComparison.Ordinal), 1));
+        // The whole grammar parser legitimately reports an unexpected x token here.
+        // Only an additional namespace witness at that key would be a false scope claim.
+        Assert.DoesNotContain(result.Diagnostics.Except(grammarWitnesses),
+            diagnostic => diagnostic.Span == new TextSpan(source.IndexOf("x=2", StringComparison.Ordinal), 1));
+        Assert.DoesNotContain(result.Diagnostics,
+            diagnostic => diagnostic.Span == new TextSpan(source.IndexOf("[b]", StringComparison.Ordinal) + 1, 1));
+        AssertWholeGrammarWitnessesPreserved(source, result);
+        Assert.Equal(source, policy.Format(source));
+    }
+
+    /// <summary>Local inline ownership errors do not suppress a later independent global duplicate.</summary>
+    [Fact]
+    public void Local_inline_error_and_later_namespace_error_are_both_retained()
+    {
+        const string source = "bad={x=1,x=2}\n[b]\ny=1\ny=2\n";
+        var policy = new TomlPolicy();
+        var result = policy.Analyze(source);
+        Assert.Equal(2, result.Diagnostics.Count);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Span.Start < source.IndexOf('[', StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics,
+            diagnostic => diagnostic.Span == new TextSpan(source.IndexOf("y=2", StringComparison.Ordinal), 1));
+        Assert.All(result.Diagnostics, diagnostic => Assert.Equal("TOML_PARSE", diagnostic.Code));
+        Assert.Equal(source, policy.Format(source));
+    }
+
+    /// <summary>An unrecoverable multiline owner cannot erase independent whole-parser grammar evidence.</summary>
+    [Theory]
+    [InlineData("a=\"\"\"unfinished\n[b]\nx=1\nx=2\n")]
+    [InlineData("a=[1,\n[b]\nx=1\nx=2\n")]
+    [InlineData("a=???\n[b]\nx=1\nx=2\n")]
+    public void Malformed_value_preserves_whole_grammar_witnesses(string source)
+    {
+        var policy = new TomlPolicy();
+        var result = policy.Analyze(source);
+        AssertWholeGrammarWitnessesPreserved(source, result);
+        Assert.Equal(source, policy.Format(source));
+    }
+
+    /// <summary>Literal key spans establish the complete expected ownership-error set for grammar-valid examples.</summary>
+    private static void AssertExactOwnershipErrors(string source, params TextSpan[] spans)
+    {
+        var policy = new TomlPolicy();
+        var result = policy.Analyze(source);
+        Assert.Equal(spans.OrderBy(span => span.Start), result.Diagnostics.Select(error => error.Span).OrderBy(span => span.Start));
+        Assert.All(result.Diagnostics, error =>
+        {
+            Assert.Equal("TOML_PARSE", error.Code);
+            Assert.Equal(DiagnosticSeverity.Error, error.Severity);
+        });
+        Assert.Equal(source, policy.Format(source));
+    }
+
+    /// <summary>The unvalidated lossless parser is an independent reference only for preserved grammar diagnostics.</summary>
+    private static void AssertWholeGrammarWitnessesPreserved(string source, FormatAnalysis analysis)
+    {
+        var grammar = GrammarDiagnostics(source);
+        Assert.NotEmpty(grammar);
+        foreach (var expected in grammar) Assert.Contains(expected, analysis.Diagnostics);
+        Assert.Equal(analysis.Diagnostics.Count, analysis.Diagnostics.Distinct().Count());
+    }
+
+    /// <summary>Converts only independent whole-parser grammar evidence, preserving exact message identity.</summary>
+    private static Diagnostic[] GrammarDiagnostics(string source) => SyntaxParser.Parse(source, validate: false).Diagnostics
+        .Select(witness =>
+        {
+            int start = Math.Clamp(witness.Span.Offset, 0, source.Length);
+            return new Diagnostic(witness.Kind == DiagnosticMessageKind.Error ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
+                "TOML_PARSE", witness.Message, new(start, Math.Clamp(witness.Span.Length, 0, source.Length - start)));
+        }).ToArray();
 
     /// <summary>67,000 independent three-component paths require 201,000 namespace bindings.</summary>
     private static string ManyBindings()
