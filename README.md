@@ -58,13 +58,13 @@ qualified for each release; see [known limitations](docs/user/manual.md#known-li
 
 ## Development
 
-Install **.NET SDK 10.0.400**. The root `global.json` selects that exact SDK,
+Install **.NET SDK 10.0.401**. The root `global.json` selects that exact SDK,
 disables roll-forward, and rejects prerelease SDKs. Installing a newer SDK alone
-is not sufficient: this pin keeps Native AOT compilation, runtime 10.0.11 and
+is not sufficient: this pin keeps Native AOT compilation, runtime 10.0.12 and
 the distributed runtime-license inventory aligned. From the repository root:
 
 ```sh
-dotnet --version  # must report 10.0.400 in this checkout
+dotnet --version  # must report 10.0.401 in this checkout
 dotnet build mote.sln
 dotnet test mote.sln
 ```
