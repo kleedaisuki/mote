@@ -247,6 +247,14 @@ class ArtifactTests(unittest.TestCase):
                 if defect == "bytes": row["trace_bytes"] += 1
                 with self.assertRaises(ValueError): subject.trace_evidence(row, ROOT)
 
+    def test_inventory_counters_exclude_bool_and_invalid_types(self):
+        for key in ("trace_file_count", "trace_bytes"):
+            for value in (False, True, -1, None, "0", 0.0):
+                with self.subTest(key=key, value=value):
+                    row = sample("off")
+                    row[key] = value
+                    with self.assertRaises(ValueError): subject.trace_evidence(row, ROOT)
+
     def test_paths_reject_traversal_and_redirect(self):
         for path in (".temp/not-evidence", ".cache/../.cache/alias", str(ROOT.parent / "outside")):
             with self.assertRaises(ValueError): subject.artifact_path(path)
@@ -267,7 +275,9 @@ class ArtifactTests(unittest.TestCase):
             output.mkdir()
             row = entry.pop("row")
             if entry["mode"] == "on":
-                trace = output / "trace.jsonl"
+                retained = output / "many-1-1"
+                retained.mkdir()
+                trace = retained / "trace.jsonl"
                 raw = encode(native_records())
                 trace.write_bytes(raw)
                 row.update(trace_files=[trace.relative_to(ROOT).as_posix()], trace_file_count=1, trace_bytes=len(raw))
@@ -289,6 +299,48 @@ class ArtifactTests(unittest.TestCase):
         summary = json.loads((self.directory / "summary.json").read_text())
         self.assertIsNone(summary["paired_estimate"])
         self.assertEqual(2, len(summary["samples"]))
+
+    def test_cli_rejects_undeclared_retained_files_and_subdirectories(self):
+        for defect in ("off-hidden-file", "on-extra-file", "retained-subdirectory"):
+            with self.subTest(defect=defect):
+                directory = self.directory / defect
+                directory.mkdir()
+                manifest, entries = series(1)
+                (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+                for entry in entries:
+                    output = directory / entry["mode"]
+                    output.mkdir()
+                    row = entry.pop("row")
+                    retained = output / "many-1-1"
+                    retained.mkdir()
+                    if entry["mode"] == "on":
+                        trace = retained / "trace.jsonl"
+                        raw = encode(native_records())
+                        trace.write_bytes(raw)
+                        row.update(trace_files=[trace.relative_to(ROOT).as_posix()],
+                                   trace_file_count=1, trace_bytes=len(raw))
+                    if defect == "off-hidden-file" and entry["mode"] == "off":
+                        (retained / "undeclared.jsonl").write_bytes(b"{}\n")
+                    if defect == "on-extra-file" and entry["mode"] == "on":
+                        (retained / "undeclared.jsonl").write_bytes(b"{}\n")
+                    if defect == "retained-subdirectory" and entry["mode"] == "off":
+                        (retained / "unlisted-subdirectory").mkdir()
+                    report = output / "screen-observations.jsonl"
+                    report.write_text(json.dumps(row) + "\n", encoding="utf-8")
+                    entry["report"] = report.relative_to(ROOT).as_posix()
+                (directory / "index.jsonl").write_text(
+                    "".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+                command = [sys.executable, "-B", str(Path(subject.__file__)), "--series", str(directory)]
+                completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(2, completed.returncode, completed.stderr)
+                summary = json.loads((directory / "summary.json").read_text())
+                self.assertEqual("not_qualified", summary["comparison"])
+                self.assertIsNone(summary["paired_estimate"])
+                expected = ("unexpected_retained_trace_inventory" if defect == "retained-subdirectory"
+                            else "retained_trace_inventory_not_fully_declared")
+                self.assertEqual(expected, summary["reason"])
+                for output in directory.glob("*/many-1-1"):
+                    self.assertTrue(output.exists(), "Rejected evidence must not be deleted by the CLI")
 
     def test_receipt_must_link_actual_session_root(self):
         rows = native_records()
@@ -332,6 +384,7 @@ class DriverSourceTests(unittest.TestCase):
         self.assertIn("process_cpu_ms = $null; process_cpu_status = 'unavailable'", source)
         self.assertIn("Assert-NoReparseAncestors $traceDir", source)
         self.assertIn("Copy-Item -LiteralPath $traceFile.FullName -Destination $destination", source)
+        self.assertIn("Sort-Object Name", source)
 
 
 if __name__ == "__main__":
