@@ -99,6 +99,7 @@ Windows checks. Their repaired macOS execution remains pending a new source run.
   [explicit encoding proof](../validation/explicit-open-encoding.md).
 - [Current macOS test failure and scoped cleanup repair](../validation/native-source-admission-macos-cleanup.md),
   [codec/source supervisor qualification](../validation/native-codec-source-workflow.md).
+- [Actual native source costs and next bounded investigation](../performance/native-source-capability-timeout.md).
 
 This checklist intentionally does not assign a completion percentage. The
 remaining native-user requirements are not proportional to file/test counts.
