@@ -103,3 +103,96 @@ Hidden controls do not establish natural Microsoft Pinyin composition,
 screen-reader quality, visible physical presentation or latency distributions.
 The existing correctness and capacity tests remain; no numerical startup,
 typing or memory hypothesis was silently promoted to a release gate.
+
+## Hosted Find failure: external observer transport, not a product Find defect
+
+The first hosted release candidate `9fecef2`, run `36921665382`, failed the
+Windows x64 and ARM64 external Markdown task at its Find-selection assertion.
+Retained evidence is under
+`.cache/release-ci-36921665382/evidence/release-evidence-win-x64/product/markdown/`
+(and the corresponding ARM64 directory). The initial report contained only
+`stage=find`; its trace proved successful initial exact import/readback and
+decoration but did not distinguish prompt acceptance from search selection.
+No production Find/selection/style change was made on that evidence alone.
+
+The coordinator then reproduced the actual managed product window locally,
+using the same marker task and process-scoped external native messages:
+
+- `.temp/windows-release-find-evidence-1/` added bounded expected/observed
+  selection and prompt-control witnesses. It retained the assertion failure;
+  it was not successful product qualification.
+- `.temp/windows-release-find-evidence-2/windows-product.json` independently
+  compared two selection transports on the **same actual native control**.
+  Expected range was **[30,51)**; pointer-based `EM_EXGETSEL` reported **[0,0)**,
+  while pointer-free packed `EM_GETSEL` returned **[30,51)**. The prompt edit
+  existed, text-setting succeeded and actual prompt text matched the query.
+  This discriminatory observation establishes an observer failure rather than
+  a failed product Find selection. Probe 2 deliberately retained the failing
+  old assertion; do not relabel it a passing complete workflow.
+
+Root cause: the PowerShell observer passed its own process's `CHARRANGE` pointer
+to the child's `EM_EXGETSEL` (`WM_USER + 52`). Windows does not automatically
+marshal messages at or above `WM_USER` across process boundaries; this was not
+a valid cross-process buffer-transfer contract. Microsoft documents both the
+[SendMessage marshalling boundary](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagew)
+and the [EM_EXGETSEL output-structure parameter](https://learn.microsoft.com/en-us/windows/win32/controls/em-exgetsel).
+The product's own same-process RichEdit calls and the hidden-control tests above
+do not cross that boundary and are unaffected.
+
+The release coordinator owns the harness correction: use pointer-free
+`EM_GETSEL` with explicit ordinary-fixture bounds and reject its `-1` overflow
+result, rather than treating packed 16-bit positions as arbitrary-size support.
+Microsoft specifies the
+[EM_GETSEL packed return and 65,535 endpoint limit](https://learn.microsoft.com/en-us/windows/win32/controls/em-getsel).
+The corrected harness must still run the complete edit/history/dirty-close/
+Save/fresh-process-reopen task and later hosted AOT qualification. This finding
+does not authorize weakening the exact selection assertion, extrapolating
+managed local success to published AOT, or discarding the original failed run.
+
+## Corrected ordinary workflows and prompt readiness
+
+The corrected transport ran the complete Markdown task successfully in
+`.temp/windows-release-find-corrected-1/`, including exact native Find, selected
+Unicode replacement, canonical/menu and native Undo/Redo, dirty-close Cancel,
+Go to Line, Save, protected original, fresh GUI process reopen and native PNG.
+The executable was the local **managed apphost**, not a Native AOT release.
+
+The first six-format local run is retained in
+`.temp/windows-release-corrected-suite-1/`. Markdown and TOML passed; JSON
+stopped at a newly explicit prompt-input acknowledgment. Its fixed evidence
+showed `prompt_control_present=false`, `prompt_text_set=false`, and
+`prompt_text_matches=false`. A top-level HWND is enumerable during `WM_CREATE`,
+before its Edit and accept-button children exist. The original observer assumed
+the top-level HWND alone certified input readiness. It could send its answer to
+a zero child handle; this is another proven observer precondition failure.
+
+The harness now waits for the actual edit `301` and accept button `302` before
+one answer is sent, verifies the actual prompt value, and only then accepts.
+This uses the unchanged 15-second condition watchdog: no repeated edit attempts,
+retry-success policy, oracle relaxation or increased timeout was added.
+
+The existing suite command then completed all six formats:
+
+```powershell
+pwsh -NoProfile -File tests/NativeReleaseProductWorkflow.ps1 `
+  -ExecutablePath src/Mote.Native/bin/Release/net10.0/mote.exe `
+  -OutputDirectory .temp/windows-release-corrected-suite-2 `
+  -RuntimeIdentifier win-x64
+```
+
+Result: **passed**, six protected inputs, six independently exact saved outputs,
+six fresh GUI-process reopens, six native window PNGs, strict opt-in trace/Save
+checks, five CLI cases and three configuration cases. The local managed apphost
+SHA-256 was `BF251AA2AF45B5906F7667BE22D42CE4290556CABD2A61512BB0C414B9661943`;
+its managed assemblies/runtime remain dependencies. This identifies the local
+observer validation, not an AOT executable or installation-independence claim.
+
+All six task traces contain successful `analysis.published` at edited version 5.
+The JSON image displays the edited value in its structured tree. The CSV image
+has a Complete version-5 status but pending placeholders in two visible rows at
+the immediate post-Save capture. That may reflect asynchronously resolving
+visible cells; the Save oracle alone does **not** certify complete rendered-cell
+readiness or every semantic feature. The release coordinator must inspect actual
+hosted current-version publications/captures rather than promote these byte
+checks into universal semantic/UX proof. Original failures and the screenshot
+boundary are retained; no production code was changed for either observer fix.

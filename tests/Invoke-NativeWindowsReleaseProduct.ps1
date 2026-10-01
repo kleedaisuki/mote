@@ -31,6 +31,9 @@ if ($original.IndexOf($marker, [StringComparison]::Ordinal) -lt 0 -or
     throw 'The task requires exactly one release marker.'
 }
 $expected = $original.Replace($marker, $replacement, [StringComparison]::Ordinal)
+if ($original.Length -ge 65535 -or $expected.Length -ge 65535) {
+    throw 'This ordinary-task observer requires fewer than 65,535 UTF-16 units; this is not an editor capacity limit.'
+}
 $beforeHash = (Get-FileHash -LiteralPath $inputFile -Algorithm SHA256).Hash
 Copy-Item -LiteralPath $inputFile -Destination $outputFile
 
@@ -52,7 +55,6 @@ public static class MoteReleaseWin32 {
     [DllImport("user32.dll", EntryPoint="SendMessageW")] public static extern IntPtr Send(IntPtr window, uint message, IntPtr first, IntPtr second);
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendText(IntPtr window, uint message, IntPtr first, string text);
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr ReadText(IntPtr window, uint message, IntPtr first, StringBuilder text);
-    [DllImport("user32.dll", EntryPoint="SendMessageW")] public static extern IntPtr ReadRange(IntPtr window, uint message, IntPtr first, ref Range range);
     [DllImport("user32.dll", EntryPoint="PostMessageW")] public static extern bool Post(IntPtr window, uint message, IntPtr first, IntPtr second);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
@@ -88,8 +90,15 @@ function Read-ReleaseText([IntPtr] $Control) {
     return $text.ToString().Replace("`r`n", "`n").Replace("`r", "`n")
 }
 function Read-ReleaseSelection([IntPtr] $Control) {
+    # EM_EXGETSEL is >= WM_USER and cannot marshal a client-local CHARRANGE
+    # pointer to another process. EM_GETSEL with null pointers returns the exact
+    # packed range for our bounded tasks; refuse overflow rather than truncate.
+    $packed = [MoteReleaseWin32]::Send($Control, 0x00B0, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+    if ($packed -eq -1 -or $packed -eq 4294967295) { throw 'Native selection exceeded the bounded observer range.' }
     $range = [MoteReleaseWin32+Range]::new()
-    [void][MoteReleaseWin32]::ReadRange($Control, 0x0434, [IntPtr]::Zero, [ref]$range)
+    $range.Start = [int]($packed -band 0xFFFF)
+    $range.End = [int](($packed -shr 16) -band 0xFFFF)
+    $script:observedSelection = @{ start=$range.Start; end=$range.End }
     return $range
 }
 function Invoke-ReleaseMenu([int] $Id) {
@@ -100,12 +109,25 @@ function Invoke-ReleaseMenu([int] $Id) {
 function Invoke-ReleasePrompt([int] $Menu, [string] $Value) {
     Invoke-ReleaseMenu $Menu
     $script:prompt = [IntPtr]::Zero
+    $script:promptEdit = [IntPtr]::Zero
     Wait-ReleaseCondition {
         $script:prompt = [MoteReleaseWin32]::Find([uint32]$script:process.Id, 'MoteNativeTextPrompt')
-        return $script:prompt -ne [IntPtr]::Zero
-    } 'Native prompt did not open.'
-    $edit = [MoteReleaseWin32]::GetDlgItem($script:prompt, 301)
-    [void][MoteReleaseWin32]::SendText($edit, 0x000C, [IntPtr]::Zero, $Value)
+        if ($script:prompt -eq [IntPtr]::Zero) { return $false }
+        $script:promptEdit = [MoteReleaseWin32]::GetDlgItem($script:prompt, 301)
+        # The top-level HWND becomes enumerable during WM_CREATE, before its
+        # input/buttons exist. Observe ready controls before sending one answer.
+        return $script:promptEdit -ne [IntPtr]::Zero -and
+            [MoteReleaseWin32]::GetDlgItem($script:prompt, 302) -ne [IntPtr]::Zero
+    } 'Native prompt controls did not become ready.'
+    $edit = $script:promptEdit
+    $script:promptControlPresent = $edit -ne [IntPtr]::Zero
+    $script:promptTextSet = [MoteReleaseWin32]::SendText($edit, 0x000C, [IntPtr]::Zero, $Value) -ne [IntPtr]::Zero
+    $promptValue = [Text.StringBuilder]::new(4096)
+    [void][MoteReleaseWin32]::ReadText($edit, 0x000D, [IntPtr]$promptValue.Capacity, $promptValue)
+    $script:promptTextMatches = $promptValue.ToString() -ceq $Value
+    if (-not $script:promptControlPresent -or -not $script:promptTextSet -or -not $script:promptTextMatches) {
+        throw 'Native prompt did not acknowledge exact fixture input.'
+    }
     if (-not [MoteReleaseWin32]::Post($script:prompt, 0x0111, [IntPtr]302, [IntPtr]::Zero)) { throw 'Prompt acceptance failed.' }
 }
 function Start-ReleaseEditor([string] $Label) {
@@ -143,6 +165,11 @@ function Close-ReleaseEditor([string] $Label) {
 $process = $null
 $stage = 'open'
 $capture = $false
+$observedSelection = $null
+$expectedSelection = $null
+$promptControlPresent = $false
+$promptTextSet = $false
+$promptTextMatches = $false
 $report = [ordered]@{ status = 'failed'; stage = $stage; profile = 'native-source'; screenshot = $false;
     external_native_messages = $true; physical_keyboard = $false; real_ime = $false; screen_reader = $false }
 try {
@@ -152,6 +179,7 @@ try {
     Wait-ReleaseCondition { (Read-ReleaseText $editor) -ceq $normalized } 'Exact native source did not open.'
     $stage = 'find'
     $offset = $normalized.IndexOf($marker, [StringComparison]::Ordinal)
+    $expectedSelection = @{ start=$offset; end=$offset + $marker.Length }
     Invoke-ReleasePrompt 213 $marker
     Wait-ReleaseCondition {
         $selection = Read-ReleaseSelection $editor
@@ -227,6 +255,11 @@ try {
 }
 finally {
     if ($report.status -ne 'passed') { $report.stage = $stage }
+    $report['expected_selection'] = $expectedSelection
+    $report['observed_selection'] = $observedSelection
+    $report['prompt_control_present'] = $promptControlPresent
+    $report['prompt_text_set'] = $promptTextSet
+    $report['prompt_text_matches'] = $promptTextMatches
     [IO.File]::WriteAllText((Join-Path $evidence 'windows-product.json'), ([pscustomobject]$report | ConvertTo-Json), $utf8)
     if ($process -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
     if ($process) { $process.Dispose() }
