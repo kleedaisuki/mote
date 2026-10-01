@@ -139,10 +139,11 @@ internal static class Program
         }
         if (args.Length == 1 && args[0] is "--help" or "-h")
         {
-            Console.WriteLine("Usage: mote [path] | mote --native-source [path] | mote --legacy-page [path]");
+            Console.WriteLine("Usage: mote [path] | mote --continuous [path] | mote --legacy-page [path]");
             Console.WriteLine("Version: mote --version; option-looking file path: mote -- <path>");
-            Console.WriteLine("Default: continuous source-backed editor (under validation); --legacy-page restores the established page view.");
-            Console.WriteLine("GUI startup diagnostic: mote [--legacy-page] --smoke-gui");
+            Console.WriteLine("Default: one full native source editor; --native-source is an explicit equivalent.");
+            Console.WriteLine("--continuous retains the earlier source-backed canvas; --legacy-page retains the page view.");
+            Console.WriteLine("GUI startup diagnostic: mote [--continuous|--legacy-page] --smoke-gui");
             Console.WriteLine("Historical canvas A/B diagnostic: mote --canvas-experimental [path]");
             Console.WriteLine("Windows UIA fragment diagnostic: mote --canvas-experimental --uia-fragment-experimental [path]");
             Console.WriteLine("macOS diagnostic: mote --check-native-mac-workflow <input> <output>");

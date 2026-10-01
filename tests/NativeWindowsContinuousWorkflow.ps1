@@ -1,5 +1,5 @@
-# Exercise the ordinary Continuous product through a bounded RichEdit island,
-# real Win32 messages, exact source bytes, and a GUI reopen. No legacy-page flag.
+# Exercise the retained --continuous product through a bounded RichEdit island,
+# real Win32 messages, exact source bytes, and a GUI reopen; not the release default.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
     [Parameter(Mandatory)][string] $ReportPath,
@@ -150,6 +150,7 @@ function Start-Editor {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.Environment['MOTE_HOME'] = Join-Path $scratch 'home'
+    [void]$start.ArgumentList.Add('--continuous')
     [void]$start.ArgumentList.Add($Path)
     $child = [Diagnostics.Process]::Start($start)
     if ($null -eq $child) { throw 'Ordinary Continuous editor did not start.' }

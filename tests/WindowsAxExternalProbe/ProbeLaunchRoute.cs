@@ -1,18 +1,19 @@
 namespace Mote.WindowsAxExternalProbe;
 
-/// <summary>Separates ordinary product launch from the preserved diagnostic A/B routes.</summary>
+/// <summary>Separates the retained Continuous product from the preserved diagnostic A/B routes.</summary>
 internal sealed record ProbeLaunchRoute(string Mode, bool UsesSourceFragment, string[] PresentationArguments)
 {
     /// <summary>
-    /// Parses the client's optional mode flag. Product mode intentionally adds no
-    /// presentation flags to mote, so a diagnostic route cannot mask a routing bug.
+    /// Parses the client's optional mode flag. Continuous mode explicitly selects
+    /// the retained product after ordinary launch moved to the full native source.
+    /// Historical evidence remains about that route, not the new release default.
     /// </summary>
     internal static ProbeLaunchRoute? Parse(string? flag) => flag switch
     {
         null => new("canvas-baseline", false, ["--canvas-experimental"]),
         "--uia-fragment-experimental" => new("fragment-experimental", true,
             ["--canvas-experimental", "--uia-fragment-experimental"]),
-        "--product-continuous" => new("product-continuous", true, []),
+        "--product-continuous" => new("product-continuous", true, ["--continuous"]),
         _ => null
     };
 }

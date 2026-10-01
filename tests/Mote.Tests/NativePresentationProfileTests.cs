@@ -73,12 +73,12 @@ public sealed class NativePresentationProfileTests
         Assert.False(Assert.IsAssignableFrom<INativeCanvasShell>(shell).CanvasEnabled);
     }
 
-    /// <summary>Ordinary launch, file launch, and GUI smoke use the continuous product.</summary>
+    /// <summary>Ordinary launch, file launch, and GUI smoke use the released full-native source.</summary>
     [Theory]
     [InlineData(null, null, false)]
     [InlineData("note.txt", "note.txt", false)]
     [InlineData("--smoke-gui", null, true)]
-    public void Ordinary_launch_uses_continuous_product(
+    public void Ordinary_launch_uses_native_source_product(
         string? argument, string? expectedPath, bool expectedSmoke)
     {
         var args = argument is null ? Array.Empty<string>() : new[] { argument };
@@ -87,11 +87,38 @@ public sealed class NativePresentationProfileTests
 
         Assert.True(parsed, error);
         var product = Assert.IsType<NativeLaunchRoute.Product>(route);
-        Assert.Equal(EditorPresentationProfile.Continuous, product.Profile);
+        Assert.Equal(EditorPresentationProfile.NativeSource, product.Profile);
         Assert.Equal(expectedPath, product.Path);
         Assert.Equal(expectedSmoke, product.Smoke);
+        Assert.False(product.UsesCanvas);
+        Assert.False(product.UsesWindowsSourceFragment);
+    }
+
+    /// <summary>The earlier continuous product retains an explicit, window-lifetime route.</summary>
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData("note.txt", "note.txt", false)]
+    [InlineData("--smoke-gui", null, true)]
+    public void Continuous_flag_retains_earlier_product(string? argument, string? path, bool smoke)
+    {
+        var args = argument is null ? new[] { "--continuous" } : new[] { "--continuous", argument };
+        Assert.True(NativeLaunchParser.TryParse(args, out var route, out var error), error);
+        var product = Assert.IsType<NativeLaunchRoute.Product>(route);
+        Assert.Equal(EditorPresentationProfile.Continuous, product.Profile);
+        Assert.Equal(path, product.Path);
+        Assert.Equal(smoke, product.Smoke);
         Assert.True(product.UsesCanvas);
         Assert.True(product.UsesWindowsSourceFragment);
+    }
+
+    /// <summary>The actual factory used by an ordinary launch exposes only the full source capability.</summary>
+    [Fact]
+    public void Ordinary_factory_creates_native_source_without_canvas()
+    {
+        Assert.True(NativeLaunchParser.TryParse(["note.txt"], out var route, out var error), error);
+        var shell = NativeShellFactory.Create(route!);
+        Assert.True(Assert.IsAssignableFrom<INativeSourceShell>(shell).NativeSourceEnabled);
+        Assert.False(Assert.IsAssignableFrom<INativeCanvasShell>(shell).CanvasEnabled);
     }
 
     /// <summary>The explicit rollback retains page and non-fragment behavior.</summary>
@@ -159,6 +186,10 @@ public sealed class NativePresentationProfileTests
     /// <summary>Conflicting presentation flags fail rather than becoming a filename.</summary>
     [Theory]
     [InlineData("--legacy-page --canvas-experimental")]
+    [InlineData("--continuous --native-source")]
+    [InlineData("--native-source --continuous")]
+    [InlineData("--continuous --legacy-page")]
+    [InlineData("--canvas-experimental --continuous")]
     [InlineData("--canvas-experimental --legacy-page")]
     [InlineData("--uia-fragment-experimental")]
     [InlineData("--legacy-page --uia-fragment-experimental")]

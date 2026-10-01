@@ -1,4 +1,4 @@
-# Verify the ordinary Continuous product through external AX routing and keyboard input.
+# Verify the retained --continuous product through external AX routing and keyboard input.
 # Only bounded source metadata and exact synthetic disk bytes are read; never AXValue.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
@@ -79,6 +79,7 @@ function Start-Editor {
     $start.WorkingDirectory = $root
     $start.UseShellExecute = $false
     $start.Environment['MOTE_HOME'] = Join-Path $scratch 'home'
+    [void]$start.ArgumentList.Add('--continuous')
     [void]$start.ArgumentList.Add($fixture)
     return [Diagnostics.Process]::Start($start)
 }

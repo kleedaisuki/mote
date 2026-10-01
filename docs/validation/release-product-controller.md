@@ -12,10 +12,17 @@ The full native source product is the qualification candidate because ordinary
 editing has one native source locus. Neither this rationale nor existing
 reference-probe timings certify physical input, real Pinyin, readers or latency.
 
-The default remains Continuous while the explicit `--native-source` candidate
-is qualified. Legacy and historical diagnostic routes remain unchanged. A
-default promotion must be a separate reviewed change after all supported
-Native AOT architectures pass the actual release workflows.
+The initial candidate kept Continuous as default until explicit
+`--native-source` passed all four Native AOT package/workflow jobs in
+[run 36925090282](https://github.com/kleedaisuki/mote/actions/runs/36925090282),
+source `f2b2de7`. The coordinator then authorized a separate ordinary-default
+promotion: bare launch selects NativeSource, additive `--continuous` retains the
+old product, and Legacy/historical diagnostic routes remain unchanged. Windows
+task edit and fresh reopen now launch bare paths; AppKit's task probe obtains
+its shell/profile through the ordinary parser and factory rather than directly
+constructing a hardcoded source shell. Both OS configuration smoke launches must
+also exercise the actual ordinary entry. The changed default still requires
+fresh four-RID hosted validation; previous explicit-route passes are not its proof.
 
 ## Necessary corrections
 
@@ -71,6 +78,15 @@ Final combined affected selection added `WindowsReleaseSourceTests` to the filte
 TRX: `.temp/release-controller/release-product-final.trx`. It includes the current
 AppKit external-open pure model, Source controller, launch parser and Windows
 hidden native controls; it still does not execute AppKit or a visible AOT product.
+
+After ordinary-default and final semantic-witness integration, the focused
+selection `NativePresentationProfileTests`, `WindowsAxProbeLaunchRouteTests`,
+`NativeSourceControllerTests`, `MacReleaseSemanticTests`, and
+`NativeCsvReleaseReadinessTests` passed **94/94**, with zero warnings/errors.
+TRX: `.temp/release-controller/release-default-final.trx`. Counts overlap earlier
+runs. Windows then passed six actual bare-default managed product tasks with
+version-linked current native semantic views and nine independently checked CSV
+callback values; see the Windows record for exact artifacts and non-AOT scope.
 
 Windows actual hidden RichEdit/TOM qualification and AppKit guard records are
 separate in [Windows](release-product-windows.md) and [macOS](release-product-mac.md).

@@ -308,6 +308,9 @@ try {
     $start.WorkingDirectory = $root
     if ($OrdinaryProduct) {
         $start.Environment['MOTE_HOME'] = Join-Path $run 'home'
+        # Preserve this historical Continuous workflow rather than relabeling
+        # it as qualification of the new full-native release default.
+        [void]$start.ArgumentList.Add('--continuous')
     }
     else {
         [void]$start.ArgumentList.Add('--canvas-experimental')

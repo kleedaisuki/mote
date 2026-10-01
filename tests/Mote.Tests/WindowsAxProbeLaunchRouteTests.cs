@@ -2,17 +2,17 @@ using Mote.WindowsAxExternalProbe;
 
 namespace Mote.Tests;
 
-/// <summary>Prevents an external ordinary-product probe from silently testing a diagnostic route.</summary>
+/// <summary>Preserves the external Continuous product probe independently of the released default.</summary>
 public sealed class WindowsAxProbeLaunchRouteTests
 {
-    /// <summary>Product launch passes only the fixture path while requiring source-fragment semantics.</summary>
+    /// <summary>Continuous launch explicitly selects its retained product and source-fragment semantics.</summary>
     [Fact]
-    public void Product_probe_has_no_presentation_flags()
+    public void Continuous_probe_retains_explicit_presentation()
     {
         var route = Assert.IsType<ProbeLaunchRoute>(ProbeLaunchRoute.Parse("--product-continuous"));
         Assert.Equal("product-continuous", route.Mode);
         Assert.True(route.UsesSourceFragment);
-        Assert.Empty(route.PresentationArguments);
+        Assert.Equal(new[] { "--continuous" }, route.PresentationArguments);
     }
 
     /// <summary>Historical baseline and fragment invocations retain their exact argument order.</summary>

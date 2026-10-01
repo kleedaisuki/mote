@@ -62,7 +62,7 @@ internal sealed partial class NativeEditorController
         if (!_sourceUnavailable) UpdateSourceInterest(_sourceVisibleDisplay);
         _sourceShell.SetSourceChrome(title, _sourceUnavailable
             ? "Native source unavailable; canonical document retained. Save or open another document."
-            : $"{snapshot.LineCount:N0} lines · native source candidate", _document.IsModified,
+            : $"{snapshot.LineCount:N0} lines · native source", _document.IsModified,
             _document.CanUndo, _document.CanRedo);
     }
 
