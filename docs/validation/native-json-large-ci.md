@@ -407,3 +407,107 @@ was rerun and no product/driver file was modified for this audit. The most
 informative next checks discriminate bounded read-only AX copy readiness and
 owned ordinary Save-command delivery separately; they should not retry writes
 or hide a failed observed phase behind internal trace success.
+
+## Follow-up: both Mac ARM sizes pass; x64 trace loss remains
+
+Independently audited completed [run 36804628122](https://github.com/kleedaisuki/mote/actions/runs/36804628122),
+current source **`42462d764fb5183d6ad8f03f30f9957bd54ebad5`**. This run preserves
+the prior history while establishing a new scoped Mac ARM milestone. It is not
+a rerun of the older product binary or an inference from a green CI job.
+
+| RID | 1 MiB | 100 MiB | Actual pilot result |
+| --- | --- | --- | --- |
+| win-x64 | complete scoped pass | complete scoped pass | report pass + actual pass marker |
+| win-arm64 | complete scoped pass | complete scoped pass | report pass + actual pass marker |
+| osx-arm64 | complete scoped pass | complete scoped pass | report pass + actual pass marker |
+| osx-x64 | failed / trace-audit / ValueError after exact Save and normal exit | complete scoped pass | incomplete / actual exit 1 |
+
+All four protocol/artifact test executions pass **21/21**. The x64 Mac raw log
+emits its incomplete summary and explicit pilot exit-1 error, despite the
+non-gating step's masked success. The other three emit real post-execution
+two-case pass summaries and markers. This is **not four-RID acceptance pass**.
+
+### Provenance and independent contract checks
+
+All four reports match source commit/native observer architecture, exact source
+blob hashes with native checkout line endings, independently reconstructed
+1/100 MiB input and edited-byte hashes, and pre/post binary identity. Separate
+inventory artifacts corroborate one executable and no companion payload/native
+libraries. Both Mac Swift clients actually compile. Reported payload identity:
+
+| RID | Bytes | Before/after SHA-256 |
+| --- | ---: | --- |
+| win-x64 | 7,105,024 | `88bdc4c03de323bcaf91fbf2b37e107cbaba5646e6accf27b0e4cfea4dd5af89` |
+| win-arm64 | 7,244,288 | `5ed3fb378a992d0e6c755e13828d0a37aa7146ccf98fe7a294c19ca928ed9e5c` |
+| osx-x64 | 16,842,720 | `5af37718c82a3d6dcc7d4ce426c6a43d89550ab881f2f4cba3d30d1df305a424` |
+| osx-arm64 | 16,489,288 | `fafaf2dab0369fa6dfc52e92e31a0ee8917003cda38ac045ccacbe6bb277c05b` |
+
+The seven complete cases satisfy exact Save/final working bytes, immutable
+original, Complete zero-diagnostic native v0/v1 observations, one edit attempt,
+disk unchanged before Save, normal initial exit, fresh GUI reopen with exact
+saved bytes, normal reopen exit, matching raw trace hashes, and successful
+counted action/terminal/version/causal-parent contracts with zero trace drops.
+Mac ARM main/reopen trace counts are **34/12** (1 MiB) and **37/16** (100 MiB);
+Mac x64 100 MiB **40/16**. No-edit/no-Save reopen evidence is independently
+checked. Unlike the prior ARM100 cleanup-only Visible trace, this ARM100 sample
+has **actual observed whole-document Complete v0 and v1**, full workflow and
+reopen evidence; its pass does not depend on interpreting generic parse spans
+as certified Full. I/O records without revision attributes remain unversioned.
+
+### Mac Save attempts are not delivery acknowledgements
+
+All four Mac samples record `save_command_attempted=true` with method
+`CGEvent.postToPid`, status **`attempted-posts-no-delivery-acknowledgement`**,
+`attempted_events=2`, and **`execution_acknowledged=false`**. The action guard
+rechecks the same target PID, trusted/post-access capabilities, focused dirty
+source, exact full source length, caret 10 and empty selection. The observer
+does **not** claim that Quartz acknowledged delivery or execution. Successful
+clean-title observation, independent exact file bytes, successful Save records
+and normal sessions are separate outcome witnesses; they do not turn the
+posting API's void return into a delivery acknowledgement. No Save retry or
+global key posting is used.
+
+Initial source-readiness summaries show count pending observations **3/2** on
+ARM 1/100 MiB, **5/2** on x64 1/100 MiB; first count error -25204 and last 0.
+Each initial summary has copy-pending count 0 and successful first/last copy
+errors 0. These counters describe bounded initial observation, not proof that
+every future AX read is reliable or that a pending count authorized input.
+
+### Mac x64 1 MiB: exact Save succeeds, zero-drop trace contract fails
+
+The x64 1 MiB case is materially different from its previous Save timeout. It
+has Complete v0/v1, acknowledged edit, unchanged disk before Save, **exact saved
+and final working hash equal to the edit oracle**, unchanged original, and
+normal initial exit. It then fails the trace audit before GUI reopen. The
+retained raw trace hash matches the report and contains successful required
+endpoint/action records with correct reported versions, including Save and
+one successful terminal root. However, an explicit **`telemetry.dropped` record
+with `attributes.count=1`** establishes one dropped record. The auditor reports
+`issues=["trace-dropped-records"]`, `dropped_records=1`, endpoint issues empty,
+but causal integrity `incomplete-or-invalid` and endpoint integrity `incomplete`.
+
+The refusal is correct under the existing zero-drop acceptance contract. Do
+not ignore the loss merely because all required endpoint records survived or
+because saved bytes are correct. The lost record's identity/cause is not
+recoverable here. There is no certified GUI reopen for this sample, no forced
+cleanup, and no justification to label it a Save failure or complete workflow
+pass. The actionable next investigation is bounded telemetry-drop attribution,
+not a Save retry or weakened acceptance predicate.
+
+### Reproducibility and timing limits
+
+Artifacts/inventories are under `.cache/ci-36804628122-json-<RID>/`; raw logs
+`.cache/ci-36804628122-json-all.log`; independent assertions and output
+`.cache/ci-36804628122-json-audit.py` and
+`.cache/ci-36804628122-json-independent-summary.json`. The script explicitly
+checks `telemetry.dropped`'s **count** attribute, confirms the failed x64 sample's
+exact Save and drop witness, and separately verifies all seven passes. It
+corroborates all eight outcomes without promoting the incomplete one.
+
+Descriptive ARM parent source binding is 1135.373958 ms (1 MiB) /
+1190.728292 ms (100 MiB); edit acknowledgement 640.374916 / 503.878917 ms;
+child Save 38.765 / 380.014 ms. Mac x64 100 MiB parent source binding is
+7111.696544 ms and child Save 2725.992 ms. These noisy single trace-on observations
+do not establish a startup/edit tail SLA or architecture superiority. Physical
+paint, real keyboard/IME and screen-reader acceptance remain outside the pilot.
+No native pilot was rerun locally, and only this document was edited for the audit.
