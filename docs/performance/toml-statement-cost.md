@@ -427,3 +427,127 @@ Mapping and projection still scale with statement count, and non-shared immutabl
 storage can require exact comparison of the unchanged source. All these costs are
 included in the reported wall time/allocation. This is meaningful local syntax reuse,
 not an O(edited-characters) guarantee for the complete analysis call.
+
+## Final uniform public-policy cost (2026-10-01)
+
+This is a **new, small public `TomlPolicy.Analyze` experiment**, not a rerun of the
+large-cache workloads above. The preceding cache experiment is the historical
+`b93c4c2` checkpoint, before uniform small-policy recovery and the later scalar-token
+projection correction; its numbers are not asserted as current final editor latency.
+
+The matched old public-policy binary is the frozen `b93c4c2` DLL,
+`5CF3A8EC3D69075E2D1170812CE4C43FE217267B150C80A7BCF49F09F28DC78D`.
+The **final candidate** was built and copied at production source freeze
+`70def6d2c04ec5c77185f4616b9a8e716261406c`, after diagnostic recovery and scalar-overlay
+corrections; its DLL hash is
+`C8F3A5FFA6A0BC42B58F2A5D91EBC3AF35074B1F16191A9FB16A0C6125F296E2`.
+The candidate engine DLL is
+`0979B1C385E32187CCE1CCBDE3EB9AE27D9FE6106237CE59C217EAAF9D4BD631`.
+No production rebuild or source mutation occurred between this freeze and measurement.
+
+### Qualification, including unsuccessful setup
+
+The scratch harness/project are `.temp/toml-small-policy-cost/Program.cs` and
+`toml-small-policy-cost.csproj`. Each revision references copied, frozen assemblies;
+before **any** warm-up, the harness computes the actually loaded format assembly's
+SHA-256 and refuses a mismatch. Every timed row separately records the runtime-loaded
+hash, source hash, environment and counts. Both intended format/engine DLLs were
+explicitly copied into their final revision outputs after scratch builds completed.
+
+Two earlier phases remain preserved, not silently erased:
+
+- **30 initial control-contaminated rows**, in `results-invalid-control/`: the output
+  directory labelled baseline actually contained—and the runtime rows actually
+  loaded—the *candidate* `889FB15E...` DLL, not intended old `5CF3A8EC...`. The two
+  revisions used the same scratch project/shared intermediate directory; the precise
+  MSBuild copy/cache mechanism was not independently traced. The comparison had no
+  distinct old binary and therefore could not answer the question. All 30 rows were
+  invalidated **because of incorrect baseline identity**, regardless of their timing,
+  not selected for or against a favorable performance result.
+- **30 correctly hash-qualified intermediate rows**, in
+  `results-intermediate-first-witness/`: these compared old `5CF3A8EC...` against
+  `889FB15E...`, but that candidate was a first-witness draft, before final multi-error
+  recovery. They are historical intermediate measurements, **not final product cost**.
+  The candidate's source/binary hash bundle remains in `current-frozen-hashes.json`.
+
+On the final run, the newly added hash guard also caught a leftover `889FB15E...`
+candidate output **before warm-up or any timed candidate row**. The already-qualified
+five final tiny-baseline rows were kept and were not rerun. Copying the intended final
+candidate DLLs repaired the setup; only the remaining unmeasured processes ran.
+`final-setup-guard.json` retains this incident. This guard refusal is not an application
+failure, retry of an unfavorable observation, or an additional measured sample.
+
+Authoritative final results are **all 30 qualified rows** in `results-final/`:
+three fixtures × two frozen revisions × five repetitions. Metadata is in
+`final-summary.json`, `final-frozen-hashes.json` (all nine TOML source files plus
+both binaries), and `final-method-hashes.json`. No qualified final observation was
+discarded, rerun or replaced. No further source-cost runs are needed for this scope.
+
+### Inputs and method
+
+One fresh process per revision/fixture, baseline then candidate for each fixture,
+with one complete public Analyze warm-up followed by five timed calls. All six
+processes used Windows 10.0.26200 x64, .NET 10.0.11, workstation GC, 20 logical
+processors and `DOTNET_TieredCompilation=0`. The same earlier machine was used;
+background activity was not isolated. Timed work includes the entire synchronous
+public Analyze call, but excludes input generation, explicit collections, validation
+of results and JSON output. Allocation is cumulative managed allocation on that
+thread; retained delta keeps only the resulting `FormatAnalysis` alive after full GC,
+excluding the pre-existing source and policy. Both revisions accepted every timed
+input unchanged with zero diagnostics. Node/token counts match, but those counts
+alone are not a recursive semantic-equivalence certificate.
+
+| Input | Exact ASCII bytes/chars | Physical lines | Semantic nodes / tokens | SHA-256 |
+| --- | ---: | ---: | ---: | --- |
+| tiny | 86 | 8 | 19 / 21 | `90A75D826F841A650228108F41168AA37F4AC66642B240CD9090A508DC5AB5C0` |
+| mixed | 8,326 | 506 | 1,105 / 1,242 | `32B41D4F24286D871E85A5E4363342BB563FBEB138FFF7C46E60FAD4EC851FC6` |
+| dense | 131,072 | 8,192 | 16,385 / 24,576 | `5C212EB1B14B2E47978CC8A302EA42739415E013A371063BA71FF7C19602B959` |
+
+Tiny source is `title='mote'`, `count=3`, `enabled=true`, `ratio=1.25`,
+`items=[1,2,3]`, `[view]`, `font='mono'`, `size=13`, each LF-terminated.
+Mixed source contains 46 unique `[table000]`…`[table045]` sections, each with the
+same eight assignments (literal name, integer port, boolean, float, integer array,
+offset timestamp, inline table and two-line literal string), plus a comment.
+Dense source is `k00000=12345 #x\n` through `k08191=12345 #x\n`, exactly 128 KiB.
+All fixture constructors are retained in the harness. Historical false-rejection
+minimals were deliberately **not** benchmark inputs: they do not share the old/new
+valid domain and belong to correctness testing.
+
+### Final observations: the adverse cost is material
+
+Elapsed values are medians with observed min–max, **not** confidence intervals.
+Allocation and retained bytes are medians; all qualified repetitions are included.
+
+| Input / revision | Analyze ms [min–max] | Cumulative allocated bytes | Retained result bytes |
+| --- | ---: | ---: | ---: |
+| tiny / old | 0.0827 [0.0552–0.1058] | 39,192 | 3,208 |
+| tiny / final | 0.1015 [0.0864–0.1719] | 64,008 | 3,208 |
+| mixed / old | 1.2294 [1.1463–2.0425] | 2,161,224 | 184,632 |
+| mixed / final | 2.4910 [1.7894–3.3832] | 3,648,984 | 184,632 |
+| dense / old | 38.4352 [35.5492–42.1167] | 33,812,928 | 3,080,456 |
+| dense / final | 52.3176 [51.0311–54.1029] | 60,096,912 | 3,080,456 |
+
+The final candidate increased cumulative allocation by approximately **63.3%, 68.8%,
+and 77.7%** on tiny/mixed/dense respectively, while the retained projected tree stayed
+the same in these observations. Observed median elapsed changes were **+22.7%,
++102.6%, and +36.1%**. Five repetitions, sequential revision order and uncontrolled
+background load do not establish precise latency distributions; the repeated additional
+allocation and explicit second parsing path are nevertheless a real engineering cost,
+not zero-overhead validation. The mixed/dense costs must remain visible in decisions.
+
+The final policy retains a whole lossless grammar tree parsed without Tomlyn's global
+validator, then separately validates logical statements and normative ownership with
+an unbounded public-policy reader. This avoids known current old-policy false rejection
+of the two valid parent-AoT minimals and preserves corrected diagnostic recovery,
+without imposing the incremental cache's resource-refusal limits on public Analyze.
+The correctness rationale is explicit; it does **not** make the extra transient work
+desirable or permit a blanket no-regression claim. A worthwhile future optimization
+would reuse the existing grammar tree for statement-local checks and source-ordered
+normative ownership, preserving diagnostic IDs/spans, scalar checks and recovery,
+rather than reverting to the incorrect global ownership model or dropping validation.
+
+These measurements are public-policy Analyze costs, **not format-edit timings**:
+no mutation, Format, Save or session reuse was invoked. They therefore establish
+neither current cached-edit performance nor native startup/input/render latency.
+The historical cache results above remain separate. No GUI, Native AOT, macOS,
+100 MiB input, or repeated completed cache experiment was involved.
