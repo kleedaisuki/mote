@@ -32,6 +32,8 @@ internal sealed partial class WindowsCsvGrid
     {
         var managed = Environment.CurrentManagedThreadId == _uiThread
             ? TelemetryFocusThreadRelation.Owner : TelemetryFocusThreadRelation.NonOwner;
+        if (!Volatile.Read(ref _focusEvidenceAlive))
+            return new(TelemetryFocusThreadRelation.Unknown, managed, TelemetryFocusPane.Unavailable);
         var table = Handle;
         var source = _sourceHandle;
         var group = _groupHandle;
@@ -57,7 +59,8 @@ internal sealed partial class WindowsCsvGrid
         uint focusProcess = 0;
         if (info.Focus != 0 && FocusWindowThread(info.Focus, out focusProcess) == 0)
             return new(native, managed, TelemetryFocusPane.Unavailable);
-        if (installation != _installation || table != Handle || source != _sourceHandle || group != _groupHandle ||
+        if (!Volatile.Read(ref _focusEvidenceAlive) || installation != _installation ||
+            table != Handle || source != _sourceHandle || group != _groupHandle ||
             !FocusMainMatches(_parent, thread, process) ||
             !FocusRoleMatches(table, group, _controlId, "SysListView32", thread, process))
             return new(native, managed, TelemetryFocusPane.Unavailable);

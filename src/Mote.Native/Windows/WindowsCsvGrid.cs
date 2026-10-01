@@ -52,6 +52,8 @@ internal sealed partial class WindowsCsvGrid : IDisposable, IGridAccessibilityAc
     private readonly int _sourceControlId;
     /// <summary>Native control identity used to validate this Grid's roles without guessing from focus.</summary>
     private readonly int _controlId;
+    /// <summary>Observation-only native lifetime; retirement never changes the original adapter admission.</summary>
+    private bool _focusEvidenceAlive;
     private int _columns, _row, _column, _anchorRow, _anchorColumn;
     private GridRange _nativeColumns;
     private GridRange Columns => _navigation?.RequestedColumns ?? _grid?.RequestedColumns ?? new(0, 0);
@@ -138,6 +140,7 @@ internal sealed partial class WindowsCsvGrid : IDisposable, IGridAccessibilityAc
         _uia = new(Handle, this, AccessibleBounds, _accessibleStatus);
         _uia.BindHeader(Win32.SendMessageW(Handle, WindowsGridInterop.First + 31, 0, 0));
         SetTheme(theme);
+        Volatile.Write(ref _focusEvidenceAlive, true);
         }
         catch { Dispose(); throw; }
     }
@@ -1102,6 +1105,7 @@ internal sealed partial class WindowsCsvGrid : IDisposable, IGridAccessibilityAc
     /// <summary>Removes the native callback before releasing its root; no caller-owned buffer survives.</summary>
     public void Dispose()
     {
+        Volatile.Write(ref _focusEvidenceAlive, false);
         ++_installation;
         _sourceHandle = 0;
         foreach (var request in _accessibleRequests.Values) Volatile.Write(ref request.Cancelled, 1);

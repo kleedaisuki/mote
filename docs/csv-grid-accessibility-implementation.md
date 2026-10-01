@@ -466,3 +466,25 @@ No completed telemetry/reader/graph suite was repeated for this native-only
 guard, and no GUI or HWND experiment was executed. The preceding independent
 review does not falsely certify this later delta; root supplied this ownership
 finding and owns its final integration inspection.
+
+The follow-up lifetime inspection also distinguishes retirement from generation:
+a sample can begin after Dispose increments installation but before HWND
+destruction. `_focusEvidenceAlive` is therefore published true only after full
+construction, retired by a volatile write at the **first** Dispose step, and
+checked before native evidence queries and again before publishing a sample.
+This state controls observations only; the original adapter Focus/admission is
+unchanged. Root inspected and accepted the two-file correction. Updated evidence
+file SHA256 is `83DF8111AC5617356F85B19E2F44AC797D1E65BD84ECA96A6344575CDDF8E0ED`.
+
+One new unpublished-lifetime fixture (`0876d5f`) bypasses the constructor with
+RuntimeHelpers.GetUninitializedObject and directly verifies native unknown,
+managed non-owner and unavailable pane. Only that new method was executed:
+**1/1**, zero warnings/skips; TRX is
+`.cache/validation/windows-grid-focus-observation/focus-lifetime-unpublished.trx`.
+It creates no HWND and does not call Dispose; Windows return values alone do not
+exclude a hypothetical accidentally reached import that returns zero. Non-Windows
+hosted execution strengthens the no-Windows-DLL branch proof, but neither case
+certifies a constructed instance's actual concurrent retirement. One affected
+Native Release build exited 0 with zero warnings/errors; log is
+`.cache/validation/windows-grid-focus/focus-provenance-lifetime-build.log`.
+The completed 58/14/29/21 suites were not repeated.
