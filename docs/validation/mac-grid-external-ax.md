@@ -327,3 +327,12 @@ Native Swift/AppKit typecheck and execution now pass on both RIDs in
 CI 36797859586 / `833ef48`. The x64 read-only followup observes the correct
 owned 12-item menu through the Table relationship, but the original action
 failure remains on both platforms. See [full discriminator results](mac-grid-table-proxy.md#read-only-action-discriminator-ci-36797859586).
+
+The next fixed trace protocol appends `allowaction=0|1 allowshown=0|1`
+(in that exact order), retaining only native selector-permission booleans.
+The whitelist requires both fields; missing, reordered or nonboolean fields
+are rejected. Independent tests accept all four boolean combinations without
+interpreting them as acceptance, and preserve invalid-line, phase/result,
+16-row, overlong-line and real dual-pipe checks. This diagnostic extension
+changes neither AX actions nor semantic verdicts. Native permission facts
+remain pending the next target run, not inferred from portable capture tests.

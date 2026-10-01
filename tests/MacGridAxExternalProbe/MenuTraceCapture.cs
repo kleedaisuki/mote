@@ -12,7 +12,7 @@ namespace Mote.Testing
     {
         /// <summary>The protocol contains no free-form text, paths, identifiers, or document content.</summary>
         private static readonly Regex Pattern = new Regex(
-            @"\Amote-grid-menu-v1 phase=(show-enter|native-return|schedule-return|popup-begin|popup-return|will-open|did-close) seq=([1-9]|1[0-6]) requests=([0-9]|1[0-6]) opens=([0-9]|1[0-6]) closes=([0-9]|1[0-6]) open=[01] result=(-1|[01]) configured=[01] items=(-1|[0-9]|1[0-6]) coordinate=[01] shown=[01] key=[01] first=[01] active=[01]\z",
+            @"\Amote-grid-menu-v1 phase=(show-enter|native-return|schedule-return|popup-begin|popup-return|will-open|did-close) seq=([1-9]|1[0-6]) requests=([0-9]|1[0-6]) opens=([0-9]|1[0-6]) closes=([0-9]|1[0-6]) open=[01] result=(-1|[01]) configured=[01] items=(-1|[0-9]|1[0-6]) coordinate=[01] shown=[01] key=[01] first=[01] active=[01] allowaction=[01] allowshown=[01]\z",
             RegexOptions.CultureInvariant);
 
         /// <summary>
