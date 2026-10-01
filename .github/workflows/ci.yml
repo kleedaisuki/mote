@@ -1480,11 +1480,19 @@ jobs:
         run: |
           $rid = '${{ matrix.rid }}'
           $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          $argvGuard = 'benchmarks/NativeJsonLargeAcceptance/test_invocation.ps1'
+          $argvGuardHashes = @('8F88F1A8228E8B31DB511A694F0D7487E98FB0FE6BF0740A48C1FE2BFA6A5F17',
+            '3FF77AD3C8DA40FE781374138DE56F529D57B6E09549B71539F17408CDF3A64F')
+          if ($argvGuardHashes -cnotcontains (Get-FileHash -LiteralPath $argvGuard -Algorithm SHA256).Hash) {
+            throw 'JSON witness argv guard differs from reviewed LF/CRLF bytes.'
+          }
+          & ./benchmarks/NativeJsonLargeAcceptance/test_invocation.ps1
           & python -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Native JSON acceptance artifact/protocol tests failed.' }
           # Original Mac child only: positive boundary observations never relax
           # the one-key-pair, exact-byte/normal-exit/trace/reopen acceptance.
-          $witness = if ($IsMacOS) { @('--mac-save-witness') } else { @() }
+          $witness = @()
+          if ($IsMacOS) { $witness = @('--mac-save-witness') }
           & python benchmarks/NativeJsonLargeAcceptance/probe.py `
             --executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name" `
             --rid $rid --output ".cache/ci-inventory/$rid/native-json-large.json" @witness

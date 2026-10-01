@@ -110,13 +110,83 @@ dotnet test tests/Mote.Tests/Mote.Tests.csproj --filter 'FullyQualifiedName~Nati
   possible producer instruction interleaving executed. The stable watermark
   argument above follows the atomic state transitions and release ordering;
   deterministic saturation and blocked-write cases exercise material boundaries.
-- Managed compilation, including Native AOT/trim analyzers, succeeded. **Actual
-  macOS Native AOT compile/launch and retained raw witness/unchanged Save outcome
-  validation remain hosted CI work**, not established by these portable tests.
+- Managed compilation, including Native AOT/trim analyzers, succeeded. These
+  portable tests do not establish actual macOS Native AOT compile/launch or
+  retained raw witness/unchanged Save outcomes. The first hosted result follows.
 
 Independent source review is recorded in
 `../reviews/mac-json-save-witness-implementation-review.md`; parent framing and
 child lifecycle remain a separate integration review.
+
+## First hosted run: Mac AOT passes, witness pilot never starts
+
+Artifact/log audit of [CI 36816778414](https://github.com/kleedaisuki/mote/actions/runs/36816778414),
+source **`d6b355b`**, 2026-10-01. Both Mac AOT jobs published successfully,
+verified system-library imports and passed the strict single-payload inventory.
+Inventory artifacts independently retain these reported sizes:
+
+| RID | AOT executable | Other payloads / bundled native libraries | Portable collector/probe suite | Actual nested JSON invocation |
+| --- | ---: | --- | --- | --- |
+| osx-x64 | `mote`, 16,920,632 B | 0 / 0 | 41/41 | **argparse exit 2, before pilot launch** |
+| osx-arm64 | `mote`, 16,583,384 B | 0 / 0 | 41/41 | **argparse exit 2, before pilot launch** |
+
+The API/job UI marks these non-gating steps successful and the whole run is green,
+but both raw logs explicitly contain:
+
+```text
+probe.py: error: unrecognized arguments: - - m a c - s a v e - w i t n e s s
+Native JSON source pilot incomplete (exit 2)
+Process completed with exit code 1.
+No files were found with the provided path: .../native-json-large.json
+```
+
+There are **no Mac JSON pilot artifacts or original-child witness records** in
+this run. No 1/100 MiB Save, selector/admission/overflow/terminal/EOF, normal or
+forced pilot cleanup, trace or reopen outcome can be claimed. The argparse
+failure occurs before `main` inventories, compiles its Swift client or launches
+the original GUI process. Thus native original/reopen environment isolation was
+not exercised by this pilot; the 41 portable tests establish only their tested
+mocked/process-protocol contracts. A missing artifact here is a prelaunch harness
+defect, not a missing callback or a further product Save timeout.
+
+Cause: the workflow assigned an `if` expression's pipeline output:
+`$witness = if ($IsMacOS) { @('--mac-save-witness') } else { @() }`.
+PowerShell unrolled the one-element output into a scalar string; native-command
+`@witness` splatting consequently supplied its individual characters. This is a
+CI wrapper defect introduced by the witness integration, not a target transport
+or Save implementation failure.
+
+### Narrow correction and argv regression guard
+
+The corrected construction preserves an actual array in both branches:
+
+```powershell
+$witness = @()
+if ($IsMacOS) { $witness = @('--mac-save-witness') }
+```
+
+`benchmarks/NativeJsonLargeAcceptance/test_invocation.ps1` reads these exact two
+production workflow lines, substitutes only a test-owned platform Boolean, and
+passes the resulting splat to a real Python argv-echo child. It asserts array
+identity and exact native argument vectors for **osx-x64, osx-arm64, win-x64 and
+win-arm64**. Both Mac branches must contain precisely one whole opt-in flag;
+both Windows branches must contain none. No AppKit/input/file experiment runs.
+All **4/4** argv controls pass on the local PowerShell host. CI runs the same
+guard before its portable Python suite and uses reviewed LF/CRLF source pins:
+
+- LF SHA-256 `8F88F1A8228E8B31DB511A694F0D7487E98FB0FE6BF0740A48C1FE2BFA6A5F17`.
+- CRLF SHA-256 `3FF77AD3C8DA40FE781374138DE56F529D57B6E09549B71539F17408CDF3A64F`.
+
+The guard changes no pilot input, Save attempt count, byte/trace/reopen oracle,
+phase deadline or target permission. **The corrected invocation and actual Mac
+witness collection require a fresh hosted run.** A future instrumented pass
+would be a successful diagnostic-on sample, not a reliability repair.
+
+Raw Mac job logs and downloaded inventory artifacts are retained under
+`.cache/ci-36816778414-save-witness/`. Product executables were not uploaded, so
+this is reported inventory plus successful hosted build/strict-step evidence,
+not independent local binary rehash or execution. No native pilot was rerun
+during this artifact-only audit; only the four portable argv controls were run.
 
 ## Platform references
 
