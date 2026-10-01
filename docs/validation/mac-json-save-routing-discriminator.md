@@ -1,13 +1,15 @@
 # Mac ordinary JSON Save: recurring failure and read-only routing discriminator
 
-Date: 2026-10-01. Current evidence:
+Date: 2026-10-01. Recurring-failure evidence:
 [CI 36809964231](https://github.com/kleedaisuki/mote/actions/runs/36809964231),
 source `8d5796542b63e54e630933de38a2c68d864ca085`. This harness-owner record owns
 only the Save-routing question; the independent four-RID matrix remains in
 `native-json-large-ci.md`. No product, CI, input retry or native local rerun is
-part of this investigation.
+part of this investigation. The first hosted run containing the read-only routing
+fields is [CI 36811953139](https://github.com/kleedaisuki/mote/actions/runs/36811953139),
+source `d9ddda97cedf98245fd499c8bb6a64cf64919633`; its observations are recorded below.
 
-## Exact current outcomes and prior controls
+## Exact preceding failure outcomes and prior controls
 
 | Case | Actual result | Material witnesses |
 | --- | --- | --- |
@@ -138,8 +140,83 @@ this is not a performance optimization or a controlled reliability fix.
 Portable **22/22** tests pass: strict true/false/null/omitted facts, rejection of
 non-Boolean substitutes, foreign identity redaction and retained Save-report facts,
 with all prior byte/trace/no-retry/deadline tests intact. Tests mock reports, not
-AppKit runtime behavior. Updated Swift compile and real activity correlations
-require a future target-host run and independent review before promotion.
+AppKit runtime behavior. CI 36811953139 subsequently compiled the updated Swift
+client on both Mac architectures and supplied the first real routing observations;
+the result below does not establish a failure correlation.
+
+## First hosted routing observations: 36811953139
+
+Both Mac raw pilot reports, not merely the non-gating parent job conclusions,
+are `pass` for 1 and 100 MiB. All four cases retain one two-post Command-S report
+with `execution_acknowledged=false`, reach the independent exact edited-byte
+oracle, preserve the immutable fixture, exit normally, and reopen normally with
+read-only traces. The independent full four-RID audit is committed in `e257658`
+and recorded in `native-json-large-ci.md`; it confirms 8/8 cases and 16 normal,
+zero-drop GUI sessions. The Mac artifact-only recomputation and routing snapshots
+are also retained at
+`.cache/native-json-large/ci-36811953139-mac-routing-audit.json`. No native workflow
+was repeated for this inspection.
+
+The following are **pre-Save guard observations**, not post-Save state or proof
+of event receipt. Each has `modified=true`, `complete=true`, source `focused=true`
+and selection `10:0`:
+
+| RID / size | `target_app_active` | `frontmost_is_target` | `window_main` | `window_focused` | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| x64 / 1 MiB | true | true | true | **false** | exact Save / normal exit / reopen |
+| x64 / 100 MiB | true | true | true | **false** | exact Save / normal exit / reopen |
+| ARM64 / 1 MiB | true | true | true | **false** | exact Save / normal exit / reopen |
+| ARM64 / 100 MiB | true | true | true | **false** | exact Save / normal exit / reopen |
+
+The ARM64 1 MiB initial source-binding snapshot has `target_app_active=false`
+and `frontmost_is_target=false`, with `window_main=true`, `window_focused=false`
+and source `focused=true`. Its edited-source and pre-Save snapshots have both
+application facts `true`. This is a sampled transition, not an activation action
+performed by the harness or evidence of a particular transition cause. All other
+initial and edited snapshots have application facts `true`; every retained
+owned-window `window_focused` observation in these cases is `false`.
+
+Consequently, the owned-window AXFocused attribute cannot be treated as a
+necessary Save-success guard or equated with native key-window state: four exact
+successful Saves occurred despite its false value. Source first-responder focus
+can coexist with an initially inactive application. These are useful distinctions,
+but they do **not** discriminate the recurring failed Save path yet.
+
+The preceding ARM64 100 MiB failure in 36809964231 has **none of the four new
+fields** in either its pre-Save guard or final failure observation. Absence means
+unavailable historical evidence, not false activity/window facts. Comparing that
+failure's routing state with this successful ARM64 100 MiB sample is therefore
+impossible. This all-pass run supplies no failure contrast and cannot establish
+that the application was inactive in the failed run, that delivery was repaired,
+or that added observation overhead fixed a product issue. Passing reports retain
+no final clean-state routing snapshot or full per-poll history; exact bytes,
+normal terminal traces and reopen establish the outcome separately from routing
+metadata.
+
+The source identities match exact committed LF blobs: driver
+`e0225f97e208f579e767a10954bb57a20fa7b26e1329cb18690dae791a283472`,
+Swift client
+`e17197620f5cc5b48def1d008fc4184c1fa5fb28c02d909979984a575a4abac8`,
+and reused auditor
+`b2d45fe1eac0f094bf997be8ea3777921e7019d09f958c03f7a6be6e1ed7f541`.
+Reported strict one-file executable inventories and unchanged pre/post hashes:
+x64 `ddd9f9d712f8e494e07241b02e7fe6dc32eb26cec88cf382ac2600a6097ebf55`
+(16,849,256 bytes), ARM64
+`1b6155901b02884bedf1a75ed97c42a447927cef3004f3443126f11b35b6e4c5`
+(16,508,264 bytes). Executable bodies were not uploaded for local reinspection.
+Reports and job logs reside in
+`.cache/ci-36811953139-native-json-{osx-x64,osx-arm64}/`.
+
+**Next discriminating observation, proposed only:** separately review one opt-in,
+content-free target-owned `moteSave:` selector-entry marker followed by a distinct
+Save-admission marker, emitted on a bounded diagnostic channel that survives a
+later forced exit. Keep one Save per process, all current byte/trace predicates,
+deadlines, target ownership and no-activation/no-global-input constraints. A
+selector witness would locate the boundary after native shortcut routing; its
+presence without admission would direct attention to the handler/composition
+boundary. Its absence would only mean selector entry was not observed, not prove
+CGEvent non-delivery. This instrumentation is not implemented or authorized by
+the current doc-only audit.
 
 ## If this is nondiscriminating
 
