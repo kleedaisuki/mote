@@ -85,3 +85,80 @@ decoded values, parser resource refusals, general sublinear complexity, cancella
 latency, physical memory reclamation, concurrent callers (the caller must serialize),
 Native AOT, macOS execution, editor scheduling/rendering, startup or UI latency.
 Full hosted cross-platform checks and focused performance evidence remain separate.
+
+## Follow-up: uniform public-policy validation and formatting
+
+The separate retained `TomlUniformValidationTests.cs` exercises the public
+`TomlPolicy.Analyze` and `Format` string APIs after they were moved to the shared
+normative ownership mechanism. This is distinct from the preceding 57 incremental
+cache tests; their file and assertions were not changed for this follow-up.
+
+All **712** pinned corpus entries are retained as individual cases. Exactly **218
+valid and 485 invalid** sources decode strictly and reach public analysis; the
+remaining **9 invalid UTF-8** cases exercise only the separate strict-decoder
+boundary, not TOML policy acceptance/rejection. All 703 decoded sources match the
+published validity label. All 485 decoded invalid sources return their original
+string from `Format`. Every valid source is formatted, reanalyzed without errors,
+formatted again for idempotence, and checked for equivalent recursive semantic
+kind/name/value structure and unchanged source-anchored comment text. This compares
+actual projected values before/after; it does not independently compare every
+decoded value to upstream JSON oracles.
+
+The two historical independently minimized array-element re-entry sources from
+`.temp/toml-conformance/small-policy-minimal-{1,2}.toml` are embedded exactly in the
+tests, so reproduction needs no temporary files. Both now validate and actually
+normalize assignment gaps while preserving the projected semantic structure.
+Their prior false-rejection/Python evidence remains in the original experiment
+artifacts. Additional retained checks cover exact public `TOML_PARSE` UTF-16 key
+spans (including an astral-character comment and CRLF), escaped aliases, internal
+inline duplicates, forbidden trivia, Unicode/tab/comment formatting, cancellation
+requested before analysis, and valid sources crossing each large-cache budget:
+one >256 KiB value, one >64-line array, >120,000 comment statements, and 201,000
+namespace bindings. All four directed resource sources remain below 4 MiB.
+
+### Failed initial expectation and correction
+
+The initial 730-case run had **729 passes and one failed test assertion**: it assumed
+`a=9223372036854775808` must be rejected. The pinned normative specification at
+`.cache/toml-test/specs/v1.1.0.md`, integer section, requires signed 64-bit values
+to be accepted losslessly and requires an error when an integer cannot be represented
+losslessly; it does not forbid a larger losslessly represented value.
+([TOML 1.1 integer specification](https://toml.io/en/v1.1.0#integer).)
+The editor retains this larger integer's exact decimal text in a number node.
+Thus this was a **test expectation defect**, not evidence of a production defect.
+The corrected tests explicitly assert exact node value preservation for both signed
+64-bit endpoints and this larger value, including after formatting. The initial
+failed TRX remains `.cache/toml-uniform/toml-uniform.trx`; it was not overwritten.
+
+### Final reproduction and result
+
+Same Windows SDK **10.0.400** environment:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore `
+  --filter FullyQualifiedName~TomlUniformValidationTests `
+  --logger 'trx;LogFileName=toml-uniform-final.trx' `
+  --results-directory .cache/toml-uniform
+```
+
+Observed 2026-10-01: **732 executed / 732 passed / 0 failed / 0 not executed**,
+process exit 0, approximately 2 seconds reported test duration. The final TRX
+counters were inspected independently. This includes the nine decoder-boundary
+cases and must not be reported as 732 public grammar checks.
+
+Source worktree based on parent HEAD `43b303a47804e1c347b02486c25d3da619fd9992`;
+exact production inputs at final validation (SHA-256, local line endings):
+
+| File under `src/Mote.Formats/` | SHA-256 |
+| --- | --- |
+| `TomlPolicy.cs` | `C8D67384F8567F6C24BFFC3A0F4CFC48D5D7C3399D349C7515A738792AF42E64` |
+| `TomlDocumentValidation.cs` | `A8528D8F64C6367B1D22A055A53FB0B121C4DE80DA35D27686156FCF7217844F` |
+| `TomlStatementReader.cs` | `11033182A07EC5C010011174C2F612266AFA1AD18D92F6E883A47AAD95CDCC09` |
+| `TomlOwnershipIndex.cs` | `5617F49A6AC81EB0329EC7C915D3ACC3212BA9034FFA16ACE09D18EC7B55DD2F` |
+
+Verdict: the public-policy finite corpus and conservative formatter contracts pass
+these checks. No claim is made about exhaustive invalid-diagnostic enumeration,
+cancellation latency during the synchronous whole-source grammar parse, all
+possible values, memory/latency distributions, AOT/macOS or GUI behavior. The
+resource checks establish absence of those four cache caps in this public path,
+not that every arbitrarily large source can be processed within finite resources.
