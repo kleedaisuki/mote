@@ -133,7 +133,7 @@ def validate_supervisor(value):
         require(integer(value[key], nullable=True))
     for key in ("timed_out", "job_empty", "cleanup_forced"):
         require(type(value[key]) is bool)
-    require(value["error_class"] in (None, "preflight", "build", "supervisor", "timeout", "cleanup", "client", "binary_changed"))
+    require(value["error_class"] in (None, "preflight", "build", "supervisor", "control", "timeout", "cleanup", "client", "binary_changed"))
     return value
 
 

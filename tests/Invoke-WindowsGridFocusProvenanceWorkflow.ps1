@@ -108,6 +108,9 @@ public static class MoteGridFocusJob
         }
         return text.Append('\\', slashes * 2).Append('"').ToString();
     }
+    /// <summary>Job draining and process signaling share one ten-second cleanup budget.</summary>
+    public static uint RemainingCleanupMilliseconds(long elapsed)
+    { return (uint)Math.Max(0L, 10000L - Math.Max(0L, elapsed)); }
     /// <summary>Run once; timeout kills only this job and never invents normal exit.</summary>
     public static Result Run(string executable, string[] arguments, string cwd, string stdout, string stderr, int milliseconds)
     {
@@ -153,6 +156,7 @@ public static class MoteGridFocusJob
         catch (Exception error) when (!(error is OutOfMemoryException)) { result.ErrorClass = "supervisor"; }
         finally
         {
+            var cleanup = Stopwatch.StartNew();
             if (job != null && !job.IsInvalid)
             {
                 try
@@ -162,8 +166,8 @@ public static class MoteGridFocusJob
                         result.CleanupForced = true;
                         Check(TerminateJobObject(job, 124));
                     }
-                    var watch = Stopwatch.StartNew();
-                    while (Active(job) != 0 && watch.ElapsedMilliseconds < 10000) Thread.Sleep(20);
+                    while (Active(job) != 0 && RemainingCleanupMilliseconds(cleanup.ElapsedMilliseconds) != 0)
+                        Thread.Sleep((int)Math.Min(20U, RemainingCleanupMilliseconds(cleanup.ElapsedMilliseconds)));
                     result.JobEmpty = Active(job) == 0;
                     if (!result.JobEmpty) result.ErrorClass = "cleanup";
                 }
@@ -171,9 +175,15 @@ public static class MoteGridFocusJob
             }
             if (child.Process != IntPtr.Zero)
             {
-                uint exit;
-                if (WaitForSingleObject(child.Process, 0) == 0 && GetExitCodeProcess(child.Process, out exit))
+                try
+                {
+                    // ActiveProcesses==0 is not a signaled process-handle witness.
+                    // Keep the original handle and use only the remaining shared budget.
+                    Check(WaitForSingleObject(child.Process, RemainingCleanupMilliseconds(cleanup.ElapsedMilliseconds)) == 0);
+                    uint exit; Check(GetExitCodeProcess(child.Process, out exit));
                     result.ExitCode = unchecked((int)exit);
+                }
+                catch (Exception error) when (!(error is OutOfMemoryException)) { result.ErrorClass = "cleanup"; }
                 CloseHandle(child.Process);
             }
             if (child.Thread != IntPtr.Zero) CloseHandle(child.Thread);
@@ -227,6 +237,7 @@ try {
     $client = @(Get-ChildItem -LiteralPath $artifacts -File -Recurse -Filter 'WindowsGridFocusProvenanceProbe.dll' |
         Where-Object { $_.DirectoryName -match '[\\/]bin[\\/]' })
     if ($client.Count -ne 1) { throw 'Exact current-architecture client missing.' }
+    $supervisor.error_class = 'supervisor'
     Add-Type -TypeDefinition $nativeSource
     [MoteGridFocusJob]::CheckLayout()
     # Console-only ownership controls precede the one UIA attempt.
@@ -247,6 +258,7 @@ Start-Sleep -Seconds 60
 '@
     [IO.File]::WriteAllText($controlPath, $control, $utf8)
     $pwsh = (Get-Process -Id $PID).Path
+    $supervisor.error_class = 'control'
     foreach ($mode in @('normal', 'timeout')) {
         $limit = if ($mode -ceq 'normal') { 10000 } else { 5000 }
         $check = [MoteGridFocusJob]::Run($pwsh, @('-NoProfile', '-File', $controlPath, '-Mode', $mode), $root,

@@ -242,6 +242,34 @@ class SummaryTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_MARKER", result.stdout + result.stderr)
         self.assertNotIn("Traceback", result.stderr)
 
+    def test_control_failure_phase_is_closed_and_not_build_or_client_evidence(self):
+        value = supervisor()
+        value.update(error_class="control", client_exit_code=None, job_empty=False,
+                     binary_sha256_after=None)
+        self.write("supervisor.json", value)
+        result = summarize(self.directory)
+        self.assertEqual("control", result["error_class"])
+        self.assertEqual("unknown", result["status"])
+        self.assertIsNone(result["client_exit_code"])
+        self.assertIsNone(result["client"]["editor_exit_code"])
+
+    def test_process_exit_observation_shares_budget_with_job_drain(self):
+        text = (ROOT / "tests/Invoke-WindowsGridFocusProvenanceWorkflow.ps1").read_text()
+        cleanup = text.index("var cleanup = Stopwatch.StartNew();")
+        terminate = text.index("Check(TerminateJobObject(job, 124));")
+        signal = text.index("Check(WaitForSingleObject(child.Process, RemainingCleanupMilliseconds(cleanup.ElapsedMilliseconds)) == 0);")
+        read = text.index("Check(GetExitCodeProcess(child.Process, out exit));")
+        publish = text.index("result.ExitCode = unchecked((int)exit);")
+        self.assertLess(cleanup, terminate)
+        self.assertLess(terminate, signal)
+        self.assertLess(signal, read)
+        self.assertLess(read, publish)
+        self.assertNotIn("WaitForSingleObject(child.Process, 0)", text)
+        self.assertNotIn("WaitForSingleObject(child.Process, 10000)", text)
+        self.assertIn("$check.ExitCode -ne 124", text)
+        self.assertIn("$check.ErrorClass -cne 'timeout'", text)
+        self.assertLess(text.index("$supervisor.error_class = 'control'"), text.index("foreach ($mode in @('normal', 'timeout'))"))
+
 
 if __name__ == "__main__":
     unittest.main()
