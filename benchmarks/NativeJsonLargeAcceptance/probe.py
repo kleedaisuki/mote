@@ -26,6 +26,11 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("native_acceptance", ROOT / "benchmarks/NativeAcceptance/acceptance.py")
 acceptance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acceptance)
+reader_spec = importlib.util.spec_from_file_location(
+    "mote_causal_save_reader", ROOT / "tests/causal_save_trace_reader.py")
+causal_save = importlib.util.module_from_spec(reader_spec)
+sys.modules[reader_spec.name] = causal_save
+reader_spec.loader.exec_module(causal_save)
 EDIT_OFFSET = 9
 POLL_SECONDS = 0.05
 
@@ -384,6 +389,43 @@ def save_exact(child, driver, working, size, expected_sha256, sample_report=None
         raise ValueError("native clean acknowledgement failed exact Save bytes")
 
 
+def save_chain_evidence(home, *, terminated, normal_exit=False):
+    """Retain typed native Save evidence even after failed dispatch or owned kill.
+
+    Absence of a retained receipt is unobserved, never proof of non-delivery.
+    The byte oracle and generic edit/draw audit remain separate contracts.
+    """
+    files = sorted((home / "traces").glob("*.jsonl"))
+    summary = {"contract": "native-save-causal-v1", "status": "unobserved",
+               "terminated": terminated, "normal_exit": normal_exit,
+               "absence_certified": False, "requests": [], "trace_sha256": [],
+               "discarded_partial_files": 0, "endpoint": "target-callback-to-local-ui-not-physical-input-or-pixels"}
+    if not files:
+        return summary
+    try:
+        if len(files) > 8 or any(not re.fullmatch(r"mote-trace-[a-f0-9]{32}-[0-9]{6}\.jsonl", path.name) for path in files):
+            raise ValueError("trace inventory differs")
+        records, hashes = acceptance.load_records([str(path) for path in files], discard_partial=terminated)
+        partial = 0
+        for path in files:
+            prefix = causal_save.read_prefix(path.read_bytes(), terminated=terminated)
+            partial += int(prefix.discarded_partial)
+        summary.update(causal_save.classify_requests(records, causal_save.MOTE_SAVE_CONTRACT, terminated=terminated))
+        summary["trace_sha256"] = hashes
+        summary["discarded_partial_files"] = partial
+        requests = summary["requests"]
+        complete = (len(requests) == 1 and requests[0]["command_operation"] == "command.save"
+                    and requests[0]["successful_chain_complete"]
+                    and requests[0]["coverage"] == "instrumented_chain_only" and normal_exit)
+        summary["status"] = "complete" if complete else ("censored" if terminated and not normal_exit else "incomplete")
+        if not requests:
+            summary["status"] = "unobserved"
+    except (ValueError, OSError) as error:
+        summary["status"] = "invalid"
+        summary["error_class"] = type(error).__name__
+    return summary
+
+
 def trace_evidence(home, editing):
     """Reuse the reviewed schema/causal auditor with exact action counts and versions."""
     files = sorted((home / "traces").glob("*.jsonl"))
@@ -414,7 +456,7 @@ def trace_evidence(home, editing):
     # Engine I/O spans currently omit revisions. Preserve that fact instead of
     # fabricating certainty, but reject conflicting revisions if present. The
     # accepted native v0/v1 status and exact Save byte oracle are separate facts.
-    audit["io_revision_contract"] = "open-save-engine-records-unversioned;exact-bytes-and-native-version-witness-separate"
+    audit["io_revision_contract"] = "open-engine-record-optional-version;save-captured-version-required-by-separate-causal-contract"
     for name in expected:
         if name == "mote.session":
             continue
@@ -505,9 +547,12 @@ def sample(executable, case, directory, client, mac_save_witness=False):
             result["mac_save_witness"] = collector.finish(original_normal_exit=True)
             collector = None
         result["phase"] = "trace-audit"
+        result["save_causal_evidence"] = save_chain_evidence(home, terminated=True, normal_exit=True)
         result["trace_evidence"] = trace_evidence(home, True)
         if result["trace_evidence"]["endpoint_integrity"] != "pass":
             raise ValueError("trace endpoint integrity incomplete")
+        if result["save_causal_evidence"]["status"] != "complete":
+            raise ValueError("native Save causal chain incomplete")
         child = None
         result["phase"] = "gui-reopen"
         reopen_home = acceptance.artifact_path(directory / "reopen-home", ".temp")
@@ -561,6 +606,11 @@ def sample(executable, case, directory, client, mac_save_witness=False):
             original_normal_exit = (original_child is not None and
                                     not original_forced_cleanup and original_child.poll() == 0)
             result["mac_save_witness"] = collector.finish(original_normal_exit=original_normal_exit)
+        # The original process owns this home, even after child becomes reopen.
+        original_terminated = original_child is not None and original_child.poll() is not None
+        result["save_causal_evidence"] = save_chain_evidence(
+            home, terminated=original_terminated,
+            normal_exit=bool(original_terminated and not original_forced_cleanup and original_child.poll() == 0))
         # Always retain the immutable-fixture witness even if trust/focus blocks
         # the probe. A failed Save may legitimately leave working bytes changed;
         # record its opaque digest without pretending the expected oracle passed.
@@ -599,6 +649,7 @@ def main():
         report["driver_sha256"] = digest(Path(__file__))
         if args.mac_save_witness:
             report["save_witness_collector_sha256"] = digest(Path(__file__).with_name("save_diagnostic.py"))
+        report["save_causal_reader_sha256"] = digest(ROOT / "tests/causal_save_trace_reader.py")
         report["artifact_auditor_sha256"] = digest(ROOT / "benchmarks/NativeAcceptance/acceptance.py")
         client = None
         if sys.platform == "darwin":

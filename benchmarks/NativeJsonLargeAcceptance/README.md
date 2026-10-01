@@ -147,6 +147,46 @@ The workflow step is `continue-on-error`: inspect the JSON `status`, each sample
 `phase/status`, native exit/normal-session evidence, and raw step exit. GitHub's
 green job or masked step conclusion does not certify this pilot.
 
+## Permanent typed Save provenance (2026-10-01)
+
+Each original GUI process now gets a separate `save_causal_evidence` result using
+`tests/causal_save_trace_reader.py` and its **native** contract, not the weaker
+recovery-harness contract. The report retains the reader source SHA-256 alongside
+the driver and generic auditor hashes. Existing exact-byte, clean-chrome,
+normal-exit, GUI-reopen and edit/draw gates are unchanged. A normal pilot additionally
+requires exactly one `command.save` request whose successful chain includes
+receipt, admission, worker, authoritative captured version, persistence phases,
+route-specific move/replace, saved stamp/bookkeeping, and local UI completion.
+Observed drops, orphan phases or missing session terminal prevent completeness.
+This is instrumented target-callback-to-local-UI evidence; it is **not** physical
+key delivery, OS wake certification, compositor presentation or photons.
+
+The original trace home is audited again in `finally`, **after** owned cleanup,
+even when the pilot fails before Save acknowledgement or when `child` has become
+the fresh reopen process. The report uses closed statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `complete` | One normal native Save chain satisfies the typed contract. |
+| `incomplete` | Positive records exist but the normal success contract is not satisfied. |
+| `censored` | A retained request is incomplete after non-normal termination. |
+| `unobserved` | No retained request receipt/terminal; this does not certify non-delivery. |
+| `invalid` | A complete record, vocabulary or causal structure is invalid. |
+
+`absence_certified` is always false. A killed trace may discard **only** an
+unterminated final physical row, including a split UTF-8 byte sequence; malformed
+newline-complete rows fail. Prefix collection neither resends Command-S nor
+changes the original byte oracle. Receipt-only killed requests retain their last
+positive stage and no fabricated request terminal.
+
+Local portable validation: 34 `test_probe.py`, 14 witness protocol,
+28 typed-reader and 6 generic-auditor tests passed. These are fixture/protocol
+checks, **not a current native GUI certification**. A regression probe against
+pre-integration `HEAD` demonstrated the old generic auditor rejected a legal
+`command.save.received` row (`unknown operation/status`); the updated reader
+retained it as one censored request. Artifacts remain under
+`.cache/native-save-reader-regression/0a92cfa32537437580cc2a55d6314d7d/`.
+
 ## Completed local evidence (2026-10-01)
 
 - Portable artifact/protocol tests: **21/21** passed, Python 3.14.6, Windows x64.

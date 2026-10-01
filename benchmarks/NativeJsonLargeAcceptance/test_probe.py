@@ -35,6 +35,97 @@ class ProbeTests(unittest.TestCase):
             path.rmdir() if path.is_dir() else path.unlink()
         self.directory.rmdir()
 
+    def write_trace(self, rows, tail=b""):
+        """Create a bounded original-process trace in the fixture home."""
+        home = self.directory / "causal-home"
+        trace_dir = home / "traces"
+        trace_dir.mkdir(parents=True)
+        path = trace_dir / ("mote-trace-" + "a" * 32 + "-000001.jsonl")
+        path.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows) + tail)
+        return home
+
+    def complete_save_rows(self):
+        """Model contractual Save checkpoint ancestry independently of GUI tooling."""
+        rows = [record("mote.session", 1, None), record("command.save.received", 2)]
+        phases = sorted(probe.causal_save.MOTE_SAVE_CONTRACT.successful_required)
+        for span, phase in enumerate(phases, 3):
+            rows.append(record(phase, span, 2, 1))
+        rows.extend([record("save.commit_move", 90, 2, 1), record("save.completed", 91, 2, 1),
+                     record("command.save", 92, 2, 1)])
+        rows[-1]["attributes"]["reason"] = "completed"
+        return rows
+
+    def test_complete_native_save_chain_is_separate_from_byte_oracle(self):
+        """A closed, version-consistent native request has its own acceptance result."""
+        home = self.write_trace(self.complete_save_rows())
+        report = probe.save_chain_evidence(home, terminated=True, normal_exit=True)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["requests"][0]["saved_version"], 1)
+        self.assertFalse(report["absence_certified"])
+        self.assertEqual(len(report["trace_sha256"]), 1)
+
+    def test_receipt_only_kill_is_censored_and_unterminated_utf8_tail_discarded(self):
+        """Abrupt owned termination never invents a request terminal or absence proof."""
+        home = self.write_trace([record("command.save.received", 2)], b'{"operation":"\xe4')
+        report = probe.save_chain_evidence(home, terminated=True)
+        self.assertEqual(report["status"], "censored")
+        self.assertEqual(report["requests"][0]["classification"], "censored")
+        self.assertEqual(report["discarded_partial_files"], 1)
+        self.assertFalse(report["absence_certified"])
+
+    def test_no_retained_receipt_is_unobserved_even_after_normal_shutdown(self):
+        """No request record is a coverage gap, not target non-delivery certification."""
+        for normal in (False, True):
+            home = self.write_trace([record("mote.session", 1, None)])
+            report = probe.save_chain_evidence(home, terminated=True, normal_exit=normal)
+            self.assertEqual(report["status"], "unobserved")
+            self.assertFalse(report["absence_certified"])
+            for path in (home / "traces").iterdir():
+                path.unlink()
+            (home / "traces").rmdir()
+            home.rmdir()
+
+    def test_complete_malformed_record_is_invalid_not_ignored(self):
+        """Only an unfinished final row can be censored; complete corruption fails."""
+        home = self.write_trace([record("command.save.received", 2)], b'{broken}\n')
+        self.assertEqual(probe.save_chain_evidence(home, terminated=True)["status"], "invalid")
+
+    def test_version_mismatch_missing_phase_and_drop_reject_causal_success(self):
+        """A coarse successful Save cannot substitute for persistence-chain evidence."""
+        for mutate in ("version", "phase", "drop", "duplicate"):
+            rows = self.complete_save_rows()
+            if mutate == "version":
+                next(row for row in rows if row["operation"] == "save.temp_flush")["attributes"]["version"] = 2
+            elif mutate == "phase":
+                rows = [row for row in rows if row["operation"] != "save.temp_hash"]
+            elif mutate == "drop":
+                rows.append(record("telemetry.dropped", 93))
+                rows[-1]["attributes"]["count"] = 1
+            else:
+                rows.extend([record("command.save.received", 94), record("command.save", 95, 94, 1)])
+            home = self.write_trace(rows)
+            report = probe.save_chain_evidence(home, terminated=True, normal_exit=True)
+            self.assertEqual(report["status"], "incomplete", mutate)
+            for path in (home / "traces").iterdir():
+                path.unlink()
+            (home / "traces").rmdir()
+            home.rmdir()
+
+    def test_closed_reason_and_operation_vocabulary_remains_strict(self):
+        """New instrumentation does not admit arbitrary content-bearing names."""
+        for bad in ("reason", "operation"):
+            rows = self.complete_save_rows()
+            if bad == "reason":
+                rows[-1]["attributes"]["reason"] = "user document contents"
+            else:
+                rows[-1]["operation"] = "user document contents"
+            home = self.write_trace(rows)
+            self.assertEqual(probe.save_chain_evidence(home, terminated=True)["status"], "invalid")
+            for path in (home / "traces").iterdir():
+                path.unlink()
+            (home / "traces").rmdir()
+            home.rmdir()
+
     def test_environment_strips_inherited_witness(self):
         """Default, runtime-control and reopen cannot inherit opt-in instrumentation."""
         with patch.dict(probe.os.environ, {probe.ENVIRONMENT_KEY: "1"}):
@@ -112,9 +203,13 @@ class ProbeTests(unittest.TestCase):
              patch.object(probe, "bounded_command", side_effect=runtime), \
              patch.object(probe.subprocess, "Popen", side_effect=launch), \
              patch.object(probe, "save_exact", side_effect=save), \
-             patch.object(probe, "trace_evidence", return_value={"endpoint_integrity": "pass"}):
+             patch.object(probe, "trace_evidence", return_value={"endpoint_integrity": "pass"}), \
+             patch.object(probe, "save_chain_evidence", return_value={"status": "complete"}) as causal:
             result = probe.sample(Path("unused"), case, sample_dir, None, True)
         self.assertEqual(result["status"], "pass")
+        self.assertEqual(causal.call_count, 2)
+        self.assertTrue(all(call.args[0] == sample_dir / "home" for call in causal.call_args_list))
+        self.assertTrue(all(call.kwargs["normal_exit"] for call in causal.call_args_list))
         self.assertEqual(result["mac_save_witness"], {"positive_original_only": True})
         self.assertEqual(events.count("attach"), 1)
         self.assertEqual(events.count("finish"), 1)
@@ -323,7 +418,7 @@ class ProbeTests(unittest.TestCase):
             rows[index]["attributes"]["version"] = original
 
     def test_unversioned_engine_io_is_explicit(self):
-        """Existing engine I/O spans have no revision; do not fabricate one."""
+        """Legacy unversioned records can pass generic audit, not typed Save certification."""
         home, path, rows = self.trace()
         for index in (2, 8, 9):
             rows[index]["attributes"] = {}
@@ -331,7 +426,7 @@ class ProbeTests(unittest.TestCase):
         result = probe.trace_evidence(home, True)
         self.assertEqual(result["endpoint_integrity"], "pass")
         self.assertIsNone(result["child_monotonic_endpoints"]["document.save"][0]["version"])
-        self.assertEqual(result["io_revision_contract"], "open-save-engine-records-unversioned;exact-bytes-and-native-version-witness-separate")
+        self.assertEqual(result["io_revision_contract"], "open-engine-record-optional-version;save-captured-version-required-by-separate-causal-contract")
 
     def test_failed_edit_never_retried(self):
         """A driver timeout consumes one attempt and kills only the owned child."""
@@ -377,6 +472,64 @@ class ProbeTests(unittest.TestCase):
         self.assertNotIn("do not disclose", json.dumps(result))
         self.assertTrue(result["forced_cleanup"])
         self.assertEqual(result["input_sha256_after"], case["input_sha256"])
+
+    def test_save_timeout_finally_collects_original_prefix_without_retry(self):
+        """The ordinary sample persists a killed request, not just helper fixtures."""
+        case = probe.prepare(self.directory, [1])[0]
+        sample_dir = self.directory / "timeout-sample"
+        sample_dir.mkdir()
+        class Child:
+            """Only this owned fake is killed and reaped."""
+            pid = 42
+            killed = False
+            def poll(self):
+                """Expose abrupt termination distinctly from exit zero."""
+                return -9 if self.killed else None
+            def kill(self):
+                """Record exact owned cleanup."""
+                self.killed = True
+            def wait(self, timeout):
+                """Return the owned abrupt exit."""
+                return self.poll()
+        class Driver:
+            """Execute one Save attempt that retains receipt but times out."""
+            attempts = 0
+            def __init__(self, *arguments):
+                """No OS handles are touched."""
+            def observe(self, version):
+                """Supply the source/semantics preconditions without byte changes."""
+                return {"ready": True, "complete": True, "modified": True}
+            def observation_summary(self):
+                """Provide only content-free Mac-interface metadata."""
+                return {}
+            def edit(self):
+                """Keep the fixture's on-disk bytes unchanged before Save."""
+            def save(self):
+                """Retain target callback entry before the external timeout."""
+                Driver.attempts += 1
+                traces = sample_dir / "home" / "traces"
+                traces.mkdir(parents=True)
+                (traces / ("mote-trace-" + "a" * 32 + "-000001.jsonl")).write_text(
+                    json.dumps(record("command.save.received", 2)) + "\n", encoding="utf-8")
+                raise TimeoutError()
+            def failure_observation(self):
+                """Return no fabricated routing acknowledgement."""
+                return {}
+            def close(self):
+                """The dirty process does not close normally."""
+        child = Child()
+        with patch.object(probe, "WindowsDriver", Driver), patch.object(probe, "MacDriver", Driver), \
+             patch.object(probe, "bounded_command"), patch.object(probe.subprocess, "Popen", return_value=child):
+            result = probe.sample(Path("unused"), case, sample_dir, None)
+        self.assertEqual(Driver.attempts, 1)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["phase"], "save-exact-bytes")
+        self.assertEqual(result["save_causal_evidence"]["status"], "censored")
+        self.assertEqual(result["save_causal_evidence"]["requests"][0]["last_positive_stage"], "command.save.received")
+        self.assertFalse(result["save_causal_evidence"]["normal_exit"])
+        self.assertFalse(result["save_causal_evidence"]["absence_certified"])
+        self.assertTrue(result["forced_cleanup"])
+        self.assertEqual(result["working_sha256_after"], case["input_sha256"])
 
     def test_save_observer_does_not_open_target_before_clean_ack(self):
         """UI-only polling cannot deny DELETE sharing during atomic replacement."""

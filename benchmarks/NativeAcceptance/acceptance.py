@@ -26,8 +26,22 @@ view.layout view.paint edit.committed analysis.published analysis.discarded
 save.completed telemetry.dropped save.failure.target_check
 save.failure.temp_write_and_hash save.failure.final_target_check save.failure.move
 save.failure.replace save.failure.cleanup save.failure.saved_stamp save.failure.unknown""".split())
+# Fixed native Save provenance vocabulary; no user-derived operation strings.
+SAVE_PHASES = frozenset("""document.save save.gate_wait save.snapshot_capture save.target_check
+save.temp_encode_write save.temp_flush save.temp_hash save.final_target_check
+save.commit_move save.commit_replace save.saved_stamp save.bookkeeping
+save.failure_cleanup save.failure_inspection""".split())
+OPERATIONS |= SAVE_PHASES | {phase + ".entered" for phase in SAVE_PHASES} | frozenset("""
+command.save command.save_as command.save.received command.save_as.received command.received
+save.composition_settled save.composition_blocked save.controller_entered save.admitted
+save.worker_started save.overwrite_requested save.overwrite_approved save.overwrite_declined
+save.snapshot_captured save.ui_local_queued save.ui_wake_requested save.ui_post_returned
+save.ui_started save.ui_deferred""".split())
+REASONS = frozenset("""completed view_deferred composition_blocked missing_handler callback_failed
+already_saving picker_cancelled recovery_redirected overwrite_declined operation_cancelled
+stale_document lifetime_ended save_failed ui_post_failed""".split())
 STATUSES = ("success", "cancelled", "failure", "skipped")
-ATTRIBUTES = {"format", "size_bucket", "version", "count", "hresult"}
+ATTRIBUTES = {"format", "size_bucket", "version", "count", "hresult", "reason"}
 
 
 def artifact_path(value, area=None):
@@ -130,8 +144,8 @@ def valid_hex(value, length):
     return isinstance(value, str) and re.fullmatch(f"[0-9a-f]{{{length}}}", value) is not None
 
 
-def load_records(paths):
-    """Bound input size and reject unknown schema/fields rather than forwarding them."""
+def load_records(paths, *, discard_partial=False):
+    """Bound and validate records; optionally discard only an unterminated final row."""
     records = []
     hashes = []
     for value in paths:
@@ -140,8 +154,11 @@ def load_records(paths):
             raise ValueError("trace file exceeds bounded reader size")
         with path.open("rb") as stream:
             hashes.append(hashlib.file_digest(stream, "sha256").hexdigest())
-        with path.open(encoding="utf-8-sig") as stream:
-            for line in stream:
+        with path.open("rb") as stream:
+            for raw in stream:
+                if discard_partial and not raw.endswith(b"\n"):
+                    continue
+                line = raw.decode("utf-8-sig")
                 if len(line) > 16384 or len(records) >= 100000:
                     raise ValueError("trace exceeds bounded record size/count")
                 row = json.loads(line)
@@ -167,6 +184,8 @@ def load_records(paths):
                 for key in ("version", "count"):
                     if key in attrs and (type(attrs[key]) is not int or attrs[key] < 0):
                         raise ValueError("invalid numeric attribute")
+                if "reason" in attrs and (not isinstance(attrs["reason"], str) or attrs["reason"] not in REASONS):
+                    raise ValueError("unsupported terminal reason")
                 records.append(row)
     return records, hashes
 
