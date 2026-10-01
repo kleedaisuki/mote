@@ -33,9 +33,12 @@ public sealed class TomlPolicy : IIncrementalDocumentPolicy
         }
         // Local recovery cannot replace the whole grammar parser's independent witnesses.
         // Exact duplicate records are collapsed, never unrelated messages/spans.
-        var seen = new HashSet<Diagnostic>(diagnostics);
-        foreach (var diagnostic in TomlDocumentValidation.Validate(text, cancellationToken))
-            if (seen.Add(diagnostic)) diagnostics.Add(diagnostic);
+        if (!TomlTreeCertification.TryCertify(syntax, cancellationToken))
+        {
+            var seen = new HashSet<Diagnostic>(diagnostics);
+            foreach (var diagnostic in TomlDocumentValidation.Validate(text, cancellationToken))
+                if (seen.Add(diagnostic)) diagnostics.Add(diagnostic);
+        }
         diagnostics.Sort((left, right) => left.Span.Start.CompareTo(right.Span.Start));
 
         var tokens = new List<SemanticToken>();
@@ -65,7 +68,7 @@ public sealed class TomlPolicy : IIncrementalDocumentPolicy
     {
         ArgumentNullException.ThrowIfNull(text);
         var syntax = SyntaxParser.Parse(text, validate: false);
-        if (syntax.HasErrors || TomlDocumentValidation.Validate(text, default).Count != 0) return text;
+        if (!IsValid(syntax, text)) return text;
 
         // Only horizontal gaps directly adjacent to an assignment token are eligible. In
         // particular, this never rewrites a key/value token, a comment, or a newline.
@@ -80,10 +83,14 @@ public sealed class TomlPolicy : IIncrementalDocumentPolicy
         edits.Sort((a, b) => b.Start.CompareTo(a.Start));
         string candidate = ApplyReverse(text, edits);
         var reparsed = SyntaxParser.Parse(candidate, validate: false);
-        if (reparsed.HasErrors || TomlDocumentValidation.Validate(candidate, default).Count != 0 ||
+        if (!IsValid(reparsed, candidate) ||
             !Equivalent(Project(syntax, text.Length), Project(reparsed, candidate.Length))) return text;
         return candidate;
     }
+
+    /// <summary>Unknown certification retains the established full validation, not a formatting rejection.</summary>
+    private static bool IsValid(DocumentSyntax syntax, string text) => !syntax.HasErrors &&
+        (TomlTreeCertification.TryCertify(syntax) || TomlDocumentValidation.Validate(text, default).Count == 0);
 
     /// <inheritdoc />
     public string RenderHtml(FormatAnalysis analysis)
