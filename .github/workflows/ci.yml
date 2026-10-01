@@ -1167,14 +1167,13 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
-      # This isolated AppKit probe installs a real attributed Flow view without
-      # changing input sources, user files, configuration, clipboard, or TCC.
-      # Keep it diagnostic until both published Mach-O architectures are observed.
-      - name: Diagnose native macOS Flow rendering (non-gating)
+      # Both published Mach-O RIDs pass the isolated Flow, global Block lifetime,
+      # and posted callback fault controls in CI 36836309613. Preserve this native
+      # ABI boundary as a gate; no input, clipboard, configuration or TCC mutation.
+      - name: Verify native macOS Flow and callback ABI
         if: always() && startsWith(matrix.rid, 'osx-')
         shell: pwsh
         timeout-minutes: 3
-        continue-on-error: true
         run: |
           $rid = '${{ matrix.rid }}'
           & ./tests/NativeMacFlowRendering.ps1 `
