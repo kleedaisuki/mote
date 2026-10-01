@@ -259,6 +259,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
         if (_window != 0) throw new InvalidOperationException("The Windows shell can run only once.");
+        // The GUI thread owns COM until native providers and the message loop have ended.
+        // Hosts that already chose MTA keep their model; no owner-thread selection guard is relaxed.
+        using var uiaApartment = new WindowsUiaApartment();
+        if (!uiaApartment.IsStaInitialized)
+            Console.Error.WriteLine($"mote: UIA STA initialization unavailable " +
+                $"(HRESULT 0x{uiaApartment.InitializationResult:X8}, " +
+                $"apartment {uiaApartment.ApartmentType}, qualifier {uiaApartment.ApartmentQualifier}); " +
+                "preserving the host apartment and owner-thread selection checks.");
         if (Win32.LoadLibraryW("Msftedit.dll") == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Windows RichEdit is unavailable.");
 
