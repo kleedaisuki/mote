@@ -32,6 +32,22 @@ public sealed class NativeSaveDiagnosticTests
         Assert.False(session.TryRecord(NativeSaveDiagnosticStage.SelectorEntered));
     }
 
+    /// <summary>Each producer wake is observed before closure, not accidentally masked by a close wake.</summary>
+    [Fact]
+    public void Dedicated_writer_observes_each_stage_while_producer_lifetime_is_open()
+    {
+        using var output = new ControlledStream();
+        var session = new NativeSaveDiagnosticSession(() => output);
+        Assert.True(output.Entered.Wait(TimeSpan.FromSeconds(2)));
+        Assert.True(session.TryRecord(NativeSaveDiagnosticStage.SelectorEntered));
+        Assert.True(output.SelectorWritten.Wait(TimeSpan.FromSeconds(2)));
+        Assert.True(session.TryRecord(NativeSaveDiagnosticStage.ControllerAdmitted));
+        Assert.True(output.AdmissionWritten.Wait(TimeSpan.FromSeconds(2)));
+        Assert.True(session.Shutdown(TimeSpan.FromSeconds(2)));
+        Assert.Equal(new[] { "ready", "selector_entered", "controller_admitted", "completed" }, output.Stages());
+        Assert.True(output.BackgroundOnly);
+    }
+
     /// <summary>Queue saturation cannot silently discard a marker beneath a healthy completion.</summary>
     [Fact]
     public void Overflow_is_reported_before_completion()
@@ -143,6 +159,10 @@ public sealed class NativeSaveDiagnosticTests
         internal ManualResetEventSlim Entered { get; } = new();
         /// <summary>Signals the exact deliberately blocked write, not merely startup.</summary>
         internal ManualResetEventSlim Blocked { get; } = new();
+        /// <summary>Certifies a selector record was written before the producer lifetime closes.</summary>
+        internal ManualResetEventSlim SelectorWritten { get; } = new();
+        /// <summary>Certifies an admission record was written independently of a close wake.</summary>
+        internal ManualResetEventSlim AdmissionWritten { get; } = new();
         /// <summary>Releases the first write; only tests wait on or signal this gate.</summary>
         internal ManualResetEventSlim Release { get; } = new();
         /// <summary>True only if every write was performed by a background thread.</summary>
@@ -172,6 +192,8 @@ public sealed class NativeSaveDiagnosticTests
             }
             if (failWrite) throw new IOException("test");
             base.Write(buffer);
+            if (buffer.SequenceEqual("mote-save-diag-v1:selector_entered\n"u8)) SelectorWritten.Set();
+            if (buffer.SequenceEqual("mote-save-diag-v1:controller_admitted\n"u8)) AdmissionWritten.Set();
         }
 
         /// <summary>Reads after successful writer join; MemoryStream retains bytes after disposal.</summary>

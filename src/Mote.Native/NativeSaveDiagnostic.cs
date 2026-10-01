@@ -68,6 +68,10 @@ internal sealed class NativeSaveDiagnosticSession
     private readonly Func<Stream> _openOutput;
     /// <summary>Dedicated background thread; writes never resume on the Save task pool.</summary>
     private readonly Thread _writer;
+    /// <summary>Synchronous wake avoids a channel ValueTask continuation on the shared task pool.</summary>
+    private readonly AutoResetEvent _wake = new(false);
+    /// <summary>Only a successful writer join may retire the wake handle, once.</summary>
+    private int _wakeDisposed;
     /// <summary>High bit closes admission; remaining bits count admitted in-flight producers.</summary>
     private int _admission;
     /// <summary>Saturated loss bit, published before admitted producer release.</summary>
@@ -93,7 +97,11 @@ internal sealed class NativeSaveDiagnosticSession
         try
         {
             if ((stage is NativeSaveDiagnosticStage.SelectorEntered or NativeSaveDiagnosticStage.ControllerAdmitted) &&
-                _channel.Writer.TryWrite(stage)) return true;
+                _channel.Writer.TryWrite(stage))
+            {
+                SignalWriter();
+                return true;
+            }
             Interlocked.Exchange(ref _lost, 1);
             return false;
         }
@@ -105,7 +113,7 @@ internal sealed class NativeSaveDiagnosticSession
         finally
         {
             if (Interlocked.Decrement(ref _admission) == int.MinValue)
-                _channel.Writer.TryComplete();
+                CompleteProducers();
         }
     }
 
@@ -137,14 +145,36 @@ internal sealed class NativeSaveDiagnosticSession
             var observed = Interlocked.CompareExchange(ref _admission, state | int.MinValue, state);
             if (observed == state)
             {
-                if (state == 0) _channel.Writer.TryComplete();
+                if (state == 0) CompleteProducers();
                 break;
             }
             state = observed;
         }
-        if (_writer.Join(budget)) return true;
+        if (_writer.Join(budget))
+        {
+            if (Interlocked.Exchange(ref _wakeDisposed, 1) == 0) _wake.Dispose();
+            return true;
+        }
         Volatile.Write(ref _abandoned, 1);
         return false;
+    }
+
+    /// <summary>Channel closure follows all admitted releases; wake never awaits a task-pool continuation.</summary>
+    private void CompleteProducers()
+    {
+        _channel.Writer.TryComplete();
+        SignalWriter();
+    }
+
+    /// <summary>
+    /// Nonwaiting wake. A final releaser can race a joined writer's handle retirement;
+    /// that redundant signal must not escape a diagnostic hook. Abandonment retains
+    /// the handle for the still-live writer rather than disposing under WaitOne.
+    /// </summary>
+    private void SignalWriter()
+    {
+        try { _wake.Set(); }
+        catch (Exception) { } // Wake failure censors the stream; never changes Save behavior.
     }
 
     /// <summary>
@@ -157,8 +187,19 @@ internal sealed class NativeSaveDiagnosticSession
         {
             using var output = _openOutput();
             output.Write("mote-save-diag-v1:ready\n"u8);
-            while (_channel.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
-                while (_channel.Reader.TryRead(out var stage)) WriteStage(output, stage);
+            while (true)
+            {
+                DrainStages(output);
+                if (Volatile.Read(ref _admission) == int.MinValue)
+                {
+                    // A producer may have enqueued between the preceding empty
+                    // read and closure observation. Closure now makes this final
+                    // drain stable: no later admitted enqueue remains possible.
+                    DrainStages(output);
+                    break;
+                }
+                _wake.WaitOne();
+            }
             if (Volatile.Read(ref _abandoned) != 0) return;
             if (Volatile.Read(ref _lost) != 0) output.Write("mote-save-diag-v1:overflow\n"u8);
             if (Volatile.Read(ref _abandoned) == 0) output.Write("mote-save-diag-v1:completed\n"u8);
@@ -167,6 +208,12 @@ internal sealed class NativeSaveDiagnosticSession
         {
             // A broken inherited pipe is unavailable evidence, never a Save failure.
         }
+    }
+
+    /// <summary>Only this background writer reads the queue; no async channel wait is registered.</summary>
+    private void DrainStages(Stream output)
+    {
+        while (_channel.Reader.TryRead(out var stage)) WriteStage(output, stage);
     }
 
     /// <summary>Maps only the two closed enum values to fixed ASCII byte literals.</summary>

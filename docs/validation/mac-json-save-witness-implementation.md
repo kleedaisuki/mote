@@ -28,10 +28,24 @@ and `native-json-large-ci.md` for independent four-RID workload outcomes.
 `NativeSaveDiagnosticSession` uses a capacity-16 enum channel with `FullMode=Wait`,
 but producers call **only `TryWrite`**. Synchronous continuations are disabled.
 The UI reads no clock, formats no string, starts no thread/task, writes no disk or
-pipe and does not wait for queue space. Fixed ASCII frames are emitted only on
+pipe and does not wait for queue space. Enabled admission signals a synchronous
+`AutoResetEvent` after enqueue; producer closure also signals it. The writer drains
+with `TryRead`, blocks only its own thread in `WaitOne`, and performs one stable
+final drain after observing all producers released. No async channel waiter is
+registered. Fixed ASCII frames are emitted only on
 one dedicated background thread, which opens and owns the inherited stderr
 wrapper and disposes it on that same thread. No stream is disposed underneath a
 blocked write by the UI.
+
+An initial implementation used `WaitToReadAsync().AsTask().GetResult`. Source
+review found that the .NET 10 channel schedules its readiness continuation on the
+shared thread pool when synchronous continuations are disabled. This is a material
+dependency for a diagnostic investigating Save scheduling, even though actual
+pipe writes stayed on a dedicated thread. The synchronous wake removes that
+dependency. Wake handle retirement occurs only after a successful writer join;
+abandonment keeps the handle alive. A final producer release can race retirement
+of a redundant wake, which is caught and cannot escape a native callback. Raw
+stream disposal remains writer-owned.
 
 The protocol is `mote-save-diag-v1:<stage>\n`; the only stages are `ready`,
 `selector_entered`, `controller_admitted`, `overflow`, `completed`. No source,
@@ -82,12 +96,14 @@ dotnet test tests/Mote.Tests/Mote.Tests.csproj --filter FullyQualifiedName~Nativ
 dotnet test tests/Mote.Tests/Mote.Tests.csproj --filter 'FullyQualifiedName~NativeControllerTests.Native_save|FullyQualifiedName~NativeControllerTests.Native_recovery' --no-restore --verbosity minimal
 ```
 
-- New transport tests **9/9** passed: zero warmed disabled-hook allocation,
+- New transport tests **10/10** passed: zero warmed disabled-hook allocation,
   ordered fixed/duplicate records on a background thread, deterministic saturation
   with `overflow` before `completed`, blocked startup write abandonment and
   writer-owned disposal, broken/open-failed streams, invalid enum loss, 40 rounds
   of concurrent producer/close stress, and a deterministically blocked final write
-  demonstrating late watermark receipt without timely-join proof.
+  demonstrating late watermark receipt without timely-join proof, and sequential
+  selector/admission wakes observed while producer admission remains open (so a
+  close wake cannot mask a missed record wake).
 - Existing focused Save/recovery regression tests **7/7** passed. These are
   controller/fake-shell tests, not synthetic native input acceptance.
 - The race stress test is scheduler-dependent and is not a proof that every
@@ -110,3 +126,11 @@ The [background-thread contract](https://learn.microsoft.com/en-us/dotnet/api/sy
 ensures a stuck diagnostic thread cannot keep the application alive. These
 platform contracts justify the mechanism; they do not themselves establish
 native workload reliability or arbitrary interleaving test coverage.
+
+The wake correction is justified by version-matched .NET 10 runtime source:
+[channel completion scheduling](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Threading.Channels/src/System/Threading/Channels/AsyncOperation.cs)
+and [ValueTask.AsTask](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/ValueTask.cs).
+Its thread-pool independence is a source-backed property of using only synchronous
+event waits and queue operations, not a claim that the portable suite globally
+starved the runtime task pool. Such global mutation would interfere with unrelated
+parallel tests and is deliberately not used as validation.
