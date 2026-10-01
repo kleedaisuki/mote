@@ -53,6 +53,18 @@ Current large cache measurements were separately frozen at `b93c4c2`; their whol
 edit medians include source verification/mapping/projection, while the narrower counters
 do not. None of these JIT experiments certifies Native AOT or end-to-end native latency.
 
+The next performance investigation is specific: avoid constructing the same small-file
+grammar twice while preserving local inline-table checks and normative global ownership.
+Probe whether a supported parser/tree validation API can validate already parsed logical
+units, or whether an upstream backend change can expose that operation without reflection.
+Compare against the current validated-statement oracle on all pinned valid/invalid cases,
+recovery/rollback cases, value categories and exact anchors before changing production.
+Do not skip checks merely because a tree exists, and do not privately invoke internal
+validators through runtime discovery in the AOT product. Measure the same tiny/mixed/dense
+fixtures and retained/transient memory. The observed 8 KiB time doubling and 69–78%
+allocation increase are correctness-motivated checkpoint debt, not a permanently accepted
+performance budget or an argument that this problem is already solved.
+
 ## Representation and normative ownership
 
 TOML has two independent state machines: logical-statement syntax and source-ordered
