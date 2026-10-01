@@ -67,6 +67,26 @@ The Actions Step Summary also renders the fixed Save-chain status, recorded
 request count, and normal-exit Boolean. Missing fields remain `unknown`, and
 non-JSON diagnostics without this evidence display `not-recorded`.
 
+The nested `native_menu_inventory` is an **independent checkpoint inventory**,
+not a Save routing certificate. JSON preserves only the five fixed
+`native.menu.observation.ready`, `native.menu.observation.unavailable`,
+`native.menu.save_family.entered`, `native.menu.save_family.returned_true`, and
+`native.menu.save_family.returned_false` operations. Each operation admits only
+nonnegative integer `success`/`failure`/`cancelled`/`skipped` counts; Boolean,
+negative, null, missing, string, and arbitrary-key counters are not converted
+to zero. Partial valid counters can survive while the inventory remains
+unverified. A recognized observed/unobserved claim is retained only with the
+complete fixed count matrix, a known boundary, explicit false absence
+certification, and `request_correlation=none`.
+
+The boundary is separately allowlisted as `normal-exit-observed`, `censored`,
+or `open`; unknown/missing boundaries remain unverified. Step Summary renders
+the fixed setup-ready/setup-unavailable/entry/true/false labels in
+`[success/failure/cancelled/skipped]` order (`?` means unknown). Setup ready
+alone can make this inventory observed while the Save-chain stays unobserved.
+No event pairing, temporal join, command delivery, or request ancestry is
+inferred; zero retained entry/return counters do not certify callback absence.
+
 ## Privacy boundary
 
 Outputs contain only fixed diagnostic IDs, fixed normalized statuses, RID,
@@ -98,7 +118,7 @@ python -B -m unittest discover -s tests -p test_summarize_ci_evidence.py -v
 python -B tests/summarize_ci_evidence.py --rid win-x64 --output .cache/ci-inventory/win-x64/evidence-summary.json
 ```
 
-Local validation: 27 deterministic fixtures passed. They cover all four RID
+Local validation: 32 deterministic fixtures passed. They cover all four RID
 manifests; missing/malformed reports; unknown report privacy; fake typed exits;
 control completion vs product pass; censored expected kills; forced cleanup;
 JSON exact two-case coverage; observed trace drops; hidden worker exits; and
@@ -109,6 +129,9 @@ native Save claim contract/typed-field/privacy boundaries, and visible Markdown
 Save-chain evidence with missing-field and privacy checks. Actual editor/reopen
 exit fields additionally have numeric retention/rendering and null/fake-type
 non-promotion fixtures. These fixtures do not claim new hosted exit observations.
+Menu fixtures additionally cover missing inventory, setup-only observations
+with an unobserved Save chain, fixed boundaries, false absence/none correlation,
+partial/fake counter types, unknown statuses, and raw-payload privacy.
 A cached real hosted osx-arm64 JSON pilot
 report was summarized: both 1/100 MiB claims and no-observed-drops retained,
 other unavailable reports explicitly missing, no inferred numeric exits.
@@ -118,4 +141,6 @@ summarized as experiment-completed-failure-observed: C0 and P0 each recorded
 owner/client exit 0, while their original AX replies remained 0 and -25205.
 The local reproduction output is `.cache/summary-tests/cached-grid-summary.json`.
 PyYAML locally parsed the modified workflow (five jobs) and `git diff --check`
-passed. No hosted execution of the new workflow steps is claimed yet.
+passed. No hosted execution was claimed at the initial integration. The menu
+inventory summary followup is local-only validation; it does not claim outcomes
+for the currently running hosted menu experiment.

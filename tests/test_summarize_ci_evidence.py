@@ -181,7 +181,8 @@ class SummaryTests(unittest.TestCase):
              "trace_sha256": "SECRET", "discarded_partial_files": ["PRIVATE-PATH"]}}]})
         evidence = row["nested"][0]["save_causal_evidence"]
         self.assertEqual(evidence, {"status": "censored", "recorded_requests": 1,
-            "absence_certified": False, "normal_exit": False, "terminated": True})
+            "absence_certified": False, "normal_exit": False, "terminated": True,
+            "native_menu_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}}})
         self.assertNotIn("SECRET", json.dumps(row))
         self.assertNotIn("PRIVATE", json.dumps(row))
 
@@ -190,7 +191,8 @@ class SummaryTests(unittest.TestCase):
             "contract": "SECRET", "status": "complete"}}), {"status": "unverified"})
         self.assertEqual(summary.save_causal_evidence({"save_causal_evidence": {
             "contract": "native-save-causal-v1", "status": "SECRET", "requests": "PRIVATE",
-            "absence_certified": "false", "normal_exit": 1}}), {"status": "unverified"})
+            "absence_certified": "false", "normal_exit": 1}}), {"status": "unverified",
+            "native_menu_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}}})
 
     def test_markdown_exposes_save_claim_request_count_and_normal_exit_privately(self):
         row = self.report("native-json-large", {"status": "incomplete", "samples": [
@@ -232,6 +234,66 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("exits=unknown", output)
             self.assertNotIn("editor_exit_code=0", output)
             self.assertNotIn("PRIVATE", output)
+
+    def menu_fixture(self, boundary="normal-exit-observed"):
+        """Create the complete fixed menu matrix, with setup ready but no Save entry."""
+        counts = {operation: {status: 0 for status in summary.MENU_STATUSES}
+                  for operation, _ in summary.MENU_FIELDS}
+        counts["native.menu.observation.ready"]["success"] = 1
+        return {"status": "observed", "boundary": boundary, "counts": counts,
+                "absence_certified": False, "request_correlation": "none"}
+
+    def test_menu_inventory_missing_and_empty_are_unverified(self):
+        for evidence in ({}, {"native_menu_inventory": {}}, {"native_menu_inventory": None}):
+            inventory = summary.menu_inventory(evidence)
+            self.assertEqual(inventory, {"status": "unverified", "boundary": "unverified", "counts": {}})
+
+    def test_menu_ready_alone_does_not_make_save_chain_complete(self):
+        row = self.report("native-json-large", {"status": "incomplete", "samples": [
+            {"status": "failed", "save_causal_evidence": {"contract": "native-save-causal-v1",
+             "status": "unobserved", "native_menu_inventory": self.menu_fixture()}}]})
+        evidence = row["nested"][0]["save_causal_evidence"]
+        self.assertEqual(evidence["status"], "unobserved")
+        self.assertEqual(evidence["native_menu_inventory"]["request_correlation"], "none")
+        output = summary.markdown({"rid": "osx-x64", "diagnostics": [row], "unrecognized_inventory_reports": 0})
+        self.assertIn("Save-chain=unobserved", output)
+        self.assertIn("menu=observed, boundary=normal-exit-observed", output)
+        self.assertIn("ready[1/0/0/0]", output)
+        self.assertIn("entry[0/0/0/0]", output)
+        self.assertIn("not Save routing or request edges", output)
+
+    def test_menu_counter_types_and_unknown_payload_are_filtered(self):
+        raw = self.menu_fixture("censored")
+        raw["counts"]["native.menu.save_family.entered"] = {
+            "success": True, "failure": -1, "cancelled": "SECRET", "skipped": 2, "PRIVATE": 99}
+        raw["counts"]["PRIVATE-OP"] = {"success": 8}
+        raw["reason"] = "SECRET-PATH"
+        inventory = summary.menu_inventory({"native_menu_inventory": raw})
+        self.assertEqual(inventory["status"], "unverified")
+        self.assertEqual(inventory["boundary"], "censored")
+        self.assertEqual(inventory["counts"]["native.menu.save_family.entered"], {"skipped": 2})
+        output = summary.menu_markdown({"save_causal_evidence": {"native_menu_inventory": inventory}})
+        self.assertIn("entry[?/?/?/2]", output)
+        self.assertNotIn("PRIVATE", json.dumps(inventory) + output)
+        self.assertNotIn("SECRET", json.dumps(inventory) + output)
+
+    def test_menu_fixed_boundaries_preserve_censorship_without_absence_claims(self):
+        for boundary in ("normal-exit-observed", "censored", "open"):
+            inventory = summary.menu_inventory({"native_menu_inventory": self.menu_fixture(boundary)})
+            self.assertEqual(inventory["boundary"], boundary)
+            self.assertFalse(inventory["absence_certified"])
+            self.assertEqual(inventory["request_correlation"], "none")
+
+    def test_menu_unknown_status_boundary_and_claimed_correlation_are_unverified(self):
+        raw = self.menu_fixture("SECRET")
+        raw.update(status="PRIVATE", absence_certified=True, request_correlation="linked-to-secret")
+        inventory = summary.menu_inventory({"native_menu_inventory": raw})
+        self.assertEqual(inventory["status"], "unverified")
+        self.assertEqual(inventory["boundary"], "unverified")
+        self.assertNotIn("absence_certified", inventory)
+        self.assertNotIn("request_correlation", inventory)
+        self.assertNotIn("SECRET", json.dumps(inventory))
+        self.assertNotIn("PRIVATE", json.dumps(inventory))
 
 
 if __name__ == "__main__":
