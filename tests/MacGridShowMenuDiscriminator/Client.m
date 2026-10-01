@@ -124,9 +124,12 @@ static BOOL Write(NSString *path, NSDictionary *value) {
 }
 @end
 
+/// Canonical JSON Boolean objects avoid boxing C relational expressions as numeric scalars.
+static NSNumber *PairBoolean(BOOL value) { return value ? @YES : @NO; }
+
 static id EqualObject(id actual, id expected) {
     if (!actual || !expected || expected==NSNull.null || CFGetTypeID((__bridge CFTypeRef)actual)!=AXUIElementGetTypeID()) return NSNull.null;
-    return @(CFEqual((__bridge CFTypeRef)actual,(__bridge CFTypeRef)expected));
+    return PairBoolean(CFEqual((__bridge CFTypeRef)actual,(__bridge CFTypeRef)expected));
 }
 /// One post-reply traversal, then bounded graph checks; unknown is never silently false.
 static NSDictionary *Audit(Probe *probe, AXUIElementRef app, NSDictionary *before) {
@@ -204,7 +207,7 @@ int main(int argc,const char *argv[]) {
         }
         NSDictionary *identity=returned ? Audit(probe,app,found) : @{};
         NSDictionary *report=@{@"schema":@"mote-grid-action-client-v1",@"status":returned ? @"reply-observed" : @"unresolved",
-            @"trusted":@(trusted),@"ready":@(ready),@"owned_target":@(found!=nil),
+            @"trusted":@(trusted),@"ready":@(ready),@"owned_target":PairBoolean(found!=nil),
             @"discovery":@{@"attempts":@(probe.attempts),@"nodes":@(probe.nodes),@"admissions":@(probe.admissions)},
             @"actions":actions,@"identity":identity,@"client_calls":probe.calls,
             @"cleanup":@{@"finish_after_reply":returned ? @YES : NSNull.null,@"finish_after_audit":returned ? @YES : NSNull.null}};

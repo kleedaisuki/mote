@@ -90,3 +90,13 @@ A default/tracking-mode timer consumes finish, cancels only the owned menu,
 then closes normally. `normal_shutdown` records owner close/stop; the driver
 must independently observe a zero process exit. Instrumentation and timer
 scheduling can perturb transport; control completion alone is not acceptance.
+
+## Scalar Boolean schema repair
+
+The shared client explicitly converts owned-target and CFEqual identity results
+to canonical JSON Boolean objects. Boxing a C relational result or the Core
+Foundation Boolean typedef can otherwise serialize numeric `1` rather than
+`true`, which the strict report parser correctly rejects. This change repairs
+the observation schema only; it does not change discovery, action, identity
+auditing, bounds or cleanup, and it is not product acceptance. A new hosted
+execution is required to validate the emitted raw reports.
