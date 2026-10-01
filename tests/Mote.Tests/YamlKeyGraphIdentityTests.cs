@@ -162,6 +162,3 @@ public sealed class YamlKeyGraphIdentityTests
         }
     }
 }
-
-
-
