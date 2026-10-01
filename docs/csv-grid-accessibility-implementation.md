@@ -154,3 +154,58 @@ line in `WindowsCsvGrid.cs`; no executable code changed. The exact 141-file
 recorded in the Windows evidence document. Test EOF normalization is outside
 this source inventory.
 Root integration owns the fresh broad test and four-RID AOT rebuild.
+
+## Failure-directed focus investigation: 2026-10-01
+
+The unchanged external Windows client at run `36837499493`, commit
+`a33c5ca8451081aa9a21a8589d832c1a12ea0637`, actually exited 1 and classified
+the x64 sample `product-fail`. Its report and driver inventory are retained in
+`.cache/ci-36837499493-flow-gate/windows-grid-accessibility-ci-win-x64/`.
+The preceding `b4093b8` comparison report has the same failure shape; this is
+not attributed to the later Mac Flow gate or trace-performance changes.
+
+The report's first and last `SyntheticF6Expected` handles are identical:
+`1048752`, the Table HWND. The client labels its pre-cycle owner-thread
+`GUITHREADINFO.hwndFocus` as `sourceFocus` without independently establishing
+that it is the source HWND. Each of the first four observed transitions is
+exactly one pane ahead of the expected target. The ownership-filtered semantic
+facts agree with the **observed** next pane, not with the expected target. Thus
+those two scroller HasKeyboardFocus failures do not, by themselves, establish
+incorrect scroller publication: they sampled a different physical focus target.
+Initial focus ownership, keyboard traversal, cached property publication and
+external cell focus must be discriminated rather than conflated.
+
+The external cell call returned without the expected InvalidOperationException.
+The report's fixed `ExternalCellFocus` text claiming an off-owner callback is
+not a callback-thread measurement. The native shell now initializes its owner
+COM STA (`1a3bbef`), and the Grid advertises UseComThreading. Whether the actual
+callback is owner-thread and performs a safe admitted focus transfer remains to
+be proved; no success or off-owner safety claim follows from the fixed text.
+
+The retained native pane regression sets source focus only **after** Grid
+installation and Show, so it cannot falsify an initial installation/show focus
+transfer. The next inexpensive discriminator must set source focus first and
+check each transition without a repair/reset between them. No production focus
+reset, retry, changed external oracle or broad unsupported-focus policy is
+justified by the current evidence.
+
+Primary contracts checked:
+
+- [GetGUIThreadInfo](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getguithreadinfo)
+  supports an explicitly identified GUI thread; the returned focus handle is a
+  native fact, not an assertion about the source pane's identity.
+- [SetFocus](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setfocus)
+  requires the caller's input queue and synchronously sends focus messages; its
+  return is the previous HWND, not a Boolean success acknowledgment.
+- [ProviderOptions](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-provideroptions)
+  defines ProviderOwnsSetFocus as `0x10` and UseComThreading as `0x20`. These are
+  not measured apartment delivery evidence.
+- [IRawElementProviderFragment.SetFocus](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.provider.irawelementproviderfragment.setfocus)
+  distinguishes framework HWND focus from provider-owned focus. Preserve the
+  explicit no-native-side-effect off-owner refusal rather than introducing a
+  timeout focus dispatcher whose native effects could finish after refusal.
+
+Research motivation is reused from the contract's CHI/TVCG sources: reader
+orientation needs actual structure/navigation/feedback evidence, not merely a
+truthful label. No new literature claim or physical-reader result is inferred
+from this narrowly scoped investigation.
