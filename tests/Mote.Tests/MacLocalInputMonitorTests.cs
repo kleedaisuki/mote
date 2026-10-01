@@ -132,12 +132,19 @@ public sealed class MacLocalInputMonitorTests
     /// <summary>Records exact token operations and simulates nonfatal native or sink failures.</summary>
     private sealed class FakeApi : MacLocalInputMonitor.IApi
     {
+        /// <summary>Borrowed opaque token returned by Add, including the nil-token case.</summary>
         public nint Token = 789;
+        /// <summary>Independent failure switches for native ownership and optional observation calls.</summary>
         public bool ThrowAdd, ThrowRetain, ThrowRemove, ThrowClassify, ThrowRecord;
+        /// <summary>Attempt counts include throwing calls so retry errors remain observable.</summary>
         public int Adds, Retains, Removes, Releases;
+        /// <summary>Reentrant callback used to verify passivation before native removal.</summary>
         public Action? DuringRemove;
+        /// <summary>Successfully recorded closed telemetry kinds, without event contents.</summary>
         public readonly List<TelemetryEvent> Events = [];
+        /// <summary>Borrowed event identities seen by the classifier before possible failure.</summary>
         public readonly List<nint> Observed = [];
+        /// <summary>Exact native ownership call order, independent of telemetry record order.</summary>
         public readonly List<string> Ownership = [];
 
         /// <inheritdoc />
