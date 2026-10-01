@@ -315,6 +315,189 @@ public sealed class NativeSaveRequestTests
         Privacy(records);
     }
 
+    /// <summary>Admission belongs to the document captured before a synchronous native callback or modal picker.</summary>
+    [Theory]
+    [InlineData("commit", false)]
+    [InlineData("commit", true)]
+    [InlineData("picker", false)]
+    [InlineData("picker", true)]
+    public async Task Admission_reentry_replacement_or_disposal_never_starts_save(string boundary, bool dispose)
+    {
+        using var temp = new RepoTemp();
+        var target = temp.File("SECRET-admission.txt");
+        Configure(temp.Path);
+        try
+        {
+            var shell = Shell();
+            Set(shell, "SavePath", target);
+            using var controller = Controller(shell, temp.Path);
+            Document(controller).Apply(new TextChange(0, 0, "SECRET-old"));
+            var hook = boundary == "commit" ? "DuringPendingCommit" : "DuringSavePicker";
+            var calls = 0;
+            Set(shell, hook, (Action)(() =>
+            {
+                calls++;
+                Set(shell, hook, null);
+                if (dispose) controller.Dispose();
+                else Invoke(controller, "ReplaceDocument", new Document("SECRET-replacement"), default(TelemetryMark), 0);
+            }));
+            var request = NativeSaveRequest.Receive(NativeSaveKind.SaveAs);
+            request.Dispatch(r => Invoke(controller, "StartSave", r));
+            Assert.Equal(1, calls);
+            Assert.False((bool)Field(controller, "_saving")!);
+            Assert.False(File.Exists(target));
+            if (!dispose) Assert.Equal("SECRET-replacement", Document(controller).Snapshot.GetText());
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var records = Read(temp.Path);
+        AssertParent(Receipt(records), Terminal(records, "command.save_as", "cancelled",
+            dispose ? "lifetime_ended" : "stale_document"));
+        Assert.DoesNotContain(records, r => Op(r) is "save.admitted" or "save.worker_started" or "document.save" or "save.completed");
+        Privacy(records);
+    }
+
+    /// <summary>A nested command admitted by a modal picker retains the busy token; the outer command is rejected.</summary>
+    [Fact]
+    public async Task Modal_picker_nested_save_does_not_admit_outer_request()
+    {
+        using var temp = new RepoTemp();
+        var target = temp.File("SECRET-nested.txt");
+        Configure(temp.Path);
+        try
+        {
+            var shell = Shell();
+            Set(shell, "SavePath", target);
+            using var controller = Controller(shell, temp.Path);
+            Document(controller).Apply(new TextChange(0, 0, "SECRET-source"));
+            using var gate = new CommitGate();
+            Document(controller).SaveOperations = gate;
+            Set(shell, "DuringSavePicker", (Action)(() =>
+            {
+                Set(shell, "DuringSavePicker", null);
+                var inner = NativeSaveRequest.Receive(NativeSaveKind.Save);
+                inner.Dispatch(r => Invoke(controller, "StartSave", r));
+            }));
+            var outer = NativeSaveRequest.Receive(NativeSaveKind.SaveAs);
+            try
+            {
+                outer.Dispatch(r => Invoke(controller, "StartSave", r));
+                Assert.True((bool)Field(controller, "_saving")!);
+                await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            finally { gate.Release.Set(); }
+            await PumpUntilSaved(shell, controller);
+            Assert.Equal("SECRET-source", await File.ReadAllTextAsync(target));
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var records = Read(temp.Path);
+        AssertParent(One(records, "command.save_as.received"),
+            Terminal(records, "command.save_as", "skipped", "already_saving"));
+        AssertParent(One(records, "command.save.received"), Terminal(records, "command.save", "success", "completed"));
+        One(records, "document.save");
+        AssertParent(One(records, "command.save.received"), One(records, "save.admitted"));
+        Privacy(records);
+    }
+
+    /// <summary>Modal overwrite approval cannot outlive its document, and a throwing dialog must not strand the worker.</summary>
+    [Theory]
+    [InlineData("replace", "cancelled", "stale_document")]
+    [InlineData("dispose", "cancelled", "lifetime_ended")]
+    [InlineData("throw", "failure", "save_failed")]
+    public async Task Modal_overwrite_reentry_or_throw_never_mutates_target(string mode, string status, string reason)
+    {
+        using var temp = new RepoTemp();
+        var target = temp.File("SECRET-existing.txt");
+        await File.WriteAllTextAsync(target, "SECRET-original");
+        Configure(temp.Path);
+        try
+        {
+            var shell = Shell();
+            Set(shell, "SavePath", target);
+            Set(shell, "OverwriteApproved", true);
+            using var controller = Controller(shell, temp.Path);
+            Document(controller).Apply(new TextChange(0, 0, "SECRET-new"));
+            var calls = 0;
+            Set(shell, "DuringOverwriteConfirm", (Action)(() =>
+            {
+                calls++;
+                Set(shell, "DuringOverwriteConfirm", null);
+                if (mode == "dispose") controller.Dispose();
+                else if (mode == "replace")
+                    Invoke(controller, "ReplaceDocument", new Document("SECRET-replacement"), default(TelemetryMark), 0);
+                else throw new InvalidOperationException("SECRET-confirmation-error");
+            }));
+            var request = NativeSaveRequest.Receive(NativeSaveKind.SaveAs);
+            request.Dispatch(r => Invoke(controller, "StartSave", r));
+            await PumpUntilSaved(shell, controller);
+            Assert.Equal(1, calls);
+            Assert.Equal("SECRET-original", await File.ReadAllTextAsync(target));
+            if (mode == "replace") Assert.Equal("SECRET-replacement", Document(controller).Snapshot.GetText());
+            if (mode == "throw") Assert.NotEmpty((IEnumerable<string>)Get(shell, "Errors")!);
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var records = Read(temp.Path);
+        AssertParent(Receipt(records), Terminal(records, "command.save_as", status, reason));
+        Assert.DoesNotContain(records, r => Op(r) is "save.overwrite_approved" or "save.snapshot_captured" or
+            "save.commit_replace" or "save.completed");
+        Assert.Equal(mode == "throw" ? "failure" : "cancelled", One(records, "document.save").GetProperty("status").GetString());
+        Privacy(records);
+    }
+
+    /// <summary>The posted confirmation transports the original exception to its awaiting worker instead of throwing on UI dispatch.</summary>
+    [Fact]
+    public async Task Throwing_confirmation_preserves_original_exception_identity()
+    {
+        using var temp = new RepoTemp();
+        var shell = Shell();
+        using var controller = Controller(shell, temp.Path);
+        var expected = new InvalidOperationException("SECRET-original-confirmation-exception");
+        Set(shell, "DuringOverwriteConfirm", (Action)(() => throw expected));
+        var task = (Task<bool>)typeof(NativeEditorController)
+            .GetMethod("ConfirmSaveOverwriteAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(controller, [temp.File("SECRET-target.txt"), Document(controller), Field(controller, "_canvasGeneration"), null])!;
+        Pump(shell);
+        var observed = await Assert.ThrowsAsync<InvalidOperationException>(() => task);
+        Assert.Same(expected, observed);
+    }
+
+    /// <summary>Pumps until the admitted worker releases busy; polling is only a bounded deadlock guard, not an ordering assertion.</summary>
+    private static async Task PumpUntilSaved(object shell, NativeEditorController controller)
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        while ((bool)Field(controller, "_saving")! && timer.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            Pump(shell);
+            await Task.Delay(10);
+        }
+        Assert.False((bool)Field(controller, "_saving")!, "Save worker stranded after a modal native callback.");
+    }
+
+    /// <summary>Native ABI dispatch contains callback errors while retaining a truthful typed failure terminal.</summary>
+    [Theory]
+    [InlineData(false, "command.save")]
+    [InlineData(true, "command.save_as")]
+    public async Task Contained_dispatch_failure_never_escapes_native_callback(bool saveAs, string operation)
+    {
+        using var temp = new RepoTemp();
+        Configure(temp.Path);
+        try
+        {
+            var calls = 0;
+            var succeeded = NativeSaveRequest.DispatchContained(saveAs ? NativeSaveKind.SaveAs : NativeSaveKind.Save, _ =>
+            {
+                calls++;
+                throw new InvalidOperationException("SECRET-native-callback-error");
+            });
+            Assert.False(succeeded);
+            Assert.Equal(1, calls);
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var records = Read(temp.Path);
+        AssertParent(One(records, operation + ".received"), Terminal(records, operation, "failure", "callback_failed"));
+        Assert.DoesNotContain(records, r => Op(r) is "save.admitted" or "save.worker_started" or "document.save" or "save.completed");
+        Privacy(records);
+    }
+
     /// <summary>Blocks commit after snapshot capture; release is always guaranteed even after an assertion fails.</summary>
     private sealed class CommitGate : DocumentSaveOperations, IDisposable
     {
