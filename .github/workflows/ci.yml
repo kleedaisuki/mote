@@ -1108,7 +1108,7 @@ jobs:
         run: |
           $rid = '${{ matrix.rid }}'
           $source = 'src/Mote.Native/Mac/MacCsvGridAccessibilityProbe.cs'
-          $reviewed = 'FA027FB10BB2C7E7A39A3065F8322411A787BC850A34B2CE15F33899D0875849'
+          $reviewed = '7F51D0A494BCC96E1831D866D55C8848D16372EAE2AD5B811743A6BCC1345D14'
           if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -cne $reviewed) {
             throw 'Mac Grid AX selector probe differs from reviewed bytes.'
           }
@@ -1142,7 +1142,7 @@ jobs:
           $pins = @(
             @{ path = 'tests/MacGridAxExternalProbe/Probe.swift'; hash = '4C06C3994346B6E822294B4182BC770A7A3EAE11A22CCC75518E0B40A6D45996' },
             @{ path = 'tests/MacGridAxExternalProbe/Run.ps1'; hash = 'A8CE1FD27A4E33745EC526A739D609260E51893B41A5E1BD5B305C6A48CDC505' },
-            @{ path = 'tests/MacGridAxExternalProbe/MenuTraceCapture.cs'; hash = 'DEB59FBD23B2E47196334F8F86F3BA66C532CB8B266F4C6654E66D55FFCEEE0E' }
+            @{ path = 'tests/MacGridAxExternalProbe/MenuTraceCapture.cs'; hash = 'AD7FE8269288BA7B5C475FDE539F2BC584C8CC71D532555EC7BC3FE255EB45A4' }
           )
           foreach ($pin in $pins) {
             $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
