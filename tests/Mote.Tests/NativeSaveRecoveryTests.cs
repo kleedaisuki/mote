@@ -92,6 +92,79 @@ public sealed partial class NativeControllerTests
         Assert.Equal("current later bytes", await File.ReadAllTextAsync(path));
     }
 
+    /// <summary>
+    /// Delivers an already queued current-version analysis after export completion.
+    /// Semantic publication must not hide the warning that export did not save the buffer.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Native_recovery_export_notice_survives_queued_analysis_and_explicit_save_is_available(
+        bool editAfterSaveSnapshot)
+    {
+        using var temp = new RepoTemp();
+        var path = temp.File("target.txt");
+        await File.WriteAllTextAsync(path, "original");
+        var shell = new FakeShell(NativeLineEndingMode.Preserve);
+        using var controller = NewController(shell, temp.Path, path);
+        controller.Run();
+        await shell.PumpUntilAsync(() => shell.Document?.Title.Contains("target.txt") == true);
+        var document = GetSaveTestDocument(controller);
+        document.SaveOperations = new NativeFaultOperations { Commit = (_, _) => throw new IOException("injected failure") };
+        shell.Edit("attempted bytes");
+        shell.RequestSave();
+        await shell.PumpUntilAsync(() => shell.Errors.Any(e => e.StartsWith("Save failed.", StringComparison.Ordinal)) &&
+            shell.Analysis?.Status.Contains("Complete · v1", StringComparison.Ordinal) == true);
+
+        shell.Edit("current later bytes");
+        await shell.WaitForPostedAsync(); // Hold v2 analysis instead of draining it.
+        shell.SavePath = temp.File("exported.txt");
+        shell.RequestSave();
+        await shell.WaitForPostedCountAsync(2); // Both analysis and export completion are now queued.
+        shell.PumpReverse(); // Export first, then the still-valid v2 semantic presentation.
+
+        Assert.Null(document.PendingSaveRecovery);
+        Assert.Contains("Complete · v2", shell.Analysis!.Status);
+        Assert.Contains("Recovery exported", shell.StatusNotice);
+        var effectiveStatusAfterAnalysis = shell.CanvasStatus;
+        var cachedAnalysis = shell.Analysis;
+        Assert.Equal("attempted bytes", await File.ReadAllTextAsync(shell.SavePath));
+        Assert.Equal("original", await File.ReadAllTextAsync(path));
+        Assert.True(document.IsModified);
+        Assert.Equal(path, document.FilePath);
+
+        // Another ordinary operation must not steal the still-relevant recovery instruction.
+        shell.ChangeSelection(0, 7);
+        shell.RequestCopy();
+        await shell.PumpUntilAsync(() => shell.ClipboardText == "current");
+        Assert.Contains("Recovery exported", shell.CanvasStatus);
+
+        // Prove the busy flag was released independently of the warning presentation.
+        document.SaveOperations = new DocumentSaveOperations();
+        shell.RequestSave();
+        if (editAfterSaveSnapshot)
+        {
+            await shell.WaitForPostedAsync(); // Save captured v2 and posted completion; do not deliver it yet.
+            shell.Edit("newest unsaved bytes");
+            await shell.PumpUntilAsync(() => shell.Analysis?.Status.Contains("Complete · v3") == true);
+            Assert.True(document.IsModified);
+            Assert.Equal("newest unsaved bytes", document.Snapshot.GetText());
+            Assert.Contains("Recovery exported", shell.CanvasStatus);
+        }
+        else
+        {
+            await shell.PumpUntilAsync(() => !document.IsModified && shell.Document?.IsModified == false);
+            Assert.DoesNotContain("Recovery exported", shell.Document!.Status);
+            Assert.DoesNotContain("Recovery exported", shell.CanvasStatus);
+            // Native hosts may replay their cached semantic view without visiting the controller.
+            shell.SetAnalysis(cachedAnalysis!);
+            Assert.DoesNotContain("Recovery exported", shell.CanvasStatus);
+        }
+        Assert.Equal("current later bytes", await File.ReadAllTextAsync(path));
+        Assert.Contains("Recovery exported", effectiveStatusAfterAnalysis);
+        Assert.Contains("Current buffer is not saved", effectiveStatusAfterAnalysis);
+    }
+
     /// <summary>Generic Close/New warns but never implicitly deletes recovery or blocks permitted discard.</summary>
     [Fact]
     public async Task Native_close_and_new_warn_and_retain_stage()
