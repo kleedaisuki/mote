@@ -103,7 +103,7 @@ series** has `paired_estimate=null`; it cannot be promoted after seeing outcomes
 Only every predeclared pair qualifying yields on-minus-adjacent-off deltas for
 common endpoints. The median and narrowest finite order-statistic median interval
 with conditional coverage ≥95% use `1 - 2*sum(C(n,j),j=0..k-1)/2^n`, ranks `k`
-and `n-k+1`. At n=20, ranks 6/15 yield 95.8606%. At n<6 no finite 95% distribution-
+and `n-k+1`. At n=20, ranks 6/15 yield 95.8611%. At n<6 no finite 95% distribution-
 free interval exists: null interval and maximum finite coverage are shown. CPU-
 null samples never become zero; that endpoint's estimate stays unavailable. No
 p95/SLA is inferred from tiny samples. Independent stationary paired sampling
@@ -127,4 +127,3 @@ PowerShell AST parses, Windows/Python 3.14.6; retained output lives at
 `.cache/validation/trace-pairs/{portable-tests,powershell-ast}.log`. These checks
 include malformed reports, strict privacy vocabulary and actual retained-file
 inventory, not a native/desktop launch.
-
