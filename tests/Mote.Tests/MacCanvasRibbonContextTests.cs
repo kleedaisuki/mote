@@ -114,6 +114,7 @@ public sealed class MacCanvasRibbonContextTests
 
     /// <summary>Captures the original frame and caret, permitting later same-interval movement.</summary>
     private static NativeCanvasBinding Bind(Document document, CanvasFrame frame, int start, string text) =>
-        new(1, document.Snapshot.Version, 1, document.Snapshot, frame, start, text,
+        new(1, document.Snapshot.Version, 1, document.Snapshot, frame, start,
+            document.Snapshot.GetText(start, text.Length),
             frame.SelectionAnchor, frame.SelectionActive, "", "", false);
 }

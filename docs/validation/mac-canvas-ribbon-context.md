@@ -33,10 +33,27 @@ Four platform-analysis warnings initially concerned reading the pure range
 fields outside the suppression scope. The only subsequent test-file change
 extended those existing suppressions to include those fields; no expectations
 or executable behavior changed. The final build succeeded with **zero warnings
-and errors**. No tests were repeated. Logs and TRX are under
+and errors**. At that checkpoint no tests were repeated. Logs and TRX are under
 `.cache/validation/mac-canvas-ribbon-context/` (`focused-release.log`,
 `ribbon-context.trx`, `final-build.log`). Final native assembly SHA-256:
 `0CDC01EBFACE7A3D61D765053382E0331B671C86E4DA1BC889BFB1794BC6618E`.
+
+### Exact-source fixture correction
+
+Parent review caught that the initial binding factory supplied same-length text
+different from its x-filled snapshot. Although this helper uses only interval
+length, that fixture violated the real exact-source binding invariant. The
+factory now obtains `InputSourceText` from `Snapshot.GetText(start, text.Length)`;
+all independently literal expected offsets remain unchanged. This consequential
+fixture correction justified one focused rerun, not a broad suite replay:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~MacCanvasRibbonContextTests --logger 'trx;LogFileName=exact-source-ribbon-context.trx' --results-directory .cache/validation/mac-canvas-ribbon-context
+```
+
+The corrected representative fixtures passed **18/18**, zero failures/skips
+(57 ms), with no compiler warnings in `exact-source-release.log`. The earlier
+run remains historical evidence rather than the final fixture qualification.
 
 | Claim | Expected and observed |
 | --- | --- |
