@@ -1300,6 +1300,52 @@ jobs:
             .temp/gui-workflow/**
           if-no-files-found: ignore
 
+      # Fresh ordinary JSON source-backed processes on every native RID. This
+      # capability/phase pilot is not a tail SLA or compositor-paint observation.
+      # All edits are exact-PID HWND/Quartz transactions; no global input or TCC.
+      - name: Set up native-architecture Python for JSON acceptance pilot
+        id: json_acceptance_python
+        if: always()
+        uses: actions/setup-python@v6
+        continue-on-error: true
+        with:
+          python-version: '3.14'
+          architecture: ${{ contains(matrix.rid, 'arm64') && 'arm64' || 'x64' }}
+      - name: Diagnose ordinary Native AOT JSON 1 and 100 MiB source (non-gating)
+        if: always() && steps.json_acceptance_python.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 20
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          & python -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p test_probe.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Native JSON acceptance artifact/protocol tests failed.' }
+          & python benchmarks/NativeJsonLargeAcceptance/probe.py `
+            --executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name" `
+            --rid $rid --output ".cache/ci-inventory/$rid/native-json-large.json"
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "Native JSON source pilot incomplete (exit $code); inspect fixed report classifications." }
+          $report = Get-Content ".cache/ci-inventory/$rid/native-json-large.json" -Raw | ConvertFrom-Json
+          if ($report.status -cne 'pass' -or $report.samples.Count -ne 2 -or
+              @($report.samples | Where-Object status -CNE 'pass').Count -ne 0) {
+            throw 'Native JSON source pilot did not pass its exact two-case coverage contract.'
+          }
+          Write-Host 'Ordinary Native AOT JSON source pilot passed; physical paint, real IME and tail latency remain untested.'
+      - name: Upload ordinary Native AOT JSON pilot report and local traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-json-large-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-json-large.json
+            .temp/native-json-large/**/traces/*.jsonl
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
   # Capture replacement-phase evidence on a disposable runner. Its positive
   # held-share control and ordinary samples touch synthetic files only; a
   # failure is diagnostic, not permission to weaken the strict release gates.

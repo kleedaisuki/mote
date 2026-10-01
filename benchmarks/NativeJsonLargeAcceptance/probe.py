@@ -1,0 +1,447 @@
+"""Non-gating ordinary Native AOT JSON launch/edit/Save diagnostic.
+
+The external clocks and child trace clocks remain separate. Native source draw
+callback return is not compositor presentation. All input is synthetic and every
+write is confined to repository .temp/.cache via the existing artifact contract.
+"""
+
+import argparse
+import ctypes
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location("native_acceptance", ROOT / "benchmarks/NativeAcceptance/acceptance.py")
+acceptance = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(acceptance)
+EDIT_OFFSET = 9
+POLL_SECONDS = 0.05
+
+
+def digest(path):
+    """Hash exact file bytes by streaming, never materialize a large document."""
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def expected_digest(path):
+    """Compute the independent one-byte r-to-X replacement oracle before launch."""
+    with path.open("rb") as stream:
+        head = stream.read(EDIT_OFFSET)
+        if head != b'[ {"id":"' or stream.read(1) != b"r":
+            raise ValueError("fixture edit witness differs")
+        result = hashlib.sha256(head + b"X")
+        while block := stream.read(131072):
+            result.update(block)
+        return result.hexdigest()
+
+
+def prepare(directory, sizes):
+    """Reuse the established many-line corpus with a space at its first LF.
+
+    The first string then has identical native/source indices on both hosts.
+    Every following record/newline and exact byte size retain the prior corpus
+    contract; the edit remains inside one root-array object's string value.
+    """
+    cases = []
+    for size in sizes:
+        path = acceptance.artifact_path(directory / f"json-many-{size}.json", ".temp")
+        acceptance.generate(path, "json", "many", size * 1048576)
+        with path.open("r+b") as stream:
+            if stream.read(2) != b"[\n":
+                raise ValueError("upstream corpus prefix differs")
+            stream.seek(1)
+            stream.write(b" ")
+        cases.append({"size_mib": size, "size_bytes": path.stat().st_size,
+                      "fixture": path, "input_sha256": digest(path),
+                      "expected_saved_sha256": expected_digest(path)})
+    return cases
+
+
+def inventory(executable, rid):
+    """Require the actual publish directory to contain one regular executable."""
+    executable = Path(os.path.abspath(executable))
+    expected = "mote.exe" if rid.startswith("win-") else "mote"
+    for entry in (executable, *executable.parents):
+        if entry.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(entry):
+            raise ValueError("linked binary ancestry")
+        if entry.exists() and getattr(entry.lstat(), "st_file_attributes", 0) & 1024:
+            raise ValueError("reparse binary ancestry")
+    entries = list(executable.parent.iterdir())
+    if executable.name != expected or not executable.is_file() or entries != [executable]:
+        raise ValueError("strict single-binary inventory differs")
+    actual = platform.machine().lower()
+    architecture = "arm64" if actual in ("arm64", "aarch64") else "x64" if actual in ("amd64", "x86_64") else "unknown"
+    host = "win" if sys.platform == "win32" else "osx" if sys.platform == "darwin" else "unknown"
+    if rid != f"{host}-{architecture}":
+        raise ValueError("RID differs from native observer host")
+    return executable, {"binary_sha256": digest(executable), "binary_bytes": executable.stat().st_size,
+                        "inventory_entries": 1, "observer_architecture": architecture}
+
+
+def environment(home):
+    """Isolate configuration, cache and local traces before starting a timer."""
+    env = os.environ.copy()
+    env["MOTE_HOME"] = str(home)
+    env["MOTE_TRACE"] = "1"
+    return env
+
+
+def bounded_command(arguments, seconds, env=None):
+    """Bound tool execution; subprocess.run kills/reaps its direct child on timeout."""
+    return subprocess.run(arguments, cwd=ROOT, env=env, timeout=seconds,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
+
+
+class WindowsDriver:
+    """Exact-PID HWND observer and bounded system-message input; no foreground mutation."""
+
+    def __init__(self, pid, size, client=None):
+        """Declare pointer-width-correct ABIs on both Windows x64 and ARM64."""
+        from ctypes import wintypes as w
+        self.pid, self.size, self.main, self.host = pid, size, 0, 0
+        self.api = ctypes.WinDLL("user32", use_last_error=True)
+        self.callback = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+        signatures = {
+            "EnumWindows": ([self.callback, w.LPARAM], w.BOOL),
+            "GetWindowThreadProcessId": ([w.HWND, ctypes.POINTER(w.DWORD)], w.DWORD),
+            "GetClassNameW": ([w.HWND, w.LPWSTR, ctypes.c_int], ctypes.c_int),
+            "FindWindowExW": ([w.HWND, w.HWND, w.LPCWSTR, w.LPCWSTR], w.HWND),
+            "GetDlgItem": ([w.HWND, ctypes.c_int], w.HWND),
+            "SendMessageTimeoutW": ([w.HWND, w.UINT, ctypes.c_size_t, ctypes.c_ssize_t,
+                                      w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)], ctypes.c_ssize_t),
+            "PostMessageW": ([w.HWND, w.UINT, ctypes.c_size_t, ctypes.c_ssize_t], w.BOOL),
+        }
+        for name, (arguments, result) in signatures.items():
+            function = getattr(self.api, name)
+            function.argtypes, function.restype = arguments, result
+
+    def owned(self, handle):
+        """Recheck process ownership before each action/read, never trust a stale HWND."""
+        process_id = ctypes.c_ulong()
+        self.api.GetWindowThreadProcessId(handle, ctypes.byref(process_id))
+        if not handle or process_id.value != self.pid:
+            raise RuntimeError("target HWND ownership differs")
+
+    def send(self, handle, message, first=0, second=0):
+        """Send only to owned HWNDs with a strict 2-second individual bound."""
+        self.owned(handle)
+        result = ctypes.c_size_t()
+        if not self.api.SendMessageTimeoutW(handle, message, first, second, 0x23, 2000, ctypes.byref(result)):
+            raise TimeoutError("owned Win32 message failed")
+        return result.value
+
+    def text(self, handle, capacity):
+        """Read a bounded synthetic host/chrome string; never persist its contents."""
+        buffer = ctypes.create_unicode_buffer(capacity)
+        self.send(handle, 0x000D, capacity, ctypes.addressof(buffer))
+        return buffer.value
+
+    def observe(self, version):
+        """Observe ordinary source binding and exact-version certified status separately."""
+        if not self.main:
+            @self.callback
+            def visit(handle, _):
+                process_id = ctypes.c_ulong()
+                self.api.GetWindowThreadProcessId(handle, ctypes.byref(process_id))
+                if process_id.value == self.pid:
+                    name = ctypes.create_unicode_buffer(128)
+                    self.api.GetClassNameW(handle, name, len(name))
+                    if name.value == "MoteNativeEditorWindow":
+                        self.main = handle
+                        return False
+                return True
+            self.api.EnumWindows(visit, 0)
+        if not self.main:
+            return {"ready": False, "complete": False}
+        canvas = self.api.FindWindowExW(self.main, 0, "MoteInteractiveCanvas", None)
+        self.host = self.api.FindWindowExW(canvas, 0, "RICHEDIT50W", None) if canvas else 0
+        if not self.host:
+            return {"ready": False, "complete": False}
+        length = self.send(self.host, 0x000E)
+        prefix = self.text(self.host, 64) if length else ""
+        status = self.api.GetDlgItem(self.main, 103)
+        status_text = self.text(status, 1024) if status else ""
+        expected_prefix = '[ {"id":"row"' if version == 0 else '[ {"id":"Xow"'
+        return {"ready": 0 < length <= 16384 and prefix.startswith(expected_prefix),
+                "complete": f"JSON · Complete · v{version}" in status_text and "No diagnostics." in status_text,
+                "bounded_input_units": length, "source_proxy_scope": "bounded-native-host-not-full-source-UIA",
+                "focused": None}
+
+    def edit(self):
+        """Replace exactly one witnessed string byte through the native input host once."""
+        if not self.observe(0)["ready"]:
+            raise RuntimeError("edit prefix witness missing")
+        self.send(self.host, 0x00B1, EDIT_OFFSET, EDIT_OFFSET + 1)
+        self.send(self.host, 0x0102, ord("X"))
+
+    def save(self):
+        """Dispatch the ordinary target-window Save menu command without global keys."""
+        self.owned(self.main)
+        if not self.api.PostMessageW(self.main, 0x0111, 203, 0):
+            raise RuntimeError("owned Save dispatch failed")
+
+    def close(self):
+        """Request normal close only on the owned editor window."""
+        self.owned(self.main)
+        if not self.api.PostMessageW(self.main, 0x0010, 0, 0):
+            raise RuntimeError("owned close dispatch failed")
+
+
+class MacDriver:
+    """Bounded exact-PID AX observer and process-specific Quartz client."""
+
+    def __init__(self, pid, size, client):
+        """Retain only process identity, ASCII character count and compiled client."""
+        self.pid, self.size, self.client = pid, size, client
+
+    def command(self, operation, version):
+        """A 6-second outer watchdog bounds each client's 0.15-second AX calls."""
+        result = bounded_command([str(self.client), str(self.pid), str(self.size), operation, str(version)], 6)
+        if len(result.stdout) > 4096:
+            raise ValueError("Mac client output exceeds bound")
+        data = json.loads(result.stdout)
+        if data.get("requested_pid") != self.pid:
+            raise ValueError("Mac client process identity differs")
+        if data.get("status") == "blocked":
+            raise PermissionError("Mac capability blocked")
+        if data.get("status") != "observed":
+            raise RuntimeError("Mac source contract failed")
+        return data
+
+    def observe(self, version):
+        """Return content-free source/focus/semantic certification observations."""
+        return self.command("observe", version)
+
+    def edit(self):
+        """Each navigation/edit action is sent once; failures never resend an edit."""
+        self.command("edit", 0)
+
+    def save(self):
+        """Only the exact process receives Command-S; source focus is rechecked."""
+        self.command("save", 1)
+
+    def close(self):
+        """Press the exact owned window's AX close button, without keyboard/global focus."""
+        self.command("close", 1)
+
+
+def wait(child, condition, seconds):
+    """Bound endpoint polling and retain failed outcomes instead of fabricated timings."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            raise RuntimeError("editor exited before endpoint")
+        observed = condition()
+        if observed:
+            return observed
+        time.sleep(POLL_SECONDS)
+    raise TimeoutError("endpoint observation timed out")
+
+
+def trace_evidence(home, editing):
+    """Reuse the reviewed schema/causal auditor with exact action counts and versions."""
+    files = sorted((home / "traces").glob("*.jsonl"))
+    if not 1 <= len(files) <= 8 or any(not re.fullmatch(r"mote-trace-[a-f0-9]{32}-[0-9]{6}\.jsonl", path.name) for path in files):
+        raise ValueError("trace inventory differs")
+    records, hashes = acceptance.load_records([str(path) for path in files])
+    expected = {"mote.session": 1, "mote.startup_to_editable": 1, "document.open": 1, "document.open_to_editable": 1,
+                "document.open_to_draw_submission": 1}
+    if editing:
+        expected.update({"document.edit": 1, "edit.committed": 1, "document.edit_to_presentation": 1, "document.save": 1,
+                         "save.completed": 1, "document.edit_to_draw_submission": 1})
+    elif any(row["operation"] in ("document.edit", "edit.committed", "document.save") for row in records):
+        raise ValueError("reopen mutated source")
+    audit = acceptance.audit(records, expected)
+    audit["trace_sha256"] = hashes
+    endpoints = {}
+    for name in ("mote.startup_to_editable", "document.open", "document.open_to_editable", "document.open_to_draw_submission",
+                 "document.edit", "edit.committed", "document.edit_to_presentation", "document.edit_to_draw_submission", "document.save", "save.completed"):
+        rows = [row for row in records if row["operation"] == name]
+        endpoints[name] = [{"status": row["status"], "duration_us": row["duration_us"],
+                            "version": row["attributes"].get("version")} for row in rows]
+    audit["child_monotonic_endpoints"] = endpoints
+    audit["endpoint_issues"] = []
+    required_versions = {"mote.startup_to_editable": 0, "document.open_to_editable": 0,
+                         "document.open_to_draw_submission": 0, "document.edit": 0,
+                         "edit.committed": 1, "document.edit_to_presentation": 1, "document.edit_to_draw_submission": 1}
+    optional_versions = {"document.open": 0, "document.save": 1, "save.completed": 1}
+    # Engine I/O spans currently omit revisions. Preserve that fact instead of
+    # fabricating certainty, but reject conflicting revisions if present. The
+    # accepted native v0/v1 status and exact Save byte oracle are separate facts.
+    audit["io_revision_contract"] = "open-save-engine-records-unversioned;exact-bytes-and-native-version-witness-separate"
+    for name in expected:
+        if name == "mote.session":
+            continue
+        rows = endpoints[name]
+        if len(rows) != 1 or rows[0]["status"] != "success":
+            audit["endpoint_issues"].append(name)
+            continue
+        version = rows[0]["version"]
+        if (name in required_versions and version != required_versions[name] or
+                name in optional_versions and version is not None and version != optional_versions[name]):
+            audit["endpoint_issues"].append(name)
+    audit["endpoint_integrity"] = "pass" if not audit["endpoint_issues"] and audit["causal_integrity"] == "pass" else "incomplete"
+    return audit
+
+
+def sample(executable, case, directory, client):
+    """Run one fresh ordinary process, exact local edit/Save and fresh GUI reopen."""
+    working = acceptance.artifact_path(directory / "working.json", ".temp")
+    shutil.copyfile(case["fixture"], working)
+    home = acceptance.artifact_path(directory / "home", ".temp")
+    env = environment(home)
+    result = {key: value for key, value in case.items() if key != "fixture"}
+    result.update({"status": "failed", "phase": "runtime-control", "cache_state": "just-written-not-cache-evicted",
+                   "trace_enabled": True, "route": "ordinary-product-no-launch-flags", "edit_attempts": 0,
+                   "normal_exit": False, "reopen_normal_exit": False, "poll_interval_ms": 50})
+    child = None
+    driver_type = WindowsDriver if sys.platform == "win32" else MacDriver
+    try:
+        started = time.perf_counter_ns()
+        bounded_command([str(executable), "--check-runtime"], 15, env)
+        result["parent_runtime_control_exit_ms"] = (time.perf_counter_ns() - started) / 1e6
+        result["phase"] = "launch-to-source-bound"
+        started = time.perf_counter_ns()
+        child = subprocess.Popen([str(executable), str(working)], cwd=ROOT, env=env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        driver = driver_type(child.pid, case["size_bytes"], client)
+        def ready(version):
+            observed = driver.observe(version)
+            return observed if observed.get("ready") else None
+        result["source_observation"] = wait(child, lambda: ready(0), 60)
+        result["parent_launch_to_source_bound_ms"] = (time.perf_counter_ns() - started) / 1e6
+        result["phase"] = "initial-whole-document-semantics"
+        wait(child, lambda: driver.observe(0).get("complete"), 60)
+        result["initial_complete_zero_diagnostics_version"] = 0
+        if digest(working) != case["input_sha256"]:
+            raise ValueError("open mutated source")
+        result["phase"] = "native-local-edit"
+        started = time.perf_counter_ns()
+        # Count attempted non-idempotent dispatch before invoking the driver.
+        result["edit_attempts"] = 1
+        driver.edit()
+        result["edited_source_observation"] = wait(child, lambda: ready(1), 15)
+        result["parent_edit_dispatch_to_source_ack_ms"] = (time.perf_counter_ns() - started) / 1e6
+        result["phase"] = "edited-whole-document-semantics"
+        wait(child, lambda: driver.observe(1).get("complete"), 60)
+        result["edited_complete_zero_diagnostics_version"] = 1
+        if digest(working) != case["input_sha256"]:
+            raise ValueError("edit wrote disk before Save")
+        result["disk_unchanged_before_save"] = True
+        result["phase"] = "save-exact-bytes"
+        driver.save()
+        def saved():
+            try:
+                return working.stat().st_size == case["size_bytes"] and digest(working) == case["expected_saved_sha256"]
+            except OSError:
+                return False
+        wait(child, saved, 60)
+        result["saved_sha256"] = digest(working)
+        result["phase"] = "normal-close"
+        driver.close()
+        if child.wait(timeout=15) != 0:
+            raise RuntimeError("editor normal exit failed")
+        result["normal_exit"] = True
+        result["phase"] = "trace-audit"
+        result["trace_evidence"] = trace_evidence(home, True)
+        if result["trace_evidence"]["endpoint_integrity"] != "pass":
+            raise ValueError("trace endpoint integrity incomplete")
+        child = None
+        result["phase"] = "gui-reopen"
+        reopen_home = acceptance.artifact_path(directory / "reopen-home", ".temp")
+        child = subprocess.Popen([str(executable), str(working)], cwd=ROOT, env=environment(reopen_home),
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        driver = driver_type(child.pid, case["size_bytes"], client)
+        # Fresh reopened source is the edited byte spelling, but native version is zero.
+        wait(child, lambda: ready(1), 60)
+        wait(child, lambda: driver.observe(0).get("complete"), 60)
+        if not saved():
+            raise ValueError("GUI reopen changed exact source bytes")
+        driver.close()
+        if child.wait(timeout=15) != 0:
+            raise RuntimeError("reopen normal exit failed")
+        result["reopen_normal_exit"] = True
+        result["reopen_trace_evidence"] = trace_evidence(reopen_home, False)
+        if result["reopen_trace_evidence"]["endpoint_integrity"] != "pass":
+            raise ValueError("reopen trace endpoint integrity incomplete")
+        result["input_sha256_after"] = digest(case["fixture"])
+        if result["input_sha256_after"] != case["input_sha256"]:
+            raise ValueError("immutable original changed")
+        result["status"], result["phase"] = "pass", "complete"
+    except Exception as error:
+        result["status"] = "blocked" if isinstance(error, PermissionError) else "failed"
+        result["error_class"] = type(error).__name__
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+            result["forced_cleanup"] = True
+        # Always retain the immutable-fixture witness even if trust/focus blocks
+        # the probe. A failed Save may legitimately leave working bytes changed;
+        # record its opaque digest without pretending the expected oracle passed.
+        result["input_sha256_after"] = digest(case["fixture"])
+        result["working_sha256_after"] = digest(working)
+    return result
+
+
+def main():
+    """Execute the explicit 1/100 MiB pilot and retain all samples without pooling."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--executable", required=True)
+    parser.add_argument("--rid", choices=("win-x64", "win-arm64", "osx-x64", "osx-arm64"), required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--sizes", type=int, choices=(1, 100), nargs="+", default=[1, 100])
+    args = parser.parse_args()
+    output = acceptance.artifact_path(args.output, ".cache")
+    if output.exists():
+        raise ValueError("refuse report overwrite")
+    directory = acceptance.artifact_path(f".temp/native-json-large/{uuid.uuid4().hex}", ".temp")
+    directory.mkdir(parents=True)
+    report = {"schema_version": 1, "status": "failed", "rid": args.rid,
+              "scope": "trace-on-fresh-process-capability-pilot-not-tail-SLA-or-physical-paint",
+              "clock_contract": "parent-and-child-monotonic-durations-never-subtracted",
+              "os": platform.system(), "host_release": platform.release(), "python": platform.python_version(),
+              "runner_image": os.environ.get("ImageVersion"), "source_commit": os.environ.get("GITHUB_SHA"),
+              "scratch_id": directory.name, "samples": []}
+    try:
+        executable, identity = inventory(args.executable, args.rid)
+        report.update(identity)
+        report["driver_sha256"] = digest(Path(__file__))
+        report["artifact_auditor_sha256"] = digest(ROOT / "benchmarks/NativeAcceptance/acceptance.py")
+        client = None
+        if sys.platform == "darwin":
+            source = Path(__file__).with_name("MacClient.swift")
+            report["mac_client_source_sha256"] = digest(source)
+            client = directory / "mac-client"
+            bounded_command(["xcrun", "swiftc", str(source), "-o", str(client)], 120)
+            report["mac_client_compiled"] = True
+        cases = prepare(directory, args.sizes)
+        for case in cases:
+            sample_directory = acceptance.artifact_path(directory / str(case["size_mib"]), ".temp")
+            sample_directory.mkdir()
+            report["samples"].append(sample(executable, case, sample_directory, client))
+        report["status"] = "pass" if all(row["status"] == "pass" for row in report["samples"]) else "incomplete"
+        report["binary_sha256_after"] = digest(executable)
+        if report["binary_sha256_after"] != report["binary_sha256"]:
+            report["status"] = "failed"
+    except Exception as error:
+        report["error_class"] = type(error).__name__
+    acceptance.write_json(output, report)
+    print(json.dumps({"status": report["status"], "rid": args.rid,
+                      "samples": len(report["samples"])}, separators=(",", ":")))
+    return 0 if report["status"] == "pass" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
