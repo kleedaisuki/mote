@@ -100,7 +100,7 @@ class CausalReaderTests(unittest.TestCase):
         self.assertEqual("test.phase.entered", report["unlinked_positive_stages"][0]["operation"])
 
     def test_native_held_anchor_graph_is_recoverable_without_duration_terminals(self):
-        rows = [record(1, "command.received", 9), record(2, "document.save.entered", 1),
+        rows = [record(1, "command.save.received", 9), record(2, "document.save.entered", 1),
                 record(3, "save.temp_flush.entered", 2)]
         report = classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)
         self.assertEqual("censored", report["requests"][0]["classification"])
@@ -108,16 +108,36 @@ class CausalReaderTests(unittest.TestCase):
         self.assertFalse(report["unlinked_positive_stages"])
 
     def test_native_distinct_terminal_identity_resolves_receipt(self):
-        rows = [record(1, "command.received", 9), record(2, "command.save", 1, status="skipped")]
+        rows = [record(1, "command.save.received", 9), record(2, "command.save", 1, status="skipped")]
         request = classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
         self.assertEqual(f"{1:016x}", request["request_span_id"])
         self.assertEqual("skipped", request["classification"])
         self.assertTrue(request["receipt_observed"])
 
     def test_native_two_terminal_ids_for_one_request_are_invalid(self):
-        rows = [record(1, "command.received", 9), record(2, "command.save", 1), record(3, "command.save", 1)]
+        rows = [record(1, "command.save.received", 9), record(2, "command.save", 1), record(3, "command.save", 1)]
         with self.assertRaises(TraceIntegrityError):
             classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)
+
+    def test_both_typed_receipt_only_kills_keep_known_command_kind(self):
+        for command in ("command.save", "command.save_as"):
+            rows = [record(1, command + ".received", 9)]
+            request = classify_requests(rows, MOTE_SAVE_CONTRACT, terminated=True)["requests"][0]
+            self.assertEqual(command, request["command_operation"])
+            self.assertEqual("censored", request["classification"])
+            self.assertEqual(command + ".received", request["last_positive_stage"])
+            self.assertFalse(request["observed_stages"])
+
+    def test_terminal_kind_must_agree_with_typed_receipt(self):
+        for receipt, terminal in (("command.save.received", "command.save_as"),
+                                  ("command.save_as.received", "command.save")):
+            with self.assertRaises(TraceIntegrityError):
+                classify_requests([record(1, receipt, 9), record(2, terminal, 1)], MOTE_SAVE_CONTRACT, terminated=True)
+
+    def test_legacy_generic_receipt_does_not_certify_native_save(self):
+        report = classify_requests([record(1, "command.received", 9)], MOTE_SAVE_CONTRACT, terminated=True)
+        self.assertFalse(report["requests"])
+        self.assertEqual("legacy_health_unknown", report["transport_health"])
 
     def test_failed_required_stage_cannot_certify_successful_chain(self):
         rows = [record(2, "test.received", 1), record(3, "test.admitted", 1),

@@ -10,10 +10,16 @@ internal static class Program
     /// <summary>Accepts an isolated repository-local trace directory and held/normal mode.</summary>
     private static async Task<int> Main(string[] args)
     {
-        if (args.Length != 2 || args[1] is not ("held" or "normal")) return 2;
+        if (args.Length != 2 || args[1] is not ("held" or "normal" or "receipt-save" or "receipt-save-as")) return 2;
         MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = Path.GetFullPath(args[0]) });
-        var request = MoteTelemetry.BeginRequest(TelemetryOperation.CommandSave);
+        var request = MoteTelemetry.BeginRequest(args[1] == "receipt-save-as"
+            ? TelemetryOperation.CommandSaveAs : TelemetryOperation.CommandSave);
         if (request is null) return 3;
+        if (args[1] is "receipt-save" or "receipt-save-as")
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan);
+            return 4;
+        }
         request.Checkpoint(TelemetryEvent.SaveAdmitted);
         request.Checkpoint(TelemetryEvent.SaveWorkerStarted);
         var coarse = request.BeginPhase(TelemetryOperation.Save);

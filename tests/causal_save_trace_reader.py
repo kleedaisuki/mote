@@ -30,7 +30,7 @@ class SaveContract:
     """Closed operation vocabulary; phases are checkpoints, not latency spans."""
 
     request_operations: frozenset[str]
-    receipt_operation: str
+    receipt_operation: str | tuple[str, ...]
     stage_operations: tuple[str, ...]
     successful_required: frozenset[str] = frozenset()
     successful_one_of: frozenset[str] = frozenset()
@@ -51,7 +51,7 @@ SAVE_EVENTS = (
     "save.ui_started", "save.ui_deferred", "save.completed",
 )
 MOTE_SAVE_CONTRACT = SaveContract(
-    frozenset({"command.save", "command.save_as"}), "command.received",
+    frozenset({"command.save", "command.save_as"}), ("command.save.received", "command.save_as.received"),
     SAVE_EVENTS + SAVE_PHASES + tuple(phase + ".entered" for phase in SAVE_PHASES),
     frozenset({"save.admitted", "save.worker_started", "save.snapshot_captured",
                "document.save", "save.ui_started"}),
@@ -121,6 +121,7 @@ def classify_requests(records: Iterable[dict], contract: SaveContract, *, termin
     and successful-chain coverage are deliberately separate result fields.
     """
     rows = list(records)
+    receipts = (contract.receipt_operation,) if isinstance(contract.receipt_operation, str) else contract.receipt_operation
     sequences = {}
     watermarks = {}
     for row in rows:
@@ -154,7 +155,7 @@ def classify_requests(records: Iterable[dict], contract: SaveContract, *, termin
             if request["terminal"] is not None:
                 raise TraceIntegrityError("duplicate request terminal")
             request["terminal"] = row
-        if row["operation"] == contract.receipt_operation:
+        if row["operation"] in receipts:
             parent = row.get("parent_span_id")
             if not parent:
                 raise TraceIntegrityError("request receipt has no parent")
@@ -187,6 +188,9 @@ def classify_requests(records: Iterable[dict], contract: SaveContract, *, termin
     result = []
     for key, request in requests.items():
         terminal = request["terminal"]
+        receipt = request["receipt"]
+        if contract.receipt_is_anchor and receipt and terminal and receipt["operation"] != terminal["operation"] + ".received":
+            raise TraceIntegrityError("request terminal kind differs from received command")
         observed = {row["operation"] for row in request["stage_records"] if row["status"] == "success"}
         missing = sorted(contract.successful_required - observed)
         if contract.successful_one_of and not observed.intersection(contract.successful_one_of):
@@ -194,12 +198,13 @@ def classify_requests(records: Iterable[dict], contract: SaveContract, *, termin
         result.append({
             "request_span_id": key[2], "session_id": key[0], "trace_id": key[1],
             "receipt_observed": request["receipt"] is not None,
+            "command_operation": receipt["operation"].removesuffix(".received") if receipt and contract.receipt_is_anchor else (terminal["operation"] if terminal else None),
             "classification": terminal["status"] if terminal else ("censored" if terminated else "pending"),
             "reason": terminal["attributes"].get("reason") if terminal else None,
             "observed_stages": request["stages"],
             "unsuccessful_stages": [{"operation": row["operation"], "status": row["status"]}
                                     for row in request["stage_records"] if row["status"] != "success"],
-            "last_positive_stage": request["stages"][-1] if request["stages"] else (contract.receipt_operation if request["receipt"] else None),
+            "last_positive_stage": request["stages"][-1] if request["stages"] else (receipt["operation"] if receipt else None),
             "successful_chain_complete": bool(terminal and terminal["status"] == "success" and request["receipt"] and not missing),
             "missing_required_stages": missing,
         })

@@ -46,18 +46,25 @@ def run_case(binary, directory, mode):
                 if len(requests) == 1:
                     request = requests[0]
                     stages = request["observed_stages"]
-                    if request["receipt_observed"] and "document.save.entered" in stages and "save.temp_flush.entered" in stages:
+                    receipt_only = mode.startswith("receipt-")
+                    expected_command = "command.save_as" if mode == "receipt-save-as" else "command.save"
+                    phase_ready = receipt_only or ("document.save.entered" in stages and "save.temp_flush.entered" in stages)
+                    if request["receipt_observed"] and request["command_operation"] == expected_command and phase_ready:
                         before = report
                         break
                 time.sleep(0.025)
             if before is None:
-                raise RuntimeError("positive receipt and linked held phase prefix not observed within deadline")
+                raise RuntimeError("positive typed receipt and expected linked prefix not observed within deadline")
             child.kill()
             exit_code = child.wait(timeout=10)
             after = read_directory(directory, True)
             request = after["requests"][0]
             passed = request["classification"] == "censored" and request["receipt_observed"]
-            passed = passed and "save.temp_flush.entered" in request["observed_stages"]
+            if mode.startswith("receipt-"):
+                expected_command = "command.save_as" if mode == "receipt-save-as" else "command.save"
+                passed = passed and request["command_operation"] == expected_command and not request["observed_stages"]
+            else:
+                passed = passed and "save.temp_flush.entered" in request["observed_stages"]
             passed = passed and not after["normal_session_terminal_observed"] and not after["absence_certified"]
             return {"mode": mode, "passed": passed, "exit_code": exit_code, "before_kill": before, "evidence": after}
         finally:
@@ -78,7 +85,7 @@ def main():
         parser.error("output must stay beneath repository .temp or .cache")
     output.mkdir(parents=True, exist_ok=False)
     results = []
-    for mode in ("held", "normal"):
+    for mode in ("held", "normal", "receipt-save", "receipt-save-as"):
         try:
             results.append(run_case(args.binary.resolve(), output / mode, mode))
         except Exception as error:

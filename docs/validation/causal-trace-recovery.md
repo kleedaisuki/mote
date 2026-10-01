@@ -5,7 +5,9 @@ native Save routing or document byte correctness.
 
 ## Contract and useful negative result
 
-`command.received` is the persisted request anchor. Its parent is the session.
+`command.save.received` / `command.save_as.received` is the persisted typed
+request anchor. Its parent is the session. Receipt-only censored evidence thus
+retains command kind; a terminal of the opposite kind is an integrity failure.
 The distinct terminal `command.save`/`command.save_as` is a child of that anchor.
 Each phase entry is the persisted phase anchor; phase duration terminals use
 fresh IDs parented to the entry. This permits reconstructing a held nested
@@ -46,6 +48,12 @@ modified. The probe performs no document Save I/O.
 
 ## Observed results
 
+The first implementation at `58a3c10` used the historical generic
+`command.received` vocabulary. The following table describes those original
+checks; their files remain valid historical evidence, not current typed-reader
+acceptance. The current native contract does not certify a generic receipt as
+a Save request.
+
 | Check | Result | Interpretation |
 | --- | --- | --- |
 | Independent Python fixtures | 19/19 pass | Schema/framing, independent requests, unique terminals, positive stage status, prefix linkage and censorship |
@@ -65,6 +73,27 @@ compatibility error, not a product defect; the parser now accepts absent/null
 parent IDs and the legacy fixture covers it. Failed evidence remains in
 `.temp/causal-recovery-managed-20261001/report.json`; the corrected managed and
 AOT reports are in the paths above.
+
+### Typed receipt follow-up
+
+After receipt names were refined, only the affected reader/probe checks were
+rerun. The reader now has **22/22 passing fixtures**, including killed-at-receipt
+Save and Save As kind preservation, mismatched terminal kind rejection, and
+generic-receipt noncertification. Managed and local win-x64 Native AOT controls
+each passed **four cases**: normal completion, nested held-phase kill,
+receipt-only Save kill, and receipt-only Save As kill.
+
+```powershell
+dotnet build tests/CausalTraceRecoveryProbe/CausalTraceRecoveryProbe.csproj -c Release --nologo
+python -B tests/Invoke-CausalTraceRecovery.py --binary tests/CausalTraceRecoveryProbe/bin/Release/net10.0/CausalTraceRecoveryProbe.dll --output .temp/causal-recovery-typed-managed-20261001
+dotnet publish tests/CausalTraceRecoveryProbe/CausalTraceRecoveryProbe.csproj -c Release -r win-x64 -o .cache/causal-recovery-probe/typed-win-x64 --nologo
+python -B tests/Invoke-CausalTraceRecovery.py --binary .cache/causal-recovery-probe/typed-win-x64/CausalTraceRecoveryProbe.exe --output .temp/causal-recovery-typed-aot-win-x64-20261001
+```
+
+The current `report.json` files under those two output directories record every
+case's positive before-kill prefix and retained censored evidence. No terminal
+is fabricated for receipt-only kills. The Save As receipt remains
+`command_operation: command.save_as` without needing a terminal or new attribute.
 
 ## Coverage limits
 
