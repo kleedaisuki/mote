@@ -262,3 +262,49 @@ fixture incorrectly expected `session.start`; the actual schema operation is
 `mote.session`. The fixture was corrected, its failed TRX retained, and no
 production behavior was changed to accommodate it. No local native GUI or hosted
 runtime coverage is claimed by these tests.
+
+## Product native source phases
+
+Five append-only `TelemetryOperation` values distinguish product source work:
+
+| Fixed operation | Measured boundary |
+| --- | --- |
+| `native.source.install` | Install source text in the native editing surface. |
+| `native.source.readback` | Read the native source buffer for reconciliation. |
+| `native.source.reconcile` | Reconcile native state with the engine-owned document and history. |
+| `native.source.range_publish` | Publish engine-owned selection or source ranges. |
+| `native.source.style_publish` | Publish semantic foreground styles to the native surface. |
+
+Callers use the existing `Start`/`StartChild` duration API and explicitly set a
+failure, cancellation, or skipped status when appropriate. These names add no
+new schema fields, dynamic labels, content, paths, coordinates, native handles,
+or exception text. Existing numeric operation identifiers are unchanged.
+Dimensions remain the existing normalized format, byte-size bucket, version,
+and numeric count; a caller must define its count locally rather than inventing
+a free-form attribute. An explicit parent span identifies causality; temporal
+proximity alone does not.
+
+Instrumentation belongs to the product native-source profile, not the
+capability experiment or a retroactive claim about other presentation profiles.
+Installation, range publication, and style publication measure call boundaries,
+not physical screen presentation. Readback is not proof of keyboard delivery;
+reconciliation is not by itself proof of a saved document. Missing spans remain
+unobserved under disabled tracing, rejected admission, queue loss, or forced
+exit. The disabled path remains allocation-free after warm-up.
+
+`NativeSourceTelemetryTests` checks append-only IDs, closed serialized names,
+v1 root/attribute fields, explicit parentage, all four statuses, and the disabled
+allocation/file boundary. These portable tests do not exercise a native GUI or
+certify that every product source call site has been instrumented.
+
+The strict native acceptance reader adds exactly these five operation names;
+its schema, closed dimensions, and privacy checks are otherwise unchanged.
+Windows Grid graph consumers reuse that reader; the causal Save reader already
+accepts compatible future operation names and needs no graph-contract change.
+On 2026-10-02, `python -B -m unittest discover -s benchmarks/NativeAcceptance
+-p test_native_source_operations.py -v` passed **4/4** methods, no skips, against
+the modified reader. The fixtures cover 20 accepted operation/status rows and
+reject unknown source names, content/foreign attributes, unsupported root
+fields, invalid numeric types, and non-vocabulary dimensions. Retained output:
+`.temp/validation/native-source-telemetry/python-vocabulary.txt`. This result
+does not qualify the separate C# producer tests or native product call sites.

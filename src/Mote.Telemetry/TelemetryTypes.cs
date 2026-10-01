@@ -54,6 +54,16 @@ public enum TelemetryOperation
     SaveFailureCleanup,
     /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
     SaveFailureInspection,
+    /// <summary>Installation of source text into the product native editing surface; not physical presentation.</summary>
+    NativeSourceInstall,
+    /// <summary>Readback of the product native source buffer; not input delivery or an engine commit.</summary>
+    NativeSourceReadback,
+    /// <summary>Reconciliation of native source state with the engine-owned document and edit history.</summary>
+    NativeSourceReconcile,
+    /// <summary>Publication of engine-owned selection or source ranges to the product native surface.</summary>
+    NativeSourceRangePublish,
+    /// <summary>Publication of semantic foreground styles to the product native surface; not analysis or screen presentation.</summary>
+    NativeSourceStylePublish,
 }
 
 /// <summary>Fixed, low-cardinality instantaneous event names.</summary>

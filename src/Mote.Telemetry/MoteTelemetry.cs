@@ -291,6 +291,11 @@ public static partial class MoteTelemetry
         TelemetryOperation.SaveBookkeeping => "save.bookkeeping",
         TelemetryOperation.SaveFailureCleanup => "save.failure_cleanup",
         TelemetryOperation.SaveFailureInspection => "save.failure_inspection",
+        TelemetryOperation.NativeSourceInstall => "native.source.install",
+        TelemetryOperation.NativeSourceReadback => "native.source.readback",
+        TelemetryOperation.NativeSourceReconcile => "native.source.reconcile",
+        TelemetryOperation.NativeSourceRangePublish => "native.source.range_publish",
+        TelemetryOperation.NativeSourceStylePublish => "native.source.style_publish",
 
         _ => "unknown"
     };

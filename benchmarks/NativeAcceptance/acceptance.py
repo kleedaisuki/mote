@@ -52,6 +52,10 @@ INPUT_FAILURE_OPERATIONS = frozenset("""native.input.monitor.unavailable
 native.input.monitor.callback_failed native.input.monitor.removal_failed""".split())
 INPUT_OPERATIONS = INPUT_SUCCESS_OPERATIONS | INPUT_FAILURE_OPERATIONS
 OPERATIONS |= INPUT_OPERATIONS
+# Product source duration names retain the existing closed v1 privacy schema.
+NATIVE_SOURCE_OPERATIONS = frozenset("""native.source.install native.source.readback
+native.source.reconcile native.source.range_publish native.source.style_publish""".split())
+OPERATIONS |= NATIVE_SOURCE_OPERATIONS
 # Adapter observations have their own exact dimensions, never global attributes.
 FOCUS_RECEIPT_OPERATION = "native.grid.focus.adapter.received"
 FOCUS_TERMINAL_OPERATION = "native.grid.focus.adapter"
