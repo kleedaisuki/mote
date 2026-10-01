@@ -148,3 +148,110 @@ typecheck, observer-overhead measurement or marker-path adversarial test was
 performed for them. Implementation must still prove its fixed bounds, complete
 entry recording, one total action entry, owned normal cleanup and absence from
 ordinary launches. No additional speculative product repair is justified.
+
+## Hosted execution appendix — CI 36818175897
+
+Date: 2026-10-01. This appendix supersedes the earlier statement that the lean
+client/owner seams do not yet exist; the initial design assessment remains a
+historical review, not an assertion about today's implementation.
+
+**Independent verdict:** the schema-only repair now admits all four raw
+session reports, and the lean shared-client comparison completed normally on
+both Mac RIDs: **C0 AX=0 / P0 AX=-25205**. No substantive schema/evidence
+inconsistency was found in the inspected artifacts. This is a reproduced
+external-reply difference with matched admitted menu effects, not an identified
+product root cause or a passed product accessibility gate.
+
+### Provenance and method
+
+Run [36818175897](https://github.com/kleedaisuki/mote/actions/runs/36818175897)
+completed with overall success at commit
+`1171d0f9b3c02c14c0d6e57b6a7f6d8d2fd3246d`. Inspected raw downloads are under
+`.cache/ci-36818175897-grid-pair/`: per-RID owner inventory, separate C0/P0
+`client.json` and `server.json`, original external Grid references, and native
+job logs. Both jobs record portable guards `checks=37` and the actual first-pair
+terminal output `completed-failure-observed`.
+
+The reviewer loaded only `Assert-Keys`, `Assert-Integer`, `Assert-Boolean`,
+`Assert-ClientReport`, and `Assert-ServerReport` from the PowerShell AST of
+`tests/MacGridShowMenuDiscriminator/Run.ps1`, without executing its native owner.
+Its SHA-256 matches both hosted owner reports:
+`EC842CF260BD91034B5D37DF79E4161D4C1A0B24AF204840B131E67F3B22C872`.
+All four independent raw client/server pairs pass these strict parsers, and
+JSON-normalized raw objects exactly equal their embedded owner copies. This
+local verification parses preserved evidence; it does not rerun native AX.
+
+Owner-report SHA-256 values:
+
+- x64: `0BFFE4059BBCC3B5BADF8AB62F00045DF32F95E5C49829B67BC92751B4DF272E`.
+- ARM64: `934E1D14510D70211CD19369CCF5B724BDC724B1E2A1C9DAADCCDC1DF96B8545`.
+
+### Four-session result
+
+| RID / session | Original AX reply | Client / target exit | Action attempts / callback entries | Requests / dispatches / opens / closes | Post-reply identity audit |
+| --- | ---: | --- | --- | --- | --- |
+| x64 C0 | 0 | 0 / 0, normal | 1 / 1 | 1 / 1 / 1 / 1 | 128 admissions, not exhausted; sampled identity/parent checks agree |
+| x64 P0 | -25205 | 0 / 0, normal | 1 / 1 | 1 / 1 / 1 / 1 | 128 admissions, exhausted; all identity conclusions null |
+| ARM64 C0 | 0 | 0 / 0, normal | 1 / 1 | 1 / 1 / 1 / 1 | 107 admissions, not exhausted; sampled identity/parent checks agree |
+| ARM64 P0 | -25205 | 0 / 0, normal | 1 / 1 | 1 / 1 / 1 / 1 | 128 admissions, exhausted; all identity conclusions null |
+
+All four sessions report trust, exact target ownership, ready observed, one
+advertised action with action-name AX error 0, action begin/end recorded,
+finish-after-reply and finish-after-audit, finish consumed, normal server
+shutdown, unchanged fixture and no forced cleanup. Session/owner error strings
+are empty. Each client-call list contains exactly one `show-menu` row matching
+its preserved original reply.
+
+Every action-entry record is on-main with owner lookup/current-root/attachment/
+frame/ready-baseline/generation/epoch flags true, installing false, queue result
+and returned Boolean true, and caught exception false. Off-main entries and
+entry/lifetime overflows are zero. Queue, dispatch, open and close retain the
+baseline/current attachment facts; the sole detach records false flags during
+normal teardown. Both targets therefore actually admitted and opened/closed
+one menu. These facts do not explain why the external replies differ.
+
+Both native compilation/typechecks succeed, source files remain unchanged and
+product inventories contain strictly one file. Per RID, the wrapper freezes
+one client binary used by both sessions; cross-RID binaries are not identical
+and are not claimed to be. Fixture SHA-256 on all sessions is
+`8BACC6F97A374853C5F04EE176384738D8BFF7F71B1C7E768D088310C98DD8C2`
+(263,760 UTF-16 units, 1,100 records, at most 24 columns), also matching the
+original external gate fixture. `Control.m:160-191` initializes the runtime-B
+control without the old `Metadata()`/NSInvocation action warmup; one recorded
+entry is therefore no longer an inspection-suppressed admission count.
+
+### Unknown identity and green-job masking
+
+The product post-reply finder consumes its complete 128-admission ceiling on
+both RIDs before completing the identity audit. `Client.m:56,134-168` preserves
+budget exhaustion and null conclusions, and the strict parser accepts those
+as unknown. Null means **unobserved**, not false, stale, or equal. Product
+sampled native-wrapper identity, reciprocal parent graph and parent-window
+reachability remain unresolved. The product's server current-root/epoch flags
+are narrower facts and cannot substitute for the external CFEqual/graph audit.
+Control x64 completes exactly at the ceiling without attempting another
+admission; `audit_admissions=128` alone is not exhaustion.
+
+Dispatcher observation is explicitly unavailable (`false`, `server_calls=[]`)
+in all sessions. The first stage makes no getter-order or missing-selector
+inference. It also ran only C0 then P0 once per RID, not reversed launch-order
+confirmation or a reliability distribution.
+
+Both unchanged original external Grid reports still say **failed**, Swift
+exit 1, **40/41** checks true, sole false predicate `context-menu-accessible`
+with AX -25205. Both report normal editor exit, no forced cleanup, unchanged
+input and empty cleanup/general error strings. The jobs are green because
+these diagnostics are non-gating; moreover the first-pair owner deliberately
+returns exit 0 for a fully observed failing reply (`Run.ps1:296-317`). Green
+therefore means the bounded comparison completed, not product AX success.
+
+### Supported conclusion and next-step boundary
+
+The same native client/action function reproduces the product failure after
+minimal preparation while its single runtime-B control succeeds on both RIDs.
+Thus Swift-client language and the original selection-setter preparation bundle
+are **not necessary conditions** for this observed product failure. Different
+bounded discovery graph lengths and unobserved AppKit reads remain; no exact
+transport mechanism, Native AOT bridge defect or graph/lifetime defect has been
+isolated. Preserve the failure and unknown graph identity rather than guessing
+a product patch. The original 41-check gate remains the acceptance obligation.
