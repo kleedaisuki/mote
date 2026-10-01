@@ -16,7 +16,8 @@ internal readonly record struct TraceRecord(
     TelemetryStatus Status,
     TelemetryDimensions Dimensions,
     int? HResult = null,
-    TelemetryReason Reason = TelemetryReason.None);
+    TelemetryReason Reason = TelemetryReason.None,
+    NativeGridFocusAttributes? Focus = null);
 
 /// <summary>
 /// Single-consumer, bounded JSONL writer. Producers only call TryWrite; all I/O,
@@ -338,22 +339,75 @@ internal sealed class JsonlTraceSink
         writer.WriteNumber("duration_us", record.DurationUs);
         writer.WriteString("status", StatusName(record.Status));
         writer.WriteStartObject("attributes");
-        if (record.Dimensions.Format != TelemetryFormat.Unknown)
-            writer.WriteString("format", FormatName(record.Dimensions.Format));
-        if (record.Dimensions.DocumentBytes is long bytes && bytes >= 0)
-            writer.WriteString("size_bucket", SizeBucket(bytes));
-        if (record.Dimensions.Version is long version && version >= 0)
-            writer.WriteNumber("version", version);
-        if (record.Dimensions.Count is long count && count >= 0)
-            writer.WriteNumber("count", count);
-        if (record.HResult is int hresult)
-            writer.WriteNumber("hresult", hresult);
-        if (MoteTelemetry.ReasonName(record.Reason) is string reason)
-            writer.WriteString("reason", reason);
+        if (record.Focus is NativeGridFocusAttributes focus && record.Operation is
+            ("native.grid.focus.adapter.received" or "native.grid.focus.adapter"))
+            WriteFocusAttributes(writer, focus);
+        else
+        {
+            if (record.Dimensions.Format != TelemetryFormat.Unknown)
+                writer.WriteString("format", FormatName(record.Dimensions.Format));
+            if (record.Dimensions.DocumentBytes is long bytes && bytes >= 0)
+                writer.WriteString("size_bucket", SizeBucket(bytes));
+            if (record.Dimensions.Version is long version && version >= 0)
+                writer.WriteNumber("version", version);
+            if (record.Dimensions.Count is long count && count >= 0)
+                writer.WriteNumber("count", count);
+            if (record.HResult is int hresult)
+                writer.WriteNumber("hresult", hresult);
+            if (MoteTelemetry.ReasonName(record.Reason) is string reason)
+                writer.WriteString("reason", reason);
+        }
         writer.WriteEndObject();
         writer.WriteEndObject();
         writer.Flush();
     }
+
+    /// <summary>Writes only closed focus evidence; legacy dimensions never enter these operations.</summary>
+    private static void WriteFocusAttributes(Utf8JsonWriter writer, NativeGridFocusAttributes focus)
+    {
+        writer.WriteString("native_thread_relation", RelationName(focus.Before.NativeThreadRelation));
+        writer.WriteString("managed_admission_relation", RelationName(focus.Before.ManagedAdmissionRelation));
+        writer.WriteString("focus_before", PaneName(focus.Before.Pane));
+        writer.WriteString("focus_target", focus.Target == TelemetryFocusTarget.Table ? "table" : "cell");
+        if (focus.After is TelemetryFocusPane after) writer.WriteString("focus_after", PaneName(after));
+        if (focus.Outcome is TelemetryFocusOutcome outcome) writer.WriteString("focus_result", OutcomeName(outcome));
+    }
+
+    /// <summary>Maps validated relationships without retaining thread identities.</summary>
+    private static string RelationName(TelemetryFocusThreadRelation relation) => relation switch
+    {
+        TelemetryFocusThreadRelation.Owner => "owner",
+        TelemetryFocusThreadRelation.NonOwner => "non_owner",
+        _ => "unknown"
+    };
+
+    /// <summary>Maps the closed native physical focus categories.</summary>
+    private static string PaneName(TelemetryFocusPane pane) => pane switch
+    {
+        TelemetryFocusPane.None => "none",
+        TelemetryFocusPane.Source => "source",
+        TelemetryFocusPane.Table => "table",
+        TelemetryFocusPane.RowScroller => "row_scroller",
+        TelemetryFocusPane.ColumnScroller => "column_scroller",
+        TelemetryFocusPane.Coordinate => "coordinate",
+        TelemetryFocusPane.OwnedOther => "owned_other",
+        TelemetryFocusPane.Outside => "outside",
+        _ => "unavailable"
+    };
+
+    /// <summary>Maps actual adapter outcomes separately from exceptional invocation failure.</summary>
+    private static string OutcomeName(TelemetryFocusOutcome outcome) => outcome switch
+    {
+        TelemetryFocusOutcome.Applied => "applied",
+        TelemetryFocusOutcome.NoChange => "no_change",
+        TelemetryFocusOutcome.Unsupported => "unsupported",
+        TelemetryFocusOutcome.Stale => "stale",
+        TelemetryFocusOutcome.NotReady => "not_ready",
+        TelemetryFocusOutcome.InvalidCoordinate => "invalid_coordinate",
+        TelemetryFocusOutcome.Unavailable => "unavailable",
+        TelemetryFocusOutcome.CompositionBlocked => "composition_blocked",
+        _ => "fault"
+    };
 
     private static string StatusName(TelemetryStatus status) => status switch
     {

@@ -212,3 +212,48 @@ causal chain. Nested calls and reconfiguration do not require event retention or
 cross-callback state. No characters, native pointers, event timestamps, modifiers
 or key codes are serialized. A missing checkpoint never certifies nonexecution;
 forced-exit evidence remains censored and bounded-queue loss still applies.
+
+## Windows Grid adapter focus provenance
+
+The opt-in `BeginNativeGridFocus(target, before)` API records only a real
+`WindowsGridUiaBridge.Focus` adapter invocation attempt. It does **not** cover
+provider `Node.SetFocus` early stale/unsupported returns, OS focus delivery, or
+cross-process client/server causality. Missing records remain unobserved, not
+proof that a provider was never called.
+
+The fixed `native.grid.focus.adapter.received` receipt is a zero-duration successful
+session child, independent of ambient `Activity`. Its terminal
+`native.grid.focus.adapter` has a distinct span ID parented to that receipt and
+measures elapsed time from the receipt timestamp. `NativeGridFocusRequest.EndOnce`
+selects one attempt atomically without holding a producer lease across native work;
+late attempts are rejected/accounted by their original sink and never redirected
+to a newer session. A winning attempt does not certify persistence.
+
+Receipt attributes are exactly `native_thread_relation`,
+`managed_admission_relation`, `focus_before`, and `focus_target`. Terminals add
+exactly `focus_after` and `focus_result`. Relationships are `unknown`, `owner`, or
+`non_owner`; physical focus categories are `unavailable`, `none`, `source`,
+`table`, `row_scroller`, `column_scroller`, `coordinate`, `owned_other`, or
+`outside`; target is `table` or `cell`. `applied` and `no_change` terminals succeed;
+`unsupported`, `stale`, `not_ready`, `invalid_coordinate`, `unavailable`,
+`composition_blocked`, and `fault` fail. The first eight results are actual adapter
+results before HRESULT conversion; `fault` is exceptional invocation failure,
+not an invented adapter result. No HWND, PID, TID, cell coordinate, document
+content, exception text, legacy dimensions, or free-form value is accepted.
+
+Disabled receipt calls allocate nothing and return before inspecting evidence.
+Enabled calls reject undefined enum values. Invalid terminal evidence does not
+consume terminal ownership. The native caller remains responsible for containing
+optional evidence failures and preserving the exact original action/result.
+
+Portable validation: `NativeGridFocusTelemetryTests` covers all closed results,
+all physical categories, exact attribute sets, nonambient parentage, concurrent
+terminal ownership, disabled zero allocations, closed enum validation, and stale
+session rejection. Release regression command (2026-10-01) passed **58/58**, zero
+failed/skipped; retained TRX is
+`.cache/validation/focus-telemetry/focus-telemetry-regression.trx`. This includes
+13 focus tests plus existing request/menu/general telemetry coverage. An initial
+fixture incorrectly expected `session.start`; the actual schema operation is
+`mote.session`. The fixture was corrected, its failed TRX retained, and no
+production behavior was changed to accommodate it. No local native GUI or hosted
+runtime coverage is claimed by these tests.
