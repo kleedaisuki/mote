@@ -1210,8 +1210,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $rid = '${{ matrix.rid }}'
           $pins = @(
-            @{ path = 'tests/MacGridAxExternalProbe/Probe.swift'; hash = '5E6B498ACE4C44783E5E3D90CA67FE45DEAEE7290D7F43799FCBCF4E0E9086CA' },
-            @{ path = 'tests/MacGridAxExternalProbe/Run.ps1'; hash = 'A8CE1FD27A4E33745EC526A739D609260E51893B41A5E1BD5B305C6A48CDC505' },
+            @{ path = 'tests/MacGridAxExternalProbe/Probe.swift'; hash = '18F016D8A6D0E11CC099D7D40BB7FDC72644FC525C5CB63F16F0A0C413149290' },
+            @{ path = 'tests/MacGridAxExternalProbe/Run.ps1'; hash = 'E058F67AF0E38E89DDA248862BBD2FA9DD4F2203CCD7AC0AF9E3669EB3E48777' },
             @{ path = 'tests/MacGridAxExternalProbe/MenuTraceCapture.cs'; hash = '9715CDA6210599BAE94AB3C283A6A514715374758441AE265F44D5F3E6495265' }
           )
           foreach ($pin in $pins) {
