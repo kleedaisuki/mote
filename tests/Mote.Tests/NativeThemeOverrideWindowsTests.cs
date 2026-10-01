@@ -54,6 +54,8 @@ public sealed class NativeThemeOverrideWindowsTests
                 .Invoke(shell, [217]);
             Assert.Equal(1, reloadRequests);
             var original = ThemePolicies.Get(ThemePolicies.DarkId);
+            AssertOwnedRichEdit(editor);
+            AssertOwnedRichEdit(preview);
             shell.SetTheme(original);
             SendText(editor, 0x000C, 0, "private 中文😀"); // WM_SETTEXT resets native undo.
             Win32.SendMessageW(editor, 0x00B1, 0, -1); // EM_SETSEL selects all.
@@ -80,6 +82,8 @@ public sealed class NativeThemeOverrideWindowsTests
             var composed = ThemeComposer.Compose(original, data);
             Assert.Empty(composed.Issues);
             Assert.Equal(original.Id, composed.Theme.Id);
+            AssertOwnedRichEdit(editor);
+            AssertOwnedRichEdit(preview);
             shell.SetTheme(composed.Theme);
             Assert.Equal(ColorRef(composed.Theme.Palette.PreviewBackground),
                 Background(preview, ColorRef(composed.Theme.Palette.PreviewBackground)));
@@ -89,6 +93,25 @@ public sealed class NativeThemeOverrideWindowsTests
             Win32.SendMessageW(editor, Win32.EM_EXGETSEL, 0, ref afterSelection);
             Assert.Equal(selected.Min, afterSelection.Min);
             Assert.Equal(selected.Max, afterSelection.Max);
+            if (semantic)
+            {
+                // The CI access violation occurred in this literal-preview import path.
+                // Exercise balanced native/TOM leases and marshalled payload lifetime
+                // repeatedly without replacing the handles, source or undo branch.
+                for (var iteration = 0; iteration < 8; iteration++)
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    AssertOwnedRichEdit(editor);
+                    AssertOwnedRichEdit(preview);
+                    shell.SetTheme(iteration % 2 == 0 ? original : composed.Theme);
+                    Assert.Equal(before, Read(shell, editor));
+                    Assert.Equal("preview", Read(shell, preview));
+                    Win32.SendMessageW(editor, Win32.EM_EXGETSEL, 0, ref afterSelection);
+                    Assert.Equal(selected.Min, afterSelection.Min);
+                    Assert.Equal(selected.Max, afterSelection.Max);
+                }
+            }
             Assert.NotEqual(0, Win32.SendMessageW(editor, 0x00C6, 0, 0));
             Assert.NotEqual(0, Win32.SendMessageW(editor, 0x00C7, 0, 0)); // EM_UNDO must undo text, not palette formatting.
             Assert.Equal("private 中文😀", Read(shell, editor));
@@ -157,6 +180,16 @@ public sealed class NativeThemeOverrideWindowsTests
     private static uint Background(nint control, uint expected) =>
         unchecked((uint)(long)Win32.SendMessageW(control, Win32.EM_SETBKGNDCOLOR, 0, (nint)expected));
     private static uint ColorRef(ThemeColor color) => (uint)(color.Red | color.Green << 8 | color.Blue << 16);
+    /// <summary>Distinguishes invalid, foreign-thread and wrong-class fixture handles before native import.</summary>
+    /// <remarks>These owner-thread diagnostics do not claim IsWindow is a cross-thread lifetime lock.</remarks>
+    private static void AssertOwnedRichEdit(nint control)
+    {
+        Assert.Equal(GetCurrentThreadId(), GetWindowThreadProcessId(control, out var process));
+        Assert.Equal((uint)Environment.ProcessId, process);
+        var name = new StringBuilder(64);
+        Assert.NotEqual(0, GetClassName(control, name, name.Capacity));
+        Assert.Equal("RICHEDIT50W", name.ToString());
+    }
     private static FieldInfo Field(string name) => typeof(WindowsEditorShell).GetField(name,
         BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static string Read(WindowsEditorShell shell, nint control) =>
@@ -170,4 +203,10 @@ public sealed class NativeThemeOverrideWindowsTests
     private static extern int GetMenuString(nint menu, uint item, StringBuilder text, int capacity, uint flags);
     [DllImport("kernel32.dll")]
     private static extern bool FreeLibrary(nint library);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint control, out uint process);
+    [DllImport("user32.dll", EntryPoint = "GetClassNameW", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(nint control, StringBuilder name, int capacity);
 }
