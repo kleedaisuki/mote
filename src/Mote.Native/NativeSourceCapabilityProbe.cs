@@ -11,7 +11,7 @@ using Mote.Themes;
 
 namespace Mote.Native;
 
-/// <summary>Hosted-only full-resident native experiment; never selects a product editing profile.</summary>
+/// <summary>Declared-hosted full-resident native experiment; never selects a product editing profile.</summary>
 internal static class NativeSourceCapabilityProbe
 {
     /// <summary>Runs on the entry-point STA/main thread; rejects admission before any writer or native object exists.</summary>
@@ -51,8 +51,9 @@ internal static class NativeSourceCapabilityProbe
         finally { MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); }
     }
 
-    /// <summary>No environment variable enables this diagnostic on ordinary user machines.</summary>
+    /// <summary>Checks mutable declared runner identifiers, not security attestation of a hosted machine.</summary>
     private static bool Hosted() => Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" &&
+        Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") == "github-hosted" &&
         (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("RUNNER_OS") == "Windows" ||
          OperatingSystem.IsMacOS() && Environment.GetEnvironmentVariable("RUNNER_OS") == "macOS");
 
@@ -65,11 +66,15 @@ internal static class NativeSourceCapabilityProbe
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         Require(new[] { ".cache", ".temp" }.Any(area => path.StartsWith(
             Path.Combine(root, area) + Path.DirectorySeparatorChar, comparison)), "artifact-boundary-invalid");
-        Require(!File.Exists(path) && !Directory.Exists(path), "artifact-already-exists");
-        for (var ancestor = new DirectoryInfo(path); ancestor is not null; ancestor = ancestor.Parent)
+        for (string? ancestor = path; ancestor is not null; ancestor = Path.GetDirectoryName(ancestor))
         {
-            if (!ancestor.Exists) { Require(!File.Exists(ancestor.FullName), "artifact-ancestor-file"); continue; }
-            Require((ancestor.Attributes & FileAttributes.ReparsePoint) == 0 && ancestor.LinkTarget is null, "artifact-ancestor-linked");
+            FileAttributes attributes;
+            try { attributes = File.GetAttributes(ancestor); }
+            catch (FileNotFoundException) { continue; }
+            catch (DirectoryNotFoundException) { continue; }
+            Require((attributes & FileAttributes.ReparsePoint) == 0, "artifact-ancestor-linked");
+            Require(!string.Equals(ancestor, path, comparison), "artifact-already-exists");
+            Require((attributes & FileAttributes.Directory) != 0, "artifact-ancestor-file");
         }
         return path;
     }

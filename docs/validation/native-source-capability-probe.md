@@ -3,12 +3,19 @@
 ## Scope and admission
 
 `mote --check-native-source-capability <fresh-repo-output-dir>` is an explicit,
-hosted-only diagnostic, not the default source editor or a product profile.
+declared-hosted diagnostic, not the default source editor or a product profile.
 Before any configuration load, artifact creation, telemetry writer or native
-object, it requires `GITHUB_ACTIONS=true` and `RUNNER_OS=Windows` on Windows or
-`RUNNER_OS=macOS` on macOS. The caller must run from a repository root with a
+object, it requires `GITHUB_ACTIONS=true`, `RUNNER_ENVIRONMENT=github-hosted`,
+and `RUNNER_OS=Windows` on Windows or `RUNNER_OS=macOS` on macOS. These are
+mutable declared runner identifiers, not security attestation of a hosted
+machine; callers can forge environment values. The guard prevents accidental
+invocation outside the declared workflow contract, not adversarial invocation. The caller must run from a repository root with a
 `.git` directory. The output must be a previously nonexistent descendant of
 root `.cache/` or `.temp/`; existing linked/reparse ancestors are rejected.
+Each output ancestor is inspected with File.GetAttributes; reparse entries are
+rejected even when their target is missing. Only FileNotFoundException and
+DirectoryNotFoundException mean absent; other I/O/access failures reject
+admission. Existing output entries and non-directory ancestors are refused.
 Files use exclusive CreateNew. These path checks do not claim protection against
 an adversarial concurrent filesystem rename; the runner controls its scratch.
 
@@ -141,3 +148,15 @@ certification; it is not the original file-byte hash on Windows CRLF projection.
 actual byte identity without claiming success. Closed failure code plus durable
 last-entered phase identifies the failed invariant without exposing text.
 Semantic counts are recorded before valid-fixture diagnostics are asserted, then a completion marker follows successful publication.
+
+
+## Admission correction qualification boundary
+
+Commit `8bc2919` records the earlier runner qualification and remains historical
+build evidence. The later admission-only correction adds the declared
+RUNNER_ENVIRONMENT check and authoritative File.GetAttributes ancestor checks.
+It does not change source binding, native edit, analysis or persistence APIs.
+Earlier build/test identities do not qualify the changed guard; focused portable
+guard tests, independent review and the coordinated final build are required.
+No local native invocation or process-global environment test accompanies this
+correction.
