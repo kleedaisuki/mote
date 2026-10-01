@@ -599,3 +599,95 @@ The milestone closes the **single-run, trace-on, cache-resident ordinary JSON
 root-array capability pilot across four native RIDs**. It does not close startup/
 editing tail SLA, trace-off overhead, disk-cold I/O, physical paint, true IME,
 general JSON workloads, repeated-run reliability or the overall mote release goal.
+
+## Follow-up: Mac ARM100 Save observation fails on a later green run
+
+Independently audited completed [run 36809964231](https://github.com/kleedaisuki/mote/actions/runs/36809964231),
+current source **`8d5796542b63e54e630933de38a2c68d864ca085`**. The prior
+`36806841387` eight-case pass remains a valid **single-run** result, not proof
+that every later run or changed source will pass. This later run has **seven
+complete cases and one incomplete Mac ARM64 100 MiB case**.
+
+| RID | 1 MiB | 100 MiB | Actual pilot result |
+| --- | --- | --- | --- |
+| win-x64 | complete pass | complete pass | pass / actual pass marker |
+| win-arm64 | complete pass | complete pass | pass / actual pass marker |
+| osx-x64 | complete pass | complete pass | pass / actual pass marker |
+| osx-arm64 | complete pass | failed / save-exact-bytes / TimeoutError | incomplete / actual exit 1 |
+
+The ARM raw log emits `status=incomplete,samples=2` and an explicit pilot exit-1
+error. The other three emit real two-case pass summaries/markers. All four
+portable protocol suites pass **21/21**; the overall CI is green. Neither fact
+overrides the incomplete non-gating ARM pilot. Do not average this failure away
+with the earlier pass or call the new Engine/UIA changes its cause merely from
+commit order: source/binary changed and no handler-level failure was captured.
+
+### Independently corroborated successes and identity
+
+Exact current Git/driver/auditor/Swift hashes, native architecture, one-file
+inventories, pre/post binary identities, independently reconstructed corpus/edit
+hashes and retained trace hashes agree. Reported payload identities:
+
+| RID | Bytes | SHA-256 |
+| --- | ---: | --- |
+| win-x64 | 7,130,112 | `663311f0aa475c6913a250510967027fb38d20799bdadde1339150681f2ed971` |
+| win-arm64 | 7,272,448 | `34d34f55f41385b37d1d1038d8085e45a7e919ac172aea8f61745695b57ee732` |
+| osx-x64 | 16,849,256 | `4c498c2b2d28946e024e89fa6a1a641ef4faba28b60914c63fced8b9eff8fece` |
+| osx-arm64 | 16,508,264 | `8e9cd26c258216712817ff4ca4d1392b3d29d135ba69484e55ff27af129305c5` |
+
+The seven successful cases have exact 1,048,576/104,857,600-byte Save and final
+working oracles, unchanged immutable original, Complete v0/v1, one edit attempt,
+unchanged disk before Save, normal initial exit and normal fresh GUI reopen.
+Their **14 distinct retained GUI session identities** satisfy terminal/action/
+version/parent/trace-hash and no-edit/no-Save reopen contracts with **zero drops**.
+Main/reopen trace counts: Windows x64 **26/13, 31/18**; Windows ARM64
+**26/13, 34/18**; Mac x64 **33/11, 37/16**; Mac ARM64 1 MiB **32/11**.
+No new zero-drop failure is observed among these normal terminal sessions.
+
+### ARM64 100 MiB: one attempted Save, no accepted Save outcome
+
+The failed sample achieves source readiness with full exact **104,857,600**
+source units, Complete zero-diagnostic v0, one acknowledged edit, Complete
+zero-diagnostic v1 and unchanged working disk before Save. It records exactly
+one Save command attempt: `CGEvent.postToPid`, **two attempted events**, status
+`attempted-posts-no-delivery-acknowledgement`, **execution_acknowledged=false**.
+The guard certifies matching PID, granted AX/post preflights, focused dirty
+source, caret 10 with empty selection, and successful window count/copy. The
+client command returns after 58.585875 ms; this is not command execution or
+successful Save duration.
+
+The 60-second clean-title wait times out. Final read-only observation is still
+ready, Complete, focused and **modified=true**, with one exact-length source,
+caret 10, window-count/copy error 0 and one window. Final working hash remains
+the **original** `11c596af…`, not expected edit hash `f11fa45a…`; the immutable
+original also remains exact. The failed sample's observation summary contains
+649 read-only observations across stages, not 649 Save attempts. No modifying
+action is retried, no global key is posted and no permission workaround is used.
+
+One owned close is attempted and fails with RuntimeError; forced cleanup
+follows. `normal_exit=false`, `reopen_normal_exit=false`; no GUI reopen occurred.
+The sole retained 100 MiB trace is **0 bytes**, so there is no terminal/Save/
+drop record to audit. This cannot establish whether Command-S reached the
+handler, whether product Save encountered an error, or why the dirty state
+persisted. It is specifically **failed external Save-outcome acceptance with
+unacknowledged event posting**, not a proven product replacement failure, TCC
+denial or parser failure. The producer-drain fix cannot promise flush after a
+forced kill; absence of a terminal trace is not evidence of a normal-shutdown
+drop recurrence or successful no-drop acceptance.
+
+### Reproducibility and next discriminating step
+
+Artifacts/inventories are under `.cache/ci-36809964231-json-<RID>/`, raw logs
+`.cache/ci-36809964231-json-all.log`, independent run-bound assertions and output
+`.cache/ci-36809964231-json-audit.py` and
+`.cache/ci-36809964231-json-independent-summary.json`. Assertions corroborate
+all eight reported outcomes, checking seven full passes separately from the
+failed ARM's exact unchanged bytes and empty trace. No workflow/native process
+was rerun and no product/driver file was edited for this audit.
+
+The informative next probe needs to distinguish owned ordinary Save-command
+delivery/handler entry from subsequent product I/O outcome without resending
+writes or broadening foreground/TCC authority. Another green overall CI or
+silent automatic retry would not resolve that uncertainty. Physical paint,
+real keyboard/IME, tail latency and reliable repeated-run acceptance remain
+outside the established single-run capability results.
