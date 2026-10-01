@@ -121,6 +121,14 @@ jobs:
       - name: Release workflow independent byte fixture controls
         shell: pwsh
         run: ./tests/NativeReleaseProductWorkflow.ps1 -SelfTest
+      - name: Windows Save observer guarded-file regression
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Owned-file sharing guard only; no GUI or application changes.
+          & pwsh -NoProfile -File ./tests/Test-NativeWindowsReleaseSaveObserver.ps1 `
+            2>&1 | Tee-Object '.cache/release-evidence/tests/windows-save-observer.stdout.txt'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Save-completion observer regression failed.' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

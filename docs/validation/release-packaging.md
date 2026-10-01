@@ -200,6 +200,24 @@ release-assets barrier. The existing requirement that all managed tests and all
 four package jobs pass remains unchanged. Diagnostic retention does not promote a
 failed candidate into downloadable product assets.
 
+### Windows Save observer regression qualification
+
+Run `36931198293` at source `a86121e` retained successful macOS final-view and
+Windows x64 product evidence, but the ARM64 observer attempted to read the Save
+target before matching native Save/UI/command completion and encountered a file
+sharing violation. The separate observer correction is qualified by
+`tests/Test-NativeWindowsReleaseSaveObserver.ps1`: an owned-file exclusive guard
+reproduces the premature read failure, requires zero reads before matching
+completion and one exact read afterward. This changes observer admission, not
+the product's Save behavior.
+
+The release workflow now executes that deterministic regression in the Windows
+managed test job only, through an external pwsh process with checked exit status.
+Its stdout/result summary is retained alongside existing test evidence. The
+complete test matrix, four package probes, timeouts and joint release-assets
+barrier remain unchanged. This wiring received YAML/PowerShell syntax validation
+only; no GUI, full suite or already-passed packer tests were rerun.
+
 The root owner must freeze commit/version/default profile and run the workflow.
 Only a complete successful release-assets job for the intended commit is eligible.
 Before upload, inspect run/job evidence and verify checksum/index identities. A

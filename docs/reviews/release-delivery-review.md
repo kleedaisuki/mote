@@ -333,3 +333,39 @@ zero failures/not-executed**. This includes the queued attempted-v3/current-v4
 regression. It overlaps the prior 37-guard result; counts are not added. Source
 hashes above remain unchanged at freeze. Targeted review complete and ready for
 integration; corrected four-RID qualification remains pending.
+
+## Final narrow Windows Save-observer ordering correction
+
+Baseline: `a86121ea4a1477796b3174332b921e3efb716a89`. Reviewed only the working
+Save-observer change, new deterministic regression script and Windows validation
+append after hosted run `36931198293`. **No substantive defect found.**
+
+The changed task sends Save once, waits for clean native modified chrome and
+successful `document.save`, `save.completed`, `command.save` with the same actual
+version/session, then reads the target text exactly once. Final semantic checks
+still require current parse/publication/style and actual view facts. The trace
+helper ignores an unfinished live JSONL suffix; the final closed-schema/causal
+oracle still checks the complete retained trace after shutdown. There is no
+sharing-exception retry/catch, repeated edit/Save, weakened byte comparison or
+increased watchdog. Final release aggregation still needs both test/package jobs.
+
+The regression extracts the production observer function by PowerShell AST,
+uses a real owned FileShare.None guard, demonstrates the old read's sharing
+exception, rejects persistence-only and mismatched-version completion, and admits
+one exact read only after guard release and matching completion. Independently
+read its retained result: zero reads before completion, one after, derived version
+7 and `gui_tested=false`. Independently read the affected local suite report:
+`passed`, win-x64, six fixtures. These reports are managed local evidence, not
+hosted AOT/ARM64 or a retroactive pass of the failed aggregate. The documentation
+preserves the original failure and explicitly states this distinction.
+
+Reviewed source SHA-256:
+
+| File | SHA-256 |
+| --- | --- |
+| `tests/Invoke-NativeWindowsReleaseProduct.ps1` | `b57fb45eb2b1598ff1caa9234af332060b40ad0cabb736a306467ab9e9d5794f` |
+| `tests/Test-NativeWindowsReleaseSaveObserver.ps1` | `505e75821555eb32c5b53d9d03b31c5621c40dd5867f0b32fa1f7e13059f42a7` |
+
+No production behavior, timeout, test, GUI or CI rerun was changed/executed by
+this reviewer. Narrow review ready for integration and new exact-source hosted
+qualification; no public-release completion claim is made.
