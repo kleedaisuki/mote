@@ -1480,11 +1480,14 @@ jobs:
         run: |
           $rid = '${{ matrix.rid }}'
           $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
-          & python -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p test_probe.py -v
+          & python -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Native JSON acceptance artifact/protocol tests failed.' }
+          # Original Mac child only: positive boundary observations never relax
+          # the one-key-pair, exact-byte/normal-exit/trace/reopen acceptance.
+          $witness = if ($IsMacOS) { @('--mac-save-witness') } else { @() }
           & python benchmarks/NativeJsonLargeAcceptance/probe.py `
             --executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name" `
-            --rid $rid --output ".cache/ci-inventory/$rid/native-json-large.json"
+            --rid $rid --output ".cache/ci-inventory/$rid/native-json-large.json" @witness
           $code = $LASTEXITCODE
           if ($code -ne 0) { throw "Native JSON source pilot incomplete (exit $code); inspect fixed report classifications." }
           $report = Get-Content ".cache/ci-inventory/$rid/native-json-large.json" -Raw | ConvertFrom-Json
@@ -1492,7 +1495,11 @@ jobs:
               @($report.samples | Where-Object status -CNE 'pass').Count -ne 0) {
             throw 'Native JSON source pilot did not pass its exact two-case coverage contract.'
           }
-          Write-Host 'Ordinary Native AOT JSON source pilot passed; physical paint, real IME and tail latency remain untested.'
+          if ($IsMacOS) {
+            Write-Host 'Mac JSON diagnostic-on sample passed exact Save acceptance; witness is not a reliability fix or performance sample.'
+          } else {
+            Write-Host 'Ordinary Native AOT JSON source pilot passed; physical paint, real IME and tail latency remain untested.'
+          }
       - name: Upload ordinary Native AOT JSON pilot report and local traces
         if: always()
         uses: actions/upload-artifact@v4
