@@ -1,6 +1,7 @@
 # Lean macOS Grid ShowMenu first pair
 
-Date: 2026-10-01. Status: implementation and portable validation; **hosted native execution pending**.
+Date: 2026-10-01. Status: portable validation and first hosted prelaunch failure;
+**C0/P0 native execution remains pending**.
 
 ## Question and scope
 
@@ -91,6 +92,61 @@ must execute the non-gating first-pair step and have their raw reports audited.
 `completed-failure-observed` is valid evidence collection of a failing original
 reply, never product `passed`. No VoiceOver, physical input, IME, arbitrary-file,
 release or causal-fix claim is made before those observations.
+
+## First hosted execution: CI 36815303415 / 6750cd9
+
+[Run 36815303415](https://github.com/kleedaisuki/mote/actions/runs/36815303415)
+executes the new first-pair step on both Mac RIDs. The containing non-gating
+steps appear successful, but the **raw owner reports are `probe-error` on both**:
+`error_code=native-typecheck-failed`, `native_typecheck=false`, `compiled=false`,
+`sessions=[]`. No C0/P0 target/client was launched, and no action return,
+identity, admission, lifecycle or normal-exit evidence exists for this pair.
+The source hashes are unchanged and strict product one-file inventory passed.
+Completed raw job logs independently print `probe-error`, the pair-unresolved
+wrapper error and actual step exit1 on both jobs (x64 job110218955959;
+ARM job110218955927). Thus the green containing jobs do not establish even
+experimental completion.
+
+| Prelaunch fact | osx-x64 | osx-arm64 |
+| --- | --- | --- |
+| Host architecture | X64 | Arm64 |
+| SDK toolchain in compiler log | Xcode16.4 | Xcode26.6 |
+| Compiler failure | Control helper `Marker` collides with SDK typedef | Same |
+| Diagnostics | 2 errors | 2 errors |
+| Product binary SHA256 | `4AADB1127CB48C872772C88E385ED3111120C940D21575B99833BEEE22CA1204` | `8C870C20B7F8A5F1284A89481F874ECB91351D6DC49BFAFA82AA125D20316C94` |
+
+Both bounded compiler logs locate `Control.m:120` and call site177; SDK
+`CarbonCore.framework/Headers/AIFF.h:133` declares `typedef struct Marker Marker`.
+This is a demonstrated **diagnostic helper compilation defect**, not a product
+AX or Native AOT callback failure. Client compilation occurs earlier in the
+driver, but the aggregate compiled flag does not certify a usable pair. Raw
+artifacts and compiler logs are preserved under
+`.cache/ci-36815303415-grid-pair/{x64,arm64}/`.
+
+Both fixture reports preserve 263,760 units and SHA256
+`8BACC6F97A374853C5F04EE176384738D8BFF7F71B1C7E768D088310C98DD8C2`.
+Source pins match the reviewed LF snapshots: Client
+`FAD0E752418E6CFE2529469E23B12C9DDEC4BE58369534BA6D9E120B56068C77`,
+Control `BC78F9EA2331738D36E6FCB6EEF152FDCFBACFC5925A7D8CFDA5CE4E26978B3D`,
+driver `EC842CF260BD91034B5D37DF79E4161D4C1A0B24AF204840B131E67F3B22C872`.
+
+The unchanged original external product probe **does execute independently**
+in this run: both raw reports have41 checks,40 true and only
+`context-menu-accessible=false`, original AX=-25205, actual Swift exit1.
+Both observe editor normal exit0, no forced cleanup, unchanged fixture and
+completed guarded downstream navigation. These separate normal-exit facts
+must not be transferred to the unlaunched C0/P0 pair. Reference reports are
+under the same audit root in `reference-{x64,arm64}/`.
+
+Bounded harness repair `60f7bd4` renames only the helper declaration/call to
+`PairFinishMarker`; no action behavior, schema, budget, cleanup or product
+implementation changes. Updated Control hashes are LF
+`0BCE7C4678221B16140BF424E33761E17471E6C171331CC657D985B053BEE693` and
+CRLF `82330DADF9F9978ADD71375846C7511542A6C43F57E1515ADA4F2F7610B75A80`.
+Workflow pins are refreshed in `904037d`; portable guards27/27, YAML parsing and
+all four LF/CRLF pin pairs were revalidated. A repeat compile
+and real C0/P0 execution are required; **the original causal question remains
+unanswered**, so no product bridge/getter/lifetime repair is justified here.
 
 ## External grounding
 
