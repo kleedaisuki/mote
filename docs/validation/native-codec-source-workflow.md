@@ -116,3 +116,80 @@ scripts are under `.cache/validation/native-codec-source-workflow/`.
 Already qualified model/build tests were not repeated. These portable/static
 checks do **not** supply published-image codec or native GUI evidence. All four
 actual Native AOT runtime results remain pending the reviewed coordinator push.
+
+## First hosted result and hidden-directory admission correction
+
+CI [36887820181](https://github.com/kleedaisuki/mote/actions/runs/36887820181)
+ran source `23f1c1a9bc01f198add7e44df8b026fe1955f923`. The new checks did
+not establish four-RID success. The following are distinct observations, not
+interchangeable job conclusions:
+
+| RID | Codec | Source capability |
+| --- | --- | --- |
+| `osx-x64` | Supervisor rejected hidden `.cache` before process launch | Same pre-launch rejection; no phase evidence |
+| `osx-arm64` | Same pre-launch rejection | Same pre-launch rejection |
+| `win-x64` | Actual exit 0, exact marker, schema 1 / X64 / all seven checks, normal boundary | Actual 120-second timeout; forced exact-process kill, exit -1, censored |
+| `win-arm64` | Actual exit 0, exact marker, schema 1 / Arm64 / all seven checks, normal boundary | Actual 120-second timeout; forced exact-process kill, exit -1, censored |
+
+Completed macOS job logs are available independently of the still-running
+aggregate run through the Actions jobs API. Jobs `110455525918` (x64) and
+`110455526123` (ARM64) both show `Get-Item` failing at line 20 of the generated
+execution script: `Could not find item /Users/runner/work/mote/mote/.cache`.
+The old guard first used `Test-Path`, then provider `Get-Item` without `-Force`.
+The path existed, but the provider hid the dot-directory. This failure occurred
+before output creation and before `Process.Start`, outside the supervisor result
+try/finally. The uploader explicitly reported no files for both probe trees;
+there are **no macOS codec/source artifacts to reinterpret as runtime failures**.
+
+The admission correction reads native `File.GetAttributes` for every ancestor,
+including hidden entries and dangling reparse points. Only file/directory-not-found
+exceptions permit continuing past a not-yet-created path component. Reparse
+points and existing non-directory ancestors are rejected; other I/O failures
+remain errors. No fresh directory is created before admission, and no deadline,
+retry, codec predicate, phase predicate or non-gating policy changes. This is
+not protection against an adversarial concurrent pathname replacement.
+
+Focused Windows portable evidence reproduced the old guard's hidden-directory
+failure using a newly created repository-owned directory with its Hidden
+attribute set. The candidate passed **10/10** guard cases: hidden ancestor,
+existing directory, missing descendants, outside-cache refusal, file-ancestor
+refusal, leaf-file inspection, real junction leaf/ancestor refusal, and dangling
+junction leaf/ancestor refusal. Both actual junction cases and their dangling
+variants executed; none was skipped. YAML parsed, both steps resolve to the
+identical anchored execution block, and its PowerShell AST had zero errors.
+There were **zero native process launches** in this focused verification. No
+local macOS runtime result is claimed; the next published CI must prove that
+macOS proceeds past corrected admission.
+
+Windows codec binary SHA-256 before and after execution was identical:
+
+- x64: `12235120D6257EAE4BD4D3B8BCC54CA2F7819F17B29E925D51E15D0133DDC181`.
+- ARM64: `4FAF083267D6B66C7D4A66782F01DC86905A08F127350652ECCBBCE46CF0D27A`.
+
+The Windows source timeouts are **not** explained by the macOS admission bug.
+Both raw phase reports reached `dense-json`, observed 79,433 semantic tokens and
+zero diagnostics. Initial native semantic publication completed in
+78,852.2383 ms (x64) / 73,852.4066 ms (ARM64); controlled editing and engine
+reconciliation then proceeded. Both completed the post-edit token projection,
+then ended during the **second, post-edit** publication with
+`semantic-publication-verified/entered`. That phase has no terminal in either
+retained prefix. The actual supervisors record `timed_out=true`,
+`cleanup_forced=true`, `terminated=true`, `process_exit_code=-1`,
+`process_boundary=censored`, and complete stdout/stderr copies. This is a real
+incomplete experiment, not a success or proof of the exact internal cause.
+Source-adapter investigation belongs to that implementation's owner; no timeout
+increase or weakened completion predicate is justified here.
+
+Evidence is retained under `.cache/ci-36887820181-codec-supervisor/`: both raw
+completed macOS job logs, original Windows codec/source artifact trees,
+extracted baseline/candidate guard scripts, reproducible guard fixtures and
+`guard-check-result.txt`. Saved macOS log SHA-256 values are
+`875985F53EDA0EA34F56AD3E288C34CEC471DD0BA9AE3B5D3DB956D4E2C31847` (x64)
+and `1449633336700A911228D083F07CE1A0711FBF5A6DEB8799927A670B0FF90953`
+(ARM64). Artifact retrieval and diagnosis did not dispatch, restart or rerun the
+hosted experiment.
+
+The corrected shared execution literal's normalized UTF-8/LF SHA-256 is
+`9b0c02fddab9a11f7e0a681da9bb5f481862e7825b1e5ec2ef868321417e5224`;
+this hashes the parsed YAML literal, not the workflow file or a platform-specific
+CRLF serialization. The only execution change is the ancestor admission block.

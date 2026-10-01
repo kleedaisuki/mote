@@ -196,8 +196,12 @@ jobs:
             if (-not $full.StartsWith($cache + [IO.Path]::DirectorySeparatorChar,
                 $(if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }))) { throw 'Unsafe artifact area.' }
             for ($cursor = $full; $cursor; $cursor = [IO.Path]::GetDirectoryName($cursor)) {
-              if ((Test-Path -LiteralPath $cursor) -and
-                  ((Get-Item -LiteralPath $cursor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe artifact ancestry.' }
+              # Native attributes include hidden ancestors and dangling links; provider visibility is not admission.
+              try { $attributes = [IO.File]::GetAttributes($cursor) }
+              catch [IO.FileNotFoundException] { continue }
+              catch [IO.DirectoryNotFoundException] { continue }
+              if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe artifact ancestry.' }
+              if ($cursor -cne $full -and -not ($attributes -band [IO.FileAttributes]::Directory)) { throw 'Non-directory artifact ancestry.' }
             }
           }
           Assert-ProbePath $directory
