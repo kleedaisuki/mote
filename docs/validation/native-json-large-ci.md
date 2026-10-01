@@ -511,3 +511,91 @@ child Save 38.765 / 380.014 ms. Mac x64 100 MiB parent source binding is
 do not establish a startup/edit tail SLA or architecture superiority. Physical
 paint, real keyboard/IME and screen-reader acceptance remain outside the pilot.
 No native pilot was rerun locally, and only this document was edited for the audit.
+
+## Follow-up: first complete four-RID ordinary JSON pilot
+
+Independently audited [run 36806841387](https://github.com/kleedaisuki/mote/actions/runs/36806841387),
+current source **`48a371108a67370bc46cea52299dc5c6561e9cc5`**. This source includes
+the bounded admitted-producer telemetry shutdown change `ea3035f` and its
+independent review. **All eight 1/100 MiB native cases now pass the existing
+complete scoped contract**, including the previously refused Mac x64 1 MiB
+case. Historical failures above remain valid evidence for their exact sources.
+
+| RID | 1 MiB | 100 MiB | Main/reopen trace records, 1 MiB | Main/reopen trace records, 100 MiB |
+| --- | --- | --- | ---: | ---: |
+| win-x64 | complete pass | complete pass | 26 / 13 | 31 / 18 |
+| win-arm64 | complete pass | complete pass | 26 / 13 | 34 / 18 |
+| osx-x64 | complete pass | complete pass | 32 / 11 | 40 / 16 |
+| osx-arm64 | complete pass | complete pass | 33 / 11 | 37 / 16 |
+
+This verdict uses raw artifacts and nested-step execution, **not green jobs**:
+every RID emits `status=pass,samples=2`, the actual post-execution pass marker,
+and no pilot failure/exit-1 path. Portable protocol/artifact tests are **21/21**
+per RID. The non-gating nature of the pilot does not change its evidence contract.
+
+### Exact workload and session evidence
+
+Each RID has exactly two distinct-sized samples: **1,048,576** and
+**104,857,600** bytes. Independent bounded reconstruction verifies the original
+and one-byte edited hashes recorded earlier. Every sample witnesses immutable
+original, disk unchanged before Save, exact saved/final working bytes, native
+Complete zero-diagnostic v0/v1, exactly one edit attempt, normal initial exit,
+fresh GUI reopen with unchanged saved bytes, and normal reopen exit.
+
+The run uses eight fresh ordinary GUI editing processes and eight fresh GUI
+reopen processes, plus eight separate `--check-runtime` launch-control processes.
+The independent retained-trace check finds **16 distinct GUI session identities**,
+one successful terminal per session, expected open/edit/Save counts and versions,
+proper open/edit draw parents, matching trace hashes, and no edits or Saves in
+reopen sessions. **All 16 sessions have zero dropped records**, with no positive
+`telemetry.dropped.count` witness. The previous x64 small case's saved-byte
+success is now supplemented by a valid zero-drop trace and actual GUI reopen;
+its earlier audit refusal has not been weakened or retroactively erased.
+
+This is an observed hosted success after the producer-drain change, not a claim
+that trace drops can never occur or that one run statistically proves repair
+reliability under every admission/shutdown race. The specific admitted-producer
+mechanism and directed tests are separately documented in
+`docs/reviews/trace-drop-normal-exit.md`. No retries or predicates were relaxed
+to produce this pilot pass. Engine I/O spans lacking revision attributes remain
+unversioned; exact file and native version witnesses stay separate.
+
+### Mac attempt versus observed outcome
+
+For all four Mac size/architecture cases, Save records retain method
+`CGEvent.postToPid`, **two attempted events**, status
+`attempted-posts-no-delivery-acknowledgement` and
+**`execution_acknowledged=false`**. Guards certify matching PID, granted preflights,
+focused dirty source, full exact source length and caret 10 with empty selection
+before the attempt. The posting API has no delivery acknowledgement; independent
+clean-title observation, exact saved bytes and successful Save/session traces
+certify the scoped resulting behavior. This remains synthetic process-specific
+input, not physical-key, global foreground, real IME or screen-reader evidence.
+
+### Published current-source identity and reproducibility
+
+Native Python 3.14.7 architecture matches each RID. Independent hashes of the
+run's driver/auditor/Swift Git blobs agree with native checkout hashes; both
+Swift clients compiled. Four separate inventory artifacts confirm one executable,
+zero other payloads and zero bundled native libraries. Report pre/post identities:
+
+| RID | Bytes | SHA-256 |
+| --- | ---: | --- |
+| win-x64 | 7,107,072 | `7261ddd62cd4f34cb963c618b2a9732256bed4f7c70497939c1ab2a13eaeade0` |
+| win-arm64 | 7,247,360 | `b6f7f3def82dd3ec3be3dc51076a316c48057ac4164670bf0b9a37246c8db6c2` |
+| osx-x64 | 16,849,104 | `b124339fe32cbf0fd4c9c7ac5c648bd150eabf3aa75525eb84ea4a82ff83c20b` |
+| osx-arm64 | 16,508,120 | `356dee6e2b531435ca12250f0dad6ea52543bb622803cd91d8a806b9614f9cc0` |
+
+No downloadable product binary was independently executed or rehashed locally;
+inventory and reported identity are corroborated without expanding that scope.
+Artifacts/inventories: `.cache/ci-36806841387-json-<RID>/`; raw logs:
+`.cache/ci-36806841387-json-all.log`; independent assertions and structured output:
+`.cache/ci-36806841387-json-audit.py` and
+`.cache/ci-36806841387-json-independent-summary.json`. Assertions bind this exact
+commit/run and independently check all eight success outcomes and 16 session
+identities. No workflow or native pilot was rerun for the audit.
+
+The milestone closes the **single-run, trace-on, cache-resident ordinary JSON
+root-array capability pilot across four native RIDs**. It does not close startup/
+editing tail SLA, trace-off overhead, disk-cold I/O, physical paint, true IME,
+general JSON workloads, repeated-run reliability or the overall mote release goal.
