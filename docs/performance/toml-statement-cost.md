@@ -551,3 +551,160 @@ no mutation, Format, Save or session reuse was invoked. They therefore establish
 neither current cached-edit performance nor native startup/input/render latency.
 The historical cache results above remain separate. No GUI, Native AOT, macOS,
 100 MiB input, or repeated completed cache experiment was involved.
+
+## Read-only clean-tree certification cost (2026-10-01)
+
+This is one **new, bounded 50-row public-policy experiment**, addressing the
+specific duplicate-grammar construction identified above. It compares the frozen
+final double-parse policy with the accepted bool-only tree certifier. It does not
+remeasure legacy `5CF3A8EC...`, the completed cache experiments, or native tracing.
+
+**Decision:** clean inputs materially reduce cumulative allocation and observed
+whole-call medians while retaining the same projected result size. A late semantic
+error incurs **additional failed-certification allocation before fallback**; that
+adverse cost is retained, not hidden behind the valid-input improvements. The
+optimization is worthwhile for the measured valid public-policy workloads, not a
+blanket no-regression guarantee for malformed files.
+
+### Correctness acceptance preceded measurement
+
+Production was frozen at `a8138522f94c3d75b1dcd28f8c8dfa790f841578`. Independent
+acceptance `9028e3e` completed before any performance qualification/warm-up:
+915/915 affected public/recovery/reuse/projection tests, 48/48 incremental tests,
+703/703 exact decoded public-analysis/Format comparisons, and retained read-only,
+structural and cancellation evidence. See
+[the independent validation record](../validation/toml-tree-certification.md).
+These finite checks establish the accepted scope, not proof for every TOML source.
+
+| Frozen revision | Actually loaded `Mote.Formats.dll` SHA-256 | Bound `Mote.Engine.dll` SHA-256 |
+| --- | --- | --- |
+| Double-parse baseline `70def6d2` | `C8F3A5FFA6A0BC42B58F2A5D91EBC3AF35074B1F16191A9FB16A0C6125F296E2` | `0979B1C385E32187CCE1CCBDE3EB9AE27D9FE6106237CE59C217EAAF9D4BD631` |
+| Clean-tree candidate `a8138522` | `F97E4CCEFECFD320B3A5C173EC90A1C0C50669CCE237DA88D274CD2EDC11C2EF` | `60183AC2FDD1B482F9A7EED9FF69BFA16A4C5D22537209361B745297C30EE5A6` |
+
+Each revision uses its own scratch project, intermediate/output directories and
+copied frozen Format/Engine bindings below `.temp/toml-tree-policy-cost/`.
+Unlike the earlier shared-output incident, both actual output DLL identities were
+verified before execution. The harness guards **runtime-loaded** Format and Engine
+hashes before qualification/warm-up and in every timed row. Production TOML source,
+Contracts, copied DLLs and harness/project hashes were checked throughout the run;
+the final guard reports unchanged. No production rebuild/mutation occurred.
+Engine identities are recorded rather than assumed equal; timed Analyze work is
+the public Formats path, not an Engine edit/session workflow.
+
+### Declared fixtures, including invalid fallbacks
+
+The three valid constructors/hashes are exactly those in the preceding experiment.
+Both invalid controls append nine ASCII characters to the same dense source; they
+do not change its earlier 8,192 assignments.
+
+| Fixture | Bytes/chars; LF count | Nodes / tokens; diagnostics | SHA-256 |
+| --- | --- | --- | --- |
+| tiny | 86; 8 | 19 / 21; 0 | `90A75D826F841A650228108F41168AA37F4AC66642B240CD9090A508DC5AB5C0` |
+| mixed | 8,326; 506 | 1,105 / 1,242; 0 | `32B41D4F24286D871E85A5E4363342BB563FBEB138FFF7C46E60FAD4EC851FC6` |
+| dense | 131,072; 8,192 | 16,385 / 24,576; 0 | `5C212EB1B14B2E47978CC8A302EA42739415E013A371063BA71FF7C19602B959` |
+| late duplicate: append `k08191=1\n` | 131,081; 8,193 | 16,387 / 24,578; **1** | `28E487AB57F872CC3D56A6043C3AA8536F418C0F628412EDB47A48FF79C796D9` |
+| late grammar: append `late=[1,\n` | 131,081; 8,193 | 16,388 / 24,579; **3** | `87E3791839DC59D1CEAC5657CACE87EEED79913E07D96B889D358FEFFE7898EA` |
+
+Before timing, ten separate untimed processes compared each revision/fixture's
+full ordered diagnostics (severity, code, **message**, exact span and count),
+complete serialized Analyze fingerprint, source identity and Format fingerprint.
+All five pairs match. The duplicate has `TOML_PARSE`, message
+`Key 'k08191' is already defined.`, span `[131072,131078)`. The grammar control
+preserves **all three existing** `TOML_PARSE` diagnostics, with spans `[0,1)`,
+`[131072,131073)` and EOF `[131081,131081)`; their full messages/order are retained
+in the qualification JSON, not collapsed to one witness or silently corrected.
+Both invalid controls' Format outputs are exactly unchanged. The benchmark does
+**not** require zero diagnostics on these controls or exclude their repetitions.
+Complete-analysis/Format SHA fingerprints are corroborating fixture checks; the
+independent 703-case exact comparison remains the broader correctness evidence.
+
+### Method and all retained observations
+
+Exactly one fresh managed process per revision/fixture, baseline then candidate
+for each fixture in table order; one complete Analyze warm-up followed by five
+timed public Analyze calls. **50/50 rows** and all ten numeric measurement-process
+exits 0 are retained. There were no setup guard refusals, failed measurements,
+retries, discarded observations or replacement processes in this batch.
+
+Environment remains Windows 10.0.26200 x64, Intel i9-12900H/20 logical processors,
+.NET 10.0.11, SDK 10.0.400, workstation GC, Tomlyn 2.10.1 and
+`DOTNET_TieredCompilation=0`. Background load is not isolated. Timed/allocation
+work is the entire synchronous Analyze call; source construction, explicit full
+GC, binary hashes, result fingerprint checks, node counting and JSON output are
+excluded. Every timed result matches its prequalified complete fingerprint.
+Format runs only in untimed qualification; no edit, Save or cache repair is timed.
+
+Allocation is current-thread cumulative managed bytes, as before; result retention
+is the post-full-GC heap delta with only the resulting FormatAnalysis deliberately
+kept alive, excluding pre-existing source/policy/expected fingerprint. It is not
+process RSS, parser peak memory or a whole-editor memory budget. Elapsed figures
+below are **medians and observed min–max**, not confidence intervals.
+
+| Input / revision | Analyze ms [min–max] | Cumulative allocated bytes, median | Retained result bytes, median |
+| --- | ---: | ---: | ---: |
+| tiny / baseline | 0.0797 [0.0734–0.1274] | 64,008 | 3,208 |
+| tiny / candidate | 0.0595 [0.0467–0.1164] | 38,456 | 3,208 |
+| mixed / baseline | 2.1094 [2.0301–3.9064] | 3,648,984 | 184,632 |
+| mixed / candidate | 1.1774 [1.1059–1.9273] | 2,167,144 | 184,632 |
+| dense / baseline | 56.6314 [53.9373–60.5888] | 60,096,912 | 3,080,456 |
+| dense / candidate | 41.5958 [35.8931–52.3105] | 33,092,112 | 3,080,456 |
+| late duplicate / baseline | 63.4874 [58.7249–65.6515] | 60,366,048 | 3,080,944 |
+| late duplicate / candidate | 61.6980 [55.0835–63.6860] | 61,800,904 | 3,080,944 |
+| late grammar / baseline | 58.9177 [57.8295–61.8709] | 60,374,640 | 3,081,560 |
+| late grammar / candidate | 60.8097 [53.4114–62.3319] | 60,374,640 | 3,081,560 |
+
+All allocation repetitions equal their group's median except the first late-
+duplicate baseline row, **60,390,672 bytes**, versus 60,366,048 for the remaining
+four. It is retained, not filtered. Small post-GC deltas also vary: e.g. dense
+first rows retain 3,072,232 bytes versus 3,080,456 later; the first duplicate
+baseline retains 3,085,008. Full per-row values remain in `summary.json`/raw JSONL.
+These net heap observations can include runtime bookkeeping, not just node fields.
+
+### Mechanism, benefit and adverse trade-off
+
+Clean tiny/mixed/dense inputs reduce cumulative allocation by **39.9%, 40.6% and
+44.9%** versus the double-parse baseline. Observed whole-call median changes are
+**−25.3%, −44.2% and −26.5%**. The unchanged retained projected result and stable
+allocation reduction support the intended mechanism: reuse the existing lossless
+grammar tree for read-only structure/normative ownership certification instead of
+constructing a second statement-parser forest. This is not dropping scalar or
+namespace validity checks; failed certification preserves the existing recovery.
+
+The late duplicate must traverse nearly the entire grammar-clean tree before
+rejecting the final already-defined key, then run the original full validation.
+It therefore adds **1,434,856 median cumulative bytes (+2.38%; 1.368 MiB)** before
+fallback. Its elapsed ranges overlap; the observed −2.8% median cannot establish
+a malformed-input latency benefit. The late unclosed array already has grammar
+diagnostics, so certification returns before ownership traversal. Its cumulative
+allocation remains exactly equal, while the observed **+3.2%** elapsed median and
+overlapping ranges likewise establish neither latency equivalence nor regression.
+Neither adverse/control outcome is hidden behind a valid-input aggregate.
+
+Five within-process repetitions, sequential revision order and uncontrolled host
+load constrain timing claims. [Kalibera/Jones's ISMM methodology](https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf)
+motivates explicit variation rather than one favorable measurement; this batch
+provides no confidence interval, p95/p99, CI performance gate, macOS/ARM, Native
+AOT, startup or native end-to-end responsiveness claim. Historical old-policy
+measurements above remain historical, not a simultaneous third comparison.
+
+### Retained artifacts and artifact-only checks
+
+All artifacts are under `.temp/toml-tree-policy-cost/`: `Program.cs`, separate
+`baseline/` and `candidate/` projects/outputs, `frozen/`, build logs, `dotnet-info`,
+`manifest.json`, ten untimed `qualification/` outputs, qualification summary,
+`run_measurements.py`, ten raw `results/` JSONL files/stderr, numeric exit index,
+`source-and-binary-final-guard.json`, `summary.json` and `artifact-hashes.json`.
+The source/project/runner and raw identities are reconstructible without rebuilding
+production or pretending today's DLL is the old baseline.
+
+```powershell
+# Inspect retained outputs; these commands launch no new measured workload.
+python -B .temp/toml-tree-policy-cost/compare_qualification.py
+python -B .temp/toml-tree-policy-cost/summarize.py
+```
+
+`run_measurements.py` is the retained one-batch scheduler and deliberately refuses
+existing index/results; do not remove that guard to rerun until favorable numbers
+appear. A future experiment should answer a new question, such as a production-
+representative sustained edit workload or the incidence/cost of semantic fallback,
+not repeat this successful bounded batch or weaken diagnostics to improve it.
