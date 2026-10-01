@@ -58,8 +58,10 @@ internal sealed partial class WindowsEditorShell
         {
             _sourceMapInstalled = false;
             Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, 0, 0);
-            var text = new Win32.SetTextEx { CodePage = Win32.CP_UNICODE };
-            Win32.SendMessageW(_editor, Win32.EM_SETTEXTEX, ref text, installation.Projection.Display);
+            // EM_SETTEXTEX auto-detects a leading RTF header. Source is always
+            // literal text, including a document that happens to start with it.
+            if (!Win32.SetWindowTextW(_editor, installation.Projection.Display))
+                throw new InvalidOperationException("Literal native source installation failed.");
             if (!CertifySource(installation)) return null;
             SetSourceSelection(installation, false);
             ScheduleSourceStyle();
@@ -282,7 +284,11 @@ internal sealed partial class WindowsEditorShell
     /// <summary>Selection and viewport publication never expose provisional composition coordinates.</summary>
     private void PublishSourceView()
     {
-        if (_sourceInstallation is not { } installed || IsTextComposing || _settingText || _settingSelection) return;
+        // EN_SELCHANGE may precede EN_CHANGE, and its posted observation may
+        // precede our candidate message. Until admission, native endpoints refer
+        // to different text and must not be mapped through the certified replica.
+        if (_sourceInstallation is not { } installed || IsTextComposing || _settingText ||
+            _settingSelection || _sourceCandidatePostQueued) return;
         SourceViewChanged?.Invoke(new(installed.Stamp, installed.Nonce, SourceSelection(_visibleText), SourceVisible(), ++_sourceViewportSequence));
         ScheduleSourceStyle();
     }

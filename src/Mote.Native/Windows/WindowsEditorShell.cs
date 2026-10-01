@@ -18,8 +18,9 @@ namespace Mote.Native.Windows;
 /// clipboard, and accessibility, while the engine remains authoritative for text and history.
 /// </summary>
 /// <remarks>
-/// The editor contains only a bounded page supplied by the controller. RichEdit projects all
-/// line endings to CRLF; callers must map display offsets back to source offsets before edits.
+/// LegacyPage contains a bounded controller page; NativeSource contains the complete certified
+/// source replica. RichEdit projects line endings to CRLF; callers map display offsets back
+/// to canonical source offsets before edits. Canvas uses a separate bounded input island.
 /// No native library ships with mote: msftedit.dll and comdlg32.dll are Windows components.
 /// </remarks>
 [SupportedOSPlatform("windows")]
