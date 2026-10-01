@@ -293,10 +293,11 @@ for these additions. Neither the 16-row bound nor external menu oracle changes.
 
 ## Read-only action-failure discriminator
 
-The next helper candidate distinguishes AppKit's modern single-element
-`NSAccessibility.Attribute.shownMenu.rawValue` from the legacy Carbon array
-relation `AXShownMenuUIElement`. Prior observations of the latter alone do not
-establish absence of the modern getter. Each relation observation now labels
+The helper candidate tested a presumed distinction between AppKit's
+`NSAccessibility.Attribute.shownMenu.rawValue` and the literal
+`AXShownMenuUIElement`. **CI 36797859586 falsifies the presumed wire-key
+distinction on both hosts: both resolve to AXShownMenuUIElement.** The origin
+labels remain diagnostic provenance, not different queries or relationships. Each relation observation now labels
 its exact API key and fixed root category; an owned single menu additionally
 records a bounded child count and only the number of exact known coordinate
 command titles. No arbitrary labels or source contents are retained.
@@ -321,3 +322,8 @@ arrays, exact PID checks and forced cleanup remain unchanged.
 Portable CSV/path preflight still passes. New Swift/AppKit code cannot be
 natively typechecked on the Windows investigation host; fresh two-RID CI must
 validate compilation and actual read-only observations before drawing conclusions.
+
+Native Swift/AppKit typecheck and execution now pass on both RIDs in
+CI 36797859586 / `833ef48`. The x64 read-only followup observes the correct
+owned 12-item menu through the Table relationship, but the original action
+failure remains on both platforms. See [full discriminator results](mac-grid-table-proxy.md#read-only-action-discriminator-ci-36797859586).

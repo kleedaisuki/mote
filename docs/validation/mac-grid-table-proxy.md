@@ -378,3 +378,62 @@ Artifacts and raw job logs: `.cache/ci-36796725674-mac-menu/`. Binary bytes / SH
 external action-result contract still fails and full external AX acceptance
 remains blocked at that exact assertion. Containing green non-gating jobs do
 not change the real Swift exit or failed check.
+
+## Read-only action discriminator: CI 36797859586
+
+[Run 36797859586](https://github.com/kleedaisuki/mote/actions/runs/36797859586)
+at `833ef48` natively typechecks and executes the Swift/AppKit diagnostic on
+both targets. Actual combined selector-success and enclosing readiness markers
+pass without a combined-step error (ARM job 110165317397; x64 110165317431).
+Both external clients remain **failed / exit 1**, preserving 25 passed checks
+and the original `context-menu-accessible` falsifier, AX=-25205
+(attributeUnsupported). The read-only followup completes on both; it does not
+retry or press any menu, nor advance to navigation.
+
+| Observed fact | osx-x64 | osx-arm64 |
+| --- | --- | --- |
+| AppKit showMenu action constant equals literal | true | true |
+| Action names error / bounded count / advertised | 0 / 1 / true | 0 / 1 / true |
+| Actual AppKit shownMenu raw wire key | AXShownMenuUIElement | AXShownMenuUIElement |
+| Table relation (both API-origin labels) | error 0, owned expected AXMenu element | -25205, absent |
+| Returned Table menu children / exact coordinate titles | 12 / 1 | not available |
+| Application relation (both origin labels) | -25205, absent | -25205, absent |
+| Single app-tree exact coordinate label / title matches | 0 / 0 | 0 / 0 |
+| App-tree maximum nodes / last menus / items | 95 / 7 / 50 | 114 / 8 / 69 |
+| Followup admissions / traversals | 700 / 1 | 779 / 1 |
+| Total admissions / client elapsed | 2,345 / 3.455s | 3,215 / 0.644s |
+
+The **presumed modern-versus-Carbon wire-key distinction is falsified** on both
+actual hosts. The stored categories say which source expression supplied the
+key; they are duplicate reads of the same key, not independent modern/legacy
+relations. This corrects the earlier investigative hypothesis and documents
+negative evidence rather than inventing another wire key.
+
+The x64 relation is a positive cross-process transport result: exact editor PID,
+AXMenu role, 12 bounded children and exactly one known coordinate title. It
+proves that a Table-pruned general app traversal may miss a menu reachable
+through its explicit relationship. It does **not** repair the failing action
+acknowledgment or establish a successful menu press/prompt/navigation workflow.
+ARM queries occur in a faster client run and find no supported relation in those
+snapshots; timing is a possible explanation, not a demonstrated mechanism.
+Neither platform's single no-wait traversal proves a menu was absent throughout
+its lifetime. No readiness retries were added to manufacture convergence.
+
+Both traces remain exactly four phases: show-enter, schedule-return(result=1),
+popup-begin, will-open(opens=1/open=1/shown=1). All report configured=1/items=12/
+coordinate=1/key=1/first=0/active=1. No did-close/popup-return appears before
+forced cleanup. Both original files remain byte-identical. Logical jump,
+retirement and normal close are still unexercised, and no external pass is
+inferred from a visible menu or containing green job.
+
+Artifacts/raw logs are under `.cache/ci-36797859586-mac-menu/`. Binary bytes/SHA:
+
+- x64: 16,841,952;
+  `EB433FF17F8FA08F4179C2FC44F16645A3CF8A4F773BC582BB78618FCFE62C36`.
+- ARM64: 16,488,600;
+  `D856B3BBAE0D3A68BD5F9FCACFFC6829E9114DEEB126F67796F39072AD7AC855`.
+
+**Verdict:** valid action naming/advertisement and, on x64, correct explicit
+menu transport are verified independently of the still-failing external action
+reply. A useful next investigation targets that acknowledgment boundary rather
+than a guessed wire-name difference, arbitrary label fallback or budget increase.

@@ -405,18 +405,17 @@ unsupported action or a timeout. Native trace and external acknowledgement
 are independent evidence surfaces; the trace does not prove their exact IPC
 ordering or AppKit's internal reason for this error.
 
-There is also an important relationship distinction: the modern
+A presumed relationship distinction motivated querying AppKit's actual
 [`NSAccessibility.Attribute.shownMenu`](https://developer.apple.com/documentation/appkit/nsaccessibility-swift.struct/attribute/shownmenu)
-is the current menu as a single `id`, while the separately documented Carbon
-[`kAXShownMenuUIElementAttribute`](https://developer.apple.com/documentation/applicationservices/kaxshownmenuuielementattribute)
-describes an array of contextual/Dock menus. Earlier helper observations queried
-the latter literal, not the modern AppKit constant. They cannot prove the
-modern getter's wire relationship is absent. The next read-only discriminator
-uses AppKit's actual `shownMenu.rawValue`, preserves the Carbon observation
-under its own name, checks action-name membership and counts exact owned menu
-matches after the failed action. It still fails the original action assertion
-and selects no menu item. No production metadata/legacy action-name override
-or proxy-backed-menu change is justified from the present facts alone.
+constant alongside the literal Carbon name. **Fresh target CI 36797859586
+falsifies the presumed wire-key difference on both hosts:** the AppKit raw value
+is exactly `AXShownMenuUIElement`. The helper's modern/legacy categories therefore
+represent API-origin labels for the same wire query, not independent relations.
+Both hosts advertise the exact showMenu action. x64 additionally transports the
+correct owned menu through the Table relation, while the action reply still
+fails; ARM's immediate snapshots report attributeUnsupported. See
+[full read-only target accounting](mac-grid-table-proxy.md#read-only-action-discriminator-ci-36797859586).
+No production override or relaxed success predicate follows from this evidence.
 
 ### Corrected native BOOL lifecycle execution
 
