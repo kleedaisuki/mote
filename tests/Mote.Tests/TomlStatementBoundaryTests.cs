@@ -130,4 +130,3 @@ public sealed class TomlStatementBoundaryTests
         return result.ToArray();
     }
 }
-
