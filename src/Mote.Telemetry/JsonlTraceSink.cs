@@ -15,7 +15,8 @@ internal readonly record struct TraceRecord(
     long DurationUs,
     TelemetryStatus Status,
     TelemetryDimensions Dimensions,
-    int? HResult = null);
+    int? HResult = null,
+    TelemetryReason Reason = TelemetryReason.None);
 
 /// <summary>
 /// Single-consumer, bounded JSONL writer. Producers only call TryWrite; all I/O,
@@ -347,6 +348,8 @@ internal sealed class JsonlTraceSink
             writer.WriteNumber("count", count);
         if (record.HResult is int hresult)
             writer.WriteNumber("hresult", hresult);
+        if (MoteTelemetry.ReasonName(record.Reason) is string reason)
+            writer.WriteString("reason", reason);
         writer.WriteEndObject();
         writer.WriteEndObject();
         writer.Flush();

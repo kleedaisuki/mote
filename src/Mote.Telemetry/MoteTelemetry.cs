@@ -7,7 +7,7 @@ namespace Mote.Telemetry;
 /// Local, opt-in instrumentation. The disabled fast path reads one nullable field;
 /// no trace object, string, queue item, or file is created.
 /// </summary>
-public static class MoteTelemetry
+public static partial class MoteTelemetry
 {
     private static readonly object Gate = new();
     private static readonly ActivitySource Source = new("Mote", "1.0.0");
@@ -276,6 +276,22 @@ public static class MoteTelemetry
         TelemetryOperation.StartupToEditable => "mote.startup_to_editable",
         TelemetryOperation.EditToDrawSubmission => "document.edit_to_draw_submission",
         TelemetryOperation.OpenToDrawSubmission => "document.open_to_draw_submission",
+        TelemetryOperation.CommandSave => "command.save",
+        TelemetryOperation.CommandSaveAs => "command.save_as",
+        TelemetryOperation.SaveGateWait => "save.gate_wait",
+        TelemetryOperation.SaveSnapshotCapture => "save.snapshot_capture",
+        TelemetryOperation.SaveTargetCheck => "save.target_check",
+        TelemetryOperation.SaveTempEncodeWrite => "save.temp_encode_write",
+        TelemetryOperation.SaveTempFlush => "save.temp_flush",
+        TelemetryOperation.SaveTempHash => "save.temp_hash",
+        TelemetryOperation.SaveFinalTargetCheck => "save.final_target_check",
+        TelemetryOperation.SaveCommitMove => "save.commit_move",
+        TelemetryOperation.SaveCommitReplace => "save.commit_replace",
+        TelemetryOperation.SaveSavedStamp => "save.saved_stamp",
+        TelemetryOperation.SaveBookkeeping => "save.bookkeeping",
+        TelemetryOperation.SaveFailureCleanup => "save.failure_cleanup",
+        TelemetryOperation.SaveFailureInspection => "save.failure_inspection",
+
         _ => "unknown"
     };
 
@@ -286,6 +302,22 @@ public static class MoteTelemetry
         TelemetryEvent.AnalysisDiscarded => "analysis.discarded",
         TelemetryEvent.SaveCompleted => "save.completed",
         TelemetryEvent.DroppedEvents => "telemetry.dropped",
+        TelemetryEvent.CommandReceived => "command.received",
+        TelemetryEvent.SaveCompositionSettled => "save.composition_settled",
+        TelemetryEvent.SaveCompositionBlocked => "save.composition_blocked",
+        TelemetryEvent.SaveControllerEntered => "save.controller_entered",
+        TelemetryEvent.SaveAdmitted => "save.admitted",
+        TelemetryEvent.SaveWorkerStarted => "save.worker_started",
+        TelemetryEvent.SaveOverwriteRequested => "save.overwrite_requested",
+        TelemetryEvent.SaveOverwriteApproved => "save.overwrite_approved",
+        TelemetryEvent.SaveOverwriteDeclined => "save.overwrite_declined",
+        TelemetryEvent.SaveSnapshotCaptured => "save.snapshot_captured",
+        TelemetryEvent.SaveUiLocalQueued => "save.ui_local_queued",
+        TelemetryEvent.SaveUiWakeRequested => "save.ui_wake_requested",
+        TelemetryEvent.SaveUiPostReturned => "save.ui_post_returned",
+        TelemetryEvent.SaveUiStarted => "save.ui_started",
+        TelemetryEvent.SaveUiDeferred => "save.ui_deferred",
+
         _ => "unknown"
     };
 

@@ -143,3 +143,43 @@ avoids deleting a concurrent editor's active trace file.
 - [.NET bounded channels](https://learn.microsoft.com/en-us/dotnet/core/extensions/channels): bounded queue behavior and non-blocking `TryWrite` prevent disk stalls from reaching the editor hot path.
 - [OpenTelemetry semantic convention guidance](https://opentelemetry.io/docs/specs/semconv/how-to-write-conventions/): use stable, low-cardinality names and opt-in for sensitive attributes. Mote deliberately exposes no free-form attributes.
 - [Google's Dapper report](https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/): production tracing emphasized low overhead, common instrumentation points, and sampling. Mote adopts common operation points and a bounded pipeline, but does not sample an explicitly enabled local diagnostic run by default: losing rare edit stalls would undercut the main use case. If profiling shows excessive telemetry-on overhead, measure it before introducing workload-aware sampling.
+
+## Explicit native Save requests
+
+`BeginRequest(CommandSave | CommandSaveAs)` returns an enabled-only
+`TelemetryRequest`; disabled tracing returns null without allocating. The request
+holds no ambient Activity, document, snapshot, path, or long producer lease.
+Native owners carry `request.Mark` explicitly through worker and UI callbacks.
+
+```csharp
+var request = MoteTelemetry.BeginRequest(TelemetryOperation.CommandSave);
+request?.Checkpoint(TelemetryEvent.SaveAdmitted);
+var save = request?.BeginPhase(TelemetryOperation.Save) ?? default;
+var phase = MoteTelemetry.BeginPhase(TelemetryOperation.SaveTargetCheck, save);
+// Execute the real operation; recording a boundary never replaces it.
+MoteTelemetry.EndPhase(TelemetryOperation.SaveTargetCheck, phase);
+MoteTelemetry.EndPhase(TelemetryOperation.Save, save);
+request?.EndOnce(TelemetryStatus.Success, TelemetryReason.Completed);
+```
+
+Receipt and phase entry are **persisted causal anchors**: `command.received`
+uses the request mark identity, and each fixed `<phase>.entered` uses its phase
+mark identity. Ordinary checkpoints use fresh child IDs. Terminal request and
+phase durations also use fresh IDs, parented to their respective entry anchors,
+and measure from the original mark timestamp. Therefore every row has a unique
+span ID, and a readable held-phase prefix can reconstruct request ancestry even
+before any terminal duration exists. Entry success means boundary execution,
+not file commit success. A missing terminal is censored evidence, not success.
+
+`EndOnce` atomically selects one terminal enqueue attempt. Its boolean result is
+not a disk acknowledgment. An optional fixed `attributes.reason` is written only
+for request terminals; schema version remains 1, and no-reason records retain the
+existing field shape. Readers must include `reason` in their attribute allowlist.
+Phase failures may carry only the adapter-supplied numeric filesystem `hresult`.
+
+All new explicit methods reject old/shutdown contexts and count rejection on
+that context's **original** sink. They never attach old work to a newly configured
+sink. Legacy Activity-backed `StartChild` behavior is unchanged; use the new
+explicit methods for request lifetimes. `MarkChild` alone is an unpersisted mark;
+use `BeginPhase` for any work whose entry must survive in a recoverable prefix.
+Callers end each phase once; only request terminal selection is internally atomic.

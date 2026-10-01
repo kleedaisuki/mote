@@ -23,7 +23,37 @@ public enum TelemetryOperation
     /// <summary>Accepted source edit through return from the first matching native source draw callback.</summary>
     EditToDrawSubmission,
     /// <summary>Open request through return from the first matching native source draw callback.</summary>
-    OpenToDrawSubmission
+    OpenToDrawSubmission,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    CommandSave,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    CommandSaveAs,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveGateWait,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveSnapshotCapture,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveTargetCheck,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveTempEncodeWrite,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveTempFlush,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveTempHash,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveFinalTargetCheck,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveCommitMove,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveCommitReplace,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveSavedStamp,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveBookkeeping,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveFailureCleanup,
+    /// <summary>Explicit, content-free Save request or engine phase interval.</summary>
+    SaveFailureInspection,
 }
 
 /// <summary>Fixed, low-cardinality instantaneous event names.</summary>
@@ -33,7 +63,37 @@ public enum TelemetryEvent
     AnalysisPublished,
     AnalysisDiscarded,
     SaveCompleted,
-    DroppedEvents
+    DroppedEvents,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    CommandReceived,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveCompositionSettled,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveCompositionBlocked,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveControllerEntered,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveAdmitted,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveWorkerStarted,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveOverwriteRequested,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveOverwriteApproved,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveOverwriteDeclined,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveSnapshotCaptured,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveUiLocalQueued,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveUiWakeRequested,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveUiPostReturned,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveUiStarted,
+    /// <summary>Target-owned Save boundary; success certifies entry only.</summary>
+    SaveUiDeferred,
 }
 
 /// <summary>Normalized document format; filenames and extensions are never accepted.</summary>
@@ -103,3 +163,38 @@ public sealed class TelemetryOptions
 
 /// <summary>Health snapshot without filesystem paths or exception messages.</summary>
 public readonly record struct TelemetryHealth(bool Enabled, bool SinkFaulted, long DroppedRecords);
+
+/// <summary>Fixed, content-free terminal reason; None leaves the attribute absent.</summary>
+public enum TelemetryReason
+{
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    None,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    Completed,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    ViewDeferred,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    CompositionBlocked,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    MissingHandler,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    CallbackFailed,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    AlreadySaving,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    PickerCancelled,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    RecoveryRedirected,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    OverwriteDeclined,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    OperationCancelled,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    StaleDocument,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    LifetimeEnded,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    SaveFailed,
+    /// <summary>Fixed request disposition; never derived from user or exception text.</summary>
+    UiPostFailed,
+}
