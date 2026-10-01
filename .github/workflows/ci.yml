@@ -525,8 +525,8 @@ jobs:
           path: .cache/ci-inventory/win-x64/windows-config-runtime.json
           if-no-files-found: warn
           retention-days: 14
-      # A separate WPF client exercises the real published UIA provider. Known
-      # duplicate Document nodes remain a release blocker, not a skipped check.
+      # Historical opt-in canvas baseline, not the ordinary Continuous source
+      # fragment. Keep its duplicate-Document result as an explicit contrast.
       - name: Diagnose external Windows UIA canvas provider (non-gating)
         if: startsWith(matrix.rid, 'win-')
         shell: pwsh
@@ -539,7 +539,7 @@ jobs:
             -Rid $rid `
             -ReportPath ".cache/windows-ax-external/$rid/report.json"
           if ($LASTEXITCODE -ne 0) {
-            throw "External UIA client found a behavioral failure or release blocker; inspect the uploaded $rid report."
+            throw "Historical canvas UIA baseline did not pass; inspect the uploaded $rid report."
           }
       - name: Upload external Windows UIA diagnostic
         if: always() && startsWith(matrix.rid, 'win-')
@@ -655,6 +655,40 @@ jobs:
         with:
           name: windows-ax-fragment-${{ matrix.rid }}
           path: .cache/windows-ax-external/${{ matrix.rid }}/fragment-report.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Ordinary `mote path` must own one source Document; the legacy canvas
+      # baseline and opt-in fragment above are separate, historically scoped runs.
+      - name: Diagnose ordinary Windows source UIA (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/WindowsAxExternalProbe/Program.cs'; hashes = @('7D4E0AFDD791BC9F54D6DEF3F0E2541DF156C693BC17DE377565893615BA48D8', '9D0EEE385F27F2DC13929F56D242F58EAEE4492B131D46C88F63F32CDFA30005') },
+            @{ path = 'tests/WindowsAxExternalProbe/ProbeLaunchRoute.cs'; hashes = @('6D9C7770FC316965089582D47CF82B1914C22CFDB8BA23D01962AF85B0C5916D', '8E70B2F81EC4B6625C5FAC9D360B2D76B771E5E7A4600718BCBC4E1BD13B96BB') },
+            @{ path = 'tests/WindowsAxExternalProbe/Run.ps1'; hashes = @('AAD02A5340E8D2DB3DEDC444AC32A6C022A4439613E17B51A39E5D622961CDB7', 'D43D9AC78CD4647C2C90A0FF44F3CAD7F8A7393591A9457B680E612C2B592522') }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if ($actual -cnotin $pin.hashes) { throw 'Ordinary Windows UIA probe differs from reviewed bytes.' }
+          }
+          & ./tests/WindowsAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -Rid $rid -ProductContinuous `
+            -ReportPath ".cache/windows-ax-external/$rid/product-report.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Ordinary Windows source UIA diagnostic did not pass; inspect the $rid report."
+          }
+      - name: Upload ordinary Windows source UIA diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ax-product-${{ matrix.rid }}
+          path: .cache/windows-ax-external/${{ matrix.rid }}/product-report.json
           if-no-files-found: warn
           retention-days: 14
       - name: Verify macOS Launch Services can open the standalone executable
