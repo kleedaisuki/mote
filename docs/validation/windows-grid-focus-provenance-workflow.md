@@ -175,3 +175,29 @@ requires waiting on the process handle to establish completed termination;
 [process-object signaling](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process)
 is the explicit wait witness. Neither reference makes a successful job-accounting
 query a replacement for that process-handle observation.
+
+## Corrected numeric-exit followup — CI 36877121813
+
+Date: 2026-10-01. Exact source `f1b929843563254ff15fb6586041d0ea2a069038`, [CI 36877121813](https://github.com/kleedaisuki/mote/actions/runs/36877121813). This is the first actual corrected-supervisor execution, not a retry of the first source's control result. Queries use explicit `--repo kleedaisuki/mote`; all ten jobs complete success. The preceding null-exit counterexamples remain unchanged.
+
+**Both Windows RIDs now pass actual console controls**: normal marker present, numeric exit **0**, queried job empty, no timeout/forced cleanup; timeout marker present, numeric exit **124**, queried job empty, timeout/forced cleanup true with fixed `timeout` error. Both architecture-specific clients build and now actually execute once. Binary before/after hashes match: x64 `37C46391D84013968B39AEA27A2C91A4BC82504F111181AFC3592DF0BC5CEA7E`, ARM64 `CD00C46C62D99E2073E8122A411FFD4D02AE05337E36F57A71E07A3BEB03AA1F`; client source/project pins remain `B96BD2445B69186FE51941C396ED089D3B431E50243CE1AF86F9674D05C7D33D` / `6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4`.
+
+| New independent client evidence | win-x64 | win-arm64 |
+| --- | --- | --- |
+| Supervisor client numeric exit / job empty / forced cleanup | **1 / true / false** | **0 / true / false** |
+| Editor numeric exit / fixture unchanged | 0 / true | 0 / true |
+| Uploaded aggregate / client classification | **unknown / incomplete** | observed / observed |
+| Initial/discovery/query owner-queue pane | source | source |
+| `select_first` owner-queue observation | source → table | source → table |
+| Single F6 owner-queue observation | table → row_scroller | table → row_scroller |
+| Single GoTo action / following observation | action returned; observation `invalid_operation`, HResult **-2146233079**, pane unavailable | action returned; pane row_scroller → none |
+| Distant read / cell-focus attempt | distant read not_attempted; cell-focus not reached | both returned; final observed pane table |
+| Retained server trace rows / bytes / explicit adapter pairs | **19 / 7,258 / 3** | **24 / 9,261 / 4** |
+
+The x64 unknown result is therefore a **new post-GoTo observation/client failure**, not another supervisor timeout or proof that the GoTo action itself failed. It retains a normal editor exit and healthy queried job cleanup, but `query_health=unknown` and fixed client `invalid_operation`; no retry or relaxed predicate turns it into observed. ARM64 reaches all 14 fixed client labels and normal exits. These owner-GUI-queue snapshots are real evidence of source remaining focused before selection, selection changing to table, and F6 advancing from table. They are not a cross-process pairing to native adapter spans or a repair of the original external acceptance.
+
+`audit_graph.py` independently reads both retained target traces through the strict schema/privacy/ancestry focus reader and exactly reproduces each uploaded server graph. All **seven explicit receipt→terminal pairs** retain `native_thread_relation=owner` **and independently** `managed_admission_relation=owner`, target cell, result `applied`, successful normal session root and original-sink span ancestry. ARM64's final pair starts with focus_before `unavailable`, yet retains applied/table; that unknown query is not rewritten as a failed adapter. Only applied is actually observed among the closed result/fault vocabulary; no foreign-thread, rejection, query-fault or exception case is invented from an unobserved count. The graphs remain `explicit_pair_only`, `provider_entry_coverage=adapter_attempt_only`, client correlation none, cross-process edge **unjoined**, absence false and transport not certified. The x64 server's three positive pairs remain observed despite its independent client unknown status.
+
+Artifacts and actual stdout/report/supervisor/control JSON are retained in `.cache/ci-36877121813-focus-exit-followup/artifacts/windows-grid-focus-provenance-{win-x64,win-arm64}/`; independent graph output and completed strict/AOT logs are alongside them. A transient log-download EOF was resolved by rereading the **same completed job** with `gh run view --job --log`, not by restarting execution. Original external AOT Grid remains **product-fail / numeric exit 1 on both RIDs**, unchanged pin `C6894B4EDCF931BAA322B878AF8965759AC7E44EFC10291200737A18C1AD5509`; its original oracle stays separate.
+
+Compact integration observations: Windows/macOS strict suites **3271/3271**, Themes14/14, Configuration9/9, zero failures/skips; four inventories retain one executable, both Windows owned-HWND pane-focus tests pass2/2. Both blocking Mac controls retain actual markers/ready (x6414:37:03 UTC, ARM64 14:37:45 UTC). Ordinary JSON is **6/8**, not a green-job pass certificate: Mac x64 1 MiB fails **native-local-edit / RuntimeError**, editor exits0 without reopen; Mac x64 100 MiB fails **save-exact-bytes / TimeoutError**, editor exits-9 without reopen. Both working/fixture hashes remain original, no recorded Save request; the latter is censored, the former must not be called a Save failure. The other six summaries pass with exits0/0. No successful raw Save audit was repeated. Parallel ordinary-surface/YAML/encoding work is not in this frozen source and has no coverage claim here. No production/script changes, local GUI experiment or push were performed by this audit.
