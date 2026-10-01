@@ -53,14 +53,14 @@ the [existing endpoint contract](../end-to-end-tracing.md).
 external action attempt                       [observer clock, not target parent]
     |
 native owned Save callback
-    +-- command.save / command.save_as         [request mark; entry checkpoint]
+    +-- command.received                      [request context's retained anchor]
          +-- composition settlement / blocked
          +-- controller guards, picker, recovery redirect
          +-- save.admitted                    [event, before Task.Run submission]
          +-- save.worker_started              [event, when delegate actually runs]
-         +-- document.save                    [existing coarse worker operation]
+         +-- document.save.entered            [coarse worker phase anchor]
          |    +-- overwrite approval / declined
-         |    +-- save.gate_wait
+         |    +-- save.gate_wait.entered       [phase anchor; terminal is its child]
          |    +-- save.snapshot_captured       [actual immutable saved version]
          |    +-- save.target_check
          |    +-- save.temp_encode_write
@@ -71,20 +71,55 @@ native owned Save callback
          |    +-- save.saved_stamp
          |    +-- save.bookkeeping
          |    +-- failure cleanup/inspection   [only if actually executed]
+         |    +-- document.save               [distinct duration child of coarse anchor]
          +-- save.ui_local_queued               [if directly observed by shell]
          +-- save.ui_wake_requested             [if directly observed by shell]
          +-- save.ui_post_returned              [local post returned; not native wake receipt]
          +-- save.ui_started
          +-- save.completed OR failure/cancel/stale/deferred result
-         +-- command.save terminal            [exactly once if not censored]
+         +-- command.save / command.save_as   [distinct duration child; once if not censored]
 ```
 
-Each checkpoint is a separate event with a fresh span ID and explicit request
-or phase parent. The duration span retains its own unique ID. A checkpoint is
-not a duplicate partial duration span and is never summed into latency totals.
+An **entry checkpoint is the retained causal anchor itself**, not an unrelated
+child of a mark which will exist only when the operation finally finishes:
+
+```text
+S  known session context                      (mote.session terminal may be absent after kill)
+└─ R  command.received                        span_id=R, parent_span_id=S
+   ├─ E  save.admitted / worker/UI checkpoint  fresh event ID, parent_span_id=R
+   ├─ D  document.save.entered                span_id=D, parent_span_id=R
+   │  ├─ P  save.temp_flush.entered           span_id=P, parent_span_id=D
+   │  │  └─ PT save.temp_flush                span_id=Fork(P), parent_span_id=P
+   │  └─ DT document.save                     span_id=Fork(D), parent_span_id=D
+   └─ RT command.save                         span_id=Fork(R), parent_span_id=R
+```
+
+`BeginRequest` serializes the request mark's **own SpanId exactly once** as
+`command.received`, with parent equal to its known session context. `BeginPhase`
+creates an explicit child mark and serializes that mark's **own SpanId exactly
+once** as the fixed `*.entered` record. The coarse worker phase is a child of
+the request anchor; engine phase anchors are children of the coarse anchor.
+Terminal durations use `Fork(mark)`, or the equivalent original-timestamp,
+fresh-ID child construction under the original active sink. They must **never**
+reuse the entry mark's SpanId. The fork keeps the entry timestamp, so the
+duration still measures the intended interval, rather than time since exit.
+
+Ordinary instantaneous checkpoints such as `save.admitted`,
+`save.snapshot_captured`, and `save.ui_started` each have a fresh event ID and
+the explicit request anchor as parent. They do not establish a new phase
+context. This distinction avoids dangling request/phase ancestry when a process
+is killed after entry but before completion. No `context_span_id` attribute,
+duplicate begin/end SpanId, or synthetic terminal is needed. Every serialized
+record has a unique span ID within its session/trace; logical terminal uniqueness
+is additionally checked **per anchor and fixed terminal operation**, not just by
+detecting repeated IDs.
+
+Entry checkpoints have zero duration; they are not partial duration spans and
+are never summed into latency totals.
 `success` on an entry event means **this boundary executed**, not its enclosing
 Save succeeded. Parentage, not file adjacency or timestamp sorting, identifies
-the request. Child spans can appear before the parent terminal record.
+the request. Children can appear before their context's terminal duration;
+they already have a retained parent entry anchor if transport preserved it.
 
 | Owner | Owns | Must not own |
 | --- | --- | --- |
@@ -143,14 +178,18 @@ allocates nothing; the native request itself is a value type.
 Required Telemetry API semantics, with names finalized before implementation:
 
 - `BeginRequest(fixedOperation, dimensions)` captures identity and start time,
-  enqueues a fixed received checkpoint immediately, and returns the enabled-only
-  owner. The checkpoint must not wait for a terminal scope.
+  enqueues `command.received` with the mark's own SpanId immediately, and returns
+  the enabled-only owner. The anchor must not wait for a terminal scope.
 - `RecordChild(fixedEvent, parentMark, dimensions, status)` uses the explicit
   parent even in a later UI callback. Do not rely on `Activity.Current` there.
+- `BeginPhase(fixedOperation, parentMark, dimensions)` creates a current-time
+  child context and immediately records `*.entered` using that context's own
+  SpanId; `EndPhase` records a distinct original-timestamp duration child.
 - `StartChild` remains for local duration scopes; asynchronous work captures
   the request mark explicitly before scheduling.
 - `EndOnce(status, fixedReason, dimensions)` atomically selects one terminal
-  record. Requests do not keep Activity ambient across the native event loop.
+  enqueue attempt, using a distinct forked duration child of the retained
+  request anchor. Requests do not keep Activity ambient across the native loop.
 
 Do not hold a producer admission lease throughout a picker, worker or UI
 callback lifetime. Use the established short enqueue leases; request lifetime
@@ -209,7 +248,11 @@ it is acceptable, but keep the same no-telemetry-dependency and snapshot rules.
 Phase and edge enums are closed; edges are entry/success/failure/cancelled or a
 fixed instantaneous milestone. The native adapter maps them to fixed trace
 operations under the explicit request/coarse Save parent, using one active
-phase mark at a time. No arbitrary operation string is supplied by an observer.
+phase mark at a time. Each engine phase has its own retained `*.entered` anchor
+under the coarse Save anchor, and a distinct duration child on exit. Exact
+`save.snapshot_captured` is an instantaneous request child, not a replacement
+for the snapshot-capture phase anchor. No arbitrary operation string is supplied
+by an observer.
 Use only the main error's allowlisted filesystem HResult; no exception messages,
 paths, fingerprints, encoding strings or exception `Data` enumeration.
 
@@ -382,7 +425,11 @@ slice adds only closed operation names and optional, privacy-safe attributes.
 Existing `version` means the stage's observed version; saved-version stages use
 the captured snapshot. No free-form `reason` or arbitrary property bag is allowed.
 
-Minimum new fixed attributes:
+The initial causal slice needs **only** the optional closed terminal `reason`
+attribute. It introduces no context-ID, sequence or watermark attribute.
+Retained parentage is expressed by existing `span_id` / `parent_span_id` fields
+as specified in section 2. Later explicit evidence-mode attributes, not required
+for the first causal slice, are:
 
 | Attribute | Type / scope | Meaning |
 | --- | --- | --- |
@@ -417,8 +464,10 @@ terminal drop totals before the final flush, not after the session terminal.
 
 The current privacy test asserts an exact old attribute allowlist; update it to
 assert the explicit expanded allowlist and types, not to permit arbitrary keys.
-Historical schema-v1 files lacking new attributes remain readable as
-`legacy_health_unknown`. Readers ignore unknown future fixed operation names
+Historical schema-v1 files lacking health attributes remain readable as
+`legacy_health_unknown`; a new causal slice without those attributes also has
+unknown transport health, not a fabricated healthy stream. Readers ignore
+unknown future fixed operation names
 for rendering but may not treat an unknown operation as a certified workflow
 stage. Unknown schema versions are unsupported, not successful acceptance.
 
@@ -434,6 +483,28 @@ stage. Unknown schema versions are unsupported, not successful acceptance.
 | Returned commit then failed bookkeeping | File commit returned; request failed later; independent byte/recovery evidence determines observed target outcome |
 | Request terminal plus complete normal drain, no drops, expected stages | Instrumented scoped chain complete; no assertion about uninstrumented earlier OS events |
 | Dropped records, sink fault, truncated retention, shutdown timeout or absent terminal | Coverage degraded/censored, even if some successful spans remain |
+
+The reader indexes a new request by **the `command.received` anchor's SpanId**,
+not by the distinct `command.save` terminal SpanId. A request terminal refers to
+that anchor through `parent_span_id`. It follows retained phase ancestry rather
+than assuming every child of a duration is attached to a final-only request.
+Legacy traces without the new anchors keep their historical causal interpretation;
+they cannot be promoted to new request-to-Save coverage merely because an old
+`document.save` exists. Optional health attributes and the new operation
+vocabulary do not change the required schema-v1 field structure.
+
+Entry anchors still use the same bounded lossy transport: enqueue may fail,
+rotation/retention may remove an earlier file, or the tail may never flush.
+Retained child/terminal with a missing request or phase anchor is **orphaned
+evidence**. Report its positive local operation and degraded/unresolved
+ancestry; do not synthesize the anchor, reparent it to a nearby receipt/version,
+or certify a complete chain. A positive request anchor without terminal is an
+in-flight request for a live reader and a censored request after termination.
+A missing session terminal after kill is expected missing session closure,
+not proof that retained request/phase anchors failed to execute. Unknown
+ancestry above a retained anchor is still not a complete session-health
+certificate. Drop count or health absence affects confidence in coverage,
+not the positive meaning of a valid retained stage.
 
 An external action attempt and a target writer heartbeat have no shared causal
 token by themselves. A heartbeat is not a post-action UI barrier; it cannot
@@ -460,8 +531,11 @@ ordinary workflow artifacts for integration evidence.
 
 1. **Causality:** two received requests, one admitted and one already-saving;
    children of each remain distinct across `Task.Run` and queued UI callbacks.
-   All expected records carry explicit parentage; exactly one terminal per
-   completed request; checkpoint IDs never duplicate terminal span IDs.
+   All expected records carry explicit parentage; receipt/phase entry uses its
+   context's own SpanId once; distinct forked terminal child retains the original
+   start; exactly one terminal per completed request and phase. All serialized
+   span IDs are unique. Duplicate terminal operations under one anchor fail even
+   if their span IDs differ. No `context_span_id` property is emitted.
 2. **Guards/outcomes:** native/controller composition block, picker cancel,
    overwrite declined, recovery redirect, Save failure, cancelled gate wait,
    publication throw, UI enqueue refusal, and disposal. No unintended success
@@ -481,7 +555,11 @@ ordinary workflow artifacts for integration evidence.
    nonwaiting producer behavior; watermark only advances after returned flush;
    rotation sequence and retained-file gaps classify correctly; shutdown stays
    bounded with active requests and held writers.
-7. **Privacy/backward compatibility:** secret source/path/exception text never
+7. **Loss/orphan/privacy/backward compatibility:** drop/remove a request anchor
+   or intermediate phase anchor while retaining descendants; reader reports
+   orphaned local evidence and never a complete chain. Retain an entry and kill
+   before terminal; it remains identifiable by its own SpanId and last-positive
+   boundary. Secret source/path/exception text never
    appears; unknown exception-data keys rejected; old schema-v1 fixture still
    loads; new optional attributes are exactly allowlisted; public two-argument
    Save calls compile unchanged.
