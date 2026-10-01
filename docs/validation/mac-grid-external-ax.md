@@ -282,3 +282,11 @@ pwsh -NoProfile -File tests/MacGridAxExternalProbe/Test-Fixture.ps1
 
 Both passed locally. Actual AppKit lifecycle facts require a fresh Mac target
 run; synthetic capture success does not establish menu presentation.
+
+The lifecycle whitelist also recognizes `schedule-return`, `popup-begin` and
+`popup-return` for the coordinated next-turn native popup discriminator.
+`native-return`, `schedule-return` and `popup-return` require boolean results;
+all entry/open/close phases require -1. A schedule result certifies admission,
+not completion; a native popup result distinguishes selection from cancellation,
+not semantic navigation success. Independent tests reject inconsistent results
+for these additions. Neither the 16-row bound nor external menu oracle changes.

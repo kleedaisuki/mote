@@ -4,21 +4,27 @@ $ErrorActionPreference = 'Stop'
 Add-Type -Path (Join-Path $PSScriptRoot 'MenuTraceCapture.cs')
 $valid = 'mote-grid-menu-v1 phase=show-enter seq=1 requests=1 opens=0 closes=0 open=0 result=-1 configured=1 items=12 coordinate=1 shown=0 key=1 first=0 active=1'
 $return = $valid.Replace('phase=show-enter', 'phase=native-return').Replace('result=-1', 'result=1')
+$schedule = $return.Replace('native-return', 'schedule-return')
+$popupReturn = $return.Replace('native-return', 'popup-return')
+$popupBegin = $valid.Replace('show-enter', 'popup-begin')
 $invalid = @(
     'private document output'
     $valid.Replace('seq=1 ', 'seq=0 ')
     $valid.Replace('opens=0', 'opens=17')
     $valid.Replace('result=-1', 'result=1')
     $return.Replace('result=1', 'result=-1')
+    $schedule.Replace('result=1', 'result=-1')
+    $popupReturn.Replace('result=1', 'result=-1')
+    $popupBegin.Replace('result=-1', 'result=1')
     ($valid + ' private-path')
     ($valid + "`r`r")
     ('prefix ' + $valid)
     (('x' * 100000) + $valid)
 )
-$inputText = ($invalid + @($valid, $return)) -join "`r`n"
+$inputText = ($invalid + @($valid, $return, $schedule, $popupReturn, $popupBegin)) -join "`r`n"
 $reader = [IO.StringReader]::new($inputText)
 $actual = [Mote.Testing.MacGridMenuTraceCapture]::ReadAsync($reader, $true).GetAwaiter().GetResult()
-if ($actual.Length -ne 2 -or $actual[0] -cne $valid -or $actual[1] -cne $return) { throw 'Whitelist admitted malformed or private output.' }
+if ($actual.Length -ne 5 -or $actual[0] -cne $valid -or $actual[1] -cne $return -or $actual[2] -cne $schedule -or $actual[3] -cne $popupReturn -or $actual[4] -cne $popupBegin) { throw 'Whitelist admitted malformed or private output.' }
 $reader = [IO.StringReader]::new((1..30 | ForEach-Object { $valid }) -join "`n")
 $actual = [Mote.Testing.MacGridMenuTraceCapture]::ReadAsync($reader, $true).GetAwaiter().GetResult()
 if ($actual.Length -ne 16) { throw 'Capture exceeded sixteen-line contract.' }
