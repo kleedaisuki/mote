@@ -7,11 +7,14 @@ or test files were changed by this review.
 
 ## Verdict and integration condition
 
-No demonstrated new production correctness defect found in the uniform-validation
-mechanism. One retained test is currently failing and must be resolved explicitly
-before claiming a green validation result. It concerns positive signed-integer
-overflow, whose relationship to the previous actual Tomlyn package behavior needs
-verification; do not classify it as a new regression solely from this test.
+Updated review: the original first-witness-only public validation **did lose
+independent public diagnostics**, a material issue identified by root after this
+review's initial assessment. That earlier clean assessment was too broad. The
+current recovery revision fixes the underlying state model rather than adding
+per-fixture exceptions: local units can recover, invalid header contexts quarantine
+assignments, and failed ownership operations roll back mutations. No substantive
+unresolved production defect found in the revised recovery source. Final evidence
+for the newly added illegal-leading-trivia header cases remains pending below.
 
 ## Semantic and compatibility assessment
 
@@ -33,8 +36,10 @@ verification; do not classify it as a new regression solely from this test.
 * Syntax/local diagnostic coordinates are shifted by the actual statement start;
   global ownership witnesses already carry absolute key coordinates. Public codes
   remain `TOML_PARSE`. A grammar-clean unexplained statement refusal produces an
-  explicit diagnostic rather than a false valid result. First-witness behavior is
-  not advertised as an exhaustive invalid-document diagnostic enumeration.
+  explicit diagnostic rather than a false valid result. Recoverable local/global
+  witnesses are retained alongside the whole grammar parser's witnesses, exact
+  duplicate records are collapsed, and the final list is source-ordered. No fully
+  exhaustive recovery claim is made for unrecoverable malformed multiline owners.
 * Empty input, trivia, a newline-terminated last unit, and final EOF segments all
   pass through the same scanner. Unbounded EOF still invokes the parser even if
   the boundary tracker says continuation, allowing actual syntax diagnostics
@@ -55,28 +60,53 @@ model. The [integer section](https://toml.io/en/v1.1.0#integer) permits sizes be
 signed 64-bit only when supported losslessly; simply exceeding `long.MaxValue`
 does not by itself establish an invalid TOML grammar production.
 
-## Evidence inspected
+## Recovery correction and evidence
 
-Independently parsed `.cache/toml-uniform/toml-uniform.trx`: **730 executed, 729
-passed, 1 failed, zero unexecuted**. The sole failed case is
-`Local_semantic_or_trivia_errors_are_not_lost("a=9223372036854775808\n")`:
-the observed diagnostic collection is empty. This is not a 730/730 result.
+The public recovery journal is opt-in; normal bounded cache analysis allocates no
+journal and keeps first-error refusal. A failed assignment reverses newly added
+bindings and implicit-parent origin conversions in reverse order. A failed header
+also clears the current assignment scope; a subsequent valid header restores an
+owned scope. Invalid syntax never enters the namespace index. Header-only syntax
+cannot legitimately continue onto another physical line, permitting a malformed
+header to be diagnosed/quarantined without swallowing later independent headers.
+Unclosed multiline assignment values remain conservative rather than inventing
+statement seams.
 
-The retained tests exercise all 712 pinned sources through the public Analyze and
-Format APIs, distinguish nine decoder refusals from policy errors, check valid
-format idempotence/value-tree equivalence/comment retention, reject invalid
-rewrites, cover the independently minimized array-reentry cases, verify exact
-UTF-16 witnesses including CRLF/non-BMP prefixes, and opt out of each large-cache
-budget using valid public inputs. These tests are substantially better evidence
-than testing the internal ownership trie alone.
+During review, a conditional gap was reported: raw space/tab-only header detection
+could miss a malformed header with leading FF/VT/NBSP/NUL and falsely attribute
+following assignments to the previous scope. The owner proactively corrected this
+before landing. Recovery now uses parser-recovered table identity or a conservative
+header prefix that skips Unicode whitespace/controls **only for quarantine**. The
+syntax parser still rejects non-TOML trivia. Broader recovery classification cannot
+make invalid source valid. Retained directed illegal-prefix tests are being added;
+source inspection alone is not their execution certificate.
 
-The failed overflow assertion needs an actual-package old/new comparison. The
-cached upstream lexer source contains an overflow guard, but its behavior cannot
-be assumed identical to the installed NuGet 2.10.1 runtime. The review did not
-establish a dirty local source modification. The editor's projected numeric value
-retains original text; a wrapped dependency decoded scalar and a lossless textual
-IR are separate questions. Preserve that distinction when deciding the test's
-expected behavior or recording parser debt.
+Independently parsed retained TRXs, without rerunning suites:
+
+| Artifact | Executed / passed | Interpretation |
+| --- | ---: | --- |
+| `toml-uniform.trx` | 730 / 729 | Original integer-overflow expectation failed; retained, not hidden |
+| `toml-uniform-final.trx` | 732 / 732 | Corrected textual numeric preservation and full public corpus checks |
+| `toml-recovery-final.trx` | 797 / 796 | A malformed-header test initially also excluded a legitimate whole-parser grammar witness |
+| `toml-recovery-corrected.trx` | 797 / 797 | Test distinguishes unchanged grammar evidence from unsupported added namespace evidence |
+
+All four have zero unexecuted results. These are checkpoints, not an execution
+certificate for subsequent source changes.
+
+The numeric expectation was corrected: TOML permits larger integers when supported
+losslessly, and mote's numeric IR retains the exact original token text. New tests
+check min/max signed 64-bit and the larger positive literal before and after
+formatting. This does not certify the dependency's decoded scalar representation;
+actual package behavior and cached upstream source are distinct evidence.
+
+The retained public tests classify all 712 pinned sources, separately identify nine
+encoding-boundary refusals, check valid formatting idempotence/value-tree/comment
+retention, reject invalid rewrites, test two independently minimized array-reentry
+cases, verify UTF-16 witnesses, and opt out of each large-cache budget. Recovery
+controls cover independent duplicate scopes, conflicting/malformed headers,
+rollback of failed dotted implicit-parent conversion, local inline errors followed
+by global errors, and preservation of whole grammar witnesses when multiline
+recovery is incomplete.
 
 ## Limits and next verification
 
@@ -88,6 +118,6 @@ overhead rather than treating correctness as proof of performance neutrality.
 
 This review does not certify decoded values against all upstream JSON oracles,
 engine UTF-8 policy, native GUI/AOT execution, macOS behavior, arbitrary nesting,
-or budget-free large-session certification. Resolve the sole test expectation
-with runtime evidence, retain its original failure artifact, and validate the
-focused correction without repeating unrelated completed work.
+or budget-free large-session certification. Retain all original failure artifacts and validate newly changed recovery cases
+before treating this revision as integration-ready; do not repeat unrelated
+completed work.
