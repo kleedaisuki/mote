@@ -18,14 +18,17 @@ public sealed class NativePostedCallbackTests
     {
         using var temp = new RepoTemp();
         MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
-        var type = typeof(NativePostedCallback).Assembly.GetType("Mote.Native.Windows.WindowsEditorShell")!;
-        var shell = type.GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic, null,
-            [typeof(bool), typeof(bool)], null)!.Invoke([false, false]);
-        var field = type.GetField("_statusNotice", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        if (existingNotice) field.SetValue(shell, "Preserve actionable notice");
-        var calls = 0;
         try
         {
+            var type = typeof(NativePostedCallback).Assembly.GetType("Mote.Native.Windows.WindowsEditorShell")!;
+            var constructor = type.GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic, null,
+                [typeof(bool), typeof(bool), typeof(bool)], null);
+            Assert.NotNull(constructor);
+            // Select the established shell; optional arguments are not omitted by exact reflection lookup.
+            var shell = constructor.Invoke([false, false, false]);
+            var field = type.GetField("_statusNotice", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            if (existingNotice) field.SetValue(shell, "Preserve actionable notice");
+            var calls = 0;
             var post = type.GetMethod("Post")!;
             post.Invoke(shell, [(Action)(() => { calls++; throw new HostileException(); })]);
             post.Invoke(shell, [(Action)(() => calls++)]);
