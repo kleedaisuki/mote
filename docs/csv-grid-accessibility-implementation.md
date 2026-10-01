@@ -488,3 +488,73 @@ certifies a constructed instance's actual concurrent retirement. One affected
 Native Release build exited 0 with zero warnings/errors; log is
 `.cache/validation/windows-grid-focus/focus-provenance-lifetime-build.log`.
 The completed 58/14/29/21 suites were not repeated.
+
+
+### Supplemental client promotion and observer truthfulness closure (2026-10-01)
+
+The coordinator approved the independent client at
+`tests/WindowsGridFocusProvenanceProbe/{Program.cs,WindowsGridFocusProvenanceProbe.csproj,README.md}`.
+Its legacy counterpart `tests/WindowsGridExternalProbe` remains byte-unchanged against
+`5d0fcb6`; legacy assertions, project and pins are not replaced. The new client accepts
+exactly editor executable, fresh scratch, and report path; scratch/report stay under
+checkout `.cache`/`.temp`, with isolated `MOTE_HOME`, unchanged synthetic fixture bytes,
+existing trace/Grid opt-ins and a sequential single F6/GoTo/distant-cell Focus workload.
+It never activates or repairs focus. A synchronous UIA hang still requires the hosted
+external 120-second bound and exact owned-tree cleanup; polling is not a call deadline.
+
+Promotion inspection found two client ownership/truthfulness defects, not established
+product causes. Prompt enumeration now requires exact main ownership via GetParent and
+unique eligible identity; ambiguity stops incomplete instead of writing a last-match
+prompt. Before observation is now outside action exception classification: query failure
+records `not_attempted`, ActionAttempted=false, closed observation error/HRESULT, and
+propagates even for the contained cell-focus action. ActionAttempted witnesses client
+body entry only, not API/server delivery. After-query failure preserves the real action
+return/exception and marks the sample unavailable. Independent review then found Main's
+unconditional observed classification: a final after-query fault could still exit0.
+The pure final classifier now marks any ObservationException incomplete/nonzero without
+relabelling the actual action result. Discover-before unavailable is expected before
+identity exists, so unavailable alone is not treated as a query exception.
+
+| Verification | Actual result | Retained evidence |
+|---|---|---|
+| First source-extracted observation/prompt controls | 8/8, exit0; no WPF/native code compiled | `focus-client-pure-observation.log` |
+| Old before-query/action conflation negative | Expected nonzero; `before was swallowed` | `focus-client-pure-observation-negative.log` |
+| Final controls, including aggregate classification | 11/11, exit0 | `focus-client-pure-observation-final.log` |
+| Old unconditional final classification negative | Expected nonzero; aggregate control fails | `focus-client-pure-observation-final-negative.log` |
+| Final permanent Release build with restore | Exit0, zero warnings/errors | `focus-provenance-client-final-restored-build.log` |
+
+Logs above are under `.cache/validation/windows-grid-focus/`; extracted subject markers,
+source hashes, fake Snapshot boundary and out-of-scope fake exception mapping are recorded
+under `.temp/windows-grid-focus-provenance/pure-observation{,-final}/extraction.json`.
+The old temporary client and negative controls are retained, not silently overwritten.
+The initial final build used --no-restore but earlier validation had a separate ArtifactsPath,
+so the normal project lacked assets (NETSDK1004). That setup failure is retained in
+`focus-provenance-client-final-build.log`; the affected build with restore passed. Its
+default bin/obj were moved into the same repository `.cache` validation area. No local
+editor, UIA client, HWND, global input, clipboard or registry operation was executed.
+These checks prove source-level observer semantics/build compatibility, not native routing.
+Independent narrow review is `08b1df3` after the finding in `fbc7fcc`.
+
+Frozen normalized SHA256 client source:
+- LF: `B7E498A9D6BD190D4F835874E53C818F7A12E542FD9979CD038892280624FBF3`
+- CRLF: `B96BD2445B69186FE51941C396ED089D3B431E50243CE1AF86F9674D05C7D33D`
+Frozen project:
+- LF: `5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2`
+- CRLF: `6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4`
+
+The root-found graph resource-bound correction is separately committed as `a276d8a`.
+The old eager list(records) consumed all 100017 finite items and reached an infinite
+fixture's 100002-item guard. Incremental intake retains at most 100000 records and refuses
+the 100001st before validation/storage; exactly 100000 is accepted. The affected suite
+passed **32/32**, exit0 (`.cache/focus-graph-validation/focus-graph-bound-after.log`), with
+the negative retained in `focus-graph-bound-before.log`. Reader report/API remains unchanged.
+Loader bounds are 32 MiB per file, 16384 decoded characters per retained line and 100000
+aggregate records; path count/aggregate file bytes have no independent cap, so callers
+must supply a finite inventory. This fix does not expand the shared loader policy.
+
+Both graphs remain independent: explicit persisted receipt-to-terminal edges only; no
+UTC/unique-count cross-process join, absence_certified=false, and adapter-attempt-only
+coverage. Owner GUI-queue focus is not global keyboard/foreground delivery. Any unknown
+sample or observer fault remains unknown even if an independent primary action returned.
+Supplemental published-AOT runtime evidence on both Windows RIDs remains pending hosted
+integration; previously green CI is not evidence of this newly promoted client.
