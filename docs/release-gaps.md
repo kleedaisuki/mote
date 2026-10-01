@@ -80,8 +80,21 @@ contracts despite positive semantic focus; the prior run has the same blockers.
 Green jobs do not close these separately non-gating acceptance failures
 ([precise followup](validation/native-local-input-monitor.md#blocking-gate-execution-followup--ci-36837499493)).
 
-Next: measure current-binary trace-off/on startup and editing on qualified
-disposable desktops. Enabled Mac monitor cost remains unmeasured. Mac Grid's
+The next performance question now has a scoped result: [Benchmarks 36841148501](https://github.com/kleedaisuki/mote/actions/runs/36841148501)
+at `c19f4c6` qualifies one declared **20-pair / 40 indexed driver-return** Windows
+foreground study, with independently verified source/screen oracles, normal
+numeric exits, and **60** complete native Save chains. Paired synthetic input
+acknowledgement median on-minus-off is **+0.0029 ms**, conditional rank interval
+**[-0.0310, +0.0379] ms**; all five endpoint intervals include zero. This resolves
+the missing equivalent-series evidence for that binary/workload/runner, **not**
+zero overhead, tail latency or generalized nonregression. Companion CI
+36841148496 passes strict 1369/14/9 and both blocking Mac controls; ordinary
+inventories retain 8/8 with numeric exits 0/0
+([raw-study interpretation](performance/causal-trace-overhead.md#first-hosted-foreground-paired-study--cibenchmarks-c19f4c6)).
+
+Next: quantify current Mac monitor cost and pursue real IME/accessibility
+coexistence and larger semantic workloads without replaying the completed
+Windows study. Enabled Mac monitor cost remains unmeasured. Mac Grid's
 original failing AX reply, Windows ARM inconclusive workflows, historical
 Windows AV, arbitrary-format semantic domains, physical presentation and real
 IME/reader coexistence remain open. No signing work or Gatekeeper acceptance.
