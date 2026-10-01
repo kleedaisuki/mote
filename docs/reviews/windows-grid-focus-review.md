@@ -102,3 +102,51 @@ that narrow discriminator.
 No new academic claim is needed to settle these concrete native contracts.
 The repository's existing CSV accessibility research remains motivation, not a
 substitute for callback affinity and actual focus-transition evidence.
+
+## Scoped passive-visibility change review
+
+Reviewed the pending diff after root approved the passive-presentation mechanism:
+`WindowsCsvGrid.Show` now uses named `WindowsGridInterop.ShowWithoutActivation`
+(SW_SHOWNA, 8) on all six visible child branches; hidden branches remain 0.
+There is no production focus reset, retry, callback marshalling change, new ABI,
+or changed COM focus admission. Explicit mouse/cell Focus and shell F6 still own
+their existing `SetFocus` calls, and shell initial source focus is unchanged.
+No substantive defect found in this narrowly scoped production delta. This is a
+documented mechanism correction, **not a demonstrated fix for the historical
+external-client failure**.
+
+The pending `WindowsGridPaneFocusTests` extension establishes source focus before
+Grid construction/publication, observes constructor, Install, Navigation,
+Resize, Show and repeated installations without intervening resets, and tests
+direct selection mutations and provider reads for noninterference. Bidirectional
+traversal also checks cached Table/cell and both scroller HasKeyboardFocus facts
+against the exact native pane. The original repaired-start traversal test remains;
+new checks do not silently replace it. Source text readback remains asserted.
+
+These source-level tests cover the owned adapter/cache paths, not a cross-process
+UIA framework invoking Select or SetFocus. They do not install the shell's full
+analysis/preview visibility sequence or certify foreign/foreground focus. Native
+execution is pending hosted validation; retain the original unchanged external
+probe and its truthful failure result. No test-pass or runtime fix claim is made
+by this review.
+
+### Separate publication/reentrancy boundary
+
+`PublishAccessibility` samples Table focus before setting the native status text,
+and samples scroller focus before setting their native text. Native calls can
+be synchronous reentrancy boundaries. A hypothetical nested focus/installation
+change could leave an outer sample stale; the final bridge publication guards
+installation and frame reference, but the outer scroller writes do not have an
+equivalent final guard. This is an identifiable structural concern, not evidence
+that the retained failure traversed that path.
+
+The actual owned status/scroller WM_SETTEXT subclass routes inspected here call
+default processing; they do not explicitly transfer focus, publish a new
+installation or dispatch a controller selection. Managed group/scroller Publish
+methods are callback-free volatile writes. No executable triggering path for a
+focus change inside these particular label calls has been demonstrated. Therefore
+this concern does **not** block the passive Show delta and does not justify an
+unrelated production reentrancy redesign now. If a transition test points here,
+add a reproducible owned synchronous callback discriminator and then repair the
+publication transaction coherently rather than patching one HasKeyboardFocus
+property or forcing focus.
