@@ -59,9 +59,11 @@ class ProbeTests(unittest.TestCase):
                 events.append("attach")
                 if self_stream is not children[0].stderr:
                     raise AssertionError("wrong child association")
-            def finish(self):
+            def finish(self, original_normal_exit=False):
                 """Mark the bounded evidence collection boundary."""
                 events.append("finish")
+                if not original_normal_exit:
+                    raise AssertionError("original normal exit not supplied")
                 return {"positive_original_only": True}
         class Driver:
             """Model an ordinary source, no input activation or retries."""
@@ -95,15 +97,20 @@ class ProbeTests(unittest.TestCase):
             child.wait = exited
             children.append(child)
             return child
+        def runtime(arguments, seconds, env):
+            """Assert runtime-control never inherits the diagnostic switch."""
+            self.assertNotIn(probe.ENVIRONMENT_KEY, env)
         def save(child, driver, working, size, expected, result):
             """Perform the fixture's exact one-byte mutation, preserving later byte oracles."""
             events.append("save")
             with working.open("r+b") as stream:
                 stream.seek(probe.EDIT_OFFSET)
                 stream.write(b"X")
-        with patch.object(probe, "SaveDiagnosticCollector", Collector), \
+        with patch.dict(probe.os.environ, {probe.ENVIRONMENT_KEY: "1"}), \
+             patch.object(probe, "SaveDiagnosticCollector", Collector), \
              patch.object(probe, "WindowsDriver", Driver), patch.object(probe, "MacDriver", Driver), \
-             patch.object(probe, "bounded_command"), patch.object(probe.subprocess, "Popen", side_effect=launch), \
+             patch.object(probe, "bounded_command", side_effect=runtime), \
+             patch.object(probe.subprocess, "Popen", side_effect=launch), \
              patch.object(probe, "save_exact", side_effect=save), \
              patch.object(probe, "trace_evidence", return_value={"endpoint_integrity": "pass"}):
             result = probe.sample(Path("unused"), case, sample_dir, None, True)
@@ -141,9 +148,11 @@ class ProbeTests(unittest.TestCase):
             def attach(self, stream):
                 """Attach only to the original owned pipe."""
                 events.append("attach")
-            def finish(self):
+            def finish(self, original_normal_exit=False):
                 """Retain evidence only after owned process cleanup."""
                 events.append("finish")
+                if original_normal_exit:
+                    raise AssertionError("forced exit classified normal")
                 return {"retained_selector": True, "stream_completion": "censored"}
         class Driver:
             """Model one timed-out edit and a failed normal-close attempt."""
@@ -173,6 +182,49 @@ class ProbeTests(unittest.TestCase):
         self.assertTrue(result["forced_cleanup"])
         self.assertTrue(result["mac_save_witness"]["retained_selector"])
         self.assertEqual(events, ["attach", "edit", "kill", "wait", "finish"])
+
+    def test_failed_workload_normal_cleanup_has_separate_transport_completeness(self):
+        """Healthy diagnostic transport cannot promote a failed workload to Save acceptance."""
+        import io
+        case = probe.prepare(self.directory, [1])[0]
+        sample_dir = self.directory / "sample"
+        sample_dir.mkdir()
+        child = SimpleNamespace(pid=42, alive=True,
+                                stderr=io.BytesIO(b"mote-save-diag-v1:ready\n"
+                                                  b"mote-save-diag-v1:completed\n"))
+        child.poll = lambda: None if child.alive else 0
+        def exited(timeout):
+            """Model successful normal owned cleanup only after the failure."""
+            child.alive = False
+            return 0
+        child.wait = exited
+        class Driver:
+            """Fail the one edit attempt but permit ordinary normal-close cleanup."""
+            def __init__(self, *arguments):
+                """Avoid platform APIs in this lifecycle test."""
+            def observe(self, version):
+                """Let unchanged initial predicates pass."""
+                return {"ready": True, "complete": True}
+            def observation_summary(self):
+                """Return content-free Mac metadata."""
+                return {}
+            def failure_observation(self):
+                """Return no document contents."""
+                return {}
+            def edit(self):
+                """Consume one attempt and preserve the failed workload status."""
+                raise TimeoutError()
+            def close(self):
+                """Permit normal cleanup without another input attempt."""
+        with patch.object(probe, "WindowsDriver", Driver), patch.object(probe, "MacDriver", Driver), \
+             patch.object(probe, "bounded_command"), patch.object(probe.subprocess, "Popen", return_value=child):
+            result = probe.sample(Path("unused"), case, sample_dir, None, True)
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["normal_exit"])
+        self.assertTrue(result["failure_cleanup_normal_exit"])
+        self.assertTrue(result["mac_save_witness"]["original_normal_exit"])
+        self.assertTrue(result["mac_save_witness"]["healthy_completed_stream"])
+        self.assertEqual(result["edit_attempts"], 1)
 
     def test_witness_startup_failure_is_censored_without_child(self):
         """Popen failure still finalizes preinitialized diagnostic state without fake EOF."""

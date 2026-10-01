@@ -286,14 +286,22 @@ Each sample's `mac_save_witness` has this content-free schema:
 | `rejected_frames`, `overlong_frames` | Saturated counts only, never discarded content |
 | `partial_tail`, `malformed` | EOF with incomplete frame; any unknown/overlong/partial output |
 | `retention_loss`, `counter_capped`, `loss` | Local retention/counter censoring or target `overflow` |
-| `read_error`, `attach_error`, `eof`, `join_timeout` | Transport/lifecycle facts; no exception text |
+| `read_error`, `attach_error`, `eof`, `join_timeout`, `original_normal_exit` | Transport/lifecycle facts; independent exact original-child normal exit; unknown defaults false; no exception text |
 | `protocol_order_valid` | Exactly one initial `ready`, no stage after terminal, admission follows a selector; checked even after retention cap |
-| `healthy_completed_stream` | Ready+completed, coherent order, EOF and no target/local loss, malformed output, transport error or join timeout |
-| `stream_completion` | `healthy-producer-watermark` or `censored`; terminal is not Save acceptance |
+| `healthy_completed_stream` | Ready+completed, coherent order, **independent original-child normal exit** and EOF; no target/local loss, malformed output, transport error or join timeout |
+| `completed_stage_semantics` | Fixed `producer-closed-drained-loss-accounted-not-exit-timeliness-or-save` classification |
+| `stream_completion` | `healthy-full-session-transport` or `censored`; terminal is not Save acceptance |
 | `absence_interpretation` | Always `not-proof-of-callback-nonexecution`; no unsupported negative callback claim |
 
 A positive selector marker witnesses selector entry; positive admission witnesses
 ordinary synchronous Save guards passing, not Save worker start or persistence.
+`completed` is only a stable producer-closed/drained/loss-accounted watermark,
+not target exit, timely shutdown drain or Save success. A write already in flight
+may be received late, including after target diagnostic shutdown times out. Full
+session transport completeness separately requires observed normal exit of the
+**original owned child** plus EOF; forced cleanup remains censored even if a
+terminal marker was already received. A failed workload's successful normal
+cleanup can establish transport completeness without establishing Save acceptance.
 Even a healthy stream does not independently prove missing callbacks did not
 execute. Forced termination can preserve **already received positive markers** but
 censors all undelivered/queued output. Instrumentation changes scheduling and is

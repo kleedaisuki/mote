@@ -52,7 +52,7 @@ class SaveDiagnosticTests(unittest.TestCase):
         """Drain finite test bytes to EOF and return the detached snapshot."""
         collector = diagnostic.SaveDiagnosticCollector()
         collector.attach(io.BytesIO(data))
-        return collector.finish()
+        return collector.finish(original_normal_exit=True)
 
     def test_normal_watermark_and_duplicates(self):
         """Preserve duplicate positive markers and do not fabricate execution times."""
@@ -64,6 +64,24 @@ class SaveDiagnosticTests(unittest.TestCase):
                          ["ready", "selector_entered", "selector_entered", "controller_admitted", "completed"])
         self.assertTrue(all(row["parent_receipt_ms"] >= 0 for row in result["records"]))
         self.assertEqual(result["absence_interpretation"], "not-proof-of-callback-nonexecution")
+
+    def test_terminal_eof_requires_independent_normal_exit(self):
+        """A received terminal plus EOF cannot certify an unknown/forced child exit."""
+        collector = diagnostic.SaveDiagnosticCollector()
+        collector.attach(io.BytesIO(wire("ready", "selector_entered", "controller_admitted", "completed")))
+        unknown = collector.finish()
+        forced = collector.finish(original_normal_exit=False)
+        self.assertTrue(forced["eof"])
+        self.assertEqual(forced["stage_counts"]["completed"], 1)
+        self.assertEqual(forced["stage_counts"]["controller_admitted"], 1)
+        for result in (unknown, forced):
+            self.assertFalse(result["original_normal_exit"])
+            self.assertFalse(result["healthy_completed_stream"])
+            self.assertEqual(result["stream_completion"], "censored")
+        normal = collector.finish(original_normal_exit=True)
+        self.assertTrue(normal["healthy_completed_stream"])
+        self.assertEqual(normal["stream_completion"], "healthy-full-session-transport")
+        self.assertFalse(forced["healthy_completed_stream"])
 
     def test_huge_unterminated_stream_memory_and_tail(self):
         """An 8 MiB no-LF frame never allocates a matching buffer or retained text."""
@@ -148,7 +166,7 @@ class SaveDiagnosticTests(unittest.TestCase):
                 return super().read(1)
         collector = diagnostic.SaveDiagnosticCollector()
         collector.attach(Fragmented(wire("ready", "selector_entered", "controller_admitted", "completed")))
-        self.assertTrue(collector.finish()["healthy_completed_stream"])
+        self.assertTrue(collector.finish(original_normal_exit=True)["healthy_completed_stream"])
 
     def test_read_error_is_content_free(self):
         """Transport exception text is discarded, not surfaced in the JSON report."""
@@ -215,14 +233,15 @@ class SaveDiagnosticTests(unittest.TestCase):
         collector = diagnostic.SaveDiagnosticCollector()
         child = subprocess.Popen([sys.executable, "-B", "-c",
                                   "import os,time;os.write(2,b'mote-save-diag-v1:ready\\n'"
-                                  "b'mote-save-diag-v1:selector_entered\\n');time.sleep(30)"],
+                                  "b'mote-save-diag-v1:selector_entered\\n'"
+                                  "b'mote-save-diag-v1:completed\\n');time.sleep(30)"],
                                  cwd=ROOT, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, bufsize=0)
         collector.attach(child.stderr)
         try:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 with collector._lock:
-                    received = collector._counts["selector_entered"] == 1
+                    received = collector._counts["completed"] == 1
                 if received:
                     break
                 time.sleep(0.01)
@@ -233,7 +252,9 @@ class SaveDiagnosticTests(unittest.TestCase):
         result = collector.finish()
         self.assertTrue(result["eof"])
         self.assertEqual(result["stage_counts"]["selector_entered"], 1)
-        self.assertEqual(result["stage_counts"]["completed"], 0)
+        self.assertEqual(result["stage_counts"]["completed"], 1)
+        self.assertFalse(result["original_normal_exit"])
+        self.assertFalse(result["healthy_completed_stream"])
         self.assertEqual(result["stream_completion"], "censored")
 
 

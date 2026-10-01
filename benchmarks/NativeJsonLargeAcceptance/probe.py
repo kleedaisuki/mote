@@ -441,6 +441,8 @@ def sample(executable, case, directory, client, mac_save_witness=False):
                    "trace_enabled": True, "route": "ordinary-product-no-launch-flags", "edit_attempts": 0,
                    "normal_exit": False, "reopen_normal_exit": False, "poll_interval_ms": 50})
     child = None
+    original_child = None
+    original_forced_cleanup = False
     collector = SaveDiagnosticCollector() if mac_save_witness else None
     result["save_witness_mode"] = "diagnostic-on-not-performance-sample" if collector else "disabled"
     driver = None
@@ -457,6 +459,7 @@ def sample(executable, case, directory, client, mac_save_witness=False):
                                  stdout=subprocess.DEVNULL,
                                  stderr=subprocess.PIPE if collector else subprocess.DEVNULL,
                                  bufsize=0 if collector else -1)
+        original_child = child
         if collector is not None:
             collector.attach(child.stderr)
         driver = driver_type(child.pid, case["size_bytes"], client)
@@ -499,7 +502,7 @@ def sample(executable, case, directory, client, mac_save_witness=False):
             raise RuntimeError("editor normal exit failed")
         result["normal_exit"] = True
         if collector is not None:
-            result["mac_save_witness"] = collector.finish()
+            result["mac_save_witness"] = collector.finish(original_normal_exit=True)
             collector = None
         result["phase"] = "trace-audit"
         result["trace_evidence"] = trace_evidence(home, True)
@@ -549,11 +552,15 @@ def sample(executable, case, directory, client, mac_save_witness=False):
                 result["failure_close_error_class"] = type(failure).__name__
     finally:
         if child is not None and child.poll() is None:
+            if child is original_child:
+                original_forced_cleanup = True
             child.kill()
             child.wait(timeout=10)
             result["forced_cleanup"] = True
         if collector is not None:
-            result["mac_save_witness"] = collector.finish()
+            original_normal_exit = (original_child is not None and
+                                    not original_forced_cleanup and original_child.poll() == 0)
+            result["mac_save_witness"] = collector.finish(original_normal_exit=original_normal_exit)
         # Always retain the immutable-fixture witness even if trust/focus blocks
         # the probe. A failed Save may legitimately leave working bytes changed;
         # record its opaque digest without pretending the expected oracle passed.

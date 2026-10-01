@@ -123,12 +123,15 @@ class SaveDiagnosticCollector:
                 with self._lock:
                     self._read_error = True
 
-    def finish(self):
+    def finish(self, original_normal_exit=False):
         """Join at most two seconds and return bounded, content-free evidence.
 
-        A completed marker alone is not a healthy stream. Any local loss, unknown
-        output, partial frame, transport error or non-EOF join censors negatives.
-        Positive records remain useful after forced termination and loss.
+        completed is only a producer-closed/drained/loss-accounted watermark,
+        never target exit, timely drain or Save success. Full-session completeness
+        independently requires normal exit of this original owned child and EOF.
+        Unknown exit/forced kill, local loss, malformed output and transport error
+        censor completeness even if completed arrived before termination or late
+        after a target shutdown timeout. Positive records remain useful.
         """
         thread = self._thread
         if thread is not None and thread.ident is not None:
@@ -137,7 +140,8 @@ class SaveDiagnosticCollector:
         with self._lock:
             malformed = bool(self._rejected or self._overlong or self._partial_tail)
             loss = self._retention_loss or self._counter_capped or bool(self._counts["overflow"])
-            healthy = (self._eof and not timed_out and not self._read_error and
+            normal_exit = original_normal_exit is True
+            healthy = (normal_exit and self._eof and not timed_out and not self._read_error and
                        not self._attach_error and not malformed and not loss and
                        self._order_valid and self._counts["ready"] == 1 and self._counts["completed"] == 1)
             return {"schema_version": 1, "mode": "diagnostic-on-not-performance-sample",
@@ -149,7 +153,8 @@ class SaveDiagnosticCollector:
                     "malformed": malformed, "retention_loss": self._retention_loss,
                     "counter_capped": self._counter_capped, "loss": loss,
                     "read_error": self._read_error, "attach_error": self._attach_error,
-                    "eof": self._eof, "join_timeout": timed_out,
+                    "eof": self._eof, "join_timeout": timed_out, "original_normal_exit": normal_exit,
+                    "completed_stage_semantics": "producer-closed-drained-loss-accounted-not-exit-timeliness-or-save",
                     "protocol_order_valid": self._order_valid, "healthy_completed_stream": healthy,
                     "absence_interpretation": "not-proof-of-callback-nonexecution",
-                    "stream_completion": "healthy-producer-watermark" if healthy else "censored"}
+                    "stream_completion": "healthy-full-session-transport" if healthy else "censored"}
