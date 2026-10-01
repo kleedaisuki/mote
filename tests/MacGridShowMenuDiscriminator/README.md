@@ -51,10 +51,13 @@ Calls contain only sequence, phase (`prelude`/`post-reply`), fixed operation ID
 and numeric AX error. No target/client PID is serialized.
 
 The client does not read Enabled, Parent, selection, Rows, text, or shown menu
-before the action. Discovery traverses Window/Group containers, prunes
-Table/Row/Column and other leaf roles, and classifies only the fixed
-`mote.csv.table` identifier. Multiple discovered Groups make the expected
-parent comparison unknown. Ownership and installed timeout calls count toward
+before the action. Discovery traverses bounded Children generically (including
+SplitGroup and ScrollArea), prunes Table/Row/Column, and classifies only the fixed
+`mote.csv.table` identifier. Unsupported Children attributes denote normal
+leaves; other failed count/read results make discovery unavailable. The
+expected Group is the Table's immediate traversal parent only when that
+parent has AXGroup role; no pre-action Parent read is added. Ownership and
+installed timeout calls count toward
 all budgets. There is one finder before the action and one after it; graph
 lengths may differ between targets. The 55-second overall deadline, 1-second
 per-element timeout, 12,000 API admissions, 256 nodes/depth 12, 128 children,
@@ -77,8 +80,10 @@ Counter overflow precludes complete absence inference.
 
 The empty control's `frame_present` means its initialized synthetic frame and
 owned window. Its stable attachment/epoch baseline is target-specific, not a
-claim of a document frame lifecycle equivalent to the product. Detach changes
-attachment equality; its immutable synthetic epoch remains equal. There is no
+claim of a document frame lifecycle equivalent to the product. Detach clears
+the Group's current Table and attachment, making current-root
+and attachment equality false; frame availability and epoch equality are
+also false once detached. There is no
 metadata action warmup, direct action invocation, NSInvocation, legacy action
 bridge, selector recorder, 150-ms cancellation, activation or global input.
 A default/tracking-mode timer consumes finish, cancels only the owned menu,

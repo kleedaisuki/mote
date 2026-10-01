@@ -40,7 +40,7 @@ static NSTimer *finishTimer;
 
 static void Lifetime(PairTable *table,unsigned phase) {
     if (lifeCount>=16) { lifeOverflow++; return; }
-    lives[lifeCount++]=(Life){phase,readyPublished && table.attached,readyPublished,
+    lives[lifeCount++]=(Life){phase,readyPublished && table.attached,readyPublished && table.attached,
         [(PairGroup *)table.ownerView table]==table,table.attached};
 }
 @implementation PairTable
@@ -89,7 +89,8 @@ static void Lifetime(PairTable *table,unsigned phase) {
     if (normalShutdown) return;
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [self.ownedMenu cancelTracking];
-    [self.ownerView.window close]; self.attached=NO; detaches++; Lifetime(self,4);
+    [self.ownerView.window close]; self.attached=NO; [(PairGroup *)self.ownerView setTable:nil];
+    detaches++; Lifetime(self,4);
     normalShutdown=YES; [finishTimer invalidate]; finishTimer=nil;
     [NSApp stop:nil];
     [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint
@@ -184,7 +185,7 @@ int main(int argc,const char *argv[]) {
         if (!readyPublished || ![[@"mote-grid-pair-ready-v1\n" dataUsingEncoding:NSUTF8StringEncoding]
             writeToFile:[sessionDirectory stringByAppendingPathComponent:@"ready"] atomically:YES]) return 1;
         [NSApp run]; [finishTimer invalidate]; [NSObject cancelPreviousPerformRequestsWithTarget:table];
-        NSData *json=[NSJSONSerialization dataWithJSONObject:Facts() options:NSJSONWritingPrettyPrinted error:nil];
+        NSData *json=[NSJSONSerialization dataWithJSONObject:Facts() options:NSJSONWritingPrettyPrinted error:NULL];
         BOOL written=json && [json writeToFile:[sessionDirectory stringByAppendingPathComponent:@"server.json"] atomically:YES];
         return written && normalShutdown ? 0 : 1;
     }

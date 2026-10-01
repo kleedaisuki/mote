@@ -25,13 +25,13 @@ static BOOL ReadyMarker(NSString *path) {
     int descriptor=open(path.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
     if (descriptor<0) return NO;
     struct stat facts; char bytes[sizeof(token)];
-    BOOL valid=fstat(descriptor,&facts)==0 && S_ISREG(facts.st_mode) && facts.st_size==sizeof(token)-1;
+    BOOL valid=fstat(descriptor,&facts)==0 && S_ISREG(facts.st_mode) && facts.st_size==(off_t)(sizeof(token)-1);
     ssize_t count=valid ? read(descriptor,bytes,sizeof(bytes)) : -1;
     close(descriptor);
-    return valid && count==sizeof(token)-1 && memcmp(bytes,token,sizeof(token)-1)==0;
+    return valid && count==(ssize_t)(sizeof(token)-1) && memcmp(bytes,token,sizeof(token)-1)==0;
 }
 static BOOL Write(NSString *path, NSDictionary *value) {
-    NSData *data = [NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingPrettyPrinted error:nil];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingPrettyPrinted error:NULL];
     return data && [data writeToFile:path atomically:YES];
 }
 
@@ -40,6 +40,7 @@ static BOOL Write(NSString *path, NSDictionary *value) {
 @property pid_t pid;
 @property double deadline, auditDeadline;
 @property NSUInteger admissions, auditStart, nodes, attempts;
+@property AXError lastChildCountError;
 @property BOOL auditing, exhausted;
 @property(nonatomic,strong) NSMutableArray *calls;
 - (BOOL)admit;
@@ -76,9 +77,10 @@ static BOOL Write(NSString *path, NSDictionary *value) {
     [self record:operation error:*error]; return CFBridgingRelease(raw);
 }
 - (NSArray *)children:(AXUIElementRef)element attribute:(CFStringRef)attribute limit:(CFIndex)limit {
+    self.lastChildCountError=kAXErrorCannotComplete;
     if (![self owned:element] || ![self admit]) return nil;
     CFIndex count = 0; AXError error = AXUIElementGetAttributeValueCount(element,attribute,&count);
-    [self record:@"child-count" error:error];
+    [self record:@"child-count" error:error]; self.lastChildCountError=error;
     if (error!=kAXErrorSuccess || count<0 || count>limit) return nil;
     if (!count) return @[];
     if (![self owned:element] || ![self admit]) return nil;
@@ -93,9 +95,8 @@ static BOOL Write(NSString *path, NSDictionary *value) {
     self.attempts++;
     NSArray *windows = [self children:application attribute:kAXWindowsAttribute limit:1];
     if (windows.count!=1) return nil;
-    NSMutableArray *queue = [NSMutableArray arrayWithObject:@{@"element":windows[0],@"depth":@0}];
+    NSMutableArray *queue = [NSMutableArray arrayWithObject:@{@"element":windows[0],@"depth":@0,@"parent_group":NSNull.null}];
     NSMutableArray *seen = [NSMutableArray array]; id table = nil, group = nil;
-    BOOL multipleGroups = NO;
     for (NSUInteger cursor=0; cursor<queue.count; cursor++) {
         if (cursor>=256) return nil;
         id node = queue[cursor][@"element"]; NSUInteger depth = [queue[cursor][@"depth"] unsignedIntegerValue];
@@ -103,22 +104,23 @@ static BOOL Write(NSString *path, NSDictionary *value) {
         [seen addObject:node]; self.nodes++;
         AXError error; id role = [self read:(__bridge AXUIElementRef)node attribute:kAXRoleAttribute operation:@"role" error:&error];
         if (error!=0 || ![role isKindOfClass:NSString.class]) return nil;
-        if ([role isEqualToString:@"AXGroup"]) { if (group) multipleGroups=YES; else group=node; }
         if ([role isEqualToString:@"AXTable"]) {
             id identifier = [self read:(__bridge AXUIElementRef)node attribute:kAXIdentifierAttribute operation:@"identifier" error:&error];
             if (error==0 && [identifier isKindOfClass:NSString.class] && [identifier isEqualToString:@"mote.csv.table"]) {
-                if (table) return nil; table=node;
+                if (table) return nil; table=node; group=queue[cursor][@"parent_group"];
             }
             continue;
         }
         if ([role isEqualToString:@"AXRow"] || [role isEqualToString:@"AXColumn"]) continue;
-        if (![role isEqualToString:@"AXWindow"] && ![role isEqualToString:@"AXGroup"]) continue;
         NSArray *children = [self children:(__bridge AXUIElementRef)node attribute:kAXChildrenAttribute limit:128];
+        // Only the documented unsupported-attribute result denotes a normal leaf.
+        if (!children && self.lastChildCountError==kAXErrorAttributeUnsupported) continue;
         if (!children) return nil;
         if ((depth>=12 && children.count) || queue.count+children.count>256) return nil;
-        for (id child in children) [queue addObject:@{@"element":child,@"depth":@(depth+1)}];
+        for (id child in children) [queue addObject:@{@"element":child,@"depth":@(depth+1),
+            @"parent_group":[role isEqualToString:@"AXGroup"] ? node : NSNull.null}];
     }
-    return table ? @{@"table":table,@"window":windows[0],@"group":multipleGroups || !group ? NSNull.null : group} : nil;
+    return table ? @{@"table":table,@"window":windows[0],@"group":group ?: NSNull.null} : nil;
 }
 @end
 
