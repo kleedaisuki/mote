@@ -201,4 +201,3 @@ public sealed class TelemetryRecoverablePrefixTests
         return lines.ToArray();
     }
 }
-

@@ -119,9 +119,10 @@ unfinished, the terminal `mote.session` has status `cancelled`, not success;
 this signals incomplete evidence without inventing a dropped count.
 Delayed marks do not hold admission indefinitely, and
 must be completed/cancelled by their owner before process shutdown. An abrupt process or power failure
-can leave an incomplete final line; JSONL readers should ignore only a malformed
-trailing line, not silently discard earlier valid lines. There is no claim of
-per-record `fsync` durability.
+can leave an incomplete final physical line; JSONL readers may ignore only an
+unterminated final row. A newline-terminated malformed record or any earlier
+malformed row is corruption and must fail validation, not be silently discarded.
+There is no claim of per-record `fsync` durability.
 
 Producer admission is the shutdown acceptance boundary, not a prior read of
 the process-wide sink reference. Fresh scopes/events that lose admission to
