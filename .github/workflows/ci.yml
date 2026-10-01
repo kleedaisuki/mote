@@ -33,6 +33,15 @@ jobs:
       - name: Test complete solution on macOS
         if: runner.os == 'macOS'
         run: dotnet test mote.sln --configuration Release --no-build --results-directory .cache/ci-test-results/macos
+      - name: Record Windows RichEdit environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $richEdit = Get-Item -LiteralPath "$env:WINDIR\System32\msftedit.dll"
+          Write-Host "Runner image: $env:ImageVersion"
+          Write-Host "OS version: $([Environment]::OSVersion.VersionString)"
+          Write-Host "RichEdit file version: $($richEdit.VersionInfo.FileVersion)"
+          Write-Host "RichEdit SHA-256: $((Get-FileHash -LiteralPath $richEdit.FullName -Algorithm SHA256).Hash)"
       - name: Test complete solution with crash sequence on Windows
         if: runner.os == 'Windows'
         # Blame records test order after a native testhost crash; it does not
