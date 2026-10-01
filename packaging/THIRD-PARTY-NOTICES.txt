@@ -27,9 +27,9 @@ Pinned source: 6cc82dd23a2c0aefb858f92a51c1b184e2812103
 Full original notice/license: packaging/licenses/Tomlyn.txt
 
 .NET Native AOT runtime — MIT and third-party notices
-Source: https://github.com/dotnet/runtime/tree/v10.0.11
-Release workflow pins SDK 10.0.400 (runtime 10.0.11); the actual SDK version
-is also recorded in every package manifest. A SDK/runtime upgrade requires
+Source: https://github.com/dotnet/runtime/tree/v10.0.12
+Release workflow pins SDK 10.0.401 (runtime and ILCompiler 10.0.12); the actual SDK version
+and verified resolved runtime/compiler package identities are recorded in every package manifest. A SDK/runtime upgrade requires
 updating these notices from the matching runtime source, not silently using
 the old notice inventory for a new runtime.
 Full original license: packaging/licenses/dotnet-runtime.txt

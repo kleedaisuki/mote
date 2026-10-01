@@ -18,6 +18,7 @@ import subprocess
 import tarfile
 import zipfile
 from urllib.parse import unquote, urlsplit
+from release_toolchain import SDK_VERSION, validate_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 RIDS = ("win-x64", "win-arm64", "osx-x64", "osx-arm64")
@@ -54,7 +55,7 @@ def checkout_identity(source):
     if actual != source:
         raise ValueError("Source checkout does not match requested package identity")
     subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "src", "packaging", "docs",
-                    "README.md", "CHANGELOG.md", "LICENSE"], cwd=ROOT, check=True)
+                    "README.md", "CHANGELOG.md", "LICENSE", "global.json"], cwd=ROOT, check=True)
 
 
 def files(root):
@@ -102,14 +103,15 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def build(publish, output, rid, version, source, run_url, sdk):
+def build(publish, output, rid, version, source, run_url, sdk, toolchain):
     """Assemble an immutable package and archive; never overwrite an existing version."""
     identity(version, source)
     if rid not in RIDS:
         raise ValueError("Unsupported runtime identifier")
     checkout_identity(source)
-    if sdk != "10.0.400":
+    if sdk != SDK_VERSION:
         raise ValueError("SDK must match the release's pinned runtime license inventory")
+    toolchain = validate_summary(toolchain, rid, source, run_url)
     output = checked_output(output)
     publish = Path(publish).resolve(strict=True)
     if output.is_relative_to(publish) or publish.is_relative_to(output):
@@ -158,7 +160,7 @@ def build(publish, output, rid, version, source, run_url, sdk):
     manifest = {"schemaVersion": 1, "product": "mote", "version": version,
                 "sourceCommit": source, "runtimeIdentifier": rid, "runtime": "NativeAOT",
                 "executable": exe_relative, "signing": "no-publisher-signature-or-notarization",
-                "build": {"workflowRun": run_url, "dotnetSdk": sdk}, "files": inventory}
+                "build": {"workflowRun": run_url, "dotnetSdk": sdk, "toolchain": toolchain}, "files": inventory}
     write_json(package / "package-manifest.json", manifest)
     if rid.startswith("win-"):
         with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as stream:
@@ -249,8 +251,10 @@ def verify(package, rid, version, source):
                 "signing": "no-publisher-signature-or-notarization"}
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("Package provenance mismatch")
-    if manifest.get("build", {}).get("dotnetSdk") != "10.0.400":
+    if manifest.get("build", {}).get("dotnetSdk") != SDK_VERSION:
         raise ValueError("Package SDK does not match license inventory")
+    validate_summary(manifest.get("build", {}).get("toolchain", {}), rid, source,
+                     manifest.get("build", {}).get("workflowRun"))
     expected_exe = "mote.exe" if rid.startswith("win-") else "Contents/MacOS/mote"
     if manifest.get("executable") != expected_exe:
         raise ValueError("Package executable mismatch")
@@ -302,9 +306,11 @@ def main():
     parser.add_argument("--archive")
     parser.add_argument("--run-url", default="local-unpublished")
     parser.add_argument("--sdk", default="unknown-local")
+    parser.add_argument("--toolchain")
     args = parser.parse_args()
     if args.action == "build":
-        result = build(args.publish, args.output, args.rid, args.version, args.source, args.run_url, args.sdk)
+        toolchain = json.loads(Path(args.toolchain).read_text(encoding="utf-8-sig"))
+        result = build(args.publish, args.output, args.rid, args.version, args.source, args.run_url, args.sdk, toolchain)
     elif args.action == "unpack":
         result = unpack(args.archive, args.output)
     else:

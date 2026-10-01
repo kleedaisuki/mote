@@ -32,8 +32,9 @@ concurrency:
 env:
   RELEASE_SOURCE: ${{ inputs.source_sha }}
   RELEASE_VERSION: ${{ inputs.version }}
-  # Notices in packaging/licenses match this SDK's Native AOT runtime 10.0.11.
-  DOTNET_VERSION: '10.0.400'
+  # Notices match the serviced SDK's resolved runtime and ILCompiler packs.
+  DOTNET_VERSION: '10.0.401'
+  NATIVE_RUNTIME_VERSION: '10.0.12'
   PYTHONDONTWRITEBYTECODE: '1'
 
 jobs:
@@ -116,6 +117,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Complete solution tests failed.' }
       - name: Release package integrity tests
         run: python -B -m unittest discover -s tests -p test_release_packaging.py -v
+      - name: Resolved runtime and compiler identity negative controls
+        run: python -B -m unittest discover -s tests -p test_release_toolchain.py -v
       - name: Release trace oracle negative controls
         run: python -B -m unittest discover -s tests -p test_release_trace_oracle.py -v
       - name: Release workflow independent byte fixture controls
@@ -176,6 +179,25 @@ jobs:
             throw 'Selected SDK does not match the pinned release toolchain.'
           }
           "$selected".Trim() | Out-File '.cache/release-evidence/${{ matrix.rid }}/selected-sdk.txt'
+      - name: Resolve and verify serviced runtime and ILCompiler packs
+        shell: pwsh
+        run: |
+          $directory = '.cache/release-evidence/${{ matrix.rid }}'
+          dotnet restore src/Mote.Native/Mote.Native.csproj -r '${{ matrix.rid }}' `
+            -p:SelfContained=true -p:PublishAot=true -p:RuntimeFrameworkVersion=$env:NATIVE_RUNTIME_VERSION `
+            2>&1 | Tee-Object "$directory/native-restore.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Serviced Native AOT pack restore failed.' }
+          $resolved = & dotnet msbuild src/Mote.Native/Mote.Native.csproj -nologo -verbosity:quiet `
+            -target:ResolveFrameworkReferences -p:RuntimeIdentifier='${{ matrix.rid }}' `
+            -p:SelfContained=true -p:PublishAot=true -p:RuntimeFrameworkVersion=$env:NATIVE_RUNTIME_VERSION `
+            -getProperty:NETCoreSdkVersion,RuntimeFrameworkVersion `
+            -getItem:ResolvedRuntimePack,ResolvedILCompilerPack,ResolvedTargetILCompilerPack
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT toolchain identity resolution failed.' }
+          ($resolved -join "`n") | Out-File "$directory/resolved-toolchain.json" -Encoding utf8
+          python -B packaging/release_toolchain.py --resolved "$directory/resolved-toolchain.json" `
+            --rid '${{ matrix.rid }}' --output "$directory/toolchain.json" --source $env:RELEASE_SOURCE `
+            --run-url "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          if ($LASTEXITCODE -ne 0) { throw 'Resolved runtime/compiler packs do not match the serviced toolchain.' }
       - name: Publish Native AOT product
         shell: pwsh
         run: |
@@ -183,8 +205,9 @@ jobs:
           dotnet --info | Out-File '.cache/release-evidence/${{ matrix.rid }}/dotnet-info.txt'
           [Environment]::OSVersion.VersionString | Out-File '.cache/release-evidence/${{ matrix.rid }}/runner-os.txt'
           if ($IsMacOS) { & sw_vers | Out-File '.cache/release-evidence/${{ matrix.rid }}/sw-vers.txt' }
-          dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r '${{ matrix.rid }}' --self-contained true `
+          dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r '${{ matrix.rid }}' --self-contained true --no-restore `
             -p:PublishAot=true -p:ContinuousIntegrationBuild=true -p:Version=$env:RELEASE_VERSION `
+            -p:RuntimeFrameworkVersion=$env:NATIVE_RUNTIME_VERSION `
             -p:SourceRevisionId=$env:RELEASE_SOURCE -o '.cache/release-publish/${{ matrix.rid }}' `
             2>&1 | Tee-Object '.cache/release-evidence/${{ matrix.rid }}/publish.log'
           if ($LASTEXITCODE -ne 0) { throw 'Native AOT publish failed.' }
@@ -195,7 +218,8 @@ jobs:
           $run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
           $sdk = (dotnet --version).Trim()
           python -B packaging/release_package.py build --rid $rid --version $env:RELEASE_VERSION --source $env:RELEASE_SOURCE `
-            --publish ".cache/release-publish/$rid" --output ".cache/release-packages/$rid" --run-url $run --sdk $sdk
+            --publish ".cache/release-publish/$rid" --output ".cache/release-packages/$rid" --run-url $run --sdk $sdk `
+            --toolchain ".cache/release-evidence/$rid/toolchain.json"
           if ($LASTEXITCODE -ne 0) { throw 'Release packaging failed.' }
           $extension = if ($IsWindows) { '.zip' } else { '.tar.gz' }
           $archive = ".cache/release-packages/$rid/mote-$env:RELEASE_VERSION-$rid$extension"

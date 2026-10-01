@@ -44,8 +44,9 @@ were inspected: Markdig1.3.2, SharpYaml3.13.1 and Tomlyn2.10.1 have no transitiv
 runtime NuGet dependencies in this group; Configuration references the same Tomlyn.
 Their original license texts were retrieved from the precise repository commits
 recorded in nuspec (listed in THIRD-PARTY-NOTICES.txt). .NET runtime original MIT
-license and conservative upstream third-party inventory are from v10.0.11.
-SDK10.0.400 is pinned so that inventory does not silently drift. The Desktop
+license and conservative upstream third-party inventory are now from v10.0.12.
+SDK10.0.401 is pinned, with verified resolved runtime/ILCompiler12 metadata, so that
+inventory does not silently drift. The Desktop
 Avalonia prototype is not linked by Native; its graphics/text DLL license table
 would be misleading here. OS-provided RichEdit/AppKit/fonts are not redistributed.
 
@@ -217,6 +218,57 @@ Its stdout/result summary is retained alongside existing test evidence. The
 complete test matrix, four package probes, timeouts and joint release-assets
 barrier remain unchanged. This wiring received YAML/PowerShell syntax validation
 only; no GUI, full suite or already-passed packer tests were rerun.
+
+### Servicing baseline before first publication
+
+The final pre-servicing source `3c2209c` passed all eight jobs in run
+`36935354135`; the independent24-task audit passed. This is preserved as real
+qualification evidence, not erased by the next revision. Publication was held
+because the approved exact SDK400/runtime11 baseline predates the official
+September08 .NET10.0.12 security servicing release. The official notes list
+SDK10.0.401 as including runtime12 and list Microsoft.DotNet.ILCompiler and
+Native AOT runtime packages at12. The six advisories have different component
+scopes; neither six exploitable mote vulnerabilities nor blanket irrelevance is
+inferred. The update is a current servicing baseline and requalification policy.
+
+The global SDK pin and early selection gates now require10.0.401. Native restore
+explicitly requests RuntimeFrameworkVersion10.0.12, followed by the cheap
+MSBuild ResolveFrameworkReferences metadata query. New
+`packaging/release_toolchain.py` checks exact SDK/runtime properties, resolved
+Core runtime pack, host compiler pack and target Native AOT runtime pack names,
+versions and matching installed nuspec identities. The raw resolved metadata is
+retained alongside a path-free summary carrying source commit, workflow run,
+resolved-metadata SHA-256 and nuspec hashes. Native publish uses no-restore and
+the same explicit runtime property. This is evidence of selected packages, not
+a claim that the installed `dotnet` host version identifies the compiled runtime.
+
+Every package manifest now includes that toolchain summary; build and verify
+reject the old SDK, old compiler/native runtime, wrong RID, missing packs and
+source/run provenance mismatch. Original upstream runtime license/notice texts
+were downloaded verbatim from v10.0.12; parser licenses remain unchanged. Source
+archives and all-four/full-test publication gates remain unchanged. Updating an
+already published version requires a new immutable patch release, never asset
+replacement (this first release is not yet published).
+
+Focused local evidence for the changed contract:
+
+```text
+python -B -m unittest discover -s tests -p test_release_packaging.py -v
+17/17 test methods passed (header/metadata fixtures, not runnable binaries).
+python -B -m unittest discover -s tests -p test_release_toolchain.py -v
+8/8 test methods passed; four RID identity cases, source/run and stale/missing/ambiguous pack controls.
+```
+
+Logs: `.cache/toolchain-servicing/packaging-tests.txt` and `toolchain-tests.txt`.
+The old installed400 SDK was queried cheaply before changing the global pin to
+confirm actual MSBuild item names; it showed runtime11/compiler11/native-runtime11.
+No SDK401 installation, full solution rerun or local AOT/GUI build was performed.
+JSON/YAML/PowerShell syntax guards and source license retrieval are local evidence;
+the exact new-source four-RID hosted qualification remains required before release.
+The adjacent raw cve.md URL returned404 during this task, so the accessible
+official release notes and advisory links, not an invented unavailable table,
+are the source of the servicing mapping:
+[.NET10.0.12 release notes](https://github.com/dotnet/core/blob/main/release-notes/10.0/10.0.12/10.0.12.md).
 
 The root owner must freeze commit/version/default profile and run the workflow.
 Only a complete successful release-assets job for the intended commit is eligible.
