@@ -16,8 +16,10 @@ release download.
 | Apple silicon Mac | `osx-arm64` |
 
 Use the package matching your machine. Do not rely on emulation as qualification
-of an untested architecture. Minimum supported OS versions and final package
-filenames must be stated on the versioned release page before publication.
+of an untested architecture. The first release targets currently supported
+Windows 11 releases and macOS 15 or newer. This is the declared product support
+policy, not a claim that every OS version has been exercised: the versioned
+release page records the actual hosted qualification environments.
 
 Native AOT packages include the required application runtime. You need neither
 a .NET installation nor an account. The application still uses OS libraries.
@@ -36,13 +38,14 @@ Get-FileHash .\downloaded-package.zip -Algorithm SHA256
 ```
 
 ```sh
-shasum -a 256 downloaded-package.zip
+shasum -a 256 mote-0.1.0-osx-arm64.tar.gz
 ```
 
 ## Windows
 
-Extract the entire archive to a directory you control. Run `mote.exe`, or pass
-one file from PowerShell:
+Extract the entire ZIP to a directory you control. The archive contains a
+`mote-0.1.0-win-x64/` or `mote-0.1.0-win-arm64/` directory. Open that directory
+and run `mote.exe`, or pass one file from PowerShell:
 
 ```powershell
 .\mote.exe "C:\Users\Ada\Documents\settings.toml"
@@ -55,18 +58,14 @@ are not evidence that an unsigned executable has been verified by its publisher.
 
 ## macOS
 
-The release page identifies whether the download contains a `.app` bundle or a
-standalone native executable. For an application bundle, move the complete
-`mote.app` to Applications or another directory you control and launch it there.
-A command-line invocation of a bundle's executable has this form:
+Extract the matching `.tar.gz` archive. It contains the complete `mote.app`
+bundle, including its executable and documentation. Move `mote.app` to
+Applications or another directory you control and launch it there. A
+command-line invocation has this form:
 
 ```sh
 /Applications/mote.app/Contents/MacOS/mote ~/Documents/notes.md
 ```
-
-For a standalone executable, extract it, retain its executable permission, and
-run it from Terminal with `./mote ~/Documents/notes.md`. Use `chmod +x ./mote`
-only if archive extraction lost the execute bit.
 
 **No Apple Developer ID signature or notarization is supplied.** A download may
 be blocked even though a hosted test launched the same binary. On supported

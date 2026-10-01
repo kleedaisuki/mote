@@ -148,4 +148,3 @@ environment opt-in, unset `MOTE_TRACE`; configuration must also have tracing off
 Tracing is local and content-free, not uploaded analytics. Old sessions are not
 deleted by a global automatic retention policy; inspect and remove unneeded
 traces yourself. See [trace schema and limits](https://github.com/kleedaisuki/mote/blob/main/src/Mote.Telemetry/README.md).
-

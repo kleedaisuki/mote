@@ -34,4 +34,3 @@ v0.1.0 publication and final profile/artifact qualification are pending. Unsigne
 platform trust, analysis resource limits, real IME/reader coverage, and large-file
 capacity remain explicitly scoped in the
 [versioned release page](docs/releases/v0.1.0.md).
-

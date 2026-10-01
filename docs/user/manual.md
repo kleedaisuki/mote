@@ -191,5 +191,3 @@ If safe, attach a minimal redacted reproducer. Optional local traces help identi
 which runtime stage occurred, but they do not prove physical display timing or
 capture your complete editing history. Do not send passwords, proprietary files,
 private recovery snapshots or signing credentials.
-
-

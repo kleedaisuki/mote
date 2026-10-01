@@ -35,8 +35,8 @@ installation instructions before downloading.
 ```
 
 ```sh
-# macOS: see Installation for the selected release package's entry point
-mote ~/Documents/notes.md
+# macOS, after placing the extracted bundle in Applications
+/Applications/mote.app/Contents/MacOS/mote ~/Documents/notes.md
 ```
 
 No argument opens an untitled document. File > Open replaces the active document
@@ -84,4 +84,3 @@ release packaging run through GitHub Actions; no .NET SDK is needed by users.
 
 GPL-3.0; see [LICENSE](LICENSE). Release packages and their corresponding source
 must remain traceable to the same version.
-
