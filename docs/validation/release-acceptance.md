@@ -642,3 +642,78 @@ Supported verdict: both Mac six-task final-view contracts and Windows x64 pass;
 Windows ARM64's first four pass, but **CSV completion and plain text remain
 unqualified, and the overall release is still failed**. No GUI/test rerun,
 original artifact rewrite or production change was performed by this audit.
+
+## Successful chosen-default candidate: run 36933575580
+
+Frozen candidate source **`f3da110534e9c9c234c4d9a4deae6b54d1e4fdae`** completed
+all eight hosted jobs successfully. This is the chosen-default **candidate**, not
+a certificate for a future main/merge/tag commit or a claim that a GitHub release
+has already been published. The final shipping identity must remain explicit.
+
+```powershell
+python -B .cache/release-ci-36933575580/product-audit/audit.py
+```
+
+Independent artifact audit reuses all prior byte/trace/final-view/default-entry
+contracts, with no GUI or test rerun:
+
+| Target | Exact task pairs and fresh GUI reopens | Task process traces | Trace rows | Save/current semantic version |
+| --- | ---: | ---: | ---: | ---: |
+| win-x64 | 6/6 | 12 | 727 | 5 |
+| win-arm64 | 6/6 | 12 | 715 | 5 |
+| osx-x64 | 6/6 | 6 | 974 | 4 |
+| osx-arm64 | 6/6 | 6 | 1,023 | 4 |
+
+All **24 tasks /36 processes /3,439 task trace rows** pass exact independent
+original/output bytes, original protection, normal completion/fresh GUI reopen,
+closed schema/privacy, complete causal graph, successful session terminal and
+no-observed-drop checks. Each final semantic sidecar equals the suite's retained
+checked result and is linked to its complete Save chain plus matching current
+parse/publication/style phases. Both Mac CSV tasks have actual-render 3×3 ready
+frames, zero pending cells, full 89-unit source coverage and version-4 identities;
+both Windows CSV tasks have nine actual label-checked cells and version-5 evidence.
+No task is skipped or replaced with a successful file-only observation.
+
+The Windows completion-before-read correction is now supported by **12 actual
+runtime witnesses**. Each native report records a completed Save version and
+session matching its final-view sidecar/strict Save chain, plus true
+`exact_saved_read_after_completion`. Inspection of the frozen driver confirms
+the acknowledgement predicate requires successful `document.save`,
+`save.completed` and `command.save` in the same session/version before its one
+saved-target `ReadAllText` call. There is no target-file polling/retry or relaxed
+watchdog. These witnesses and the normal complete traces replace—not excuse—the
+previous ARM64 sharing-violation/censored lifecycle result.
+
+All four targets also pass independently inspected runtime/help/invalid-argument
+output, three bare/default config startup cases, unchanged independently
+specified config bytes, default-off home absence, and strict native-source
+install/readback witnesses in both opt-in traces. The six retained TRX
+collections contain, per OS, **3,695/3,695** main results, Themes **14/14** and
+Configuration **9/9**, without failed or unexecuted results.
+
+Reported candidate executable SHA-256 identities:
+
+- win-x64: `6DAB00C8ABCC075B99327DD14C3A49DA5B926A87EFF1AC6790464226F7F6892E`.
+- win-arm64: `DFDD62FD0108F12C32CF980B389F565342F2F35E4FFDFE95D82D8A25104D05A4`.
+- osx-x64: `2D5B11466B1C8EB36BEEEB425DBA0E70D70C8E9ADBED34C2E0F025AA0E3B7402`.
+- osx-arm64: `331DE91EEEE3FF71429AE778838C0C555DE8E887E9244CDD10BE5FA9E5328657`.
+
+The separate root-owned asset/source audit at
+`.cache/release-ci-36933575580/asset-audit.json` checks ten checksummed collected
+assets, architecture/payload identities and **886** corresponding source blobs
+against this exact candidate. This task audit does not substitute a new main/tag
+source identity for that verified one.
+
+Persistent evidence:
+
+- `.cache/release-ci-36933575580/product-audit/{audit.py,result.json,test-counters.json}`
+- `.cache/release-ci-36933575580/product-audit/frozen-windows-task.ps1`
+- `.cache/release-ci-36933575580/product-audit/frozen-suite.ps1`
+- `.cache/release-ci-36933575580/evidence/release-evidence-<rid>/product/`
+
+Supported verdict: **all four chosen-default Native AOT candidate task/final-view
+contracts pass**, with the previously failed Mac render observer and Windows ARM
+Save observation now actually exercised successfully. This does not turn green
+CI into physical keyboard/Pinyin, screen-reader, pixel-color, broad semantic
+conformance or latency-percentile certification. Final merge/tag publication
+and its artifact identity remain separate release steps.

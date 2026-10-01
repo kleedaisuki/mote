@@ -8,7 +8,26 @@ the old literal-binary constraint and unapproved size/latency promotion budgets
 are retired. See the [release acceptance contract](release-acceptance-contract.md)
 and [versioned release page](../releases/v0.1.0.md).
 
-Latest default/source-view candidate:
+Fully qualified chosen-default candidate:
+`f3da110534e9c9c234c4d9a4deae6b54d1e4fdae`,
+[CI 36933575580](https://github.com/kleedaisuki/mote/actions/runs/36933575580).
+All eight jobs pass, including both managed main suites3695/3695, Themes14/14,
+Configuration9/9, four actual Native AOT package task/codec/inventory gates and
+the joint release asset assembly. Independent task audit verifies **24 exact
+original/saved pairs, 24 fresh GUI-process reopens, 36 task trace sessions and
+3,439 strict causal records**. Windows completion/session/version witnesses
+prove completion-before-one-exact-read; Mac CSV final render state has nine
+ready cells with no experimental AX opt-in. Default/config witnesses use bare
+launch, not an explicit alternative. Root checks all ten checksum entries,
+native architectures and all **886 corresponding Git source blobs** against
+the exact commit. Artifacts and reproducible audits are under
+`.cache/release-ci-36933575580/`.
+
+The candidate is ready for default-branch integration. Public release/tag and
+the final main commit are not yet qualified or published. A changed final source
+identity requires its own qualification; no older run will be relabeled.
+
+Previous failed default/source-view candidate:
 `832dae60ed5361ee45f652d39ef61dd2ae208d19`,
 [CI 36928548957](https://github.com/kleedaisuki/mote/actions/runs/36928548957).
 The aggregate run **failed**. Both main managed suites pass 3684/3684,
@@ -112,13 +131,13 @@ runtime acceptance supplies stronger evidence.
 | --- | --- | --- |
 | Open a single document without projects/workspaces/LSP | Established | Native composition opens one document; no discovery/indexing/language-server dependency. |
 | Mechanism/policy architecture | Established | Engine owns canonical text/lifetime/I/O/history; statically registered format/theme policies and UI adapters are separate modules. |
-| C# Native AOT application packages | Four-RID candidate qualified; publication pending | f2b2de7 passes actual four-architecture packages/tasks/inventories and assembled asset checks. Default promotion/final source still need qualification. Literal-one-executable inventory is historical, not the current delivery gate. |
+| C# Native AOT application packages | Four-RID default candidate qualified; publication pending | f3da110 passes all four actual ordinary-default packages/tasks/final-view/codecs/inventories and assembled asset checks. Final main/tag identity still needs qualification/publication. Literal-one-executable inventory is historical, not the current delivery gate. |
 | Text model, versioned snapshots and edit history | Established | Immutable chunked text, line indexing, undo/redo, ordered edits and stale-result rejection. |
 | Safe file persistence and default encoding | Established with four-RID scoped native task evidence | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; all four AOT six-format suites prove exact Save/fresh-process reopen at f2b2de7. Not power-loss/autosave or every recovery-state certification. |
 | Six-format parsing/semantic results | Partial | All six policies exist and produce structural results, diagnostics and conservative formatting/rendering. General semantic completeness and recovery/large-domain boundaries remain format-specific. |
 | Intermediate representation / source projections | Established foundation | Versioned semantic nodes, tokens and source spans; per-format caches/compact summaries. Not a claim of one universal compiler IR or general local incremental parsing. |
 | Incremental analysis and caching | Partial | Actual reuse for CSV, restricted JSON/Markdown domains and TOML statements; YAML still re-streams. Session interface alone is not incrementality. |
-| Native Windows/macOS editing | Partial | Basic commands and bounded native workflows implemented; coherent single editing locus, real IME and assistive-technology acceptance remain open. |
+| Native Windows/macOS editing | Ordinary default tasks established; attended evidence partial | f3da110 uses a coherent native source locus and passes actual four-RID edits/history/navigation/Save/reopen/final-view tasks. Physical Pinyin and attended assistive-technology acceptance remain open and unadvertised. |
 | Restrained strategy-based themes | Established foundation | Dark/light/high-contrast policies, overrides and system appearance notifications. Physical/high-DPI/all-state visual polish is not certified. |
 | ~/.mote conventions and configurable directories | Established | Typed configuration, MOTE_HOME, relocatable cache/data/trace paths; explicit settings override conventions. |
 | End-to-end tracing | Partial | Opt-in bounded local JSONL, explicit Save provenance, versioned analysis/draw boundaries and native observations. Physical presentation and missing cross-process edges are not fabricated. |
@@ -126,7 +145,7 @@ runtime acceptance supplies stronger evidence.
 | Smooth editing and bounded memory | Partial | Chunked engine and bounded visible work exist; actual input-to-visible tails, long-line/native composition and prolonged interaction require stronger evidence. |
 | Large-file capability | Partial | Capacity tests, virtualized projections and correctness-preserving partial status exist; no universal full semantics/fluent large-file certificate. Retain resilience, prioritize actual ordinary workflows. |
 | GitHub Actions cross-platform validation | Established | Managed/native/AOT/inventory/control/artifact jobs execute. Non-gating success is not product acceptance. |
-| Native release-ready product | Final default qualification/publication pending | All-four joint candidate qualification passed. Visible CSV readiness, actual default-route promotion and immutable public publication remain open. Do not confuse unverified IME/readers/tail latency with advertised certification. |
+| Native release-ready product | Final main/tag publication pending | All-four joint chosen-default qualification and corrected visible CSV readiness pass at f3da110. Exact final-main source, immutable public assets and publication status remain open. Do not confuse unverified IME/readers/tail latency with advertised certification. |
 
 ## Historical component checkpoint before active release work (6827cd1a)
 
