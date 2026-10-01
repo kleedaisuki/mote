@@ -117,4 +117,3 @@ public sealed class NativeUnicodeEditDifferenceTests
         Assert.Equal(expected, document.Snapshot.GetText());
     }
 }
-
