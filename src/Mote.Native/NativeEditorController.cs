@@ -693,7 +693,11 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                     var approved = await FileOverwriteToken.CaptureAsync(path).ConfigureAwait(false);
                     if (await ConfirmOverwriteAsync(path).ConfigureAwait(false))
                         await document.SaveOverAsync(approved).ConfigureAwait(false);
-                    else cancelled = true;
+                    else
+                    {
+                        cancelled = true;
+                        scope?.SetStatus(TelemetryStatus.Cancelled);
+                    }
                 }
                 else await document.SaveAsync(path).ConfigureAwait(false);
             }
@@ -2056,6 +2060,9 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
         using var present = MoteTelemetry.Start(TelemetryOperation.AnalysisToPresentation,
             Dimensions(snapshot));
+        // Scope disposal precedes the outer callback's error handling. Only a
+        // fully installed publication may be classified as successful.
+        present?.SetStatus(TelemetryStatus.Failure);
         var tokens = ProjectTokens(result.Tokens, _pageStart, _pageLength, _projection!);
         PresentAnalysis(new NativeAnalysisView(tokens,
             SessionDiagnosticSummary(result, _pageStart, _pageLength),
@@ -2068,6 +2075,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             VisibleSourceDiagnostics(result.Diagnostics, _pageStart, _pageLength)));
         MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
             dimensions: Dimensions(snapshot));
+        present?.SetStatus(TelemetryStatus.Success);
     }
 
     /// <summary>
