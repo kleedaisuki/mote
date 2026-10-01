@@ -52,6 +52,63 @@ No GUI, input source, clipboard or global codec registration was modified. All t
 
 These portable checks do not establish Native AOT code-page inclusion, Windows/macOS picker behavior, actual input method operation, or UI-reported diagnostics. Those require their own platform integration evidence.
 
+## Wrapper compatibility and runtime-body checks
+
+The extended explicit-open implementation initially changed private `StartOpen`
+to an optional-parameter method. Source inspection found the existing
+`NativePaintTraceTests` reflection caller still supplies exactly one argument.
+Before delivery, the original `StartOpen(string)` entry was restored as a thin
+wrapper around a distinctly named `StartOpenCore`; explicit retries call the
+core directly. This is a diagnostic-call compatibility correction, not a new
+replacement-admission policy. The 166-case controller run is not silently
+recounted or presented as a rerun after this mechanical correction.
+
+One first paint-test compilation raced the independently owned Program route
+being published before `NativeEncodingRuntimeProbe.cs`; it failed with CS0103,
+and **no tests executed**. After the helper existed, the affected test command
+completed with no warnings/errors and **11/11 passed**, zero failed/skipped:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~NativePaintTraceTests --logger 'trx;LogFileName=native-paint-open-wrapper.trx' --results-directory .cache/validation/explicit-open-encoding
+```
+
+Qualified output: `native-paint-open-wrapper.log` and
+`native-paint-open-wrapper.trx` in the existing evidence directory. The log is
+the successful retry, not a retained log of the preceding compilation failure;
+the failure and its reason are explicitly recorded here.
+
+The root-approved tiny published-image diagnostic has one entry:
+`--check-native-encoding <fresh-checkout-scratch>`. It accepts only a hosted
+Windows/macOS identity and a fresh non-reparse strict descendant of the checkout's
+`.cache/` or `.temp/`. It creates four fixed tiny fixtures exclusively, then runs
+seven actual production-engine checks: three legacy exact byte Saves, GBK/Big5
+strict encode-failure original protection, default UTF-8 refusal, and matching /
+conflicting Unicode BOM with exact Save. It never registers a global provider,
+opens user files, changes settings, or invokes a GUI. Closed `report.json` fields
+are schema, status, architecture, error kind, and the completed check labels.
+The marker `mote-native-encoding-ready` is printed only after all seven checks
+and a successful durable report write. Failure is nonzero; raw fixtures and
+reports are retained rather than erased or retried.
+
+`NativeEncodingRuntimeProbeTests` executed the actual seven-check body once under
+`RepoTemp`, without changing environment variables or impersonating a hosted
+runner. It checked all completed labels, all four exact file-byte results, and
+absence of leftover stages. Result **1/1 passed**, zero failed/skipped, with
+no build warnings/errors:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~NativeEncodingRuntimeProbeTests --logger 'trx;LogFileName=native-encoding-runtime-body.trx' --results-directory .cache/validation/explicit-open-encoding
+```
+
+Artifacts: `native-encoding-runtime-body.log` and
+`native-encoding-runtime-body.trx`. The subsequent admission-only refinement uses
+direct ancestor attribute inspection instead of `DirectoryInfo.Exists`, avoiding
+its suppression of errors/dangling-link state. It does not change the qualified
+fixed-file body. Admission and report/marker outer behavior were source-reviewed,
+not runtime-tested locally. The [native review](../reviews/explicit-open-encoding-native.md)
+records that boundary. Actual published four-RID execution remains pending CI;
+the body test is not an AOT or native chooser acceptance claim.
+
 ## Native-controller portable orchestration
 
 `tests/Mote.Tests/NativeExplicitEncodingControllerTests.cs` drives the actual `NativeEditorController` through an independently implemented minimal `INativeEditorShell` and optional `INativeOpenEncodingShell`. No shared fake was changed and no production seam was added. Modal callbacks dispatch actual New, ordinary Open, edits or disposal, and background completions are delivered through the fake's owned concurrent queue. The postconditions concern installed text, document stamps/titles, dirty state, undo results, exact saved bytes, chooser/discard/picker call counts and collected errors, not presumed implementation fields.

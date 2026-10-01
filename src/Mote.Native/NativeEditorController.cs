@@ -159,6 +159,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         shell.GridGeometryChanged += GridGeometryChanged;
         shell.NewRequested += New;
         shell.OpenRequested += Open;
+        if (shell is INativeOpenEncodingShell encodingShell)
+            encodingShell.OpenWithEncodingRequested += OpenWithEncoding;
         shell.SaveRequested += StartSave;
         shell.UndoRequested += Undo;
         shell.RedoRequested += Redo;
@@ -205,6 +207,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             _startupMark, status: TelemetryStatus.Cancelled);
         _startupMark = default;
         _settingsReload.Dispose();
+        if (_shell is INativeOpenEncodingShell encodingShell)
+            encodingShell.OpenWithEncodingRequested -= OpenWithEncoding;
         _shell.ReloadSettingsRequested -= RequestSettingsReload;
         _shell.AppearanceChanged -= AppearanceChanged;
         _shell.CompositionSettled -= CompositionSettled;
@@ -515,6 +519,31 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         if (path is not null) StartOpen(path);
     }
 
+    /// <summary>Explicit choice also admits BOM-less files that happen to be valid under another codec.</summary>
+    private void OpenWithEncoding()
+    {
+        if (_shell is not INativeOpenEncodingShell encodingShell || !CanReplace()) return;
+        var previous = _document;
+        var version = previous.Snapshot.Version;
+        var serial = _openSerial;
+        var path = _shell.PickOpenFile();
+        if (path is null || _disposed || serial != _openSerial) return;
+        var selected = ChooseOpenEncoding(encodingShell);
+        if (selected is null || _disposed || serial != _openSerial) return;
+        StartOpenCore(path, selected, previous, version);
+    }
+
+    /// <summary>Contains chooser failure without consuming a pending open or changing document state.</summary>
+    private DocumentTextEncoding? ChooseOpenEncoding(INativeOpenEncodingShell shell)
+    {
+        try { return shell.ChooseOpenEncoding(); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            _shell.ShowError($"Cannot choose a source encoding: {error.Message}");
+            return null;
+        }
+    }
+
     private bool CanReplace()
     {
         if (!_shell.CommitPendingText()) return false;
@@ -527,12 +556,17 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         return !_document.IsModified || _shell.ConfirmDiscard();
     }
 
-    private void StartOpen(string path)
+    /// <summary>Retains the existing single-argument default-open entry and its diagnostic callers.</summary>
+    private void StartOpen(string path) => StartOpenCore(path);
+
+    /// <summary>Retains the originally approved document/version across a deliberate codec retry.</summary>
+    private void StartOpenCore(string path, DocumentTextEncoding? selected = null,
+        Document? expectedDocument = null, long? expectedVersion = null)
     {
         FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
         var request = ++_openSerial;
-        var previous = _document;
-        var version = previous.Snapshot.Version;
+        var previous = expectedDocument ?? _document;
+        var version = expectedVersion ?? previous.Snapshot.Version;
         var openMark = MoteTelemetry.Mark();
         _openMark = openMark;
         _openTraceRequest = request;
@@ -545,7 +579,9 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             {
                 using var io = MoteTelemetry.StartChild(TelemetryOperation.DocumentOpen, openMark);
                 io?.SetStatus(TelemetryStatus.Failure);
-                opened = await Document.OpenAsync(path).ConfigureAwait(false);
+                opened = selected is { } encoding
+                    ? await Document.OpenWithEncodingAsync(path, encoding).ConfigureAwait(false)
+                    : await Document.OpenAsync(path).ConfigureAwait(false);
                 io?.SetStatus(TelemetryStatus.Success);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -564,6 +600,14 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 if (error is not null)
                 {
                     FinishOpen(request, TelemetryStatus.Failure);
+                    if (selected is null && error is DecoderFallbackException &&
+                        _shell is INativeOpenEncodingShell encodingShell)
+                    {
+                        var choice = ChooseOpenEncoding(encodingShell);
+                        if (choice is not null && !_disposed && request == _openSerial)
+                            StartOpenCore(path, choice, previous, version);
+                        return;
+                    }
                     _shell.ShowError(failureMessage!);
                     return;
                 }

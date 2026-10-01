@@ -79,8 +79,12 @@ non-roundtrip failures are not automatic retry signals.
 Root approved an optional `INativeOpenEncodingShell` capability, including a File
 > Open with Encoding command (no shortcut change) and a chooser after default
 strict decode failure. Existing shell implementations need not implement it.
-Controller and both native dialog implementations are being integrated in separate
-file areas. Actual OS dialog / encoded-file workflows are not yet verified.
+Controller and both native dialog implementations are integrated. A codec retry
+retains the original approved document and version through the modal choice;
+open serial changes invalidate the choice, and the existing Save / composition /
+later-edit confirmation guards remain. The original single-argument private
+default-open entry is retained for diagnostic callers. Actual OS dialog /
+encoded-file workflows are not yet verified.
 
 ## Initial inexpensive probe
 
@@ -108,4 +112,20 @@ The qualified DLL hash, commands, fixed raw bytes, exhaustive provider scans, an
 coverage limits are retained in [validation](../validation/explicit-open-encoding.md).
 The [independent review](../reviews/explicit-open-encoding-engine.md) found no
 substantive defect in the bounded engine patch. Native AOT runtime, native dialogs,
-and modal controller lifetime outcomes remain separate acceptance requirements.
+and actual native modal lifetime outcomes remain separate acceptance requirements.
+
+The optional-capability controller has 13 new portable cases plus 153 existing
+controller regressions, all 166 passing. A mechanical private-wrapper compatibility
+correction was subsequently checked by the 11 affected paint-trace tests. Both
+native shells compile in the coordinated Release build; the Mac helper additionally
+has isolated typed-ABI/layout compilation evidence. Neither compile proves actual
+dialog operation. See [Windows chooser](../validation/windows-open-encoding-ui.md),
+[macOS chooser](../validation/mac-open-encoding-ui.md), and the
+[native integration review](../reviews/explicit-open-encoding-native.md).
+
+A root-approved tiny hosted-only published-image diagnostic exercises the actual
+codecs and safe-save paths through `--check-native-encoding`; its fixed-file body
+passed one portable test without a simulated hosted identity. The bounded
+admission, exclusive fixtures, closed report, and marker contract are described
+in validation. Four-RID actual Native AOT execution remains pending CI, not an
+inferred consequence of a portable green test or a successful publish.
