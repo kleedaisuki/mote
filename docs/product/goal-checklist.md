@@ -8,7 +8,24 @@ the old literal-binary constraint and unapproved size/latency promotion budgets
 are retired. See the [release acceptance contract](release-acceptance-contract.md)
 and [versioned release page](../releases/v0.1.0.md).
 
-First complete passing release candidate:
+Latest default/source-view candidate:
+`832dae60ed5361ee45f652d39ef61dd2ae208d19`,
+[CI 36928548957](https://github.com/kleedaisuki/mote/actions/runs/36928548957).
+The aggregate run **failed**. Both main managed suites pass 3684/3684,
+Themes14/14 and Configuration9/9 with no skips. Both Windows AOT packages pass
+the actual bare-default six-format tasks and new final native-view checks;
+CSV's nine native labels match independent expected values and the screenshot
+shows populated rows. Both Mac targets complete the first four format tasks
+with saved-version-4 semantic/style/capture witnesses, then stop at CSV stage8.
+The new observer incorrectly required an experimental Grid accessibility frame,
+which is not registered in normal product launches. Its replacement must observe
+actual installed render identity/slots, not enable experimental AX to pass.
+Retained ARM CSV conversion failure is version3, before final version4; it is
+not silently relabeled as the current guard failure. A bounded rejection/failure
+witness and corrected normal-render observation are being integrated. No retry,
+watchdog increase, four-RID default certificate or public release is claimed.
+
+First complete passing pre-default release candidate:
 `f2b2de77912b7bb57baa6c72947d392c9b1f9668`,
 [CI 36925090282](https://github.com/kleedaisuki/mote/actions/runs/36925090282).
 Both complete managed matrices pass (main 3661/3661, Themes14/14,
@@ -20,9 +37,9 @@ release-assets job passes. Root downloaded the set and independently checked all
 headers/permissions and all **876 Git blobs** in corresponding source against
 that exact commit. See `.cache/release-ci-36925090282/asset-audit.json`.
 This is not a public release or a promoted-default certificate: the qualified
-candidate still uses explicit NativeSource. Default promotion and a visible CSV
-cell-readiness issue are being integrated separately and require another frozen
-qualification. Public v0.1.0 assets do not yet exist.
+candidate uses explicit NativeSource. The subsequent default/CSV correction is
+implemented and qualified on Windows as described above, but final joint
+qualification remains open. Public v0.1.0 assets do not yet exist.
 
 Previous failed candidate: `9fecef2d5ede8b0c593e709bdd6b39d7ad3e6986`,
 [CI 36921665382](https://github.com/kleedaisuki/mote/actions/runs/36921665382).

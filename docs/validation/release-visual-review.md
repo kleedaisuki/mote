@@ -41,3 +41,17 @@ contrast across every state, or the eventual promoted default route.
   rendering is deliberately not browser parity.
 - No screenshot proves startup distributions, scroll/typing tails, exact saved
   text, or successful public installation. Those require separate evidence.
+
+## Post-correction actual Windows AOT CSV capture
+
+Source `832dae6`, run [36928548957](https://github.com/kleedaisuki/mote/actions/runs/36928548957).
+Root inspected
+`.cache/release-ci-36928548957/evidence/release-evidence-win-x64/product/csv/native-product.png`.
+The actual default AOT window shows the committed Chinese edit, Complete v5
+source status and three populated table records without the former pending rows.
+Only part of the three-column table fits the split-pane width: horizontal
+scrolling remains necessary. This screenshot alone does not prove offscreen
+labels; the separate owned-process callback oracle verifies all nine labels.
+The native table/footer chrome remains utilitarian, not certified pixel polish.
+Both Windows package jobs pass, but the aggregate run fails on Mac CSV observer
+readiness. This capture is not an overall release/default certificate.
