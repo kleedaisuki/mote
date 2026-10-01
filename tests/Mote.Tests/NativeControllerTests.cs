@@ -1423,9 +1423,7 @@ public sealed partial class NativeControllerTests
         /// <inheritdoc />
         public event Action? OpenRequested;
         /// <inheritdoc />
-        public event Action? SaveRequested;
-        /// <inheritdoc />
-        public event Action? SaveAsRequested;
+        public event Action<NativeSaveRequest>? SaveRequested;
         /// <inheritdoc />
         public event Action? UndoRequested;
         /// <inheritdoc />
@@ -1549,7 +1547,10 @@ public sealed partial class NativeControllerTests
             Document = view;
             _statusText = view.Status;
             DocumentSetCount++;
+            DuringDocumentSet?.Invoke(view);
         }
+        /// <summary>Injects a single reentrant UI transition while a native source installation returns.</summary>
+        public Action<NativeDocumentView>? DuringDocumentSet { get; set; }
         /// <inheritdoc />
         public void SetCanvasBinding(NativeCanvasBinding binding)
         {
@@ -1590,6 +1591,7 @@ public sealed partial class NativeControllerTests
         public bool CommitPendingText()
         {
             CommitCalls++;
+            DuringPendingCommit?.Invoke();
             if (VetoPendingCommit) return false;
             if (PendingText is not { } pending) return true;
             PendingText = null;
@@ -1597,6 +1599,8 @@ public sealed partial class NativeControllerTests
             if (Document is { } view) CommittedTexts.Add(view.Text);
             return true;
         }
+        /// <summary>Injects a single document lifetime transition during native composition settlement.</summary>
+        public Action? DuringPendingCommit { get; set; }
         /// <inheritdoc />
         public void SetAnalysis(NativeAnalysisView view)
         {
@@ -1648,19 +1652,34 @@ public sealed partial class NativeControllerTests
         /// <inheritdoc />
         public string? PickOpenFile() => OpenPath;
         /// <inheritdoc />
-        public string? PickSaveFile(string? currentPath) => SavePath ?? currentPath;
+        public string? PickSaveFile(string? currentPath)
+        {
+            DuringSavePicker?.Invoke();
+            return SavePath ?? currentPath;
+        }
+        /// <summary>Models a native modal picker dispatching another UI transition before returning.</summary>
+        public Action? DuringSavePicker { get; set; }
         /// <inheritdoc />
         public bool ConfirmOverwrite(string path)
         {
             OverwritePromptCount++;
+            DuringOverwriteConfirm?.Invoke();
             return OverwriteApproved;
         }
+        /// <summary>Models a native modal approval dispatching another UI transition before returning.</summary>
+        public Action? DuringOverwriteConfirm { get; set; }
         /// <inheritdoc />
         public bool ConfirmDiscard() => true;
         /// <inheritdoc />
         public void ShowError(string message) => Errors.Add(message);
         /// <inheritdoc />
-        public void Post(Action action) => _posted.Enqueue(action);
+        public void Post(Action action)
+        {
+            if (RejectPost) throw new InvalidOperationException("Synthetic UI queue refusal.");
+            _posted.Enqueue(action);
+        }
+        /// <summary>Injects synchronous local queue refusal without pretending native delivery occurred.</summary>
+        public bool RejectPost { get; set; }
         /// <inheritdoc />
         public void Close() { }
 
@@ -1688,9 +1707,9 @@ public sealed partial class NativeControllerTests
         /// <summary>Signals that a native IME commit or cancellation has finished its final edit callback.</summary>
         public void SettleComposition() => CompositionSettled?.Invoke();
         /// <summary>Raises the native Save command.</summary>
-        public void RequestSave() => SaveRequested?.Invoke();
+        public void RequestSave() => NativeSaveRequest.Receive(NativeSaveKind.Save).Dispatch(SaveRequested);
         /// <summary>Raises the native Save As command.</summary>
-        public void RequestSaveAs() => SaveAsRequested?.Invoke();
+        public void RequestSaveAs() => NativeSaveRequest.Receive(NativeSaveKind.SaveAs).Dispatch(SaveRequested);
         /// <summary>Raises the native Open command.</summary>
         public void RequestOpen() => OpenRequested?.Invoke();
         /// <summary>Raises the native Undo command.</summary>

@@ -228,9 +228,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public event Action? OpenRequested;
     /// <inheritdoc />
-    public event Action? SaveRequested;
-    /// <inheritdoc />
-    public event Action? SaveAsRequested;
+    public event Action<NativeSaveRequest>? SaveRequested;
     /// <inheritdoc />
     public event Action? UndoRequested;
     /// <inheritdoc />
@@ -1680,6 +1678,29 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
         catch (Exception error) { ShowError(error.Message); }
     }
 
+    /// <summary>Preserves the native settlement policy while retaining receipt and blocked outcomes.</summary>
+    private void NotifySave(NativeSaveRequest request)
+    {
+        try
+        {
+            if (!CommitPendingText())
+            {
+                request.Trace?.Checkpoint(TelemetryEvent.SaveCompositionBlocked, status: TelemetryStatus.Skipped);
+                request.Trace?.EndOnce(TelemetryStatus.Skipped, TelemetryReason.CompositionBlocked);
+                ShowError("Finish or cancel the current text composition before this command.");
+                return;
+            }
+            request.Trace?.Checkpoint(TelemetryEvent.SaveCompositionSettled);
+            request.Dispatch(SaveRequested);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            request.Trace?.EndOnce(TelemetryStatus.Failure, TelemetryReason.CallbackFailed);
+            try { ShowError(error.Message); }
+            catch { /* Never unwind secondary UI failure through the native selector. */ }
+        }
+    }
+
     private static string RegisterEditorAppearanceClass()
     {
         var cls = ObjC.AllocateClassPair(ObjC.Class("NSTextView"), EditorAppearanceClass, 0);
@@ -2164,13 +2185,25 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     { var shell = s_current; shell?.NotifyAfterComposition(shell.OpenRequested); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Save(nint self, nint selector, nint sender)
-    {
-        NativeSaveDiagnostic.Record(NativeSaveDiagnosticStage.SelectorEntered);
-        var shell = s_current; shell?.NotifyAfterComposition(shell.SaveRequested);
-    }
+    { DispatchSave(NativeSaveKind.Save); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SaveAs(nint self, nint selector, nint sender)
-    { var shell = s_current; shell?.NotifyAfterComposition(shell.SaveAsRequested); }
+    { DispatchSave(NativeSaveKind.SaveAs); }
+
+    /// <summary>Contains every managed failure at the AppKit ABI, including failures creating diagnostics.</summary>
+    private static void DispatchSave(NativeSaveKind kind)
+    {
+        try
+        {
+            var request = NativeSaveRequest.Receive(kind);
+            if (kind == NativeSaveKind.Save)
+                NativeSaveDiagnostic.Record(NativeSaveDiagnosticStage.SelectorEntered);
+            var shell = s_current;
+            if (shell is null) request.Dispatch(null);
+            else shell.NotifySave(request);
+        }
+        catch { /* Never unwind a managed exception through an unmanaged selector. */ }
+    }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Undo(nint self, nint selector, nint sender)
     { var shell = s_current; shell?.NotifyAfterComposition(shell.UndoRequested); }

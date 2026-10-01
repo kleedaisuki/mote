@@ -350,9 +350,7 @@ namespace Mote.Native.Mac
             /// <inheritdoc />
             public event Action? OpenRequested;
             /// <inheritdoc />
-            public event Action? SaveRequested;
-            /// <inheritdoc />
-            public event Action? SaveAsRequested;
+            public event Action<NativeSaveRequest>? SaveRequested;
             /// <inheritdoc />
             public event Action? UndoRequested;
             /// <inheritdoc />

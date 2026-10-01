@@ -159,8 +159,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         shell.GridGeometryChanged += GridGeometryChanged;
         shell.NewRequested += New;
         shell.OpenRequested += Open;
-        shell.SaveRequested += Save;
-        shell.SaveAsRequested += SaveAs;
+        shell.SaveRequested += StartSave;
         shell.UndoRequested += Undo;
         shell.RedoRequested += Redo;
         shell.FormatRequested += Format;
@@ -196,6 +195,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     {
         if (_disposed) return;
         _disposed = true;
+        _activeSaveTrace?.EndOnce(TelemetryStatus.Cancelled, TelemetryReason.LifetimeEnded);
         RetireGridNavigation();
         CancelGridCopy();
         _shell.CancelSourceDrawTrace();
@@ -618,6 +618,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     private void ReplaceDocument(Document replacement, TelemetryMark drawMark = default, int openRequest = 0)
     {
         ResetGridInterest();
+        _activeSaveTrace?.EndOnce(TelemetryStatus.Cancelled, TelemetryReason.StaleDocument);
         if (openRequest == 0) FinishOpen(_openTraceRequest, TelemetryStatus.Cancelled);
         ++_openSerial;
         CancelAnalysis();
@@ -655,88 +656,6 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         TraceSourceDraw(drawMark, TelemetryOperation.OpenToDrawSubmission);
         ShowDocument(drawMark);
         ScheduleAnalysis();
-    }
-
-    private void Save() => StartSave(saveAs: false);
-
-    private void SaveAs() => StartSave(saveAs: true);
-
-    private void StartSave(bool saveAs)
-    {
-        if (!_shell.CommitPendingText()) return;
-        if (_saving) return;
-        if (_document.PendingSaveRecovery is { } recovery)
-        {
-            StartRecoveryExport(_document, recovery);
-            return;
-        }
-        var pickerWasUsed = saveAs || _document.FilePath is null;
-        var path = pickerWasUsed
-            ? _shell.PickSaveFile(_document.FilePath)
-            : _document.FilePath;
-        if (path is null) return;
-        var document = _document;
-        var samePath = document.FilePath is { } current && string.Equals(
-            Path.GetFullPath(current), Path.GetFullPath(path),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-        _saving = true;
-        NativeSaveDiagnostic.Record(NativeSaveDiagnosticStage.ControllerAdmitted);
-        _ = Task.Run(async () =>
-        {
-            Exception? error = null;
-            var cancelled = false;
-            using var scope = MoteTelemetry.Start(TelemetryOperation.Save);
-            try
-            {
-                if (pickerWasUsed && !samePath && File.Exists(path))
-                {
-                    var approved = await FileOverwriteToken.CaptureAsync(path).ConfigureAwait(false);
-                    if (await ConfirmOverwriteAsync(path).ConfigureAwait(false))
-                        await document.SaveOverAsync(approved).ConfigureAwait(false);
-                    else
-                    {
-                        cancelled = true;
-                        scope?.SetStatus(TelemetryStatus.Cancelled);
-                    }
-                }
-                else await document.SaveAsync(path).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                scope?.SetStatus(TelemetryStatus.Failure);
-                MoteTelemetry.RecordSaveFailure(ex);
-                error = ex;
-            }
-            Post(() =>
-            {
-                _saving = false;
-                if (_disposed) return;
-                if (error is not null)
-                {
-                    _shell.ShowError(SaveFailureMessage(error));
-                    return;
-                }
-                if (cancelled) return;
-                // File identity already changed in Document.SaveAsync. Policy selection
-                // must not depend on whether a newly started IME composition can settle.
-                if (document.FilePath is { } savedPath)
-                    SelectPolicy(DocumentPolicies.ForPath(savedPath));
-                MoteTelemetry.Record(TelemetryEvent.SaveCompleted);
-                ScheduleAnalysis();
-                if (!SettleInputBeforeAsyncResult())
-                {
-                    _operationStatus = "Save view update postponed during text composition.";
-                    ShowDocument();
-                    return;
-                }
-                // Settle native input first: a successful save may capture an earlier
-                // version, while newer edits (including preedit) are still unsaved.
-                if (!document.IsModified) _recoveryExported = false;
-                if (_operationStatus == "Save view update postponed during text composition.")
-                    _operationStatus = "";
-                ShowDocument();
-            });
-        });
     }
 
     /// <summary>Reports observed bytes without treating dirty state or an error code as preservation proof.</summary>
@@ -806,15 +725,6 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                     ? $"It is attempted snapshot v{recovery.SnapshotVersion}, not necessarily your latest edits. "
                     : "It is incomplete or unverified staged data, not a guaranteed full snapshot. ") +
                 "Inspect, copy, or remove it explicitly before saving this target again.");
-    }
-
-    private Task<bool> ConfirmOverwriteAsync(string path)
-    {
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!TryPost(() =>
-            completion.TrySetResult(!_disposed && _shell.ConfirmOverwrite(path))))
-            completion.TrySetResult(false);
-        return completion.Task;
     }
 
     private void Edited(string editedDisplay)

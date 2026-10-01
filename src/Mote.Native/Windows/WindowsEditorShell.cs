@@ -222,9 +222,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public event Action? OpenRequested;
     /// <inheritdoc />
-    public event Action? SaveRequested;
-    /// <inheritdoc />
-    public event Action? SaveAsRequested;
+    public event Action<NativeSaveRequest>? SaveRequested;
     /// <inheritdoc />
     public event Action? UndoRequested;
     /// <inheritdoc />
@@ -1194,8 +1192,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         {
             case NewId: NewRequested?.Invoke(); break;
             case OpenId: OpenRequested?.Invoke(); break;
-            case SaveId: SaveRequested?.Invoke(); break;
-            case SaveAsId: SaveAsRequested?.Invoke(); break;
+            case SaveId: DispatchSave(NativeSaveKind.Save); break;
+            case SaveAsId: DispatchSave(NativeSaveKind.SaveAs); break;
             case ExitId: Win32.PostMessageW(_window, Win32.WM_CLOSE, 0, 0); break;
             case UndoId: UndoRequested?.Invoke(); break;
             case RedoId: RedoRequested?.Invoke(); break;
@@ -1210,6 +1208,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             case PreviousId: PagePreviousRequested?.Invoke(); break;
             case NextId: PageNextRequested?.Invoke(); break;
         }
+    }
+
+    /// <summary>Save callback errors cannot unwind through user32; reporting is fixed and itself contained.</summary>
+    private void DispatchSave(NativeSaveKind kind)
+    {
+        if (NativeSaveRequest.DispatchContained(kind, SaveRequested)) return;
+        try { SetStatusNotice("Save command failed before completion."); }
+        catch (Exception error) when (error is not OutOfMemoryException) { }
     }
 
     private void OnTextChanged()

@@ -13,6 +13,41 @@ internal enum NativeLineEndingMode
     CrLf
 }
 
+/// <summary>Closed persistence commands sharing one admission and lifetime contract.</summary>
+internal enum NativeSaveKind { Save, SaveAs }
+
+/// <summary>Target-owned receipt; no native pointer, path, input text, or document is retained.</summary>
+internal readonly record struct NativeSaveRequest(NativeSaveKind Kind, TelemetryRequest? Trace)
+{
+    /// <summary>Begins at the native command callback, not at physical key delivery.</summary>
+    internal static NativeSaveRequest Receive(NativeSaveKind kind) => new(kind,
+        MoteTelemetry.BeginRequest(kind == NativeSaveKind.Save
+            ? TelemetryOperation.CommandSave : TelemetryOperation.CommandSaveAs));
+
+    /// <summary>Dispatches once or truthfully ends an unhandled receipt without inventing admission.</summary>
+    internal void Dispatch(Action<NativeSaveRequest>? callback)
+    {
+        if (callback is null)
+        {
+            Trace?.EndOnce(TelemetryStatus.Skipped, TelemetryReason.MissingHandler);
+            return;
+        }
+        try { callback(this); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            Trace?.EndOnce(TelemetryStatus.Failure, TelemetryReason.CallbackFailed);
+            throw;
+        }
+    }
+
+    /// <summary>Contains nonfatal Save receipt/handler failures before returning to an unmanaged command dispatcher.</summary>
+    internal static bool DispatchContained(NativeSaveKind kind, Action<NativeSaveRequest>? callback)
+    {
+        try { Receive(kind).Dispatch(callback); return true; }
+        catch (Exception error) when (error is not OutOfMemoryException) { return false; }
+    }
+}
+
 /// <summary>
 /// Identifies one immutable document version across native text and semantic
 /// presentation. A new document may reuse a version number but never a generation.
@@ -136,10 +171,8 @@ internal interface INativeEditorShell
     event Action? NewRequested;
     /// <summary>Raised by the Open command.</summary>
     event Action? OpenRequested;
-    /// <summary>Raised by the Save command.</summary>
-    event Action? SaveRequested;
-    /// <summary>Raised by the Save As command.</summary>
-    event Action? SaveAsRequested;
+    /// <summary>Raised once from Save or Save As receipt; shared admission settles any pending native text.</summary>
+    event Action<NativeSaveRequest>? SaveRequested;
     /// <summary>Raised by the Undo command.</summary>
     event Action? UndoRequested;
     /// <summary>Raised by the Redo command.</summary>

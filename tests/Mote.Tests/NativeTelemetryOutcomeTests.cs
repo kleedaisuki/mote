@@ -31,7 +31,7 @@ public sealed class NativeTelemetryOutcomeTests
             SetProperty(shell, "OverwriteApproved", approve);
             using var controller = Controller(shell, temp.Path);
             Document(controller).Apply(new TextChange(0, 0, "SECRET-new"));
-            Invoke(controller, "StartSave", true);
+            Invoke(controller, "StartSave", NativeSaveRequest.Receive(NativeSaveKind.SaveAs));
             await PumpUntil(shell, () => !(bool)Field(controller, "_saving")!);
             Assert.Equal(1, shell.GetType().GetProperty("OverwritePromptCount")!.GetValue(shell));
             Assert.Equal(approve ? "SECRET-new" : "SECRET-original", await File.ReadAllTextAsync(target));

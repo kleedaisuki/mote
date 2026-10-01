@@ -499,9 +499,7 @@ public sealed class NativeGridNavigationTests
         /// <inheritdoc />
         public event Action? OpenRequested;
         /// <inheritdoc />
-        public event Action? SaveRequested;
-        /// <inheritdoc />
-        public event Action? SaveAsRequested;
+        public event Action<NativeSaveRequest>? SaveRequested;
         /// <inheritdoc />
         public event Action? UndoRequested;
         /// <inheritdoc />
@@ -628,7 +626,7 @@ public sealed class NativeGridNavigationTests
         /// <summary>Raises a user command through the actual subscribed controller boundary.</summary>
         internal void Undo() => UndoRequested?.Invoke();
         /// <summary>Raises a user command through the actual subscribed controller boundary.</summary>
-        internal void Save() => SaveRequested?.Invoke();
+        internal void Save() => NativeSaveRequest.Receive(NativeSaveKind.Save).Dispatch(SaveRequested);
 
         /// <summary>Waits for an actual queued completion without executing it, enabling deterministic stale-publication tests.</summary>
         internal async Task WaitPosted()
