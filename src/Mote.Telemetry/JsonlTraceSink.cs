@@ -19,15 +19,21 @@ internal readonly record struct TraceRecord(
 
 /// <summary>
 /// Single-consumer, bounded JSONL writer. Producers only call TryWrite; all I/O,
-/// formatting, rotation, and durable shutdown flushing run off the UI thread.
+/// formatting, rotation, periodic OS flushing, and durable shutdown flushing run off the UI thread.
 /// </summary>
 internal sealed class JsonlTraceSink
 {
+    /// <summary>Caps dirty-buffer residence under healthy writer scheduling; this is not a durability deadline.</summary>
+    private static readonly TimeSpan FlushInterval = TimeSpan.FromMilliseconds(250);
+    /// <summary>Flushes sustained traffic without waiting for an idle timer turn.</summary>
+    private const int FlushBytes = 64 * 1024;
     private static readonly byte[] Newline = [(byte)'\n'];
     private readonly Channel<TraceRecord> _channel;
     private readonly Task _writer;
     private readonly string _directory;
     private readonly TelemetryOptions _options;
+    /// <summary>Optional test-only file factory; invoked exclusively by the writer at file creation.</summary>
+    private readonly Func<string, FileStream>? _openFile;
     private readonly string _sessionId = Guid.NewGuid().ToString("N");
     private readonly long _started = Stopwatch.GetTimestamp();
     private long _dropped;
@@ -40,9 +46,10 @@ internal sealed class JsonlTraceSink
     /// <summary>Remains set when closure abandoned admitted work, so the session cannot certify a complete drain.</summary>
     private int _producerDrainIncomplete;
 
-    internal JsonlTraceSink(TelemetryOptions options)
+    internal JsonlTraceSink(TelemetryOptions options, Func<string, FileStream>? openFile = null)
     {
         _options = options;
+        _openFile = openFile;
         var root = options.OutputDirectory;
         if (root is null)
         {
@@ -167,7 +174,19 @@ internal sealed class JsonlTraceSink
         var bytesInFile = 0L;
         var openedAt = 0L;
         var sequence = 0;
+        var dirtyBytes = 0L;
+        var flushedAt = Stopwatch.GetTimestamp();
         var buffer = new ArrayBufferWriter<byte>(512);
+
+        // Only this consumer touches the stream. FlushAsync drains managed buffering to
+        // the OS, not storage media; a stalled disk never makes producers wait.
+        async Task FlushDirtyAsync()
+        {
+            if (stream is null || dirtyBytes == 0) return;
+            await stream.FlushAsync().ConfigureAwait(false);
+            dirtyBytes = 0;
+            flushedAt = Stopwatch.GetTimestamp();
+        }
 
         async Task AppendAsync(TraceRecord record)
         {
@@ -186,22 +205,59 @@ internal sealed class JsonlTraceSink
                 sequence++;
                 var name = $"mote-trace-{_sessionId}-{sequence:D6}.jsonl";
                 var path = Path.Combine(_directory, name);
-                stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write,
+                stream = _openFile?.Invoke(path) ?? new FileStream(path, FileMode.CreateNew, FileAccess.Write,
                     FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
                 bytesInFile = 0;
                 openedAt = Stopwatch.GetTimestamp();
+                dirtyBytes = 0;
+                flushedAt = openedAt;
                 PruneSessionFiles(sequence);
             }
 
             await stream!.WriteAsync(buffer.WrittenMemory).ConfigureAwait(false);
             await stream.WriteAsync(Newline).ConfigureAwait(false);
             bytesInFile += lineBytes;
+            dirtyBytes += lineBytes;
+            if (dirtyBytes >= FlushBytes || Stopwatch.GetElapsedTime(flushedAt) >= FlushInterval)
+                await FlushDirtyAsync().ConfigureAwait(false);
         }
 
         try
         {
-            await foreach (var record in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
-                await AppendAsync(record).ConfigureAwait(false);
+            using var timer = new PeriodicTimer(FlushInterval);
+            using var waits = new CancellationTokenSource();
+            Task<bool>? readable = null;
+            Task<bool>? tick = null;
+            try
+            {
+                while (true)
+                {
+                    // Retain the losing wait rather than accumulating one pending
+                    // channel wait per timer tick (or one timer wait per record).
+                    readable ??= _channel.Reader.WaitToReadAsync(waits.Token).AsTask();
+                    tick ??= timer.WaitForNextTickAsync(waits.Token).AsTask();
+                    await Task.WhenAny(readable, tick).ConfigureAwait(false);
+                    if (tick.IsCompleted)
+                    {
+                        await tick.ConfigureAwait(false);
+                        tick = null;
+                        await FlushDirtyAsync().ConfigureAwait(false);
+                    }
+                    if (!readable.IsCompleted) continue;
+                    if (!await readable.ConfigureAwait(false)) break;
+                    readable = null;
+                    while (_channel.Reader.TryRead(out var record))
+                        await AppendAsync(record).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                // Also runs on broken I/O. No background timer/read wait survives
+                // this writer; observe cancellation without obscuring its failure.
+                waits.Cancel();
+                if (readable is not null) await ObserveWaitAsync(readable).ConfigureAwait(false);
+                if (tick is not null) await ObserveWaitAsync(tick).ConfigureAwait(false);
+            }
 
             var finalDropped = Interlocked.Exchange(ref _pendingDropped, 0);
             if (finalDropped > 0)
@@ -235,6 +291,13 @@ internal sealed class JsonlTraceSink
                 }
             }
         }
+    }
+
+    /// <summary>Observes a retained readiness wait cancelled when the sole writer leaves.</summary>
+    private static async Task ObserveWaitAsync(Task<bool> wait)
+    {
+        try { await wait.ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
     }
 
     private void PruneSessionFiles(int latestSequence)
