@@ -502,3 +502,65 @@ dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore `
   --logger 'trx;LogFileName=menu-permission-diagnostic.trx' `
   --results-directory .cache/mac-grid-menu-regression
 ```
+
+## Next single experiment: independently test an already verified menu
+
+Decision after CI `36799464145` / `d7b2473`: the live proxy allows both exact
+selectors in every phase, including native will-open; both hosts now transport
+the same exact-PID Table AXMenu, 12 children and one exact coordinate title.
+The original external AXShowMenu result remains `attributeUnsupported`.
+Permission refusal and distinct wire names are falsified explanations. Neither
+fact justifies a permissive override, a changed Table role or a legacy action
+implementation. A custom NSAccessibilityElement/AXTable bridge peculiarity is
+still possible, but not causally established by the current observations.
+
+The **next single experiment is test-only downstream navigation from that
+already verified menu**, not a product patch or an action-acknowledgement fix.
+This separates an unresolved framework reply from currently unexercised
+numeric navigation, exact semantic rebase, retired-node safety and close.
+
+Before any additional action, the helper must prove all of these guards:
+
+1. Exactly the existing 25 preceding fixture/semantic assertions passed.
+2. The original action error is the observed `attributeUnsupported`, retained
+   verbatim, and the exact showMenu action is advertised.
+3. The direct Table shown-menu relationship returns a type-validated AX element
+   with the exact already launched editor PID and AXMenu role.
+4. Its exact child count is at most 128 and its children preserve per-node PID
+   admission. Exactly one AXMenuItem has both the established exact coordinate
+   title and label. No arbitrary-label or app-tree fallback is admitted.
+
+If any guard fails, **no downstream action is performed**. The helper does not
+retry AXShowMenu, synthesize input, add a menu or change the original predicate.
+The broad app traversal prunes Tables and has repeatedly missed the menu that
+the direct relationship positively exposes; using the verified relationship
+is a platform-semantic entry path, not a weakened menu identity assertion.
+
+With all guards satisfied, only the existing numeric coordinate command is
+pressed. The existing prompt-identity and unique field/Go-button checks remain;
+the only value supplied is the fixed synthetic `1001:17`. The separate
+downstream checks cover exact Row 1001/Column 17/value, still-local ranges,
+retained old-cell retirement/mixed-selection refusal, independent full source,
+and normal owned close. No Copy/Replace/Save action or source edit is tested.
+
+The original `context-menu-accessible=false` assertion, AX error, **overall
+failed status and exit 1 are immutable**. Downstream outcomes/phases are named
+separately; they cannot certify the overall accessibility gate or mask its
+first falsifier. Even a completed downstream path requires wrapper proof of
+actual normal editor exit and unchanged fixture bytes, with failure-specific
+owned cleanup otherwise. All existing admission/lifetime/array/query bounds
+remain unchanged; these are not permission to inflate a budget.
+
+Expected discriminating outcomes:
+
+| Result | Consequence |
+| --- | --- |
+| A guard fails | Stop without action; the previously observed live menu condition was not reproduced |
+| Menu press or prompt fails | Identify a distinct downstream action/dialog boundary, retaining the original upstream failure |
+| Numeric rebase/retirement fails | Diagnose actual semantic/navigation safety separately from AXShowMenu acknowledgement |
+| All downstream checks and normal exit pass | Establish this safe user workflow independently; overall action acknowledgement still fails and is not release-ready |
+
+Only after these independent facts should a role-only/native-bridge control
+experiment be designed if needed. Changing receiver type, role, property
+storage and legacy action implementation together would not discriminate the
+remaining mechanism and is explicitly out of this experiment.
