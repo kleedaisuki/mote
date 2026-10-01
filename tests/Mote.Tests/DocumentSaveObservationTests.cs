@@ -51,26 +51,36 @@ public sealed class DocumentSaveObservationTests
     {
         using var temp = new RepoTemp();
         using var document = new Document("one");
-        var operations = new BlockingMove();
+        using var operations = new BlockingMove();
         document.SaveOperations = operations;
         var first = Task.Run(() => document.SaveAsync(temp.File("one.txt")));
-        Assert.True(operations.Entered.Wait(TimeSpan.FromSeconds(5)));
+        Task? second = null;
         try
         {
+            // Yield the test worker while the first save reaches its held commit.
+            await operations.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var observer = new Observer();
-            var second = document.SaveAsync(temp.File("two.txt"), default, observer);
+            second = document.SaveAsync(temp.File("two.txt"), default, observer);
             Assert.Single(observer.Events);
             Assert.Equal(DocumentSavePhase.GateWait, observer.Events[0].Phase);
+            Assert.False(second.IsCompleted);
             document.Apply(new TextChange(0, 3, "two"));
             var version = document.Snapshot.Version;
             operations.Release.Set();
             await first;
             await second;
+            Assert.Equal("one", await File.ReadAllTextAsync(temp.File("one.txt")));
             Assert.Equal("two", await File.ReadAllTextAsync(temp.File("two.txt")));
             Assert.Equal(version, observer.Events.Single(e => e.Phase == DocumentSavePhase.SnapshotCapture && e.Edge == DocumentSaveEdge.Succeeded).SnapshotVersion);
             AssertBalanced(observer);
         }
-        finally { operations.Release.Set(); await first; }
+        finally
+        {
+            // Entry timeout and assertion failures must also release and drain owned saves
+            // before disposing the document, synchronization primitive or scratch files.
+            operations.Release.Set();
+            await Task.WhenAll(first, second ?? Task.CompletedTask);
+        }
     }
 
     /// <summary>Concurrent edits do not change captured bytes or falsely mark their new state clean.</summary>
@@ -324,20 +334,23 @@ public sealed class DocumentSaveObservationTests
     }
 
     /// <summary>Blocks only the first commit so queued snapshot capture is deterministic.</summary>
-    private sealed class BlockingMove : DocumentSaveOperations
+    private sealed class BlockingMove : DocumentSaveOperations, IDisposable
     {
-        internal readonly ManualResetEventSlim Entered = new();
+        internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly ManualResetEventSlim Release = new();
         private int _calls;
         internal override void Move(string stage, string target)
         {
             if (Interlocked.Increment(ref _calls) == 1)
             {
-                Entered.Set();
+                Entered.TrySetResult();
                 if (!Release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("test commit gate");
             }
             base.Move(stage, target);
         }
+
+        /// <summary>Disposes the commit gate only after the test has drained both owned saves.</summary>
+        public void Dispose() => Release.Dispose();
     }
 
     /// <summary>Injects a deterministic primary filesystem error without mutating commit policy.</summary>
