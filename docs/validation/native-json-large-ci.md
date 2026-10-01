@@ -868,3 +868,58 @@ Artifacts and per-Mac raw `job.log` files are retained under
 `.cache/ci-36815303415-json-osx-x64/` and
 `.cache/ci-36815303415-json-osx-arm64/`. No Windows/full successful-case trace
 re-audit, product/probe modification or workflow rerun was performed.
+
+## Follow-up: first hosted Save-witness invocation blocked before launch
+
+2026-10-01: independently examined the completed Mac native jobs of
+[run 36816778414](https://github.com/kleedaisuki/mote/actions/runs/36816778414),
+source **`d6b355b254821e208db2216c3761be5bae2cfaab`**. Both jobs are green, but
+their ordinary JSON diagnostic **does not execute**: a workflow argument-shape
+defect prevents the Python pilot from reaching any native runtime/GUI process.
+
+| Mac RID | Protocol/artifact tests | Actual pilot invocation | Uploaded JSON pilot evidence |
+| --- | --- | --- | --- |
+| osx-x64 | 41/41 pass | argparse exit 2 → nested shell exit 1 | none; upload warns no files |
+| osx-arm64 | 41/41 pass | argparse exit 2 → nested shell exit 1 | none; upload warns no files |
+
+Both raw logs contain the exact parser error
+`unrecognized arguments: - - m a c - s a v e - w i t n e s s`, followed by
+`Native JSON source pilot incomplete (exit 2)` and the failing shell exit.
+The upload warning names absent report/local-trace paths. No sample report,
+source binding, Save post, exact-byte result, original-child exit, GUI reopen,
+terminal trace or hosted selector/admission witness was produced. This is an
+**environment-independent workflow/harness defect**, not a new product Save
+failure or a hosted diagnostic transport failure.
+
+### Independent minimal reproduction
+
+The run's workflow assigns:
+
+```powershell
+$witness = if ($IsMacOS) { @('--mac-save-witness') } else { @() }
+# The command subsequently uses @witness as a splatted native argument list.
+```
+
+PowerShell pipeline assignment unwraps the one-element result to `System.String`;
+native-command splatting then enumerates its 18 characters. A no-GUI, no-product
+local reproduction with the same true branch and
+`python -c 'import sys; print(repr(sys.argv[1:]))' @witness` yields
+`['-', '-', 'm', 'a', 'c', '-', 's', 'a', 'v', 'e', '-', 'w', 'i', 't', 'n', 'e', 's', 's']`,
+matching both hosted failures. This establishes the argument bug without
+rerunning either workflow or changing product/probe code.
+
+The intended witness is default-off product instrumentation enabled only for
+the original Mac GUI child, with positive selector/admission stages and a bounded
+content-free transport. **None of its hosted properties can yet be concluded
+from this run**: ready/selector/admission/completed/overflow, original-child normal
+exit, EOF and transport health are all unavailable, not false or successful.
+Portable 41-test success remains a separate result. The implementation contract
+is owned in `mac-json-save-witness-implementation.md`; a corrected hosted argument
+invocation is needed before positive-boundary or absence interpretation is useful.
+Prior ordinary Save successes/failures above are unaffected by this prelaunch block.
+
+Raw per-job logs were retrieved directly from the completed job-log API to
+`.cache/ci-36816778414-mac-x64-job.log` and
+`.cache/ci-36816778414-mac-arm64-job.log`; attempted JSON artifact downloads found
+no matching Mac artifact. Only this ledger was changed; no product/probe/workflow
+was modified or native workload rerun for the audit.
