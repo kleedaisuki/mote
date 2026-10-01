@@ -1,13 +1,25 @@
 # Goal implementation checklist
 
 Date: 2026-10-02 (Asia/Singapore). This is an implementation inventory, not a release certificate.
-The authoritative updated objective asks for clear top-down modeling, good
-implementation and native productization; it does not authorize shrinking the
-six-format, performance, single-binary, or semantic requirements.
+The user supersedes the earlier paused objective: **allow multi-file application
+packages, retain Native AOT, publish the first deliverable, and maintain its
+release page/manual/changelog**. Single-document behavior and integrity remain;
+the old literal-binary constraint and unapproved size/latency promotion budgets
+are retired. See the [release acceptance contract](release-acceptance-contract.md)
+and [versioned release page](../releases/v0.1.0.md).
+
+First release candidate `25b897e2bc375c0e36556ff569717843ff2bfa16` is undergoing
+[CI 36915680535](https://github.com/kleedaisuki/mote/actions/runs/36915680535):
+Windows/macOS complete solution tests and four native-architecture extracted
+package product/codec tasks. No published release or default promotion is claimed
+until those actual tasks and final assets are verified. Local affected product
+selection is 85/85, package controls 15 methods, strict trace oracle 7 methods;
+these independent counts are not added into a fabricated complete-suite total.
+Old Canvas/capacity experiments remain explicitly dispatchable, not deleted.
 
 ## Evidence baseline and status rules
 
-Current component checkpoint: `6827cd1a19142c9ad766d296c18d0770e600e79c`,
+Historical component checkpoint (before the release candidate): `6827cd1a19142c9ad766d296c18d0770e600e79c`,
 [CI 36899695843](https://github.com/kleedaisuki/mote/actions/runs/36899695843).
 The component audit covers managed suites, four native inventories/codecs and
 native source reference experiments. It is not an audit certifying every
@@ -52,7 +64,7 @@ runtime acceptance supplies stronger evidence.
 | --- | --- | --- |
 | Open a single document without projects/workspaces/LSP | Established | Native composition opens one document; no discovery/indexing/language-server dependency. |
 | Mechanism/policy architecture | Established | Engine owns canonical text/lifetime/I/O/history; statically registered format/theme policies and UI adapters are separate modules. |
-| C# Native AOT, strict one executable | Established at hosted baseline | win-x64, win-arm64, osx-x64, osx-arm64 actual inventories; system libraries allowed, no shipped companion libraries/resources. New source must retain this gate. |
+| C# Native AOT application packages | Release qualification pending | Four prior AOT architectures established; new Windows directories/macOS .app resources now allowed. Literal-one-executable inventory is historical, not the current delivery gate. |
 | Text model, versioned snapshots and edit history | Established | Immutable chunked text, line indexing, undo/redo, ordered edits and stale-result rejection. |
 | Safe file persistence and default encoding | Established with reliability gaps outside engine | Strict BOM/UTF-8 loading, guarded Save/Save As, original-file protection and recovery contracts; real Mac workflow failures remain open. |
 | Six-format parsing/semantic results | Partial | All six policies exist and produce structural results, diagnostics and conservative formatting/rendering. General semantic completeness and recovery/large-domain boundaries remain format-specific. |
