@@ -110,9 +110,9 @@ reports even if aggregate admission fails. Neither a nonzero original AX reply
 nor green workflow completion is relabeled a product pass. Partial primary
 reply files survive client/post-audit/watchdog failure as raw evidence.
 
-Validation evidence: reviewer independently ran 27/27 portable driver guards
-before these native-only revisions; driver/guard hashes remain unchanged. The
-implementation owner reported targeted managed tests **5/5** and a zero-warning
+Validation evidence: reviewer independently ran 27/27 portable driver guards twice,
+including the final driver snapshot and pins. The
+implementation owner reported focused managed tests **24/24**, including the five new recorder/path/ABI tests and a zero-warning
 build; those are owner-provided evidence, not a duplicate reviewer execution.
 `git diff --check` passed on the final visible edits. Mac native compilation,
 tracking/close ordering and exact-PID external action outcomes remain unexecuted
