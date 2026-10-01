@@ -85,6 +85,29 @@ several corpora. The first null-Full-counter specialization recovered 100 MiB
 latency (LF +0.45%, CRLF +1.40%, compact -2.48% median ratios), but enlarged transient
 key object layouts still added approximately 6.3% ordinary cold allocations. Those
 candidates were rejected, not promoted as a complete performance win.
-The final source specializes accounting to bounded interactive turns. Final matched
-source measurements, retained metadata and native acceptance remain independently
-reported in the linked evidence; no GUI latency follows from parser timings.
+The final source specializes accounting to bounded interactive turns and passes
+key budget context without enlarging transient key objects. Final matched-source
+CoreCLR measurements support this bounded parser slice:
+
+- 100 MiB LF cold Full median 583.234 to 582.567 ms (-0.11%); CRLF 577.919 to
+  593.208 ms (+2.65%) in the first five pairs. CRLF's pairwise median was +7.29%
+  with a +23.35% outlier; ten additional focused pairs yielded +0.406% pairwise
+  median (all ten at most +4.51%). The original outlier is retained, not excluded.
+- Ordinary cold allocation is effectively unchanged (LF -0.25%, CRLF +0.21%
+  medians). Compact primitive Full adds 114,320 bytes (+46.22% relative to its
+  tiny baseline allocation), an explicit source-sized index admission trade-off,
+  while its 100 MiB cold latency improves. No universal allocation win is claimed.
+- After one Full, 200 local plus 5,000 dispersed edits on each 100 MiB corpus stay
+  Complete with exact counts/version and at most 512 Ki charged visits. With
+  the file-open producer unwound before timing, dispersed p95 is 0.631 ms LF,
+  0.595 ms CRLF and 2.251 ms compact; these are managed Analyze times, not input
+  or paint latency. The certificate graph is approximately 32 KiB.
+- A first inline-await benchmark retained original file-open producer chunks,
+  confounding steady-state memory. An engine-only control reproduced that growth;
+  the explicit-unwind discriminator reduced LF post-edit forced-GC growth to
+  21,547,120 bytes. Certificate retention is measured separately. The Engine owner
+  handles the producer lifetime issue independently.
+
+Full measurements, identities, tails and reproducibility are in the linked
+benchmark evidence. Native AOT builds and actual native interaction/paint remain
+separate promotion gates; no GUI latency follows from these parser timings.
