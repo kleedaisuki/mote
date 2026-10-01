@@ -655,8 +655,9 @@ hide a theme-induced selection reset.
 
 Before and after each target theme notification, the existing assertion requires
 one selected range with exact text `lp`, both endpoints equal to the expected
-source range, and the full bounded source fixture unchanged. All six checks
-complete, and phase launch observations/cases report `[1,3)` with exact LF source.
+source range, and the full bounded source fixture unchanged. All six phases
+complete both checks, and phase launch observations/cases report `[1,3)` with
+exact LF source.
 This is source-coordinate selection preservation, not input-window-local
 EM_GETSEL inference. The source Document/Pane distinction stays intact.
 
