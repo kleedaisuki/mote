@@ -297,6 +297,11 @@ Python 3.14.6 `tomllib` accepted both unchanged sources. Its parsed array struct
 and the full current diagnostics are retained in
 `small-policy-minimals-python.txt`, `small-policy-minimals.jsonl`, and
 `small-policy-minimals-summary.json` (0 accepted, 2 rejected, 0 exceptions).
+Minimal 1 is exactly 50 UTF-8 bytes, SHA-256
+`5ad99e515c9c968f6e55ad54445e800f35921336b7f01b5af25261d8c1cd0e30`;
+minimal 2 is exactly 70 UTF-8 bytes, SHA-256
+`ae8ec429f8fd13cce1d48eecaf2f6a3aac95fc48c01d72880049993d13c7007c`.
+Both use LF newlines, including the final newline, and contain no explanatory comments.
 Historical independent Rust evidence for those same source-order patterns is documented
 elsewhere; Rust was not rerun here. This establishes **two concrete current whole-file
 policy disagreements**, despite the 218-fixture positive pass. It does not establish
