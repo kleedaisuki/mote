@@ -308,3 +308,122 @@ policy disagreements**, despite the 218-fixture positive pass. It does not estab
 the source-level cause inside shipped NuGet 2.10.1: the older inspected upstream
 checkout is not assumed to be identical to that binary. Production still needs to
 reconcile these valid small-file semantics with the normative ownership correction.
+
+## Compact statement-cache follow-up (2026-10-01)
+
+Production cache code was frozen at `b93c4c2deb81e6023f9c1b05832378cde6ef03fe`.
+The Release build completed with zero errors/warnings before later small-policy work.
+`Mote.Formats.dll` SHA-256:
+`5CF3A8EC3D69075E2D1170812CE4C43FE217267B150C80A7BCF49F09F28DC78D`;
+`Mote.Engine.dll` SHA-256:
+`129E6A62EFE01D37ABE843A2783FA4CC383A1E716E264353534ED852EE6662F6`.
+All measurements subsequently invoked those copied DLLs without rebuilding production.
+
+The project-local harness is `.temp/toml-reuse-cost/Program.cs`; source/binary provenance
+is in `frozen-hashes.json`, and raw observations are `results/<fixture>.jsonl` in that
+directory. The seven TOML source hashes at freeze are retained here for reproducibility:
+
+| Source | SHA-256 |
+| --- | --- |
+| `TomlIncrementalSession.cs` | `534A4A82031659CE60206DB757EDE5FD85A80C4F075F616B3917E65599771896` |
+| `TomlOwnershipIndex.cs` | `81365E69117DAC310D8C3BC82932AF95F33C03AFB74A9985D5527CAE9820351E` |
+| `TomlPolicy.cs` | `EDF2850A551CEA582AE1D01C0F8EC41040A9E23C775DC098D3E076EE0D6A6D67` |
+| `TomlStatementBoundary.cs` | `F423CB7D17C541CEC68713CFCE57966C9CEA02474D54EB152FFE19E41D0C32CA` |
+| `TomlStatementCache.cs` | `1F9AB9F22CFCF9AD5E1CE2805E652BDF8B83CFC23CB73EA2724F696AEFB041A3` |
+| `TomlStatementReader.cs` | `E0503F36FE5036A0967C86798B25F85A41400A9534B98C56CCF9283A8E557AF2` |
+| `TomlStatementSummary.cs` | `56413A27CA592DBDB24E9A6B7B4884AE6B79DB86803CD81455CBBFE508B26B7D` |
+
+### Workload and controls
+
+The same five fixture constructors and exact initial byte hashes were reused; none
+was resized. Sizes are approximately 5 MiB (some slightly greater than 5 MiB), all
+below 8 MiB. One fresh process per fixture, the same Windows/runtime/workstation GC,
+and `DOTNET_TieredCompilation=0` were used. A complete cold session warmed the Full
+path once, then five separate fresh sessions measured cold Full on the original
+snapshot. The fifth session became the live edited session.
+
+Ten real engine `Document.Apply` mutations replaced one character at a fixed near-start
+offset, alternating `x`/`y` in valid string/comment contents or `1`/`2` in the first
+short-key value. Exact offsets were nested AoT 29, long quoted 6, short keys 7,
+multiline quoted 9, comments 1. Each call received the actual contiguous
+`VersionedEdit` from the engine's before/after versions; versions were exactly 1–10.
+Every result had current version, whole-document coverage, `Complete`, zero included
+diagnostics and exact total zero. Every edited snapshot was separately checked against
+the expected entire source through chunk traversal, outside the timed region. After
+ten replacements each source was exactly the initial source again. No Save or other
+file I/O was invoked, so these are source-content checks, not disk-save evidence.
+
+The first edited snapshot also had one separately timed fresh-cold analysis, compared
+against repair for exact diagnostics, tokens and recursive semantic-node properties /
+spans. All five comparisons passed. This checks cache/cold consistency for those
+snapshots, not independent language conformance. The retained correctness tests and
+normative corpus evidence remain separate.
+
+In total: **80 measured rows**, comprising 25 cold, 50 sequential repairs, and five
+matched-cold controls. No repeated historical parser modes or 100 MiB inputs, no GUI,
+no retries or favorable-sample exclusions. Engine mutation, source/result checks,
+explicit GC and JSON output were outside the timed/allocation region. Wall time
+includes the entire real analysis call, including source-agreement proof, statement
+array mapping, all-summary projection and bounded lexical output.
+
+### Observations and cost trade-off
+
+All elapsed ranges are observed min–max, not confidence intervals. Allocation and
+retained values are medians in MiB. Repair retained deltas are **net replacement**
+changes from a live-cache baseline, not the full size of the resulting cache.
+
+| Fixture | Cold ms [min–max] | Cold cumulative / retained MiB | Repair ms [min–max], 10 edits | Repair cumulative MiB | First edited snapshot cold ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| nested AoT | 87.07 [83.54–90.35] | 59.36 / 1.271 | 0.1807 [0.1500–6.7628] | 0.1401 | 86.04 |
+| long quoted | 72.79 [71.75–74.91] | 43.14 / 0.037 | 0.5934 [0.5065–7.2967] | 0.3843 | 73.18 |
+| many short keys | 205.65 [201.21–211.42] | 215.14 / 14.653 | 0.8375 [0.6799–6.5799] | 0.9618 | 208.20 |
+| multiline quoted | 77.75 [76.69–79.91] | 50.10 / 0.235 | 0.1925 [0.1611–6.8271] | 0.1167 | 78.35 |
+| comment lines | 56.33 [55.55–56.61] | 20.44 / 0.007 | 0.9272 [0.8647–6.8577] | 0.4262 | 54.64 |
+
+The slowest repair in every fixture was its **first** repair invocation. Only Full
+was warmed, so first-use compilation of repair methods is a plausible additional
+JIT cost; it was not isolated with a compilation trace. Those first samples are
+deliberately included in the ten-edit medians/ranges, not dropped. This experiment
+does not establish Native AOT first-edit latency, physical-input latency, p95/p99
+behavior or end-to-end editor responsiveness.
+
+Compared with the previous stateful/no-cache batch, observed cold medians increased
+for nested AoT (78.30 → 87.07 ms) and short keys (172.15 → 205.65 ms), with retained
+metadata increasing substantially for 60,000 statements. The cold-cache cost is real
+in this setup: it is not hidden behind the much cheaper subsequent repairs. The
+compact cache retains statement IR and one snapshot instead of transient trees and
+value/source copies; the original baseline retained only viewport result nodes.
+For short keys, post-GC cache/result retention was 14.653 MiB versus 0.116 MiB for
+the prior viewport-only result; these exclude the already-existing document/input.
+Cold syntax-construction allocation still dominates at 215.14 MiB. Sequential repair
+allocates a new mapped statement array, explaining why the 60,000-statement case
+still allocates about 0.962 MiB per call despite parsing only 87 characters.
+
+The new lexical projection is also clamped to viewport plus up to 4,096 characters
+on either side, rather than always lexing up to 256 KiB from the old start point.
+Consequently **cold/repair deltas combine IR/cache changes and a smaller lexical
+projection**, plus their bookkeeping; do not credit all benefits to parser reuse or
+attribute all costs to IR without a separate controlled experiment. Arbitrary huge
+key cardinality, namespace-changing edits, malformed syntax and resource refusals
+were not performance-measured here.
+
+### Counters versus actual call work
+
+| Fixture | Cold parsed/scanned chars | Cold ownership actions | Repair parsed/scanned chars | Repair ownership actions | Retained statements / decoded key components |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| nested AoT | 5,257,209 | 5,201 | 2,007 | 0 | 5,201 / 7,801 |
+| long quoted | 5,244,370 | 160 | 32,776 | 0 | 160 / 160 |
+| many short keys | 5,220,000 | 60,000 | 87 | 0 | 60,000 / 60,000 |
+| multiline quoted | 5,243,818 | 1,024 | 5,119 | 0 | 1,024 / 1,024 |
+| comment lines | 5,242,880 | 0 | 65,536 | 0 | 80 / 0 |
+
+Both cold and repair columns show identical parsed/scanned counts within their
+mode across all repetitions. Repair revalidated the actual owning statement; exact
+decoded-key/action equivalence allowed ownership reuse. No counter is a total work
+certificate: `LastParsedCharacters` / `LastScannedCharacters` exclude prefix/suffix
+source identity or equality checks, array copying, semantic projection and lexer
+work; `LastOwnershipTransitions=0` says only that no namespace action was replayed.
+Mapping and projection still scale with statement count, and non-shared immutable
+storage can require exact comparison of the unchanged source. All these costs are
+included in the reported wall time/allocation. This is meaningful local syntax reuse,
+not an O(edited-characters) guarantee for the complete analysis call.
