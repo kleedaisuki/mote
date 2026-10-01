@@ -169,7 +169,7 @@ Windows codec binary SHA-256 before and after execution was identical:
 The Windows source timeouts are **not** explained by the macOS admission bug.
 Both raw phase reports reached `dense-json`, observed 79,433 semantic tokens and
 zero diagnostics. Initial native semantic publication completed in
-78,852.2383 ms (x64) / 73,852.4066 ms (ARM64); controlled editing and engine
+78,852.2383 ms (x64) / 73,852.4120 ms (ARM64); controlled editing and engine
 reconciliation then proceeded. Both completed the post-edit token projection,
 then ended during the **second, post-edit** publication with
 `semantic-publication-verified/entered`. That phase has no terminal in either
