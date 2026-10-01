@@ -420,6 +420,42 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+      # The ordinary Continuous Canvas has a separate target-owned source and
+      # palette contract. A killable GUI worker keeps HKCU restoration in the
+      # independent owner even if UIA or PrintWindow stalls.
+      - name: Diagnose ordinary Windows Canvas live theme (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/NativeWindowsCanvasThemeWorkflow.ps1'; hashes = @('EF59B864E76869096FB5254AB0961911CEF2E22C57DEC4147A77A7F7C34F0291', '846534FD67513C5A3A3270AAFED749E03A458026C69FD8C55BA60A162EE3AE64') },
+            @{ path = 'tests/NativeWindowsCanvasThemeWorker.ps1'; hashes = @('CE29B4A2985AEAC906DE05A7AD2A217C8F4F7D818A227A33477629C5B5702683', '54CF0E489DA42884A3AD17C2B8DA0B0D836F815233F7988F21F628AE7F77ED99') }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if ($actual -cnotin $pin.hashes) { throw 'Canvas live-theme probe differs from reviewed bytes.' }
+          }
+          & pwsh -NoProfile -File ./tests/Test-NativeWindowsCanvasThemeContract.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Canvas live-theme restoration contracts failed.' }
+          & pwsh -NoProfile -File ./tests/NativeWindowsCanvasThemeWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -RuntimeIdentifier $rid
+          if ($LASTEXITCODE -ne 0) { throw "Ordinary Canvas theme probe failed on $rid; inspect the retained report." }
+      - name: Upload ordinary Windows Canvas live-theme diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canvas-theme-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-canvas-theme.json
+            .cache/native-canvas-theme/${{ matrix.rid }}/**
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
       # One-process-per-case screen observation after HKCU has been restored;
       # no p95 or physical-compositor latency claim from this first hosted pass.
       - name: Diagnose Windows external paint latency (non-gating)
