@@ -255,3 +255,98 @@ bounded discovery graph lengths and unobserved AppKit reads remain; no exact
 transport mechanism, Native AOT bridge defect or graph/lifetime defect has been
 isolated. Preserve the failure and unknown graph identity rather than guessing
 a product patch. The original 41-check gate remains the acceptance obligation.
+
+## Next-experiment design review — truthful ShownMenu override
+
+Date: 2026-10-01. Reviewed architectural revision `9c4bbb2`, specifically
+`docs/architecture/mac-grid-showmenu-discriminator.md:189-301`, against the
+current `Control.m:48-100,160-191` and product
+`MacCsvGrid.Accessibility.cs:224-257,347-361,651-664`. No previous raw audit was
+rerun. **Design is suitable to preserve for later; no implementation or CI run
+is authorized by this review.** The integration owner has reprioritized
+end-to-end telemetry/provenance work.
+
+### Verdict: meaningful narrow factor, not a product-forwarding reproduction
+
+**No blocking design defect found.** C-base versus C-shown is a legitimate
+small sufficiency experiment provided the implementation keeps everything
+except the explicit getter unchanged. The intervention is the complete
+representation choice: an explicitly exposed getter with truthful dynamic
+return behavior. It is not a pure test of method presence independently of
+return values, and the proposal correctly says so (`:232-236`).
+
+The control already owns the actual popup strongly before display, updates
+`opens` and `closes` through its existing exact-menu delegate, and clears
+`ownedMenu` after popup return. An object-returning runtime IMP using
+`opens > closes && attached` can return the exact owned menu during that
+observed interval and nil otherwise without adding a setter, a second native
+view, queue behavior or another action. Keep the same runtime superclass and
+class initialization path; condition only the `class_addMethod` operation.
+Do not create different subclasses with different inherited metadata.
+
+Adding the getter without setter publication or NSTableView forwarding tests
+a useful but deliberately narrower question: **is the truthful explicit
+relation representation alone sufficient to change the original AX reply in
+the successful native control?** A positive result would locate a native
+representation interaction worth reducing. Both replies remaining zero would
+reject sufficiency in this control, not eliminate product forwarding, setter
+notifications/storage, frame/graph interactions or the managed callback.
+Those distinctions are explicit in `:273-283`; no product root cause follows.
+
+### Official-contract check
+
+Apple documents [accessibilityShownMenu](https://developer.apple.com/documentation/appkit/nsaccessibility-c.protocol/accessibilityshownmenu)
+as a nullable relation to the menu currently displayed for the element.
+Apple's [NSAccessibilityProtocol overview](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol)
+explicitly supports overriding a dynamic informational getter and calculating
+its current value on demand; setter override is not a prerequisite for exposing
+a getter. Both official Markdown endpoints were checked on 2026-10-01.
+Consequently omitting a new setter is not a contract defect in this experiment.
+Neither source specifies a dependency of AXShowMenu success on this relation,
+so the experiment remains a hypothesis test rather than a contract repair.
+
+### One material interpretation constraint; cheaper first control
+
+The optional 16-sample observer (`:244-252`) exists only in the treatment
+getter, since instrumenting the inherited C-base getter by overriding it would
+remove the baseline being tested. If enabled, the exact treatment therefore
+includes those bounded observation writes as well as the getter. Do not turn
+a divergent **instrumented** outcome into a claim about an uninstrumented
+getter alone. This is not a reason to reject the comparison; it is a constraint
+on the causal label of its positive result.
+
+The cheapest clean first pair is to **omit getter counters initially**, retain
+the existing action/lifetime facts and compare the original replies. That
+preserves the single representation intervention and needs no new narrow
+artifact schema. It cannot tell whether AppKit invoked the getter, but entry
+observation is not required to determine whether the representation treatment
+changes AX reply. If call-entry information is needed, a separately labelled
+bounded observer variant can follow. Alternatively retain the proposed
+observer and call the intervention an instrumented getter; require a fresh
+matched observation-disabled pair before attributing divergence to the plain
+representation. Never add a pre-action getter read to obtain convenient facts.
+
+### Preserved boundaries and implementation checks
+
+- Same frozen client and same ready/finish lifecycle, fresh target/client
+  processes, one action, no direct getter/action warmup, no menu traversal.
+  The proposal does not silently add an external action or a synthetic event.
+- Real nil/owned-menu/nil state must come from the existing delegate transitions,
+  not `ownedMenu != nil` alone: that property becomes non-nil before popup open
+  and may remain non-nil briefly after close. Keep cancellation/teardown intact.
+- If a getter ledger is implemented, off-main refusal must use safe atomic or
+  otherwise thread-safe fixed accounting without accessing mutable menu facts;
+  unknown/unobserved inherited C-base calls must not be reported as zero.
+- C-base must reproduce AX0 before interpreting any treatment failure. Only the
+  same -25205 with one admitted/current action and matching actual open/close
+  is the target failure; another error, extra entry or forced cleanup is unknown.
+- Reverse launch-order confirmation after divergence is appropriate; one
+  observation in each order still is not a reliability distribution.
+- Do not bundle the proposed retained-parent-before-rediscovery audit reorder
+  (`:289-296`) into this experiment. Product external identity remains unknown.
+- No outcome licenses suppressing the product's live-menu relation. Preserve
+  truthful semantics and the unchanged original 41-check acceptance gate.
+
+This review recommends no additional broad recorder, native-host bundle or
+product patch. The design can be revisited when the higher-priority tracing
+infrastructure work has completed.
