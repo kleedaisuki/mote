@@ -51,3 +51,30 @@ Result: **5/5 passed**, 0 failed, 0 skipped, exit 0. This is not 52 distinct tes
 No GUI, input source, clipboard or global codec registration was modified. All test scratch paths use the repository-local `RepoTemp` helper under `.temp/tests/`. No production code was changed by the validator and no assertions were weakened to accept current behavior.
 
 These portable checks do not establish Native AOT code-page inclusion, Windows/macOS picker behavior, actual input method operation, or UI-reported diagnostics. Those require their own platform integration evidence.
+
+## Native-controller portable orchestration
+
+`tests/Mote.Tests/NativeExplicitEncodingControllerTests.cs` drives the actual `NativeEditorController` through an independently implemented minimal `INativeEditorShell` and optional `INativeOpenEncodingShell`. No shared fake was changed and no production seam was added. Modal callbacks dispatch actual New, ordinary Open, edits or disposal, and background completions are delivered through the fake's owned concurrent queue. The postconditions concern installed text, document stamps/titles, dirty state, undo results, exact saved bytes, chooser/discard/picker call counts and collected errors, not presumed implementation fields.
+
+The 13 new cases establish:
+
+- A default strict UTF-8 failure offers the chooser exactly once; deliberate GBK selection opens fixed Chinese bytes and a supported edit saves fixed GBK bytes.
+- Canceling the offered chooser or selecting invalid UTF-8 does not replace the previous document, alter its version/title, clear dirty state or discard undo history. Explicit decode failure does not offer the chooser again.
+- The explicit command can interpret BOM-less `41004200` as UTF-16 LE (`AB`) even though these bytes are also legal UTF-8; it is not restricted to default decode failures.
+- A nonfatal chooser exception is contained and preserves current text.
+- New, later ordinary Open or disposal dispatched within the explicit chooser prevents the original choice from replacing the current document. Disposal removes the optional command subscription; invoking it afterward does not call the chooser.
+- Edits after initial Open admission, both before the fallback chooser and within it, require a fresh discard confirmation. Rejecting that final confirmation preserves the newer edit and its undo chain; initial approval is not reused.
+- An in-flight actual Save request or a fake native pending-input veto prevents the explicit command from entering its file picker or chooser.
+- A shell without the optional capability retains the established generic strict-decode error behavior.
+
+Executed once with the affected existing controller suite:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release --no-restore --filter 'FullyQualifiedName~NativeExplicitEncodingControllerTests|FullyQualifiedName~NativeControllerTests' --logger 'trx;LogFileName=native-controller.trx' --results-directory .cache/validation/explicit-open-encoding
+```
+
+Result: **166/166 passed**, comprising **13 new cases and 153 existing controller cases**, zero failed/skipped, process exit 0, approximately 36 seconds. Evidence: `.cache/validation/explicit-open-encoding/{native-controller.log,native-controller.trx}`. Build emitted one unrelated **CA1416 warning** at `NativeSourceCapabilityProbe.cs:84` concerning the macOS-only source probe factory; this was reported to the integration leader and is not mislabeled as a zero-warning build.
+
+Tested Native DLL SHA-256: `7D5756C1C98474F55F0DBC15C8D1C6B638224F23BE649EEC9670BFD35458B6B5`; controller source SHA-256: `C4033AA5FEE6F02DF97F8056E2AC805D50A284268FE08A951DBB623E84CC5E25`; capability source SHA-256: `7DD7D3174E60D6D78F12C3C05C1E732AC5D011AD0A2C6DD9630D2935A817BF6B`.
+
+Scope limits: this is portable controller evidence, not native modal-dialog interaction or physical IME delivery. The pending-input case models the shell's documented veto contract; the Save case uses the real controller request but holds its queued UI completion, not disk I/O inside a native process. These cases do not prove all arbitrary reentrant callback sequences or platform menu/shortcut wiring.
