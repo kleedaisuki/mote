@@ -1,7 +1,8 @@
 # macOS CSV Grid external AX acceptance harness
 
-Date: 2026-10-01. Status: **proxy execution on both Mac RIDs fixes observed row metadata; 26 external
-checks pass, coordinate-menu discovery fails, not full external acceptance**. This does not change production
+Date: 2026-10-01. Status: **guarded independent navigation/retirement/normal close completes on both
+Mac RIDs; original AXShowMenu acknowledgment still fails, no whole external
+acceptance**. This does not change production
 accessibility defaults or certify VoiceOver/IME/release readiness.
 
 ## Purpose and ownership
@@ -378,3 +379,11 @@ per-call timeout and old readiness bounds remain unchanged.
 Portable fixture/path and driver syntax preflight passes. Native Swift/AppKit
 compilation and the actual independent workflow require fresh two-target CI;
 no downstream execution success is yet claimed.
+
+Fresh native execution in CI 36800944850 / `99fbe39` completes the independent
+workflow on both targets, with actual normal editor exit 0 and unchanged input.
+The primary action false check and whole failed / Swift exit 1 are intentionally
+preserved (40 of 41 checks true). See
+[exact downstream target results](mac-grid-table-proxy.md#guarded-independent-downstream-execution-ci-36800944850).
+This verifies conditional downstream behavior, not the original AXShowMenu
+acknowledgment or general assistive-technology acceptance.

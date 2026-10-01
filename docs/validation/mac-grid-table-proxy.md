@@ -1,7 +1,8 @@
 # macOS bounded semantic Table proxy candidate
 
-Date: 2026-10-01. Status: **both Mac Native AOT/in-process targets executed; external row/cell/selection
-transport passes, external coordinate-menu discovery fails; no full AX acceptance**.
+Date: 2026-10-01. Status: **both Mac native targets execute guarded independent external navigation,
+retirement and normal close successfully; original AXShowMenu acknowledgment
+still fails, so no whole external AX acceptance**.
 The established default and native physical input implementation are unchanged.
 
 ## Why this representation changed
@@ -492,3 +493,74 @@ Artifacts/raw logs: `.cache/ci-36799464145-mac-menu/`. Binary bytes/SHA-256:
   `EF98590AA12322EF0CA1F8D000FE27308BEB59C77A29174C1C9C60CE6DED9305`.
 - ARM64: 16,505,608;
   `0AA07F3FEA66377E28582462B11611CD561B47E565A434BFF5D909B364403F96`.
+
+## Guarded independent downstream execution: CI 36800944850
+
+[Run 36800944850](https://github.com/kleedaisuki/mote/actions/runs/36800944850)
+at `99fbe39` freshly builds both native targets and exercises the frozen guarded
+Swift workflow. Actual combined native selector/outer readiness markers pass
+without a combined-step error (x64 job 110174903182; ARM job 110174903133).
+Native Swift typecheck and client trust pass on both.
+
+**Both whole reports remain failed / Swift exit 1**. Exactly one of 41 checks
+is false: the original context-menu-accessible action acknowledgment,
+AX=-25205 attributeUnsupported. Forty checks pass, including the independent
+workflow; there is no conversion of visible native menu into original action
+success. The separate downstream object says completed / phase complete /
+originalActionError -25205 on both targets.
+
+Admission occurs only after 25 exact prior checks pass, advertised action and
+fresh exact-PID Table shown-menu AXMenu <=128 children with exactly one command
+matching both known Title and established label. Table relation facts are owned
+AXMenu / 12 children / exactly one coordinate title. No ShowMenu retry or
+app-tree menu discovery occurs; the synthetic prompt is identified through
+existing bounded app traversal only after pressing the already verified item.
+
+The following independently observed external workflow succeeds on both:
+
+1. Guarded unique coordinate item and exact AXPress.
+2. Unique numeric-coordinate prompt, setter **1001:17**, and exact Go press.
+3. New first row **Row 1001**, first column **Column 17**, value **r01001c17**.
+4. Cell ranges remain local 0:1, not absolute ordinals disguised as ranges.
+5. Retained original cell cannot expose old value/range (both errors -25202).
+6. Remote selection applies; mixing retired original node is refused (-25201)
+   without changing valid remote selection.
+7. Independent full source still returns **r01100c24** after navigation.
+8. Single fixture window, AXClose press and no old value after closure.
+9. Wrapper separately observes **normal owned-editor exit 0**, not just transport
+   failure after close. Both `editor_normal_exit=true`, forced cleanup=false.
+
+The closed-cell transport error -25204 alone is not lifetime evidence; the
+actual normal-exit fact makes the conditional close assertion meaningful.
+Original fixture hashes remain identical. Wrapper errors are empty.
+
+| Bounded evidence | x64 | ARM64 |
+| --- | --- | --- |
+| Total admissions / client elapsed | 3,848 / 2.187s | 4,513 / 4.312s |
+| Independent downstream | completed | completed |
+| Original action / whole verdict | -25205 / failed | -25205 / failed |
+| Actual editor normal exit / forced cleanup | true / false | true / false |
+| Native menu request / open / close counts | 1 / 1 / 1 | 1 / 1 / 1 |
+
+Both native traces contain six phases: show-enter, schedule-return(result=1),
+popup-begin, will-open, did-close and popup-return(result=1). Shown/open change
+from 0 to 1 at will-open and back to 0 at did-close; request count stays one.
+All phases retain allowaction=1/allowshown=1 and configured 12-item exact-command
+facts. The trace is below its 16-row cap and includes real graceful tracking
+completion, unlike earlier forced-cleanup snapshots.
+
+**Supported verdict:** given the independently verified owned native menu,
+the bounded coordinate navigation, selection, stale-node retirement and normal
+close workflow works on both RIDs for this synthetic fixture. The original
+external AXShowMenu acknowledgment remains a real failing contract, so whole
+external AX acceptance and release readiness are still not established.
+VoiceOver/real IME, arbitrary file handling, multi-monitor geometry, tracking-
+disposal stress and input/paint performance are outside this one workflow.
+Client-relative elapsed values are not editor startup or interaction benchmarks.
+
+Artifacts/raw logs: `.cache/ci-36800944850-mac-grid/`. Binary bytes/SHA-256:
+
+- x64: 16,842,720;
+  `9E60AEA84E588339CB9A7CE9D36AFB2A9B27629C73463EBE2C4F9A593A3564A1`.
+- ARM64: 16,489,288;
+  `EC1E61195123AB387558873887CDD90819323ED74B5CF254E6E45F8D52351D5B`.
