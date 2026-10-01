@@ -17,7 +17,7 @@ complete large-file semantics or continuous performance.
 
 ## 1. Product workflow and boundaries
 
-The dominant interaction is `mote path` (or Open), immediate editable text, useful structure and diagnostics shortly afterward, and safe Save. No project discovery, indexing service, external language server, runtime plugin loading, or network operation occurs on that path. Multiple windows may each hold a document, but no operation requires a project/workspace. Filename extension selects a policy; the user can override it without changing file bytes. Unknown extensions select PlainText.
+The dominant interaction is `mote path` (or Open), quickly available editable text, useful structure and diagnostics afterward, and safe Save. No project discovery, indexing service, external language server, runtime plugin loading, or application-managed remote service occurs on that path. Multiple processes may each hold a document, but no operation requires a project/workspace. Filename extension selects a statically registered policy; Save As under another extension can change that selection. Unknown extensions select PlainText. There is no separate public arbitrary-policy override advertised by the current release.
 
 ```
 path → open/encoding → Document + versioned TextSnapshot → TextView
