@@ -1007,3 +1007,57 @@ was edited; implementation details remain owned in
 `mac-json-save-witness-implementation.md`. No product/probe/workflow was modified
 or rerun. Do not pool diagnostic-on receipt/phase durations with ordinary
 performance samples or interpret them as target execution time or tail SLA.
+
+## Follow-up: periodic flush preserves a forced-exit trace prefix
+
+2026-10-01: narrow Mac raw-artifact/log check of
+[run 36820725850](https://github.com/kleedaisuki/mote/actions/runs/36820725850),
+source **`8a24e90b16ca9886d25274a2ce1921b6d9cecaca`**. The material new evidence
+is a **nonempty, schema-valid trace prefix after forced cleanup**, not Save
+success or complete telemetry. Mac outcomes remain **3/4** diagnostic-on cases:
+
+| Mac RID | 1 MiB | 100 MiB | Actual nested pilot |
+| --- | --- | --- | --- |
+| osx-x64 | complete pass | failed / save-exact-bytes / TimeoutError | incomplete / exit 1 |
+| osx-arm64 | complete pass | complete pass | pass / actual diagnostic-on marker |
+
+The three successful reports retain exact edited saved/final hashes, normal
+original/reopen exits and passing zero-drop main/reopen audits; no repeated
+full raw-trace audit was performed for them. The x64 raw log explicitly reports
+incomplete and pilot exit 1. ARM emits its actual diagnostic-on acceptance
+marker. Non-gating job/overall color does not alter the failed case.
+
+X64 100 MiB reaches Complete v0/v1, one acknowledged edit and one Save attempt
+with two `CGEvent.postToPid` attempted events, **execution_acknowledged=false**.
+The source remains exact-length, dirty/Complete/focused with granted preflights
+and successful count/copy after timeout. Original/final working bytes retain
+the original hash `11c596af…`, not edited `f11fa45a…`. Owned close fails with
+RuntimeError, forced cleanup follows, and no normal exit or GUI reopen occurs.
+The original-only diagnostic stream has only `ready`, EOF true, normal exit
+false, no completed watermark and `stream_completion=censored`; missing
+selector/admission still does not prove callback nonexecution.
+
+Unlike prior empty failure traces, the retained 100 MiB JSONL now has
+**11,521 bytes / 33 schema-valid complete records**, SHA-256
+**`e530b6b71d7e6a446793461fa404421ff59154ae71e2bd7378bb074a062d418c`**.
+Independent parsing confirms a single session, unique span IDs and successful
+recorded statuses. Positive records include startup, open/editable/open-draw,
+one edit/commit, edit-draw/presentation and analysis/layout work. There are
+**no retained `document.save`, `save.completed`, `mote.session` or
+`telemetry.dropped` records**. This is a valid **prefix**, not a terminal session
+or causal/full-count/zero-drop certification: unflushed/in-flight records and
+the terminal accounting remain unavailable. Absence of Save spans does not
+prove Save never entered the controller or failed at a particular I/O boundary.
+
+The new writer-side periodic-flush version has therefore demonstrably preserved
+useful positive prefix evidence in this forced-exit case, without making forced
+kill a successful shutdown or solving intermittent synthetic Save delivery.
+Physical durability, every future failure flush and negative callback conclusions
+are not established by this single observed prefix.
+
+Artifacts and raw `job.log` files are under
+`.cache/ci-36820725850-json-osx-x64/` and
+`.cache/ci-36820725850-json-osx-arm64/`. Focused schema/prefix assertions and
+summary: `.cache/ci-36820725850-prefix-audit.py` and
+`.cache/ci-36820725850-prefix-summary.json`. Only the general CI ledger was
+edited; no product/probe/workflow was modified or native workload rerun.
