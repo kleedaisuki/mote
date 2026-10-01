@@ -40,6 +40,10 @@ save.ui_started save.ui_deferred""".split())
 REASONS = frozenset("""completed view_deferred composition_blocked missing_handler callback_failed
 already_saving picker_cancelled recovery_redirected overwrite_declined operation_cancelled
 stale_document lifetime_ended save_failed ui_post_failed""".split())
+MENU_OPERATIONS = frozenset("""native.menu.observation.ready native.menu.observation.unavailable
+native.menu.save_family.entered native.menu.save_family.returned_true
+native.menu.save_family.returned_false""".split())
+OPERATIONS |= MENU_OPERATIONS
 STATUSES = ("success", "cancelled", "failure", "skipped")
 ATTRIBUTES = {"format", "size_bucket", "version", "count", "hresult", "reason"}
 
@@ -181,6 +185,10 @@ def load_records(paths, *, discard_partial=False):
                 attrs = row.get("attributes")
                 if not isinstance(attrs, dict) or set(attrs) - ATTRIBUTES:
                     raise ValueError("unsupported trace attributes")
+                if row["operation"] in MENU_OPERATIONS and (
+                        row["duration_us"] != 0 or row["status"] != "success"
+                        or attrs or parent is None):
+                    raise ValueError("invalid independent menu checkpoint")
                 for key in ("version", "count"):
                     if key in attrs and (type(attrs[key]) is not int or attrs[key] < 0):
                         raise ValueError("invalid numeric attribute")

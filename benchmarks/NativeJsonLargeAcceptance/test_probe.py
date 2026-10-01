@@ -126,6 +126,66 @@ class ProbeTests(unittest.TestCase):
             (home / "traces").rmdir()
             home.rmdir()
 
+    def test_menu_inventory_is_independent_of_complete_save_chain(self):
+        """Extra menu checkpoints neither join a request nor change Save acceptance."""
+        rows = self.complete_save_rows()
+        for span, operation in enumerate(sorted(probe.acceptance.MENU_OPERATIONS), 100):
+            row = record(operation, span)
+            row["duration_us"] = 0
+            rows.append(row)
+        report = probe.save_chain_evidence(self.write_trace(rows), terminated=True, normal_exit=True)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(len(report["requests"]), 1)
+        inventory = report["native_menu_inventory"]
+        self.assertEqual(inventory["status"], "observed")
+        self.assertEqual(inventory["boundary"], "normal-exit-observed")
+        self.assertEqual(inventory["request_correlation"], "none")
+        self.assertFalse(inventory["absence_certified"])
+        for outcomes in inventory["counts"].values():
+            self.assertEqual(outcomes, {"success": 1, "cancelled": 0, "failure": 0, "skipped": 0})
+
+    def test_menu_only_killed_prefix_retains_positives_without_fabricating_request(self):
+        """A missing request or return after a menu entry cannot certify nonexecution."""
+        rows = []
+        for span in (2, 3):
+            row = record("native.menu.save_family.entered", span)
+            row["duration_us"] = 0
+            rows.append(row)
+        report = probe.save_chain_evidence(self.write_trace(rows, b'{"operation":"'), terminated=True)
+        self.assertEqual(report["status"], "unobserved")
+        self.assertEqual(report["requests"], [])
+        self.assertEqual(report["discarded_partial_files"], 1)
+        inventory = report["native_menu_inventory"]
+        self.assertEqual(inventory["boundary"], "censored")
+        self.assertEqual(inventory["counts"]["native.menu.save_family.entered"]["success"], 2)
+        self.assertEqual(inventory["counts"]["native.menu.save_family.returned_true"]["success"], 0)
+        self.assertFalse(inventory["absence_certified"])
+
+    def test_missing_menu_inventory_is_unobserved_not_absence_certified(self):
+        """Even a normal successful Save does not imply menu callback coverage."""
+        report = probe.save_chain_evidence(self.write_trace(self.complete_save_rows()),
+                                          terminated=True, normal_exit=True)
+        inventory = report["native_menu_inventory"]
+        self.assertEqual(inventory["status"], "unobserved")
+        self.assertFalse(inventory["absence_certified"])
+        self.assertTrue(all(not any(outcomes.values()) for outcomes in inventory["counts"].values()))
+
+    def test_menu_unknown_vocabulary_and_content_are_invalid(self):
+        """Reject arbitrary names and content instead of reflecting them into reports."""
+        for patch_value in ({"operation": "native.menu.user-private-text"},
+                            {"attributes": {"format": "user-private-text"}}):
+            row = record("native.menu.observation.ready", 2)
+            row["duration_us"] = 0
+            row.update(patch_value)
+            home = self.write_trace([row])
+            report = probe.save_chain_evidence(home, terminated=True)
+            self.assertEqual(report["status"], "invalid")
+            self.assertNotIn("user-private-text", json.dumps(report))
+            for path in (home / "traces").iterdir():
+                path.unlink()
+            (home / "traces").rmdir()
+            home.rmdir()
+
     def test_environment_strips_inherited_witness(self):
         """Default, runtime-control and reopen cannot inherit opt-in instrumentation."""
         with patch.dict(probe.os.environ, {probe.ENVIRONMENT_KEY: "1"}):
@@ -207,6 +267,8 @@ class ProbeTests(unittest.TestCase):
              patch.object(probe, "save_chain_evidence", return_value={"status": "complete"}) as causal:
             result = probe.sample(Path("unused"), case, sample_dir, None, True)
         self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["editor_exit_code"], 0)
+        self.assertEqual(result["reopen_exit_code"], 0)
         self.assertEqual(causal.call_count, 2)
         self.assertTrue(all(call.args[0] == sample_dir / "home" for call in causal.call_args_list))
         self.assertTrue(all(call.kwargs["normal_exit"] for call in causal.call_args_list))
@@ -333,6 +395,8 @@ class ProbeTests(unittest.TestCase):
         self.assertFalse(result["mac_save_witness"]["eof"])
         self.assertEqual(result["mac_save_witness"]["records"], [])
         self.assertNotIn("private startup text", json.dumps(result))
+        self.assertIsNone(result["editor_exit_code"])
+        self.assertIsNone(result["reopen_exit_code"])
 
     def test_corpus_and_local_edit_oracle(self):
         """One exact-size valid array and only one in-string byte change are witnessed."""
@@ -524,6 +588,8 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(Driver.attempts, 1)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["phase"], "save-exact-bytes")
+        self.assertEqual(result["editor_exit_code"], -9)
+        self.assertIsNone(result["reopen_exit_code"])
         self.assertEqual(result["save_causal_evidence"]["status"], "censored")
         self.assertEqual(result["save_causal_evidence"]["requests"][0]["last_positive_stage"], "command.save.received")
         self.assertFalse(result["save_causal_evidence"]["normal_exit"])

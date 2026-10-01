@@ -31,6 +31,52 @@ ARM64 100 MiB hit a later bounded window-copy messaging error, while x64 1 MiB
 had a distinct Save-acknowledgement timeout. Both Mac sizes/RIDs remain unaccepted
 as a whole; neither failure is generalized into the other.
 
+## Independent native menu evidence
+
+`save_causal_evidence.native_menu_inventory` is an additive inventory of five
+fixed, content-free checkpoints, independently parented to the telemetry session:
+
+| Operation | Positive observation only |
+| --- | --- |
+| `native.menu.observation.ready` | Native menu observation was installed |
+| `native.menu.observation.unavailable` | Installation was unavailable |
+| `native.menu.save_family.entered` | The observed native Save-family menu boundary entered |
+| `native.menu.save_family.returned_true` | That boundary returned true |
+| `native.menu.save_family.returned_false` | That boundary returned false |
+
+Each is a zero-duration `success` record with no attributes; `success` describes
+recording the checkpoint, **not Save success**. In particular, returned false is
+a positively observed native return, not a failed persistence operation. The
+reader rejects unknown menu names, content-bearing attributes and incompatible
+checkpoint shapes. The inventory exposes only fixed operation/status counts,
+`observed`/`unobserved`, lifecycle boundary and fixed semantic labels. A returned
+false/true or entry count is not paired with another row, a keyboard event, a menu
+item or a Save request. `request_correlation` is always `none`, and
+`absence_certified` is always false. There is no menu-to-request causal edge.
+
+A forced-exit prefix retains complete positive checkpoints and marks the boundary
+`censored`; an unterminated final physical row alone may be discarded. Missing
+checkpoints remain `unobserved`, even with normal shutdown. Invalid complete rows
+invalidate the enclosing Save evidence instead of being ignored. The separate
+mandatory Save-chain contract, exact edit/draw record counts, byte oracle, input
+attempt count and routing are unchanged. This inventory cannot repair a timeout
+or certify a physical key's delivery.
+
+Each ordinary sample also retains `editor_exit_code` and `reopen_exit_code`
+directly from the original/reopen owned child's nonblocking `poll()` after the
+existing cleanup. An unlaunched process or unknown exit remains JSON null. These
+are actual process outcomes, not values inferred from `normal_exit`, workload
+success or a green hosting job; a killed process can therefore report its real
+platform exit code while acceptance remains failed/censored. No additional wait,
+input retry or cleanup route is introduced.
+
+Portable verification: `test_acceptance.py` passes **7/7**, `test_probe.py` passes
+**38/38** after the additive change. New cases cover all five checkpoint names,
+closed content-free shape, unchanged complete Save classification, repeated
+menu-only positives in a killed prefix with a partial tail, missing menu coverage,
+and privacy/unknown-vocabulary rejection. These are synthetic artifact tests, not
+hosted AppKit or Native AOT runtime observations.
+
 ## Workload and independent oracles
 
 Each default run uses one **1 MiB control** and one **100 MiB workload**, in that

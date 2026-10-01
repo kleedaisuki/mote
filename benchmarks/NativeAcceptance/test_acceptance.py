@@ -123,6 +123,28 @@ class AcceptanceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tool.load_records([str(path)])
 
+    def test_independent_menu_checkpoints_have_closed_content_free_shape(self):
+        """Admit all five fixed names without weakening existing schema privacy."""
+        rows = [record("mote.session", 1)]
+        for span, operation in enumerate(sorted(tool.MENU_OPERATIONS), 2):
+            row = record(operation, span, 1)
+            row["duration_us"] = 0
+            rows.append(row)
+        path = self.directory / "menu-checkpoints.jsonl"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        loaded, _ = tool.load_records([str(path)])
+        self.assertEqual(len(loaded), 6)
+        self.assertEqual(tool.audit(loaded, {})["causal_integrity"], "pass")
+        for patch in ({"operation": "native.menu.private-document"},
+                      {"attributes": {"format": "private-document"}},
+                      {"attributes": {"source_text": "private-document"}},
+                      {"duration_us": 1}, {"status": "failure"}, {"parent_span_id": None}):
+            row = copy.deepcopy(rows[-1])
+            row.update(patch)
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with self.subTest(patch=patch), self.assertRaises(ValueError):
+                tool.load_records([str(path)])
+
     def test_artifact_paths_and_no_overwrite(self):
         """Protect repository confinement and previously persisted measurements."""
         for value in ("docs/report.json", ".cache/../docs/report.json", ".temp", "../report.json"):

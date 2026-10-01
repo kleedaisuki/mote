@@ -389,6 +389,26 @@ def save_exact(child, driver, working, size, expected_sha256, sample_report=None
         raise ValueError("native clean acknowledgement failed exact Save bytes")
 
 
+def native_menu_inventory(records, *, terminated, normal_exit):
+    """Count independent menu checkpoints without joining them to Save requests.
+
+    Retained positives survive an owned kill, but missing rows never prove that
+    native menu callbacks did not execute. No order or entry/return pairing is
+    inferred from session-parent records.
+    """
+    counts = {operation: {status: 0 for status in acceptance.STATUSES}
+              for operation in sorted(acceptance.MENU_OPERATIONS)}
+    for row in records:
+        if row["operation"] in counts:
+            counts[row["operation"]][row["status"]] += 1
+    observed = any(sum(outcomes.values()) for outcomes in counts.values())
+    return {"status": "observed" if observed else "unobserved", "counts": counts,
+            "boundary": "normal-exit-observed" if normal_exit else (
+                "censored" if terminated else "open"),
+            "absence_certified": False, "request_correlation": "none",
+            "endpoint": "independent-native-menu-boundary-not-save-delivery"}
+
+
 def save_chain_evidence(home, *, terminated, normal_exit=False):
     """Retain typed native Save evidence even after failed dispatch or owned kill.
 
@@ -399,6 +419,8 @@ def save_chain_evidence(home, *, terminated, normal_exit=False):
     summary = {"contract": "native-save-causal-v1", "status": "unobserved",
                "terminated": terminated, "normal_exit": normal_exit,
                "absence_certified": False, "requests": [], "trace_sha256": [],
+               "native_menu_inventory": native_menu_inventory(
+                   [], terminated=terminated, normal_exit=normal_exit),
                "discarded_partial_files": 0, "endpoint": "target-callback-to-local-ui-not-physical-input-or-pixels"}
     if not files:
         return summary
@@ -406,6 +428,8 @@ def save_chain_evidence(home, *, terminated, normal_exit=False):
         if len(files) > 8 or any(not re.fullmatch(r"mote-trace-[a-f0-9]{32}-[0-9]{6}\.jsonl", path.name) for path in files):
             raise ValueError("trace inventory differs")
         records, hashes = acceptance.load_records([str(path) for path in files], discard_partial=terminated)
+        summary["native_menu_inventory"] = native_menu_inventory(
+            records, terminated=terminated, normal_exit=normal_exit)
         partial = 0
         for path in files:
             prefix = causal_save.read_prefix(path.read_bytes(), terminated=terminated)
@@ -481,9 +505,11 @@ def sample(executable, case, directory, client, mac_save_witness=False):
     result = {key: value for key, value in case.items() if key != "fixture"}
     result.update({"status": "failed", "phase": "runtime-control", "cache_state": "just-written-not-cache-evicted",
                    "trace_enabled": True, "route": "ordinary-product-no-launch-flags", "edit_attempts": 0,
-                   "normal_exit": False, "reopen_normal_exit": False, "poll_interval_ms": 50})
+                   "normal_exit": False, "reopen_normal_exit": False, "poll_interval_ms": 50,
+                   "editor_exit_code": None, "reopen_exit_code": None})
     child = None
     original_child = None
+    reopen_child = None
     original_forced_cleanup = False
     collector = SaveDiagnosticCollector() if mac_save_witness else None
     result["save_witness_mode"] = "diagnostic-on-not-performance-sample" if collector else "disabled"
@@ -558,6 +584,7 @@ def sample(executable, case, directory, client, mac_save_witness=False):
         reopen_home = acceptance.artifact_path(directory / "reopen-home", ".temp")
         child = subprocess.Popen([str(executable), str(working)], cwd=ROOT, env=environment(reopen_home),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        reopen_child = child
         driver = driver_type(child.pid, case["size_bytes"], client)
         # Fresh reopened source is the edited byte spelling, but native version is zero.
         wait(child, lambda: ready(1), 60)
@@ -602,6 +629,10 @@ def sample(executable, case, directory, client, mac_save_witness=False):
             child.kill()
             child.wait(timeout=10)
             result["forced_cleanup"] = True
+        # Retain actual child outcomes independently of workload/cleanup claims.
+        # poll() never waits and returns None for an unobserved process exit.
+        result["editor_exit_code"] = original_child.poll() if original_child is not None else None
+        result["reopen_exit_code"] = reopen_child.poll() if reopen_child is not None else None
         if collector is not None:
             original_normal_exit = (original_child is not None and
                                     not original_forced_cleanup and original_child.poll() == 0)
