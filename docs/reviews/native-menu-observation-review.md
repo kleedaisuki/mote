@@ -62,15 +62,20 @@ calls. These are not AppKit dispatch or native allocation measurements.
 The in-process probe shares production's `Forward` core through a separate
 tiny unmanaged wrapper supplying its own lexical control superclass. It checks
 false/true byte preservation, identical event pointers, one superclass call per
-invocation, and nested invocation. It creates synthetic events without posting
+invocation, and nested invocation. A narrow final follow-up also inspected
+`MoteMenuAbiDescendant`: this class is registered below the observed control
+without overrides, and false/true calls require exactly one base-control call.
+Its inherited IMP therefore exercises the shared core with a receiver whose
+dynamic superclass differs from the wrapper's lexical superclass. The final
+probe blob identity is the one recorded above. It creates synthetic events without posting
 them to AppKit or the system. `MacFlowRenderingProbe.Run` reports a managed
 check failure as exit 1 and closes its shell in the existing finally path.
 
 No macOS x64/ARM64 runtime result exists for this slice at review time. In
 particular, the probe does not prove that ordinary externally posted Command-S
-uses the owned production main menu, nor that the production subclass's cached
-NSMenu dispatch is exercised by an additional dynamic descendant. The latter
-invariant is supported by source inspection, not this control topology.
+uses the owned production main menu. The descendant control now explicitly
+tests inherited-IMP lexical dispatch, but neither this new control nor actual
+production NSMenu superclass execution has a macOS runtime result yet.
 Setup-failure/managed-exception containment is likewise inspected, not exercised
 through injected native failures. These limitations are not evidence of a
 defect, and should not be converted into pass claims.
@@ -84,6 +89,8 @@ Do not infer callback absence from missing rows, manufacture menu-to-Save
 parentage, add retries, or rescue a failed Save through another route. Measure
 enabled/off overhead on the same new macOS binary before claiming a cost bound.
 
-An optional future strengthening is a control receiver one subclass below the
-observed control, exercising inherited callback forwarding directly. It is not
-a blocker to the examined implementation or a reason to expand this slice.
+The originally suggested descendant control has been added and source-reviewed
+without changing the production dispatch contract. It remains part of the next
+macOS runtime validation, not an already passed test. The accompanying
+[implementation/evidence note](../validation/native-menu-observation.md)
+also explicitly distinguishes core ABI controls from real keyboard routing.
