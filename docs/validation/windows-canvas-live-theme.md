@@ -10,12 +10,13 @@ is not evidence for the ordinary Continuous Canvas route.
 
 The new diagnostic launches the published executable with only its disposable
 fixture filename. It does not select a legacy, experimental Canvas or test-only
-product route. Its current status is **both native targets now pass unique-child
-source readiness, but source-range setup fails on an unimplemented product UIA
-operation; registry restoration, unchanged-file hash and normal close pass**.
-No selection-preservation or live palette acceptance has yet been established.
-No registry setting was changed on the local developer machine, and no product
-implementation was modified to satisfy the checks.
+product route. Its current status is **the full bounded native diagnostic passed
+on both win-x64 and win-arm64: exact source selection/text, dark -> light -> dark
+palette/raster checks, unchanged input hash, verified registry restoration and
+normal close** at run 36809964231. This does not establish editing history,
+immutable engine version, physical presentation, real IME or complete product
+accessibility acceptance. No registry setting was changed on the local developer
+machine, and this final audit changed documentation only.
 
 ## Acceptance basis
 
@@ -608,3 +609,125 @@ reports, and nonce-specific `dark-before.json`/stderr/empty stdout. Retrieval us
 .cache/canvas-theme-36806841387/<RID>` and the job IDs above with
 `gh api repos/kleedaisuki/mote/actions/jobs/<JOB-ID>/logs`. Use the raw nested exits
 and phase/owner reports, not green non-gating conclusions, as verdict inputs.
+
+## First complete bounded native pass: run 36809964231
+
+Run [36809964231](https://github.com/kleedaisuki/mote/actions/runs/36809964231),
+head `8d57965`, provides the first complete ordinary Canvas live-theme pass on
+both Windows Native AOT architectures after the product range/selection and COM
+STA integration changes. The acceptance predicate was **not relaxed** to bypass
+the earlier source-range failure. Verification uses downloaded owner/phase
+reports, raw logs, worker exits, rehashed PNGs and independently decoded samples,
+not the green non-gating job conclusions.
+
+| RID | Job ID | Theme artifact ID | Owner result | Workers |
+| --- | --- | --- | --- | --- |
+| win-x64 | 110202605779 | 11138993806 | passed / dark-after / error null | all three completed, exit 0 |
+| win-arm64 | 110202605878 | 11139042367 | passed / dark-after / error null | all three completed, exit 0 |
+
+The actual invocation's `$LASTEXITCODE` guard completed without errors and reached
+artifact upload on both jobs. There are no raw error/exit-1 markers between the
+portable-contract pass marker and that step's upload group; all six phase worker
+stderr files are empty. This is the evidence for a zero-returning nested native
+command, not an invented explicit `exit code 0` log line. Portable
+`13 + 7 + 11 + 7` contracts also passed, independently of the GUI result.
+
+Published executable SHA-256:
+
+- win-x64: `663311F0AA475C6913A250510967027FB38D20799BDADDE1339150681F2ED971`.
+- win-arm64: `34D34F55F41385B37D1D1038D8085E45A7E919AC172AEA8F61745695B57EE732`.
+
+### Source semantics and state preservation
+
+All six phase readiness records report one attempt, one direct child, one matching
+source candidate, no foreign child/budget overflow, a target-process Pane
+container, and a distinct target-process Document with expected source ID and
+TextPattern. Bounded source length is exactly **11**, LF comparison true and
+CRLF/CR comparisons false; Canvas/input visibility is true. Attempt-start samples
+are 5/5/5 ms on x64 and 7/11/6 ms on ARM64; they are observer metadata, **not native
+startup/render latency**.
+
+The unchanged source-range sequence now executes successfully: Clone,
+MoveEndpointByRange, exact Character-unit endpoint movement, and Select establish
+absolute `[1,3)` in the semantic source provider. The first phase makes the only
+Select attempt. Later fresh GUI workers do **not** reselect and therefore cannot
+hide a theme-induced selection reset.
+
+Before and after each target theme notification, the existing assertion requires
+one selected range with exact text `lp`, both endpoints equal to the expected
+source range, and the full bounded source fixture unchanged. All six checks
+complete, and phase launch observations/cases report `[1,3)` with exact LF source.
+This is source-coordinate selection preservation, not input-window-local
+EM_GETSEL inference. The source Document/Pane distinction stays intact.
+
+### Palette and raster evidence
+
+Observed values are identical across architectures for the tested roles:
+
+| Phase | Canvas body background (GetDC sample) | Expected plain foreground | Matching foreground pixel count | Status and supported caption |
+| --- | --- | --- | --- | --- |
+| dark-before | `#1F2023` | `#D8DADF` | 101 | `#27292D` |
+| light | `#FFFFFF` | `#26282E` | 125 | `#F6F7F9` |
+| dark-after | `#1F2023` | `#D8DADF` | 101 | `#27292D` |
+
+Canvas body sampling is above the input ribbon, and the foreground count is from
+the known first-row sample region. These are actual observed raster checks, not
+only a configured theme ID. Each phase contains a **1044 x 760** target-window
+PrintWindow PNG. Independent Pillow decoding of all six images verifies the
+reported blank status coordinate `(1016,739)` and caption coordinate `(522,15)`:
+dark RGB `(39,41,45)`, light RGB `(246,247,249)`. These match the expected exact
+panel/caption role values. x64 dark/light images were also visually inspected:
+they contain the owned synthetic source/selection and distinguish dark and light
+source surfaces. This is not a full visual-design or every-native-control audit.
+
+All six downloaded PNG SHA-256 hashes match their phase/owner reports. Within each
+RID, dark-before equals dark-after byte-for-byte, and light is different:
+
+| RID | Both dark PNGs | Light PNG |
+| --- | --- | --- |
+| win-x64 | `C1CE17B5997DFB94DFAF541DCECF9946F52FC595F5C1672AF26855AAE9DC1AB8` | `39CFC9D38CFBE24153F4A03BA31EF1A05AC2436D39C9DEDBCAC3F63305E74A2D` |
+| win-arm64 | `BF13B104A2BD3A894FBEFE2DCCB285E5E80A4E99AB7C3F60828B7066391B5554` | `8FCBE2DDCABE3163DC0098EE559D88C3E51061B355F69204A7E7E767A4082407` |
+
+Cross-RID PNG hashes differ; this is not a requirement violation. Hash equality
+within a run supports return to the same captured static window state, not
+physical-display presentation, timing, or a statistical reliability claim.
+
+### Cleanup and remaining scope
+
+Both owners report `registry_restored=true`, `source_sha256_unchanged=true` and
+`normal_exit=true`, with original key/value present and kind DWord. The owner
+restoration path verifies raw original value/kind/existence before passing;
+original registry data is not serialized. No worker timed out and no forced editor
+kill was needed. The real native failure-to-pass progression now closes the
+specific earlier E_NOTIMPL selection setup blocker for this sequence on both RIDs.
+
+**No edits, undo or redo are performed by this probe.** Therefore it establishes
+source-content/selection preservation across theme transitions, not editing
+history preservation or all UIA operations. Immutable engine version remains
+explicitly `unverified-no-public-external-version-contract`; exact text and disk
+hash do not prove its internal version did not change. `draw_callback_status`
+remains `not-observed` and `physical_presentation_status` remains `not-tested`.
+GetDC/GetPixel and PrintWindow do not establish compositor present/physical paint
+or latency. Real IME composition/candidate placement, screen-reader workflows,
+full accessibility contracts, large-file performance, every theme role/control,
+and full product release acceptance remain separate validations.
+
+### Reproducibility
+
+Evidence stays under `.cache/canvas-theme-36809964231/`: raw job logs, both theme
+artifacts with owner reports, all six phase JSONs/log pairs/PNGs, and an independent
+`artifact-audit.json` summary. Artifact audit checks owner/phase statuses, exact
+phase order, all worker exits, source-readiness/selection fields, empty stderr,
+all PNG hashes/dimensions, and decoded panel/caption samples. No product or driver
+code was changed and no native test was rerun for this offline audit.
+
+```powershell
+gh run download 36809964231 --name native-canvas-theme-win-x64 `
+  --dir .cache/canvas-theme-36809964231/win-x64
+gh run download 36809964231 --name native-canvas-theme-win-arm64 `
+  --dir .cache/canvas-theme-36809964231/win-arm64
+gh api repos/kleedaisuki/mote/actions/jobs/110202605779/logs `
+  > .cache/canvas-theme-36809964231/win-x64.log
+gh api repos/kleedaisuki/mote/actions/jobs/110202605878/logs `
+  > .cache/canvas-theme-36809964231/win-arm64.log
+```
