@@ -691,3 +691,66 @@ writes or broadening foreground/TCC authority. Another green overall CI or
 silent automatic retry would not resolve that uncertainty. Physical paint,
 real keyboard/IME, tail latency and reliable repeated-run acceptance remain
 outside the established single-run capability results.
+
+## Follow-up: four-RID scoped pass on d9ddda9
+
+Independently audited completed [run 36811953139](https://github.com/kleedaisuki/mote/actions/runs/36811953139),
+source **`d9ddda97cedf98245fd499c8bb6a64cf64919633`**. All **eight** exact
+1/100 MiB ordinary-product cases pass, including Mac ARM100. This run establishes
+another current-source scoped pass; the preceding ARM Save failure remains
+unattributed historical evidence, not a failure to erase or a cause proved fixed.
+
+| RID | 1 MiB | 100 MiB | Main/reopen trace records, 1 MiB | Main/reopen trace records, 100 MiB |
+| --- | --- | --- | ---: | ---: |
+| win-x64 | complete pass | complete pass | 26 / 13 | 31 / 18 |
+| win-arm64 | complete pass | complete pass | 26 / 13 | 34 / 18 |
+| osx-x64 | complete pass | complete pass | 34 / 11 | 39 / 16 |
+| osx-arm64 | complete pass | complete pass | 32 / 11 | 36 / 16 |
+
+Each raw nested log emits its actual `status=pass,samples=2` summary and
+post-execution success marker without the pilot error/exit-1 path. All four
+portable suites pass **22/22**. No non-gating false green is present **for this
+JSON pilot**; this does not generalize to unrelated diagnostic steps or establish
+release acceptance from the overall green run.
+
+Independent checks corroborate exactly **1,048,576** and **104,857,600** bytes
+per RID, independently reconstructed original/edited hashes, immutable original,
+Complete zero-diagnostic v0/v1, one edit attempt, unchanged disk before Save,
+exact Save/final working bytes, normal initial exit, fresh GUI reopen with
+unchanged saved bytes and normal reopen exit. **16 unique GUI session identities**
+have successful terminal roots, exact action/version/causal-parent contracts,
+matching trace-file hashes and **zero dropped records**; reopened sessions have
+no edit/Save. The unversioned I/O-span limitation and separate byte/version
+witnesses remain unchanged. No successful phase is inferred merely from a parse
+span or its document size bucket.
+
+Mac Save continues to record **one attempt**, two `CGEvent.postToPid` attempted
+events and **`execution_acknowledged=false`**, with matching PID, granted
+capability preflights, focused dirty source, exact source length and caret
+10/empty-selection guard. New read-only target-active/frontmost/main-window/
+window-focus metadata does not change the attempt into a delivery acknowledgement
+or authorize app activation/global input. Exact bytes, clean-title observations
+and successful product trace records are independent outcome evidence. No Save
+retry occurred, and this is not physical-key/IME or foreground responsiveness
+acceptance.
+
+Native observer architecture and Git/check-out source hashes match; both Mac
+clients compiled. All separate inventories corroborate one executable with no
+other payload/native libraries, and reported pre/post identities agree:
+
+| RID | Bytes | SHA-256 |
+| --- | ---: | --- |
+| win-x64 | 7,130,112 | `c4124139d386725bf42cd2750698fb08910a17d285a4d8ccd806125cdbe49721` |
+| win-arm64 | 7,272,448 | `6e5eaf91fa5249c8d2d613f98b9cb74a31e1532a1b87396e4934e5b1b24fc74b` |
+| osx-x64 | 16,849,256 | `ddd9f9d712f8e494e07241b02e7fe6dc32eb26cec88cf382ac2600a6097ebf55` |
+| osx-arm64 | 16,508,264 | `1b6155901b02884bedf1a75ed97c42a447927cef3004f3443126f11b35b6e4c5` |
+
+Artifacts/inventories: `.cache/ci-36811953139-json-<RID>/`; raw complete logs:
+`.cache/ci-36811953139-json-all.log`; run/commit-bound independent assertions and
+results: `.cache/ci-36811953139-json-audit.py` and
+`.cache/ci-36811953139-json-independent-summary.json`. Assertions pass all eight
+cases and 16 distinct trace sessions. No native product was rerun or downloadable
+binary rehashed locally, and no product/probe was edited for the audit. This
+remains a trace-on, just-written/cache-resident root-array capability result,
+not disk-cold/tail-latency/physical-paint/real-IME or repeated-run reliability
+certification.
