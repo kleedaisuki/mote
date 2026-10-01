@@ -398,6 +398,29 @@ after query. The existing 8/8 controls do not include Main's final classificatio
 so they cannot falsify this finding. Reported promptly to the implementation
 owner; resolution remains pending at this checkpoint.
 
+### P2 closure: required observation faults now make the report incomplete
+
+Reinspected only the subsequent permanent-client helper/call and README changes.
+Main now assigns `ClassificationAfterSequence(report)`, whose pure decision
+returns incomplete when any operation has ObservationException, observed
+otherwise. Thus returned body + failed final after query retains the true action
+outcome but cannot satisfy the existing zero-exit predicate. A healthy discover
+operation may legitimately begin with no identity and unavailable pane without
+an exception; a contained actual Focus refusal alone also remains observed.
+Neither is accidentally treated as a query fault.
+
+The retained final extraction manifest includes the classification helper,
+exact source/extracted SHA256 and the same explicit fake/native-excluded limits.
+Its log reports **11/11 passed**, including after-query fault => incomplete,
+healthy discovery-before-unavailable => observed, and contained primary-only
+throw => observed. The final restored Release build log records zero warnings
+and errors. An earlier missing project.assets restore failure is an artifact
+setup failure, not a source defect or native test result. No validations were
+rerun by this review.
+
+Finding resolved. No substantive issue remains in this narrow final-classification
+delta; original runtime/hosted-AOT boundaries and unjoined graphs remain unchanged.
+
 ## Addendum: scoped dual-architecture hosted focus step
 
 Independent workflow-only review on 2026-10-01 examined the additive 26-line
