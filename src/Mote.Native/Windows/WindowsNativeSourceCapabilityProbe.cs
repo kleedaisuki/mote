@@ -22,6 +22,61 @@ internal static class WindowsNativeSourceCapabilityProbe
         return new Host(theme);
     }
 
+    /// <summary>
+    /// Selects bounded native color witnesses: document endpoints/middle and
+    /// first/middle/last style interiors and adjacent boundaries. These are not
+    /// exhaustive coverage; an uncovered character is checked only if sampled.
+    /// Every result begins a scalar or CRLF unit, not its trailing UTF-16 half.
+    /// </summary>
+    internal static int[] ForegroundSampleOffsets(string display,
+        IReadOnlyList<NativeSourceDiagnosticStyle> styles)
+    {
+        var offsets = new List<int>(18);
+        AddSample(display, 0, offsets);
+        AddSample(display, display.Length / 2, offsets);
+        AddSample(display, display.Length - 1, offsets);
+        if (styles.Count == 0) return offsets.ToArray();
+        foreach (var index in new[] { 0, styles.Count / 2, styles.Count - 1 })
+        {
+            var style = styles[index];
+            if (style.Length == 0) continue;
+            AddSample(display, style.Start - 1, offsets);
+            AddSample(display, style.Start, offsets);
+            AddSample(display, style.Start + style.Length / 2, offsets);
+            AddSample(display, style.Start + style.Length - 1, offsets);
+            AddSample(display, style.Start + style.Length, offsets);
+        }
+        return offsets.ToArray();
+    }
+
+    /// <summary>Resolves exact last-writer-wins publication order, including arbitrary overlapping spans.</summary>
+    internal static ThemeColor ExpectedForeground(int offset,
+        IReadOnlyList<NativeSourceDiagnosticStyle> styles, ThemeColor foreground)
+    {
+        for (var i = styles.Count - 1; i >= 0; i--)
+        {
+            var style = styles[i];
+            if (offset >= style.Start && offset - style.Start < style.Length)
+                return style.Foreground;
+        }
+        return foreground;
+    }
+
+    /// <summary>Returns the end of one complete display scalar or paragraph unit at a sampled start.</summary>
+    internal static int ForegroundSampleEnd(string display, int start) => start +
+        ((display[start] == '\r' && start + 1 < display.Length && display[start + 1] == '\n') ||
+         (char.IsHighSurrogate(display[start]) && start + 1 < display.Length &&
+          char.IsLowSurrogate(display[start + 1])) ? 2 : 1);
+
+    /// <summary>Normalizes only diagnostic sample positions, never published style spans.</summary>
+    private static void AddSample(string display, int offset, List<int> offsets)
+    {
+        if (offset < 0 || offset >= display.Length) return;
+        if (offset > 0 && ((display[offset] == '\n' && display[offset - 1] == '\r') ||
+            (char.IsLowSurrogate(display[offset]) && char.IsHighSurrogate(display[offset - 1])))) offset--;
+        if (!offsets.Contains(offset)) offsets.Add(offset);
+    }
+
     /// <summary>Owns only a system RichEdit library reference and two private HWNDs.</summary>
     private sealed class Host : INativeSourceDiagnosticHost
     {
@@ -209,20 +264,15 @@ internal static class WindowsNativeSourceCapabilityProbe
             Win32.SendMessageW(_source, Win32.WM_SETREDRAW, 0, 0);
             try
             {
-                var baseColor = ColorFormat(_foreground);
-                ApplyFormat(Win32.SCF_ALL, ref baseColor);
+                using var attributes = new WindowsRichEditForegroundRange(_source);
+                attributes.Apply(0, map.ToNative(display.Length), ColorRef(_foreground));
                 foreach (var style in styles)
                 {
                     if (style.Length == 0) continue;
-                    var range = new Win32.CharacterRange
-                    {
-                        Min = map.ToNative(style.Start),
-                        Max = map.ToNative(checked(style.Start + style.Length))
-                    };
-                    SetNativeSelection(ref range);
-                    var format = ColorFormat(style.Foreground);
-                    ApplyFormat(Win32.SCF_SELECTION, ref format);
+                    attributes.Apply(map.ToNative(style.Start),
+                        map.ToNative(checked(style.Start + style.Length)), ColorRef(style.Foreground));
                 }
+                VerifyForeground(attributes, display, styles, map);
             }
             finally
             {
@@ -242,6 +292,20 @@ internal static class WindowsNativeSourceCapabilityProbe
                 CaptureViewport() != viewport)
                 throw new InvalidOperationException("RichEdit attribute publication changed text or view state.");
             EnsureUndoDisabled();
+        }
+
+        /// <summary>Checks actual attributes through fresh attached getters, not the reusable setter font.</summary>
+        private void VerifyForeground(WindowsRichEditForegroundRange attributes, string display,
+            IReadOnlyList<NativeSourceDiagnosticStyle> styles, RichEditOffsetMap map)
+        {
+            foreach (var offset in ForegroundSampleOffsets(display, styles))
+            {
+                var end = ForegroundSampleEnd(display, offset);
+                var actual = attributes.Read(map.ToNative(offset), map.ToNative(end));
+                var expected = ColorRef(ExpectedForeground(offset, styles, _foreground));
+                if (actual != expected)
+                    throw new InvalidOperationException("RichEdit foreground attribute readback disagrees with publication.");
+            }
         }
 
         /// <inheritdoc />
@@ -296,11 +360,13 @@ internal static class WindowsNativeSourceCapabilityProbe
             }
         }
 
-        /// <summary>RichEdit cannot represent a separate selection boundary inside an expanded CRLF pair.</summary>
+        /// <summary>Rejects separate boundaries inside CRLF expansion or a UTF-16 scalar pair.</summary>
         private static void CheckBoundary(string display, int offset)
         {
             if (offset < 0 || offset > display.Length ||
-                (offset > 0 && offset < display.Length && display[offset - 1] == '\r' && display[offset] == '\n'))
+                (offset > 0 && offset < display.Length &&
+                 ((display[offset - 1] == '\r' && display[offset] == '\n') ||
+                  (char.IsHighSurrogate(display[offset - 1]) && char.IsLowSurrogate(display[offset])))))
                 throw new ArgumentOutOfRangeException(nameof(offset));
         }
 

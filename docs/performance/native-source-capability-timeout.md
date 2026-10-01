@@ -1,7 +1,8 @@
 # Windows full-native source: dense semantic publication timeout
 
-Date: 2026-10-02. Status: **hosted baseline attribution and bounded next-step
-proposal; no optimization implemented or speedup claimed**.
+Date: 2026-10-02. Status: **hosted baseline attributed; non-selection TOM
+candidate implemented and portable-build qualified in section 8; no hosted
+candidate acceptance or speedup claimed**.
 
 ## Decision
 
@@ -289,3 +290,142 @@ publication cannot serve ordinary structured editing. The next useful question
 is whether removing visible selection from attribute mutation solves the dominant
 measured cost while preserving the exact contract—not whether a longer wait can
 turn an unknown timeout into a green workflow.
+
+## 8. Candidate implementation qualification: non-selection foreground transaction
+
+The implementation below is a new candidate after the frozen hosted baseline,
+not a reinterpretation of its timing or a native performance result. Changes
+are confined to `WindowsNativeSourceCapabilityProbe.cs` and the new internal
+`WindowsRichEditForegroundRange.cs`. The common runner, fixture contents,
+complete semantic token spans, publication sequence, process deadline,
+default editor and LegacyPage profile are unchanged.
+
+### Publication and ownership model
+
+- Acquire the owned RichEdit control's OLE reference, query the exact
+  `ITextDocument` IID and release the temporary OLE reference immediately.
+- Create one ordinary `ITextRange` through `ITextDocument.Range(0, 0)`. Neither
+  `GetSelection` nor `Select` is called. The formatting loop never sends
+  `EM_EXSETSEL`; visible selection is no longer a per-token formatting cursor.
+- Obtain one attached range font, make one detached `GetDuplicate` copy and
+  release the attached font. Reset **the duplicate only** with
+  `tomUndefined = -9999999`, so applying it leaves every property unchanged
+  except the foreground subsequently assigned by `SetForeColor`.
+- Acquire one positive Freeze count. Retarget the ordinary range to the whole
+  document and set the explicit base COLORREF; then retarget and publish every
+  nonempty semantic span in the original order. Arbitrary overlaps retain
+  last-writer-wins semantics. Zero-length semantic spans are skipped as before.
+  No coalescing, dropped tokens, text replacement or RTF import is introduced.
+- Check each mutation/getter for `S_OK`, not merely a nonnegative HRESULT;
+  for example `Reset` may return `S_FALSE` when protected. Freeze and Unfreeze
+  have their own documented count semantics. Unfreeze is attempted exactly
+  once after a successful positive acquisition, and its reported count must
+  decrement by exactly one, including when an outer freeze remains active.
+- Release duplicate, range and document on the acquiring thread, even after
+  formatting, readback or Unfreeze failure. Constructor failures release every
+  acquired reference; nonnull failed COM outputs are also released. No fallback
+  to the old selection loop hides interface or attribute failures.
+- Retain the existing disabled native Undo queue, outer redraw suppression,
+  selection/viewport restoration and complete text/native history assertions.
+  The common caller still verifies Engine snapshot/version/Undo/Redo identity.
+  Native state readback occurs after the balanced transaction and view cleanup.
+
+The span admission additionally rejects a boundary inside a UTF-16 surrogate
+pair, complementing the existing CRLF-interior check. This rejects an invalid
+scalar-splitting request rather than silently changing any admitted span.
+
+### Native foreground readback, not setter-state self-confirmation
+
+Within the same aggregate verified-publication interval, at most **18 unique
+display positions** are sampled: document start/middle/end and positions before,
+at the start, in the middle, at the end and after the first/middle/last style.
+Samples are normalized to the start of a complete scalar or CRLF unit, then
+mapped through the same `RichEditOffsetMap` to native offsets. An empty document
+has no character sample, rather than inventing an observable character.
+
+For each sample, the helper obtains a **fresh attached** range font and reads
+`GetForeColor`, releases that getter object, and compares the actual COLORREF to
+an independent reverse-order scan of the original style spans plus the base
+foreground. The detached setter font is never used as the readback oracle.
+Negative automatic/undefined colors or non-COLORREF values fail rather than
+being replaced by an assumed theme value. This checks both styled and default
+foreground where those bounded samples encounter them; it does **not** prove
+every token, guarantee an uncovered character sample, prove complete font-face
+or size preservation by observation, or certify physically presented pixels.
+
+There is no global interval sort or per-token color getter. Sample construction
+has constant output size; expected-color resolution scans input spans at most
+18 times. This diagnostic overhead is included in the aggregate publication
+timer and must not be subtracted from future before/after comparisons.
+
+### ABI provenance and portable build
+
+Installed SDK header:
+`C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um/tom.h`,
+SHA-256 `ED6CFD4C3B128D46A8E5AC412DB763905C5A52403527084CDC05CB3F8F1526F7`.
+The C-interface method declarations were extracted in declaration order,
+including all seven IUnknown/IDispatch entries. Signatures and slot extraction
+are retained at `.cache/windows-detached-style/sdk-abi.json`.
+
+| Interface | Verified zero-based vtable slots |
+| --- | --- |
+| IUnknown | QueryInterface 0, Release 2 |
+| ITextDocument | Freeze 18, Unfreeze 19, Range 24 |
+| ITextRange | GetFont 18, SetFont 19, SetRange 28 |
+| ITextFont | GetDuplicate 7, Reset 11, GetForeColor 24, SetForeColor 25 |
+
+All calls use direct `delegate* unmanaged[Stdcall]`, 32-bit signed `int` for
+Windows LONG/HRESULT/COLORREF parameters and pointer-sized `nint` for interfaces.
+The approach follows the existing `WindowsRichEditUndoScope` lifetime pattern;
+it requires no RCW, generated-at-runtime COM marshalling, dynamic activation or
+Native AOT exception. Microsoft documents the
+[font duplicate/reset model](https://learn.microsoft.com/en-us/windows/win32/api/tom/nf-tom-itextrange-setfont),
+[undefined-only clone reset](https://learn.microsoft.com/en-us/windows/win32/api/tom/nf-tom-itextfont-reset),
+[actual foreground getter](https://learn.microsoft.com/en-us/windows/win32/api/tom/nf-tom-itextfont-getforecolor),
+[Range creation](https://learn.microsoft.com/en-us/windows/win32/api/tom/nf-tom-itextdocument-range),
+and [Unfreeze count/status semantics](https://learn.microsoft.com/en-us/windows/win32/api/tom/nf-tom-itextdocument-unfreeze).
+
+One portable build used .NET SDK **10.0.400** on the local Windows host:
+
+```powershell
+dotnet build src/Mote.Native/Mote.Native.csproj -c Release --no-restore `
+  -p:PublishAot=false --disable-build-servers
+```
+
+Observed result: exit **0**, **0 warnings / 0 errors**, **10.73 s**. Log:
+`.cache/windows-detached-style/build.log`, SHA-256
+`6E8CD629B95116DD474181741A9CA89C81F466FDE0F502CF2D5C4D6369AB0CD2`.
+This checks source compilation and configured analyzers, not an actual AOT
+publication or COM runtime. The two relevant source hashes at that build were:
+
+| Source | SHA-256 |
+| --- | --- |
+| WindowsNativeSourceCapabilityProbe.cs | `078AE3FA876D1BFD1747FB073D987BF4376B8771BD3A0A01BBB7EC4861FCA0CD` |
+| WindowsRichEditForegroundRange.cs | `37C38F989F01E0EEAC5131E28D55B65AB82E30835547AACAD75551F58A1682D6` |
+
+No local GUI/control was created, no native COM call executed, no global input
+changed and no CI run dispatched/replayed for this build. Independent portable
+tests and ABI review have separate owners and artifacts. Hosted comparison must
+still show the unchanged three fixtures completing all publication/history/
+save/reopen phases, foreground readback and existing preservation assertions,
+with exact executable identity and actual process termination. The proposed
+mechanism remains unverified as a speedup; it cannot yet promote the diagnostic
+adapter into the default product or settle the separate full-source history
+reimport latency problem.
+
+Independent qualification subsequently completed against those same two source
+hashes:
+
+- [Portable witness-model validation](../validation/windows-native-foreground-range-model.md):
+  **25/25 executed, zero failed/skipped**, including overlap-order literal
+  expectations, a 25,700-position forward-paint differential oracle, bounded
+  scalar/CRLF witnesses, mapped native endpoints and pre-mutation invalid-span
+  refusal. The pure tests did not execute TOM or construct a native host.
+- [Independent source/ABI review](../reviews/windows-native-foreground-range-review.md):
+  no substantive scoped defect identified; SDK slots, detached-only reset,
+  checked HRESULTs, acquisition/release and counted Freeze balance inspected.
+  The reviewer did not rerun builds/tests or certify runtime performance.
+
+These results establish a compiled, independently reviewed candidate with
+portable planning/admission coverage. They do not establish native speed,
+foreground correctness or successful unchanged hosted journeys.
