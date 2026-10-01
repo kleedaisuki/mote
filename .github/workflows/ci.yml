@@ -18,6 +18,8 @@ concurrency:
 jobs:
   release-candidate:
     name: Test and package Native AOT
+    # Draft PRs reuse their branch push evidence instead of duplicating native builds.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     uses: ./.github/workflows/release.yml
     with:
       source_sha: ${{ github.sha }}
