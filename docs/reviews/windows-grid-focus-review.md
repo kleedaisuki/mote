@@ -150,3 +150,38 @@ unrelated production reentrancy redesign now. If a transition test points here,
 add a reproducible owned synchronous callback discriminator and then repair the
 publication transaction coherently rather than patching one HasKeyboardFocus
 property or forcing focus.
+
+## Addendum: scoped dual-architecture hosted focus step
+
+Independent workflow-only review on 2026-10-01 examined the additive 26-line
+`.github/workflows/ci.yml` change for `WindowsGridPaneFocusTests`, with passive
+Show implementation `4cc9c16` and retained source-before-publication/F6 fixtures
+`3ec540a` as dependencies. **No substantive issue found in this scoped diff.**
+Native source and the external AOT probe were not re-reviewed or edited; no
+local HWND, GUI, input or full-suite experiment was executed for this review.
+
+The existing Native AOT matrix maps win-x64 to `windows-latest` and win-arm64
+to `windows-11-arm`. The Windows-only step derives x64/arm64 from that fixed RID,
+passes it explicitly through `dotnet test --arch`, and permits the required
+architecture-specific restore/build rather than reusing an x64-only `--no-build`
+output. The test project uses VSTest/xUnit; [Microsoft's VSTest CLI contract](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test-vstest)
+documents `--arch` as selecting the architecture-specific RID. The global
+`-p:PublishAot=false` override is appropriate for this managed user32 test seam
+and its Native project reference; it does not republish or modify the already
+inventoried `$rid/publish` payload.
+
+The step is blocking, has one invocation and a five-minute bound, restricts
+discovery to the existing Windows focus fixture class, and explicitly rejects
+a nonzero test exit. TRX results are written under the repository's per-RID
+`.cache/ci-inventory` area and uploaded with an `always()` Windows-only condition.
+Missing results are warned, not fabricated as a pass; inspect actual test counts
+and outcomes before claiming execution. The original publish-inventory JSON,
+payload paths, strict single-binary/import gates, external accessibility probe,
+existing safety/hash pins and all unrelated step contracts remain unchanged.
+
+Hosted execution of the managed owned-offscreen HWND fixtures on both Windows
+architectures remains pending. A future pass establishes the tested native seam,
+not a published Native AOT/cross-process UIA certificate, a physical F6 event,
+foreground/assistive-technology behavior, or a fix for the historical external
+client's unverified starting-focus premise. Root's planned YAML semantic and
+PowerShell AST checks are separate integration checks, not runtime evidence.
