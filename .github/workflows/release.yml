@@ -87,7 +87,9 @@ jobs:
       - name: Complete solution tests
         shell: pwsh
         run: |
-          dotnet test mote.sln -c Release --logger 'trx;LogFileName=release-tests.trx' --results-directory '.cache/release-evidence/tests'
+          # Let each test host select its own timestamped TRX name. A fixed
+          # LogFileName makes the three project runs overwrite one another.
+          dotnet test mote.sln -c Release --logger trx --results-directory '.cache/release-evidence/tests'
           if ($LASTEXITCODE -ne 0) { throw 'Complete solution tests failed.' }
       - name: Release package integrity tests
         run: python -B -m unittest discover -s tests -p test_release_packaging.py -v

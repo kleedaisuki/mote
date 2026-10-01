@@ -89,6 +89,19 @@ work remains separate and is not deleted or relabeled as ordinary user demand.
 
 ## Publication protocol
 
+### First hosted qualification evidence correction
+
+CI run `36915680535` did not reach package jobs because the Windows test job
+failed. Its log also exposed an independent evidence bug: the complete-solution
+test command supplied one fixed `LogFileName=release-tests.trx` for three test
+projects, so later runs overwrote earlier TRX files. The workflow now uses the
+TRX logger's generated filenames instead. The existing recursive always-upload
+captures all project reports separately. No test assertion, test selection or
+failure gate was changed; this correction does not resolve or relabel the
+Windows test failure. The next hosted run must confirm all three suite reports
+are retained. Only workflow PowerShell syntax was checked locally for this fix;
+already-passing packer tests were not repeated.
+
 The root owner must freeze commit/version/default profile and run the workflow.
 Only a complete successful release-assets job for the intended commit is eligible.
 Before upload, inspect run/job evidence and verify checksum/index identities. A
