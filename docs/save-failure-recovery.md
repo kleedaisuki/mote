@@ -34,6 +34,14 @@ Every native Save failure message starts exactly `Save failed.` and reports insp
 
 Open failures after restart now positively discover an existing same-target deterministic slot and show its local path as **unowned and unverified**. The controller does not read sidecar contents, associate it with the buffer, or delete it. A different missing target receives no unrelated-sidecar hint; successful Open remains unchanged even when the slot exists. A negative File.Exists result produces no hint and is not a claim that recovery is absent.
 
+### Native status ownership
+
+Successful export retains the explicit instruction `Recovery exported. Current buffer is not saved; Save again when ready.` as document-lifetime controller state, separate from transient search/format/copy operation text. Every document or analysis publication refreshes the existing `SetStatusNotice` channel with the current recovery, operation, configuration, tracing and session-health notices. Document and analysis `Status` fields retain only their contextual page/format information. This is an internal presentation change, not a change to persistence or a new platform-shell contract.
+
+The distinction matters beyond task ordering: Windows/macOS can replay cached analysis during palette or composition updates without re-entering the controller. A notice embedded in that cached analysis could disappear on a queued later analysis, or reappear after successful Save. The separate channel is composed by existing native status rendering and cannot be replaced by analysis replay. Repeated analysis does not duplicate notices. Idle document/analysis refresh skips an empty initial notice; explicit settings/health events retain their existing publication semantics (including an equal-valued settings reload), and after publication clearing is explicit.
+
+Recovery export does not clear dirty state or document association. A subsequent successful Save clears the export instruction only after native input settlement confirms the current Document is unmodified; newer edits during Save keep the instruction. New/Open replacement clears this document-bound instruction but not independent settings, theme or accessibility health notices. Save failure, cancellation and other operations cannot claim that the current buffer was saved. An unsettled composition retains the recovery instruction conservatively until a later clean Save; this fix does not mark native preedit as persisted content.
+
 ## Acceptance evidence (local Windows, 2026-10-01)
 
 Environment: Windows/.NET SDK 10.0.400, `net10.0` Debug JIT builds. All experiment artifacts are inside root `.temp`/`.cache`. No Native AOT or macOS runtime acceptance is implied by these focused tests.

@@ -35,6 +35,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     private string? _reloadFailureNotice;
     /// <summary>Last failed layout installation, retained until a deliberate settings retry.</summary>
     private string? _previewFailureNotice;
+    /// <summary>An empty initial notice needs no native mutation; published notices still require explicit clearing.</summary>
+    private bool _statusNoticePublished;
     /// <summary>Requested paths/writers differ from the running process-lifetime values.</summary>
     private bool _settingsRestartRequired;
     /// <summary>The palette last committed to both controller and native shell.</summary>
@@ -102,6 +104,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     private int _openTraceRequest;
     private long _formatSerial;
     private string _operationStatus = "";
+    /// <summary>Export is not Save; retain this document-bound warning through later analysis and operations.</summary>
+    private bool _recoveryExported;
     private bool _saving;
     private volatile bool _accessibilityUnavailable;
     private bool _disposed;
@@ -365,26 +369,39 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _themeUnavailable = true;
         try
         {
-            TryPost(UpdateStatusNotice);
+            TryPost(() => UpdateStatusNotice());
         }
         catch (Exception) { /* A failed status refresh must not escape an OS callback. */ }
     }
 
-    /// <summary>Composes session health and settings notices once, after preedit has ended.</summary>
-    private void UpdateStatusNotice()
+    /// <summary>
+    /// Composes current UI-owned notices independently of cached document/analysis status.
+    /// Native analysis replay cannot erase newer operation state or revive a cleared warning.
+    /// Idle paint can skip an empty initial notice; explicit settings/health events still publish.
+    /// </summary>
+    private void UpdateStatusNotice(bool skipInitialEmpty = false)
     {
         if (_disposed || !_shown || _shell.IsTextComposing) return;
         try
         {
+            var health = MoteTelemetry.Health;
             var notice = string.Join(" ", new[]
             {
                 _accessibilityUnavailable ? (_productProfile == EditorPresentationProfile.Continuous
                     ? "AX unavailable: save, restart --legacy-page"
                     : "Accessibility provider unavailable") : null,
                 _themeUnavailable ? "Theme update unavailable; editing remains available." : null,
-                _reloadFailureNotice, _previewFailureNotice, _settingsNotice
+                _reloadFailureNotice, _previewFailureNotice, _settingsNotice,
+                _configuration.Diagnostics.Count == 0 ? null :
+                    $"Config warnings: {_configuration.Diagnostics.Count}",
+                health.SinkFaulted || health.DroppedRecords > 0 ? "Trace degraded" : null,
+                _recoveryExported
+                    ? "Recovery exported. Current buffer is not saved; Save again when ready." : null,
+                _operationStatus
             }.Where(item => !string.IsNullOrEmpty(item)));
+            if (skipInitialEmpty && notice.Length == 0 && !_statusNoticePublished) return;
             _shell.SetStatusNotice(notice.Length == 0 ? null : notice);
+            _statusNoticePublished = true;
         }
         catch (Exception) { /* A status failure must not disable editing. */ }
     }
@@ -626,6 +643,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         ++_clipboardSerial;
         ++_formatSerial;
         _operationStatus = "";
+        _recoveryExported = false;
         _policy = replacement.FilePath is { } path
             ? DocumentPolicies.ForPath(path)
             : DocumentPolicies.ForKind(DocumentKind.PlainText);
@@ -706,6 +724,11 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                     ShowDocument();
                     return;
                 }
+                // Settle native input first: a successful save may capture an earlier
+                // version, while newer edits (including preedit) are still unsaved.
+                if (!document.IsModified) _recoveryExported = false;
+                if (_operationStatus == "Save view update postponed during text composition.")
+                    _operationStatus = "";
                 ShowDocument();
             });
         });
@@ -763,7 +786,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                         $"Current buffer was not saved. {error.Message}");
                     return;
                 }
-                _operationStatus = "Recovery exported. Current buffer is not saved; Save again when ready.";
+                _recoveryExported = true;
                 ShowDocument();
             });
         });
@@ -1477,16 +1500,10 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         var snapshot = _document.Snapshot;
         var file = _document.FilePath is { } path ? Path.GetFileName(path) : "Untitled";
         var title = $"{file}{(_document.IsModified ? " •" : "")} — mote";
-        var warnings = _configuration.Diagnostics.Count == 0 ? "" :
-            $" · Config warnings: {_configuration.Diagnostics.Count}";
-        var health = MoteTelemetry.Health;
-        var traceWarning = health.SinkFaulted || health.DroppedRecords > 0
-            ? " · Trace degraded" : "";
-        var statusSuffix = warnings + traceWarning +
-            (_operationStatus.Length == 0 ? "" : " · " + _operationStatus);
+        UpdateStatusNotice(skipInitialEmpty: true);
         if (_canvasShell is not null)
         {
-            ShowCanvasDocument(snapshot, title, statusSuffix);
+            ShowCanvasDocument(snapshot, title);
             layout?.SetStatus(TelemetryStatus.Success);
             return;
         }
@@ -1503,7 +1520,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         var pageStatus = snapshot.Length <= PageSize ? "" :
             $"Page {_pageStart:N0}–{_pageStart + _pageLength:N0} / {snapshot.Length:N0}; page navigation is discrete";
         _shell.SetDocument(new NativeDocumentView(title, _projection.Display, _pageStart,
-            snapshot.Length, _document.IsModified, pageStatus + statusSuffix,
+            snapshot.Length, _document.IsModified, pageStatus,
             new NativeDocumentStamp(_canvasGeneration, snapshot.Version), focus));
         layout?.SetStatus(TelemetryStatus.Success);
     }
@@ -1513,8 +1530,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     /// Scrolling and status updates paint a new source-backed frame without
     /// replacing the native input host's text or disturbing composition.
     /// </summary>
-    private void ShowCanvasDocument(TextSnapshot snapshot, string title,
-        string statusSuffix)
+    private void ShowCanvasDocument(TextSnapshot snapshot, string title)
     {
         var canvas = _canvas!;
         var shell = _canvasShell!;
@@ -1540,7 +1556,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         var line = snapshot.GetLineIndexFromOffset(frame.TopAnchor.SourceOffset) + 1;
         var presentation = _productProfile == EditorPresentationProfile.Continuous
             ? "continuous canvas" : "continuous canvas (experimental)";
-        var status = $"Line {line:N0} / {snapshot.LineCount:N0} · {presentation}" + statusSuffix;
+        var status = $"Line {line:N0} / {snapshot.LineCount:N0} · {presentation}";
         var needsBinding = _canvasBoundGeneration != _canvasGeneration ||
             _canvasBoundVersion != snapshot.Version ||
             (_navigation.Active != _canvasBoundActive &&
@@ -2241,6 +2257,9 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             view = view with { GridNavigation = _gridFrame };
             _presentedPreview = view;
         }
+        // Notices live in the separate persistent channel, not a cached analysis
+        // candidate: native palette/composition replay must not restore old notices.
+        UpdateStatusNotice(skipInitialEmpty: true);
         try { _shell.SetAnalysis(view); }
         catch
         {
