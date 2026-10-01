@@ -200,6 +200,58 @@ def validate_focus_record(row):
         raise ValueError("invalid focus adapter outcome/duration")
 
 
+def validate_record(row):
+    """Validate one complete decoded record using the loader's unchanged policy.
+
+    Direct graph consumers use the same closed privacy schema as JSONL readers.
+    File byte/count bounds and partial-row handling remain loader responsibilities;
+    this check does not establish graph integrity or attest native observation.
+    """
+    allowed = {"schema_version", "utc_time", "session_id", "run_id", "trace_id",
+               "span_id", "parent_span_id", "operation", "duration_us", "status", "attributes"}
+    required = allowed - {"run_id"}
+    if (not isinstance(row, dict) or set(row) - allowed or required - set(row)
+            or type(row.get("schema_version")) is not int or row["schema_version"] != 1):
+        raise ValueError("unsupported trace schema")
+    if row.get("operation") not in OPERATIONS or row.get("status") not in STATUSES:
+        raise ValueError("unknown operation/status")
+    if type(row.get("duration_us")) is not int or row["duration_us"] < 0:
+        raise ValueError("invalid monotonic duration")
+    for key, length in (("session_id", 32), ("trace_id", 32), ("span_id", 16)):
+        if not valid_hex(row.get(key), length):
+            raise ValueError("invalid causal identifier")
+    parent = row.get("parent_span_id")
+    if parent is not None and not valid_hex(parent, 16):
+        raise ValueError("invalid parent identifier")
+    attrs = row.get("attributes")
+    if not isinstance(attrs, dict):
+        raise ValueError("unsupported trace attributes")
+    if row["operation"] in FOCUS_OPERATIONS:
+        validate_focus_record(row)
+    elif set(attrs) - ATTRIBUTES:
+        raise ValueError("unsupported trace attributes")
+    if row["operation"] in MENU_OPERATIONS and (
+            row["duration_us"] != 0 or row["status"] != "success"
+            or attrs or parent is None):
+        raise ValueError("invalid independent menu checkpoint")
+    if row["operation"] in INPUT_OPERATIONS and (
+            row["duration_us"] != 0 or attrs or parent is None
+            or row["status"] != ("success" if row["operation"] in
+                                  INPUT_SUCCESS_OPERATIONS else "failure")):
+        raise ValueError("invalid independent input checkpoint")
+    for key in ("version", "count"):
+        if key in attrs and (type(attrs[key]) is not int or attrs[key] < 0):
+            raise ValueError("invalid numeric attribute")
+    for key, vocabulary in (("format", TRACE_FORMATS), ("size_bucket", SIZE_BUCKETS)):
+        if key in attrs and (not isinstance(attrs[key], str) or attrs[key] not in vocabulary):
+            raise ValueError("unsupported closed dimension")
+    if "hresult" in attrs and (type(attrs["hresult"]) is not int or
+                              not -(2**31) <= attrs["hresult"] < 2**31):
+        raise ValueError("invalid signed HResult")
+    if "reason" in attrs and (not isinstance(attrs["reason"], str) or attrs["reason"] not in REASONS):
+        raise ValueError("unsupported terminal reason")
+
+
 def load_records(paths, *, discard_partial=False):
     """Bound and validate records; optionally discard only an unterminated final row."""
     records = []
@@ -218,49 +270,7 @@ def load_records(paths, *, discard_partial=False):
                 if len(line) > 16384 or len(records) >= 100000:
                     raise ValueError("trace exceeds bounded record size/count")
                 row = json.loads(line)
-                allowed = {"schema_version", "utc_time", "session_id", "run_id", "trace_id",
-                           "span_id", "parent_span_id", "operation", "duration_us", "status", "attributes"}
-                required = allowed - {"run_id"}
-                if (not isinstance(row, dict) or set(row) - allowed or required - set(row)
-                        or type(row.get("schema_version")) is not int or row["schema_version"] != 1):
-                    raise ValueError("unsupported trace schema")
-                if row.get("operation") not in OPERATIONS or row.get("status") not in STATUSES:
-                    raise ValueError("unknown operation/status")
-                if type(row.get("duration_us")) is not int or row["duration_us"] < 0:
-                    raise ValueError("invalid monotonic duration")
-                for key, length in (("session_id", 32), ("trace_id", 32), ("span_id", 16)):
-                    if not valid_hex(row.get(key), length):
-                        raise ValueError("invalid causal identifier")
-                parent = row.get("parent_span_id")
-                if parent is not None and not valid_hex(parent, 16):
-                    raise ValueError("invalid parent identifier")
-                attrs = row.get("attributes")
-                if not isinstance(attrs, dict):
-                    raise ValueError("unsupported trace attributes")
-                if row["operation"] in FOCUS_OPERATIONS:
-                    validate_focus_record(row)
-                elif set(attrs) - ATTRIBUTES:
-                    raise ValueError("unsupported trace attributes")
-                if row["operation"] in MENU_OPERATIONS and (
-                        row["duration_us"] != 0 or row["status"] != "success"
-                        or attrs or parent is None):
-                    raise ValueError("invalid independent menu checkpoint")
-                if row["operation"] in INPUT_OPERATIONS and (
-                        row["duration_us"] != 0 or attrs or parent is None
-                        or row["status"] != ("success" if row["operation"] in
-                                              INPUT_SUCCESS_OPERATIONS else "failure")):
-                    raise ValueError("invalid independent input checkpoint")
-                for key in ("version", "count"):
-                    if key in attrs and (type(attrs[key]) is not int or attrs[key] < 0):
-                        raise ValueError("invalid numeric attribute")
-                for key, vocabulary in (("format", TRACE_FORMATS), ("size_bucket", SIZE_BUCKETS)):
-                    if key in attrs and (not isinstance(attrs[key], str) or attrs[key] not in vocabulary):
-                        raise ValueError("unsupported closed dimension")
-                if "hresult" in attrs and (type(attrs["hresult"]) is not int or
-                                          not -(2**31) <= attrs["hresult"] < 2**31):
-                    raise ValueError("invalid signed HResult")
-                if "reason" in attrs and (not isinstance(attrs["reason"], str) or attrs["reason"] not in REASONS):
-                    raise ValueError("unsupported terminal reason")
+                validate_record(row)
                 records.append(row)
     return records, hashes
 

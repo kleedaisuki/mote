@@ -43,6 +43,7 @@ class FocusContractTests(unittest.TestCase):
 
     def load(self, row):
         """Exercise the public bounded reader, not merely a private validator."""
+        self.assertIsNone(tool.validate_record(row))
         self.path.write_text(json.dumps(row) + "\n", encoding="utf-8")
         rows, hashes = tool.load_records([str(self.path)])
         self.assertEqual([row], rows)
@@ -50,6 +51,8 @@ class FocusContractTests(unittest.TestCase):
 
     def reject(self, row):
         """Require malformed complete records to fail, never discard them."""
+        with self.assertRaises(ValueError):
+            tool.validate_record(row)
         self.path.write_text(json.dumps(row) + "\n", encoding="utf-8")
         for discard_partial in (False, True):
             with self.subTest(discard_partial=discard_partial), self.assertRaises(ValueError):
@@ -140,6 +143,26 @@ class FocusContractTests(unittest.TestCase):
         row = focus_record(receipt=True)
         row["duration_us"] = 1
         self.reject(row)
+
+    def test_direct_validation_matches_general_loader_privacy_policy(self):
+        """Share legacy schema checks with direct callers, not just focus fields."""
+        base = focus_record()
+        base.update(operation="command.save", status="success", attributes={"reason": "completed"})
+        self.load(base)
+        patches = ({"source_text": "private"}, {"schema_version": True},
+                   {"attributes": {"format": "private"}}, {"attributes": {"version": True}},
+                   {"attributes": {"hresult": 2**31}}, {"attributes": {"reason": "private"}},
+                   {"attributes": {"count": -1}}, {"span_id": "private"},
+                   {"trace_id": "private"}, {"session_id": "private"},
+                   {"operation": "private"}, {"duration_us": True})
+        for patch in patches:
+            row = copy.deepcopy(base)
+            row.update(patch)
+            self.reject(row)
+        for field in base:
+            row = copy.deepcopy(base)
+            del row[field]
+            self.reject(row)
 
 
 if __name__ == "__main__":
