@@ -732,14 +732,13 @@ internal sealed unsafe class MacTextInputIsland
     {
         TraceStage("P0-place-host");
         if (_editor == 0 || _binding is null || _frame is null || IsComposing ||
-            _frame.Version != _binding.Snapshot.Version) return;
+            !TryGetRibbonContext(_binding, _frame, out var label, out var projected)) return;
         ObjC.Send(_hostScroll, ObjC.Sel("setFrame:"), new ObjC.Rect(
             RibbonLabelWidth, 4, Math.Max(1, _width - RibbonLabelWidth - 8),
             RibbonHeight - 8));
         ObjC.Send(_hostScroll, ObjC.Sel("setHidden:"), 0);
         ObjC.Send(_editor, ObjC.Sel("setEditable:"), 1);
-        SetRibbonLabel($"Input @ {_binding.Active.ToString("N0", CultureInfo.InvariantCulture)}");
-        var projected = ProjectedHostSelection();
+        SetRibbonLabel(label);
         _setting = true;
         try
         {
@@ -807,10 +806,31 @@ internal sealed unsafe class MacTextInputIsland
         return rect;
     }
 
-    private ObjC.Range ProjectedHostSelection()
+    /// <summary>
+    /// Resolves ribbon text and native selection from one current source frame.
+    /// A retained binding owns the input interval, not the current caret; its
+    /// original Active must not label a newer same-version frame selection.
+    /// Null or mismatched state leaves the installed native host unchanged.
+    /// This pure boundary does not call AppKit or settle provisional input.
+    /// </summary>
+    internal static bool TryGetRibbonContext(NativeCanvasBinding? binding,
+        CanvasFrame? frame, out string label, out ObjC.Range selection)
     {
-        var frame = _frame!;
-        var binding = _binding!;
+        label = string.Empty;
+        selection = default;
+        if (binding is null || frame is null || frame.Version != binding.Snapshot.Version)
+            return false;
+        label = $"Input @ {frame.SelectionActive.ToString("N0", CultureInfo.InvariantCulture)}";
+        selection = ProjectedHostSelection(binding, frame);
+        return true;
+    }
+
+    /// <summary>Projects the current frame without changing the native input interval.</summary>
+    private ObjC.Range ProjectedHostSelection() => ProjectedHostSelection(_binding!, _frame!);
+
+    /// <summary>Clamps source selection to the exact retained single-line input slice.</summary>
+    private static ObjC.Range ProjectedHostSelection(NativeCanvasBinding binding, CanvasFrame frame)
+    {
         var first = Math.Min(frame.SelectionAnchor, frame.SelectionActive);
         var last = Math.Max(frame.SelectionAnchor, frame.SelectionActive);
         var start = Math.Clamp(first - binding.InputSourceStart, 0,
