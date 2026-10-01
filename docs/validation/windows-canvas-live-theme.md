@@ -146,4 +146,3 @@ window/raster content; they are neither a callback endpoint measurement nor a
 compositor/physical-display presentation or latency claim. Real IME candidate
 placement, composition preservation, screen-reader behavior, full accessibility
 acceptance and product-wide theme reload/edit/version guarantees remain separate.
-

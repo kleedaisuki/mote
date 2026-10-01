@@ -355,7 +355,7 @@ try {
             png = [IO.Path]::GetFileName($png)
             png_sha256 = (Get-FileHash -LiteralPath $png -Algorithm SHA256).Hash
         }
-    
+
     $report.status = 'passed'
 }
 catch { $report.error = $_.Exception.GetType().Name + ': ' + $_.Exception.Message }
