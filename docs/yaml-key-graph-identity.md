@@ -84,11 +84,12 @@ candidate both exhibit it; graph equality does not correct source-span
 projection. The failed requirement checks and subsequent characterization are
 recorded in the [independent validation](validation/yaml-key-graph-identity.md).
 
-The small-policy key checker also retains its existing skip after an error
-contained in a key. In particular, undefined-alias recovery should not be
-inferred to have the larger streaming checker's complete key-equality
-certificate. This slice preserves that compatibility boundary; it is not a
-claim that every invalid YAML input receives exhaustive diagnostics.
+The identity-only checkpoint retained the existing silent skip after an error
+contained in a key. A subsequent [ordinary recovery certificate correction](architecture/yaml-small-recovery-certificate.md)
+keeps the skip but makes its unavailable equality proof explicit through the
+existing unsupported-key warning. The small session therefore no longer claims
+Complete for that path. This does not claim that every invalid YAML input
+receives exhaustive diagnostics or broaden parser syntax recovery.
 
 ## Verification checkpoint
 
