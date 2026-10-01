@@ -266,3 +266,122 @@ Current run artifacts/logs: `.cache/ci-36800944850-json-<RID>/` and
 bound to **this** run/commit, not the prior results; they pass across all eight
 retained samples while preserving the four Mac failures. Only this document
 was changed for this audit.
+
+## Follow-up: bounded initial AX count readiness
+
+Independently audited the completed [run 36802378381](https://github.com/kleedaisuki/mote/actions/runs/36802378381),
+source **`c453506c84e249dbff7c73748140314f6760ff33`**. The initial Mac window-count
+`cannotComplete` response is now an observed, read-only pending result under
+the existing deadline; unsuccessful count output is unavailable rather than
+fabricated as zero. Count and window-copy outcomes are recorded separately.
+This advances readiness evidence without authorizing input until the owned
+source/focus/range witnesses succeed. The prior two runs remain historical
+evidence, not claims about this changed harness/source.
+
+**Do not summarize this run as "both Macs pass 1 MiB and fail 100 MiB".** Its
+actual size/architecture outcomes differ:
+
+| RID | 1 MiB | 100 MiB | Report / actual pilot result |
+| --- | --- | --- | --- |
+| win-x64 | full scoped pass | full scoped pass | pass / actual pass marker |
+| win-arm64 | full scoped pass | full scoped pass | pass / actual pass marker |
+| osx-x64 | failed at save-exact-bytes / TimeoutError | full scoped pass | incomplete / exit 1 |
+| osx-arm64 | full scoped pass | failed at initial-whole-document-semantics / RuntimeError | incomplete / exit 1 |
+
+All four portable protocol/artifact suites pass **15/15**. The overall CI and
+all four AOT jobs are green, but **both Mac nested pilots actually exit 1**;
+their incomplete summaries and explicit pilot-error lines survive in raw logs.
+Windows summaries and emitted pass markers corroborate their full two-size
+results. The green overall run cannot close Mac pilot acceptance.
+
+### Identity and independent pass evidence
+
+Fresh current-source native payload identities are:
+
+| RID | Bytes | Before/after SHA-256 |
+| --- | ---: | --- |
+| win-x64 | 7,105,024 | `526c45d6f6df34861f4fe0b86d3c27d30c5d37bd8d7ac68d22ff25fb51408b15` |
+| win-arm64 | 7,244,288 | `1d1050838a13150671dd71c41095e55bd6fc37e99ba9a9dc0ae3eb9ec1e40ef7` |
+| osx-x64 | 16,842,720 | `1b24d7357eccca349e73884221037ab3feaf2f19781e6a168cd85a6621126d21` |
+| osx-arm64 | 16,489,288 | `3cc3683d0bb7f57920762ea08e131b37433fc09236f8680dd9ae563a3a180e91` |
+
+Native observer architecture, exact Git source/checkout hashes, same corpus
+and single-byte edit oracles, before/after binary hashes and all four separate
+single-payload inventories match. Both Swift clients compiled. As in previous
+audits, this is uploaded report/inventory provenance, not a locally downloaded
+product executable rehash or execution.
+
+The **six successful cases**, including Mac ARM64 1 MiB and Mac x64 100 MiB,
+independently satisfy exact source/save/final hashes, immutable original,
+Complete zero-diagnostic v0/v1 observations, one edit attempt, unchanged disk
+before Save, normal initial exit, fresh GUI reopen with unchanged saved bytes,
+normal reopen exit, and audited successful trace endpoints/versions/parents.
+Their trace file hashes agree with reports. Raw successful terminal roots and
+no-edit/no-Save reopen contracts pass; there is no evidence of trace false
+positives. Mac ARM64 1 MiB main/reopen traces have **35/11** records; Mac x64
+100 MiB **40/16**. I/O revisions remain unavailable when omitted; native status
+and byte correctness remain separate witnesses.
+
+### Readiness versus later failure
+
+Every Mac sample now achieves a source observation with one owned window,
+successful count/copy calls, one exact-length source, source focus, caret 0,
+and permission preflights true. The count-readiness summary records first AX
+error -25204 followed by last count error 0 and first ready acknowledgement:
+
+| Mac sample | Source observation attempts | Driver attach → first ready ms | Parent launch → bound source ms |
+| --- | ---: | ---: | ---: |
+| x64 / 1 MiB | 2 | 399.180760 | 403.051354 |
+| x64 / 100 MiB | 19 | 4008.251812 | 4011.828249 |
+| ARM64 / 1 MiB | 4 | 1310.631958 | 1315.942459 |
+| ARM64 / 100 MiB | 6 | 957.182875 | 959.094750 |
+
+These counters and times concern the bounded observer, not product CPU work,
+compositor presentation or a statistical startup SLA.
+
+**Mac x64 1 MiB:** reaches Complete v0, one witnessed edit, Complete v1 and
+unchanged disk before Save. The clean-title Save wait times out; final working
+hash is still the original, not the edit oracle. Post-error observation remains
+ready/Complete/focused, dirty, caret 10, count/copy success, exact 1,048,576 source
+units. One owned close fails with RuntimeError and forced cleanup follows; the
+retained trace is 0 bytes. It proves no accepted clean/exact Save result, **not
+whether Command-S was lost, a product save failed, or another operation blocked**.
+No Save resend was attempted. The 499 total observation attempts in the failure
+summary include earlier stages and are not 499 modifying actions.
+
+**Mac ARM64 100 MiB:** source readiness succeeds with exact 104,857,600 units,
+then the external initial-whole-document Complete wait aborts. The post-error
+observation has **count success/error 0/count 1**, but
+**window-copy error -25204 / copy count unavailable**, `guard_stage=window-read`.
+This is not the earlier window-count failure and not proof of absent windows.
+Permission preflights remain true. No edit was attempted; exact original and
+working bytes are unchanged.
+
+The ARM64 failure's owned cleanup **does exit normally** (`failure_cleanup_normal_exit=true`),
+retaining a 4,838-byte, **14-record** trace with one successful terminal root,
+successful open/editable/open-draw and successful 100 MiB parse/publish/semantic
+presentation at v0, diagnostic count 0, and no edit or Save. Independent checks
+confirm unique identities, valid parents, no drops and successful statuses.
+Thus it is unsupported to call this observed parser failure: internal analysis
+did succeed, while external Complete observation was interrupted by AX window
+copy communication. Cleanup-only normal exit still **does not** certify the
+unexecuted edit/Save/reopen workload or turn its sample into pass.
+
+### Endpoint boundaries and reproducibility
+
+New Mac pass observations are descriptive only: ARM64 1 MiB parent edit ack
+424.649292 ms, child edit→draw return 7.646 ms, semantic presentation 266.442 ms,
+Save 8.649 ms; x64 100 MiB parent edit ack 464.950699 ms, child edit→draw return
+10.068 ms, semantic presentation 529.717 ms, Save 2266.715 ms. Parent/child clocks
+are not subtracted, physical paint/IME remain untested, and one case cannot
+establish reliable small-file Save or cross-platform tail latency.
+
+Artifacts and inventory downloads are under `.cache/ci-36802378381-json-<RID>/`;
+raw logs `.cache/ci-36802378381-json-all.log`. Independent run/commit-bound
+assertions and structured results are `.cache/ci-36802378381-json-audit.py` and
+`.cache/ci-36802378381-json-independent-summary.json`; they corroborate all eight
+sample outcomes, including the two distinct Mac failures. No native process
+was rerun and no product/driver file was modified for this audit. The most
+informative next checks discriminate bounded read-only AX copy readiness and
+owned ordinary Save-command delivery separately; they should not retry writes
+or hide a failed observed phase behind internal trace success.
