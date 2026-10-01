@@ -77,8 +77,7 @@ schema. Expected five-row normal sessions do not trigger this mismatch.
 - Neither completed-success-observed nor completed-failure-observed replaces
   the original product AX gate or implies VoiceOver, IME or release acceptance.
 
-This review is not final implementation approval. Recheck the corrected cleanup,
-shared schema bounds, frozen CI hashes and executed Mac artifacts after integration.
+The initial review required a cleanup/schema integration recheck; that recheck follows below.
 
 ## Integration recheck and current verdict
 
