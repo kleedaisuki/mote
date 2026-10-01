@@ -453,7 +453,7 @@ jobs:
           $rid = '${{ matrix.rid }}'
           $pins = @(
             @{ path = 'tests/NativeWindowsCanvasThemeWorkflow.ps1'; hashes = @('9A242F8B4045D000AEE657399A566BBF65855B636EE2159DC6BF912285E54CA4', '2AEB54CFF3E8D5B77B6AE27B0260CF1038A8EA66EEC0C45F6C419379FC3BC0A6') },
-            @{ path = 'tests/NativeWindowsCanvasThemeWorker.ps1'; hashes = @('D5BBD79F82D8219E04F71257413AF769B9346384116F6E67617D24EE5BE750EA', '43B69C41F318828642A588C075CD278D0304CF528447E3F717A92D2F64070B6D') }
+            @{ path = 'tests/NativeWindowsCanvasThemeWorker.ps1'; hashes = @('889C5FA1E8B7B6E05531677E13291B70B8546A11FDE9648A94EB2A6265BF09CD', '006B712D8357D87848FC47E85DB01ED4C9AC2DD6D8D8CB613164B7336266142F') }
           )
           foreach ($pin in $pins) {
             $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
