@@ -138,4 +138,3 @@ Three successful cases have normal edit/reopen closure and complete independent 
 3. **Request-level command/Save provenance: not certified in this frozen run.** The audited hosted failure demonstrates why the remaining P2 matters: a readable prefix reaches edit/draw but cannot classify receipt/admission/worker/commit. `docs/architecture/observability-provenance.md` describes separate causal integration work. Concurrent subsequent working-tree changes are outside source 8a24e90 and outside this hosted audit; this follow-up does not adjudicate or certify them. Saved-version attribution, request-linked outcomes, fixed rejection reasons, entry checkpoints and Save phase timing require their own integrated review and targeted acceptance.
 
 The correct updated claim is **recoverable completed-operation prefixes plus truthful reviewed outcomes**, not crash-complete telemetry or complete command-to-durable-save coverage.
-
