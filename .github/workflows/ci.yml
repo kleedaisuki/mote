@@ -1520,6 +1520,59 @@ jobs:
           include-hidden-files: true
           retention-days: 14
 
+      # Synthetic positive-prefix recovery is infrastructure evidence only.
+      # Killing the owned child is expected in three cases, never a Save oracle.
+      - name: Diagnose Native AOT causal trace prefix recovery (non-gating)
+        if: always() && steps.json_acceptance_python.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & dotnet publish tests/CausalTraceRecoveryProbe/CausalTraceRecoveryProbe.csproj `
+            --configuration Release --runtime $rid --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true `
+            --output ".cache/causal-recovery-probe/$rid" --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Causal recovery probe publish failed.' }
+          $name = if ($IsWindows) { 'CausalTraceRecoveryProbe.exe' } else { 'CausalTraceRecoveryProbe' }
+          & python -B tests/Invoke-CausalTraceRecovery.py `
+            --binary ".cache/causal-recovery-probe/$rid/$name" `
+            --output ".cache/causal-recovery-$rid"
+          if ($LASTEXITCODE -ne 0) { throw 'Causal recovery diagnostic failed; inspect typed case outcomes.' }
+      - name: Upload causal trace recovery evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: causal-trace-recovery-${{ matrix.rid }}
+          path: .cache/causal-recovery-${{ matrix.rid }}/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # This summary exposes nested failures masked by continue-on-error.
+      # It never changes any diagnostic into a release gate or copies payloads.
+      - name: Summarize actual native diagnostic evidence (non-gating)
+        if: always()
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          & python -B -m unittest discover -s tests -p test_summarize_ci_evidence.py
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic summary contract tests failed.' }
+          & python -B tests/summarize_ci_evidence.py --rid '${{ matrix.rid }}' `
+            --output '.cache/ci-inventory/${{ matrix.rid }}/evidence-summary.json' `
+            --step-summary $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic evidence summary failed.' }
+      - name: Upload actual native diagnostic evidence summary
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-evidence-summary-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/evidence-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
   # Capture replacement-phase evidence on a disposable runner. Its positive
   # held-share control and ordinary samples touch synthetic files only; a
   # failure is diagnostic, not permission to weaken the strict release gates.
