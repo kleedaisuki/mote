@@ -1,18 +1,53 @@
 # Goal implementation checklist
 
-Date: 2026-10-01. This is an implementation inventory, not a release certificate.
+Date: 2026-10-02 (Asia/Singapore). This is an implementation inventory, not a release certificate.
 The authoritative updated objective asks for clear top-down modeling, good
 implementation and native productization; it does not authorize shrinking the
 six-format, performance, single-binary, or semantic requirements.
 
 ## Evidence baseline and status rules
 
-Latest inspected completed hosted source: `f1b929843563254ff15fb6586041d0ea2a069038`,
+Last fully inspected completed hosted baseline: `f1b929843563254ff15fb6586041d0ea2a069038`,
 [CI 36877121813](https://github.com/kleedaisuki/mote/actions/runs/36877121813).
 Both main suites report 3271/3271, Themes 14/14 and Configuration 9/9; four
 Native AOT inventories contain one executable. Non-gating original Grid probes
 still fail, the new x64 client is unknown after GoTo, and ordinary JSON is 6/8.
 These failures remain requirements/evidence gaps, not erased by green jobs.
+
+Latest inspected hosted source is `23f1c1a9bc01f198add7e44df8b026fe1955f923`,
+[CI 36887820181](https://github.com/kleedaisuki/mote/actions/runs/36887820181).
+At the 2026-10-01 16:03 UTC inspection the run was still in progress. Windows managed tests had a
+successful job conclusion, but the macOS managed test job failed. Both completed
+macOS AOT jobs passed publish, inventory, system-library imports and the strict
+single-binary gate, then failed the newly added embedded-codec verification step.
+The run subsequently completed with a failed overall conclusion and successful
+Windows AOT jobs. All four publish inventories passed the strict single-binary
+gate. Completed-job/artifact inspection establishes these distinctions:
+
+- Windows main suite: 3436/3436 passed, with Themes 14/14 and Configuration 9/9;
+  all three report no failures or skips.
+- macOS main suite: 3434 passed, 2 failed, 0 skipped. Both failures are dangling
+  symlink fixture cleanup exceptions after admission assertions, not failed
+  production link rejection. Themes 14/14 and Configuration 9/9 passed.
+- Both macOS new probe routes failed before launch: PowerShell provider lookup of
+  hidden `.cache` omitted `-Force`. No codec/source report was produced, so this
+  is not evidence that the macOS codecs or native text adapters failed at runtime.
+- Both Windows published-codec reports actually pass all seven checks, with
+  process exit 0 and unchanged executable hashes. macOS codec acceptance remains
+  unobserved until the supervisor repair executes there.
+- Both Windows full-native source experiments reached dense JSON but were
+  censored at the unchanged 120-second deadline. The last recorded phase entered
+  the second, post-edit native semantic publication after 79,433 projected tokens.
+  The initial publication completed in approximately 78.85 seconds on x64 and
+  73.85 seconds on ARM64, already unacceptable for a 512 KiB ordinary document.
+  The experiment is not a passing native editing surface; a non-gating step conclusion cannot erase
+  this result. Its attribution is being investigated independently.
+
+The two harness corrections are scoped separately from product requirements.
+They cannot retroactively turn this source's failed jobs into a passing run.
+They are now implemented as test-only Unix link cleanup and supervisor ancestry
+inspection through native attributes, with 12/12 and 10/10 respective focused
+Windows checks. Their repaired macOS execution remains pending a new source run.
 
 - Established: implementation exists with relevant scoped evidence.
 - Partial: implementation exists, but required behavior or acceptance remains open.
@@ -42,15 +77,15 @@ These failures remain requirements/evidence gaps, not erased by green jobs.
 | GitHub Actions cross-platform validation | Established | Managed/native/AOT/inventory/control/artifact jobs execute. Non-gating success is not product acceptance. |
 | Native release-ready product | Open | Product interaction, reliability, performance and accessibility gaps above must be closed; implementation count is not release readiness. |
 
-## Current parallel delivery (not part of f1b9298 hosted evidence)
+## Current parallel delivery (published at 23f1c1a; qualification remains open)
 
 | Stream | Actual progress | Remaining qualification |
 | --- | --- | --- |
-| Native editing locus | One-source full-resident native adapter capability experiment is being implemented on both OSes, without changing ordinary default or LegacyPage. | Coordinated build/model qualification, then actual hosted run; controlled input is not real IME or a delivered default surface. |
-| Ordinary YAML semantics | Graph-key structural identity implemented/reviewed, 153 affected checks and 21 frozen output comparisons; skipped erroneous-key completeness correction is in validation. | Integrated source/RID coverage; retained collection-span boundary and other policy limits remain. |
-| Unicode edit difference | Shared scalar-safe difference implemented/reviewed; real pre-fix Apply failures and qualified focused regression evidence retained. | Full integrated suite and native ingress execution; scalar safety is not full grapheme/IME acceptance. |
-| Explicit source encoding | Eight-codec engine API qualified; native explicit choice/menu/controller implemented with portable checks; tiny published-AOT codec check is being finalized. | Actual four-RID codec-table execution and native chooser behavior; never guess the user's file encoding. |
-| Runtime evidence | Owned Windows cleanup controls now really pass 0/124; separate adapter graph exists on both RIDs. | Original Grid failure, new x64 post-GoTo unknown, and Mac native edit/Save failures remain open. |
+| Native editing locus | One-source full-resident native adapter capability experiment implemented on both OSes; coordinated builds, 33 model checks and 12 admission checks qualified, without changing ordinary default or LegacyPage. | Both Windows runs have slow initial dense-JSON native styling and time out during post-edit publication; Mac routes did not launch. Controlled input is not real IME or a delivered default surface. |
+| Ordinary YAML semantics | Graph-key structural identity implemented/reviewed, 153 affected checks and 21 frozen output comparisons; skipped erroneous-key completeness correction implemented with qualified scoped evidence. | Current macOS suite's two failures are separate fixture cleanup failures; retained collection-span boundary and other policy limits remain. |
+| Unicode edit difference | Shared scalar-safe difference implemented/reviewed; real pre-fix Apply failures, focused regression evidence and passing current Windows integrated suite retained. | Native ingress and real composition acceptance remain scoped; scalar safety is not full grapheme/IME acceptance. |
+| Explicit source encoding | Eight-codec engine API qualified; native explicit choice/menu/controller and published-AOT codec probe implemented with portable checks. Both Windows published codec checks passed. | Both Mac routes failed before launch in the supervisor; Mac codec runtime acceptance and real native chooser behavior remain open. Never guess the user's file encoding. |
+| Runtime evidence | Owned Windows cleanup controls passed 0/124 at the previous baseline; separate adapter graph exists on both RIDs. Mac edit reports now preserve the rejected transaction independently of later cleanup. | Original Grid failure, new x64 post-GoTo unknown, and Mac native workflow/Save failures remain open. The previous 1 MiB Mac failure occurred in external AX preflight before any edit event, not a demonstrated editor edit fault. |
 
 ## Primary internal evidence
 
@@ -62,6 +97,8 @@ These failures remain requirements/evidence gaps, not erased by green jobs.
 - [YAML graph proof](../validation/yaml-key-graph-identity.md),
   [Unicode difference proof](../validation/native-unicode-edit-difference.md),
   [explicit encoding proof](../validation/explicit-open-encoding.md).
+- [Current macOS test failure and scoped cleanup repair](../validation/native-source-admission-macos-cleanup.md),
+  [codec/source supervisor qualification](../validation/native-codec-source-workflow.md).
 
 This checklist intentionally does not assign a completion percentage. The
 remaining native-user requirements are not proportional to file/test counts.
