@@ -41,6 +41,30 @@ contains the practical manual. Each published release has its own page here.
 - Do not package private traces, recovery content, development settings or
   repository `.cache`/`.temp` artifacts.
 
+## Runtime security servicing
+
+Before each publication, check Microsoft's current .NET servicing release and
+security advisories; a reproducible SDK pin is not permission to ship an obsolete
+security patch. The [.NET 10.0.12 release notes](https://github.com/dotnet/core/blob/main/release-notes/10.0/10.0.12/10.0.12.md)
+(2026-09-08) include SDK 10.0.401 and security fixes with links to the official CVE
+advisories. Microsoft's [.NET support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core)
+requires supported installations to remain current with servicing updates.
+
+Native AOT includes runtime code in the application executable. Installing a
+new .NET runtime on a user's computer does not service that compiled application.
+Update the exact SDK/runtime pin, workflows, notices and corresponding license
+inventory together, then rebuild and requalify extracted packages for the same
+four native RIDs. Verify the actual selected SDK and resulting package provenance,
+not only the SDK requested from setup tooling. Review CVE relevance without
+claiming every framework advisory necessarily affects mote's executed paths.
+
+If a version is already published, distribute the serviced build under a new
+patch version/tag with new manifests and checksums. Never replace immutable
+archives or retarget the previous tag. If publication has not occurred, hold it
+until the serviced candidate passes; a previous toolchain's successful run cannot
+qualify rebuilt bytes. Users install the complete new mote package; they still
+do not need a separate .NET installation.
+
 ## Publication records
 
 - [v0.1.0 release reference](v0.1.0.md)

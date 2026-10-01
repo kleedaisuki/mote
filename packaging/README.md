@@ -16,7 +16,7 @@ product is `src/Mote.Native`, not the experimental `Mote.Desktop` prototype.
 Each package contains the executable, all required publish companions (if any),
 user documentation, release notes, GPL license, third-party notices and full
 upstream license texts. `package-manifest.json` records source commit, version,
-RID, actual SDK, workflow run and every payload file's length/SHA-256. No symbols,
+RID, actual SDK, workflow run verified resolved runtime/compiler metadata and every payload file's length/SHA-256. No symbols,
 CoreCLR runtime configuration, plugin download or workspace is introduced.
 Mutable settings, caches and opt-in traces remain under `~/.mote` or user overrides.
 
@@ -33,13 +33,20 @@ is 15.0; hosted qualification records its actual OS version, not all versions.
 `.github/workflows/release.yml` is reusable via `workflow_call` and manually
 invocable via `workflow_dispatch`. It requires a full immutable lowercase Git
 SHA and canonical stable version. The source project version must agree. The
-workflow pins SDK 10.0.400/runtime 10.0.11 to match the distributed notice texts;
+workflow pins SDK 10.0.401/runtime 10.0.12 to match the distributed notice texts;
 repository `global.json` selects exactly that installed SDK with roll-forward
 disabled and prerelease SDKs excluded. Merely installing the SDK is not enough
 when a hosted image has a newer SDK. Early actual `dotnet --version` checks run
 before restore/build and before native publish. Developers must install exactly
-SDK10.0.400; a toolchain upgrade must deliberately update the global pin and
+SDK10.0.401; a toolchain upgrade must deliberately update the global pin and
 runtime notice inventory together.
+
+Before compilation, native restore explicitly requests runtime10.0.12. MSBuild's
+actual resolved Core runtime, host ILCompiler and target Native AOT runtime pack
+items must all be12, with installed nuspec identity checks. Raw resolved metadata
+is retained; a path-free summary binds its SHA-256 to source/run identity and is
+included in package provenance. The SDK or installed `dotnet` host version alone
+is not evidence of the linked runtime/compiler version.
 
 After source identity passes, two branches run concurrently: complete solution
 tests and packer/oracle negative controls on Windows/macOS; and native-architecture
@@ -67,8 +74,12 @@ Native AOT publish. Outputs must be descendants of repository `.cache` or `.temp
 
 ```powershell
 $sha = (git rev-parse HEAD).Trim()
-dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r win-x64 --self-contained true -p:PublishAot=true -o .cache/release-publish/win-x64
-python -B packaging/release_package.py build --rid win-x64 --version 0.1.0 --source $sha --sdk 10.0.400 --publish .cache/release-publish/win-x64 --output .cache/local-release/win-x64
+New-Item -ItemType Directory -Force .cache/release-evidence/win-x64 | Out-Null
+dotnet restore src/Mote.Native/Mote.Native.csproj -r win-x64 -p:SelfContained=true -p:PublishAot=true -p:RuntimeFrameworkVersion=10.0.12
+dotnet msbuild src/Mote.Native/Mote.Native.csproj -nologo -verbosity:quiet -target:ResolveFrameworkReferences -p:RuntimeIdentifier=win-x64 -p:SelfContained=true -p:PublishAot=true -p:RuntimeFrameworkVersion=10.0.12 -getProperty:NETCoreSdkVersion,RuntimeFrameworkVersion -getItem:ResolvedRuntimePack,ResolvedILCompilerPack,ResolvedTargetILCompilerPack | Out-File .cache/release-evidence/win-x64/resolved-toolchain.json -Encoding utf8
+python -B packaging/release_toolchain.py --resolved .cache/release-evidence/win-x64/resolved-toolchain.json --rid win-x64 --output .cache/release-evidence/win-x64/toolchain.json --source $sha --run-url local-unpublished
+dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishAot=true -p:RuntimeFrameworkVersion=10.0.12 -o .cache/release-publish/win-x64
+python -B packaging/release_package.py build --rid win-x64 --version 0.1.0 --source $sha --sdk 10.0.401 --toolchain .cache/release-evidence/win-x64/toolchain.json --publish .cache/release-publish/win-x64 --output .cache/local-release/win-x64
 python -B packaging/release_package.py unpack --archive .cache/local-release/win-x64/mote-0.1.0-win-x64.zip --output .cache/local-release-extracted/win-x64
 python -B packaging/release_package.py verify --rid win-x64 --version 0.1.0 --source $sha --package .cache/local-release-extracted/win-x64/mote-0.1.0-win-x64
 ```

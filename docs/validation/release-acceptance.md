@@ -717,3 +717,61 @@ Save observation now actually exercised successfully. This does not turn green
 CI into physical keyboard/Pinyin, screen-reader, pixel-color, broad semantic
 conformance or latency-percentile certification. Final merge/tag publication
 and its artifact identity remain separate release steps.
+
+## Final main identity audit: run 36935354135
+
+After PR 2 merged, the exact main source
+**`3c2209cb8728120c5f2b94f9155b0c57b13ee7c4`** completed all eight jobs in
+**run 36935354135**. This source differs from the previously qualified candidate,
+so its actual binaries and tasks were independently audited rather than inheriting
+the candidate verdict or executable hashes.
+
+```powershell
+python -B .cache/release-ci-36935354135/product-audit/audit.py
+```
+
+| Final main target | Exact original/output pairs and fresh GUI reopens | Process traces | Trace rows |
+| --- | ---: | ---: | ---: |
+| win-x64 | 6/6 | 12 | 727 |
+| win-arm64 | 6/6 | 12 | 719 |
+| osx-x64 | 6/6 | 6 | 990 |
+| osx-arm64 | 6/6 | 6 | 1,024 |
+
+All **24 tasks /36 processes /3,460 task rows** pass the unchanged independent
+byte/protected-original/fresh-reopen/strict Save/current final-sidecar contracts.
+All 12 Windows completion-before-one-read witnesses match the final-view
+session/version and complete Save chain. Both Mac CSV observations have their
+actual-render complete 3×3 ready frames with zero pending cells. CLI/config output,
+independently specified unchanged config bytes, and bare/default source-surface
+startup witnesses also pass on all targets. No physical input, reader, pixel-color,
+universal format-conformance or latency-percentile claim is added.
+
+The audit now additionally reads each final archive directly, verifies its
+collected `SHA256SUMS` entry, and binds the actual executable bytes/size to the
+manifest's **exact main source/RID** and suite executable identity. Final executable
+SHA-256 values are:
+
+- win-x64: `8AE70248A2E3CD30993AD9A67FC3DD30E5005736DEA1FBBA072A9DEC617C6929`.
+- win-arm64: `D67FAA64835D55F635D1E89292B0320EE0E8A928A8F2A378064B8057ED4E5B25`.
+- osx-x64: `262D782D2900F8170BBA9A9E6EE733341BD47906B23CF9D44FA5A78E12368656`.
+- osx-arm64: `A9A2F4C31C3B930758E35754EF1DDAA0A627C9F6B6A2F0F884A648B62478C2FE`.
+
+The root-owned separate asset/source audit also passes for this same main commit:
+ten checksummed assets and **886** corresponding Git source blobs. The six TRX
+collections were enumerated without rerun: each OS main suite **3,695/3,695**,
+Themes **14/14**, Configuration **9/9**, zero failures/unexecuted results.
+
+Evidence:
+
+- `.cache/release-ci-36935354135/product-audit/{audit.py,result.json,test-counters.json}`
+- `.cache/release-ci-36935354135/product-audit/frozen-windows-task.ps1`
+- `.cache/release-ci-36935354135/product-audit/frozen-suite.ps1`
+- `.cache/release-ci-36935354135/evidence/release-evidence-<rid>/product/`
+- `.cache/release-ci-36935354135/assets/` and `asset-audit.json`
+
+Supported verdict: **the exact final-main Native AOT payloads pass all four
+default task/final-view contracts**. Publication must use these verified archives
+and a tag pointing to this source; an older candidate or later documentation-only
+commit must not silently replace their identity. This audit does not claim that
+publication has already occurred. No GUI/test rerun, original artifact rewrite,
+production/oracle change or commit was performed by this final audit.

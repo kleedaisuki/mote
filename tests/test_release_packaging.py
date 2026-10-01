@@ -12,6 +12,8 @@ import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "packaging"))
+from release_toolchain import SDK_VERSION, RUNTIME_VERSION
 spec = importlib.util.spec_from_file_location("release_package", ROOT / "packaging/release_package.py")
 pack = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pack)
@@ -79,10 +81,21 @@ class ReleasePackagingTests(unittest.TestCase):
         """Build and extract one synthetic package through the production packer."""
         self.binary(rid)
         output = self.fake / ".cache/package"
-        archive = pack.build(self.publish, output, rid, "0.1.0", self.sha, "fixture-run", "10.0.400")
+        archive = pack.build(self.publish, output, rid, "0.1.0", self.sha, "fixture-run", SDK_VERSION, self.toolchain(rid))
         extract = pack.unpack(archive, self.fake / ".cache/extracted")
         package = next(extract.iterdir())
         return package, archive
+
+    def toolchain(self, rid):
+        """Provide synthetic serviced identities; actual package resolution is tested separately."""
+        summary = {"schemaVersion": 1, "runtimeIdentifier": rid, "dotnetSdk": SDK_VERSION,
+                   "runtimeVersion": RUNTIME_VERSION, "ilCompilerVersion": RUNTIME_VERSION,
+                   "sourceCommit": self.sha, "workflowRun": "fixture-run", "resolvedMetadataSha256": "d" * 64}
+        for group, name in (("runtimePacks", f"Microsoft.NETCore.App.Runtime.{rid}"),
+                            ("ilCompilerPacks", f"runtime.{rid}.Microsoft.DotNet.ILCompiler"),
+                            ("nativeRuntimePacks", f"Microsoft.NETCore.App.Runtime.NativeAOT.{rid}")):
+            summary[group] = [{"name": name, "version": RUNTIME_VERSION, "nuspecSha256": "c" * 64}]
+        return summary
 
     def test_four_architecture_roundtrips(self):
         """All four RID headers/layouts survive archive extraction and exact validation."""
@@ -136,7 +149,7 @@ class ReleasePackagingTests(unittest.TestCase):
         """Re-running a pack cannot replace an existing immutable artifact."""
         self.assemble("win-x64")
         with self.assertRaisesRegex(ValueError, "already exists"):
-            pack.build(self.publish, self.fake / ".cache/package", "win-x64", "0.1.0", self.sha, "run", "10.0.400")
+            pack.build(self.publish, self.fake / ".cache/package", "win-x64", "0.1.0", self.sha, "fixture-run", SDK_VERSION, self.toolchain("win-x64"))
 
     def test_reject_output_escape(self):
         """Package outputs cannot be directed at the source tree or global temp."""
@@ -193,7 +206,7 @@ class ReleasePackagingTests(unittest.TestCase):
         inputs = self.fake / ".cache/inputs"
         for rid in pack.RIDS:
             self.binary(rid)
-            pack.build(self.publish, inputs / rid, rid, "0.1.0", self.sha, "fixture-run", "10.0.400")
+            pack.build(self.publish, inputs / rid, rid, "0.1.0", self.sha, "fixture-run", SDK_VERSION, self.toolchain(rid))
             for path in self.publish.iterdir():
                 path.unlink()
         def archive_source(command, **kwargs):
@@ -212,6 +225,23 @@ class ReleasePackagingTests(unittest.TestCase):
         for line in lines:
             checksum, name = line.split("  ")
             self.assertEqual(checksum, pack.digest(output / name))
+
+    def test_reject_unserviced_sdk(self):
+        """A formerly qualified SDK is not accepted after the servicing baseline moves."""
+        self.binary("win-x64")
+        with self.assertRaisesRegex(ValueError, "SDK must match"):
+            pack.build(self.publish, self.fake / ".cache/old-sdk", "win-x64", "0.1.0", self.sha,
+                       "fixture-run", "10.0.400", self.toolchain("win-x64"))
+
+    def test_reject_manifest_old_compiler_with_new_sdk(self):
+        """The SDK label alone cannot admit a package carrying the older native compiler."""
+        package, _ = self.assemble("win-x64")
+        manifest_path = package / "package-manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["build"]["toolchain"]["ilCompilerPacks"][0]["version"] = "10.0.11"
+        pack.write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(ValueError, "Unserviced"):
+            pack.verify(package, "win-x64", "0.1.0", self.sha)
 
 
 if __name__ == "__main__":
