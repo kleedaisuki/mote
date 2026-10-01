@@ -1,0 +1,61 @@
+using Probe.Engine;
+
+/// <summary>Compares line metadata and every line/offset query for scalar versus candidate leaf statistics.</summary>
+internal static class LineCheck
+{
+    private static long _snapshots, _queries;
+
+    /// <summary>Tests exhaustive small CR/LF/ordinary strings and adversarial cross-leaf CRLF splits.</summary>
+    internal static void Run() { RunMode(false, false); RunMode(true, false); RunMode(false, true); }
+
+    /// <summary>Runs the same differential oracle for broad or no-CR-only counting.</summary>
+    private static void RunMode(bool hybrid, bool direct)
+    {
+        PhaseProbe.HybridBreaks = hybrid;
+        PhaseProbe.DirectBreaks = direct;
+        for (var length = 0; length <= 8; length++)
+        {
+            var combinations = (int)Math.Pow(3, length);
+            for (var seed = 0; seed < combinations; seed++)
+            {
+                var chars = new char[length]; var n = seed;
+                for (var i = 0; i < length; i++) { chars[i] = "x\r\n"[n%3]; n/=3; }
+                Check([new string(chars)], true, direct);
+                if (length > 1) Check([new string(chars, 0, length/2), new string(chars, length/2, length-length/2)], true, direct);
+            }
+        }
+        foreach (var text in new[] {
+            new string('x', 65539), string.Concat(Enumerable.Repeat("a\n", 35000)),
+            string.Concat(Enumerable.Repeat("a\r\n", 24000)), string.Concat(Enumerable.Repeat("a\r", 35000)),
+            new string('x',16383)+"\r\n"+new string('x',16383)+"\r\n",
+            "\r"+new string('x',16383)+"\r\n"+new string('x',16382)+"\n\r" })
+        {
+            for (var stride=16383; stride<=16385; stride++)
+                Check(Enumerable.Range(0,(text.Length+stride-1)/stride).Select(i=>text.Substring(i*stride,Math.Min(stride,text.Length-i*stride))).ToArray(), false, direct);
+        }
+        Console.WriteLine($"line-check pass hybrid={hybrid} direct={direct} cumulative_snapshots={_snapshots} queries={_queries}");
+    }
+
+    /// <summary>Preserves leaf fragmentation and compares text/offset semantics, not just aggregate counts.</summary>
+    private static void Check(string[] chunks, bool exhaustive, bool direct)
+    {
+        PhaseProbe.FastBreaks=false; PhaseProbe.DirectBreaks=false; var original = new TextSnapshot(RopeNode.FromChunks(chunks),0);
+        PhaseProbe.FastBreaks=!direct; PhaseProbe.DirectBreaks=direct; var candidate = new TextSnapshot(RopeNode.FromChunks(chunks),0);
+        if(original.Length!=candidate.Length || original.LineCount!=candidate.LineCount) throw new InvalidOperationException("Aggregate mismatch");
+        for(var i=0;i<original.LineCount;i++)
+        {
+            if(original.GetLineStartOffset(i)!=candidate.GetLineStartOffset(i) || original.GetLine(i)!=candidate.GetLine(i)) throw new InvalidOperationException("Line query mismatch");
+            _queries++;
+        }
+        var stride=exhaustive?1:Math.Max(1,original.Length/1000);
+        for(var i=0;i<=original.Length;i+=stride)
+        {
+            // Switch at query time too: offset lookup uses the same leaf CountBreaks helper.
+            PhaseProbe.FastBreaks=false; PhaseProbe.DirectBreaks=false; var before=original.GetLineIndexFromOffset(i);
+            PhaseProbe.FastBreaks=!direct; PhaseProbe.DirectBreaks=direct; var after=candidate.GetLineIndexFromOffset(i);
+            if(before!=after) throw new InvalidOperationException("Offset query mismatch");
+            _queries++;
+        }
+        _snapshots++;
+    }
+}
