@@ -76,7 +76,7 @@ that path was not falsely claimed as a new fix. Malformed flow-key syntax
 reported `Provisional` after parser termination.
 
 `YamlSmallRecoveryCertificateTests` derives expectations independently of the
-implementation's existing blanket skip. The same final eighteen-case test file
+implementation's existing blanket skip. The frozen eighteen-case pre-correction expectation checkpoint
 ran against the frozen DLL: **7 passed / 11 failed / 0 skipped**. Failures include
 missing uncertainty warnings, offscreen Visible certificate, and the initial
 erroneous snapshot before a genuine repair. Raw TRX:
@@ -167,3 +167,4 @@ and a repaired authoritative snapshot recovers Complete. Syntax termination,
 large streaming recovery, full-format completion, original Unicode flow-key span
 coverage, native GUI/AOT behavior and mid-analysis cancellation are not claimed
 by this validation slice.
+
