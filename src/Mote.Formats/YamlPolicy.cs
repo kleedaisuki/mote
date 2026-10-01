@@ -151,6 +151,8 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
         private readonly Dictionary<string, int> _anchors = new(StringComparer.Ordinal);
         private readonly Dictionary<int, SemanticNode> _anchorNodes = new();
         private readonly Dictionary<SemanticNode, (string Tag, string Value, bool Supported)> _scalarKeys = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<SemanticNode, KeyIdentity> _keyIdentities = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<IdentityEntry, int> _internedKeys;
 
         public Projector(IParser parser, int length, List<Diagnostic> diagnostics,
             List<SemanticToken> tokens, CancellationToken cancellationToken)
@@ -160,6 +162,7 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
             _diagnostics = diagnostics;
             _tokens = tokens;
             _cancellationToken = cancellationToken;
+            _internedKeys = new Dictionary<IdentityEntry, int>(new IdentityComparer(cancellationToken));
         }
 
         public IReadOnlyList<SemanticNode> ParseDocuments()
@@ -171,6 +174,9 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
                 if (_parser.Current is not DocumentStart start) continue;
                 _anchors.Clear();
                 _anchorNodes.Clear();
+                _scalarKeys.Clear();
+                _keyIdentities.Clear();
+                _internedKeys.Clear();
                 if (!_parser.MoveNext()) break;
                 var children = new List<SemanticNode>();
                 if (_parser.Current is not DocumentEnd) children.Add(ParseNode());
@@ -290,17 +296,17 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
             _cancellationToken.ThrowIfCancellationRequested();
             if (node.Kind == "mapping")
             {
-                var keys = new HashSet<string>(StringComparer.Ordinal);
+                var keys = new HashSet<int>();
                 foreach (var entry in node.Children)
                 {
                     if (entry.Children.Count != 2) continue;
                     var key = entry.Children[0];
                     if (_diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error &&
                         d.Span.Start >= key.Span.Start && d.Span.End <= key.Span.End)) continue;
-                    var canonical = Canonical(key, new HashSet<SemanticNode>(ReferenceEqualityComparer.Instance), out var reason);
+                    var canonical = IdentifyKey(key, new HashSet<SemanticNode>(ReferenceEqualityComparer.Instance), out var reason);
                     if (canonical is null)
                         _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "yaml.key-equality-unsupported", $"Cannot verify this mapping key's uniqueness: {reason}.", key.Span));
-                    else if (!keys.Add(canonical))
+                    else if (!keys.Add(canonical.Value.Id))
                         _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error, "yaml.duplicate-key", "Duplicate YAML mapping key after canonicalization.", key.Span));
                 }
             }
@@ -308,71 +314,170 @@ public sealed class YamlPolicy : IIncrementalDocumentPolicy
         }
 
         /// <summary>
-        /// Constructs an injective representation of an acyclic YAML node: sequence order is
-        /// retained, mapping pairs are sorted, and aliases resolve to their original anchors.
-        /// Cycles are implementation-defined by YAML and deliberately produce no guessed key.
+        /// Interns exact acyclic node structure without expanding shared alias subgraphs.
+        /// Successful memo entries retain expanded path height so reuse cannot bypass the
+        /// established comparison-depth limit. Failures remain contextual and are not cached.
         /// </summary>
-        private string? Canonical(SemanticNode node, HashSet<SemanticNode> visiting, out string reason)
+        private KeyIdentity? IdentifyKey(SemanticNode node, HashSet<SemanticNode> visiting, out string reason)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             reason = "";
             if (visiting.Count > 256) { reason = "key nesting exceeds comparison limit"; return null; }
+            if (_keyIdentities.TryGetValue(node, out var cached))
+            {
+                if (visiting.Count + cached.Height > 257)
+                { reason = "key nesting exceeds comparison limit"; return null; }
+                return cached;
+            }
             if (!visiting.Add(node)) { reason = "cyclic alias graph"; return null; }
             try
             {
-                if (node.Kind == "alias")
-                {
-                    if (!int.TryParse(node.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var offset) ||
-                        !_anchorNodes.TryGetValue(offset, out var target))
-                    { reason = "unbound alias"; return null; }
-                    return Canonical(target, visiting, out reason);
-                }
-                if (node.Kind == "scalar")
-                {
-                    if (!_scalarKeys.TryGetValue(node, out var scalar) || !scalar.Supported)
-                    { reason = "unknown scalar tag canonicalization"; return null; }
-                    return Pack("S", scalar.Tag, scalar.Value);
-                }
-                if (node.Kind == "sequence")
-                {
-                    var values = new List<string> { "Q", NormalizeTag(node.Name, "seq") };
-                    foreach (var item in node.Children)
-                    {
-                        if (item.Children.Count != 1) { reason = "invalid sequence projection"; return null; }
-                        var value = Canonical(item.Children[0], visiting, out reason);
-                        if (value is null) return null;
-                        values.Add(value);
-                    }
-                    return Pack(values.ToArray());
-                }
-                if (node.Kind == "mapping")
-                {
-                    var pairs = new List<string>();
-                    foreach (var entry in node.Children)
-                    {
-                        if (entry.Children.Count != 2) { reason = "invalid mapping projection"; return null; }
-                        var key = Canonical(entry.Children[0], visiting, out reason);
-                        if (key is null) return null;
-                        var value = Canonical(entry.Children[1], visiting, out reason);
-                        if (value is null) return null;
-                        pairs.Add(Pack(key, value));
-                    }
-                    pairs.Sort(StringComparer.Ordinal);
-                    pairs.Insert(0, NormalizeTag(node.Name, "map"));
-                    pairs.Insert(0, "M");
-                    return Pack(pairs.ToArray());
-                }
-                reason = "unknown YAML node kind";
-                return null;
+                var identity = IdentifyContents(node, visiting, out reason);
+                if (identity is not null) _keyIdentities.Add(node, identity.Value);
+                return identity;
             }
             finally { visiting.Remove(node); }
         }
 
-        /// <summary>Length prefixes prevent delimiter collisions in nested canonical strings.</summary>
-        private static string Pack(params string[] values)
+        /// <summary>Uses original anchor offsets, tag-aware scalars and ordered collection identities.</summary>
+        private KeyIdentity? IdentifyContents(SemanticNode node, HashSet<SemanticNode> visiting, out string reason)
         {
-            var result = new StringBuilder();
-            foreach (var value in values) result.Append(value.Length).Append(':').Append(value);
-            return result.ToString();
+            reason = "";
+            if (node.Kind == "alias")
+            {
+                if (!int.TryParse(node.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var offset) ||
+                    !_anchorNodes.TryGetValue(offset, out var target))
+                { reason = "unbound alias"; return null; }
+                var identity = IdentifyKey(target, visiting, out reason);
+                return identity is null ? null : new KeyIdentity(identity.Value.Id, identity.Value.Height + 1);
+            }
+            if (node.Kind == "scalar")
+            {
+                if (!_scalarKeys.TryGetValue(node, out var scalar) || !scalar.Supported)
+                { reason = "unknown scalar tag canonicalization"; return null; }
+                return new KeyIdentity(Intern(new IdentityEntry("S", scalar.Tag, scalar.Value, [])), 1);
+            }
+            if (node.Kind == "sequence") return IdentifySequence(node, visiting, out reason);
+            if (node.Kind == "mapping") return IdentifyMapping(node, visiting, out reason);
+            reason = "unknown YAML node kind";
+            return null;
+        }
+
+        /// <summary>Retains sequence order and the deepest expanded alias path.</summary>
+        private KeyIdentity? IdentifySequence(SemanticNode node, HashSet<SemanticNode> visiting, out string reason)
+        {
+            reason = "";
+            var children = new int[node.Children.Count];
+            var height = 1;
+            for (var i = 0; i < children.Length; i++)
+            {
+                var item = node.Children[i];
+                if (item.Children.Count != 1) { reason = "invalid sequence projection"; return null; }
+                var child = IdentifyKey(item.Children[0], visiting, out reason);
+                if (child is null) return null;
+                children[i] = child.Value.Id;
+                height = Math.Max(height, child.Value.Height + 1);
+            }
+            return new KeyIdentity(Intern(new IdentityEntry("Q", NormalizeTag(node.Name, "seq"), "", children)), height);
+        }
+
+        /// <summary>
+        /// Sorts complete key/value identity pairs, not source order. Repeated pairs remain
+        /// present, preserving the existing malformed-mapping comparison contract.
+        /// </summary>
+        private KeyIdentity? IdentifyMapping(SemanticNode node, HashSet<SemanticNode> visiting, out string reason)
+        {
+            reason = "";
+            var pairs = new (int Key, int Value)[node.Children.Count];
+            var height = 1;
+            for (var i = 0; i < pairs.Length; i++)
+            {
+                var entry = node.Children[i];
+                if (entry.Children.Count != 2) { reason = "invalid mapping projection"; return null; }
+                var key = IdentifyKey(entry.Children[0], visiting, out reason);
+                if (key is null) return null;
+                var value = IdentifyKey(entry.Children[1], visiting, out reason);
+                if (value is null) return null;
+                pairs[i] = (key.Value.Id, value.Value.Id);
+                height = Math.Max(height, Math.Max(key.Value.Height, value.Value.Height) + 1);
+            }
+            SortPairs(pairs);
+            var children = new int[pairs.Length * 2];
+            for (var i = 0; i < pairs.Length; i++)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                children[i * 2] = pairs[i].Key;
+                children[i * 2 + 1] = pairs[i].Value;
+            }
+            return new KeyIdentity(Intern(new IdentityEntry("M", NormalizeTag(node.Name, "map"), "", children)), height);
+        }
+
+        /// <summary>Preserves cancellation rather than exposing Array.Sort's comparer exception wrapper.</summary>
+        private void SortPairs((int Key, int Value)[] pairs)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                Array.Sort(pairs, (left, right) =>
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    var order = left.Key.CompareTo(right.Key);
+                    return order != 0 ? order : left.Value.CompareTo(right.Value);
+                });
+            }
+            catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                throw;
+            }
+        }
+
+        /// <summary>IDs are document-local equality witnesses; hashing never decides equality.</summary>
+        private int Intern(IdentityEntry entry)
+        {
+            if (_internedKeys.TryGetValue(entry, out var id)) return id;
+            id = _internedKeys.Count;
+            _internedKeys.Add(entry, id);
+            return id;
+        }
+
+        /// <summary>Expanded height includes alias edges even though identity does not.</summary>
+        private readonly record struct KeyIdentity(int Id, int Height);
+
+        /// <summary>Owns an immutable structural entry; child arrays are never modified after interning.</summary>
+        private sealed record IdentityEntry(string Kind, string Tag, string Scalar, int[] Children);
+
+        /// <summary>Compares every structural field after hash bucketing, with cooperative cancellation.</summary>
+        private sealed class IdentityComparer(CancellationToken cancellationToken) : IEqualityComparer<IdentityEntry>
+        {
+            public bool Equals(IdentityEntry? left, IdentityEntry? right)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ReferenceEquals(left, right)) return true;
+                if (left is null || right is null || left.Kind != right.Kind || left.Tag != right.Tag ||
+                    left.Scalar != right.Scalar || left.Children.Length != right.Children.Length) return false;
+                for (var i = 0; i < left.Children.Length; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (left.Children[i] != right.Children[i]) return false;
+                }
+                return true;
+            }
+
+            public int GetHashCode(IdentityEntry entry)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var hash = new HashCode();
+                hash.Add(entry.Kind, StringComparer.Ordinal);
+                hash.Add(entry.Tag, StringComparer.Ordinal);
+                hash.Add(entry.Scalar, StringComparer.Ordinal);
+                foreach (var child in entry.Children)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    hash.Add(child);
+                }
+                return hash.ToHashCode();
+            }
         }
 
         private static string NormalizeTag(string? tag, string fallback)
