@@ -381,3 +381,13 @@ coordinate command, followed by inherited BOOL false, with zero open/close
 callbacks. No menu relation query or navigation polling is reached. This
 supersedes earlier apparent action success for this corrected roundtrip.
 See [full target evidence](mac-grid-table-proxy.md#correct-bool-and-lifecycle-target-ci-36794910486).
+
+### First owned-popup target execution
+
+CI 36796725674 / `ab6224a` passes the actual combined in-process probe on both
+Mac targets. Product traces now prove deferred admission, native popup entry
+and `will-open` with truthful open/shown state, unlike the previous inherited
+action refusal. Nevertheless the separate client receives AX=-25205 for the
+action and aborts at the unchanged action assertion, before menu relation or
+navigation queries. No graceful close occurs before forced cleanup. See
+[precise target accounting](mac-grid-table-proxy.md#owned-next-turn-popup-target-ci-36796725674).

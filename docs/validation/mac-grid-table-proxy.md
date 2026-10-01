@@ -320,3 +320,58 @@ The next candidate may explicitly schedule the existing exact native menu on
 the owner UI thread; a queued acknowledgment is not completion. Its target
 acceptance must still prove the unchanged external coordinate menu/prompt/jump/
 retirement/close oracle, with no synthetic key fallback or relaxed bounds.
+
+## Owned next-turn popup target: CI 36796725674
+
+[Run 36796725674](https://github.com/kleedaisuki/mote/actions/runs/36796725674)
+at `ab6224a` freshly publishes the explicit deferred native popup candidate.
+Actual combined selector and enclosing readiness outputs pass on both Mac
+RIDs (ARM job 110161759808; x64 job 110161759910), without a combined-step error.
+The unchanged separate Swift client typechecks and is trusted on both hosts.
+
+Both external reports still fail / exit 1 at **context-menu-accessible**,
+`AX=-25205; no key-injection fallback`: 25 prior checks pass, the action assertion
+is the 26th and false. x64 has 1,640 admissions / 1.017s; ARM 2,437 / 1.540s.
+Logical-navigation has one admission (the action), no polling/traversal and no
+shown-menu observations. The later coordinate item/prompt, jump, retired-cell
+selection and close assertions are **not exercised**.
+
+Unlike the preceding native refusal, both bounded traces now contain these
+four exact phases and values:
+
+| Phase | Result | Opens / closes / open / shown |
+| --- | --- | --- |
+| show-enter | -1 | 0 / 0 / 0 / 0 |
+| schedule-return | 1 | 0 / 0 / 0 / 0 |
+| popup-begin | -1 | 0 / 0 / 0 / 0 |
+| will-open | -1 | 1 / 0 / 1 / 1 |
+
+Every row reports `configured=1 items=12 coordinate=1 key=1 first=0 active=1`,
+one request and serials 1..4. There are no `did-close` or `popup-return` rows
+before forced cleanup. Thus the candidate admits the request and enters real
+native menu tracking; its delegate records opening and the shown-menu state.
+This is actual product-side lifecycle progress, **not** external success: the
+framework client still receives action failure despite queued admission true.
+The exact reason (action transport, callback type metadata or other framework
+behavior) is not yet identified by this evidence. A changed label predicate,
+query budget or synthetic key fallback would not resolve this first boundary.
+
+The shown-menu relation is not queried because the preserved action predicate
+fails first. Empty observations must not be reported as absent external menu.
+The four-row trace is below the 16-row cap; missing close/return rows therefore
+cannot be attributed to whitelist capacity. Forced process cleanup interrupts
+native tracking; this is not a graceful cancellation/close acceptance result.
+Both original files remain byte-identical. Real screen reader, IME, tracking-
+disposal stress and performance remain outside this synthetic gate.
+
+Artifacts and raw job logs: `.cache/ci-36796725674-mac-menu/`. Binary bytes / SHA:
+
+- x64: 16,841,952;
+  `89FC8C3827C509A701009BD3CD04ACC48E58EB9878B580C753A273F3D551B76D`.
+- ARM64: 16,488,600;
+  `5D50ED0F726B5F87DCC18D5FB882F57566F09BCC443B754F37B2186B8B106BB7`.
+
+**Verdict:** native popup presentation now occurs on both targets, but the
+external action-result contract still fails and full external AX acceptance
+remains blocked at that exact assertion. Containing green non-gating jobs do
+not change the real Swift exit or failed check.
