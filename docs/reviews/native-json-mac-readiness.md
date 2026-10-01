@@ -79,4 +79,3 @@ launched by this review and no successful Mac readiness measurement is claimed.
 The next hosted report should discriminate: pending count recovering within the
 existing deadline versus persistent -25204 timeout, with copy errors kept
 separate. Full edit/Save/reopen/trace acceptance is still required after readiness.
-
