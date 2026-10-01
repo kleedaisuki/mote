@@ -343,4 +343,3 @@ public sealed class NativeSourceDiagnosticBindingTests
         return current?.FullName ?? throw new InvalidOperationException("Repository root not found.");
     }
 }
-

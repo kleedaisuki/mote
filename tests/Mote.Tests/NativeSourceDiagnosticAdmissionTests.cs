@@ -160,4 +160,3 @@ public sealed class NativeSourceDiagnosticAdmissionTests(ITestOutputHelper outpu
         }
     }
 }
-

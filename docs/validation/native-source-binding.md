@@ -104,4 +104,3 @@ O(n); the tests do not imply sublinear edit reconciliation or a large-file claim
 The immediate-before-Apply cancellation check is an explicit implementation phase
 boundary. The API has no deterministic injection hook between projection work and
 Apply; it is source-inspected, not verified through a scheduler-sensitive race.
-
