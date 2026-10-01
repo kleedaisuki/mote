@@ -372,6 +372,52 @@ its presentation flag is cleared in `finally`, so a managed preflight fault
 cannot leave the attachment permanently queued. Actual disposal-during-tracking
 native stress remains separately unclaimed target coverage.
 
+### First owned-popup target result: display versus external action return
+
+CI `36796725674` / `ab6224a` executes the new in-process selector probe and
+enclosing Grid probe on both `osx-x64` and `osx-arm64`. Their raw logs contain
+both actual readiness markers with no probe error. This executes the actual
+owned-popup open/cancel callback assertions, frozen identity, unchanged
+responder and retained detached-menu checks; it is no longer just a compiled
+proposal. Saved raw logs:
+`.cache/ci-36796725674-mac-popup/{x64,arm64}-job.log`.
+
+The unchanged external assertion still **fails** on both targets after 25 prior
+checks: AXShowMenu reports **-25205**, even though the captured native sequence
+is `show-enter → schedule-return(result=1) → popup-begin → will-open`.
+The actual callback facts show `opens=1`, `closes=0`, `open=1`, `shown=1`,
+`configured=1`, `items=12`, `coordinate=1`, `key=1`, `active=1`, `first=0`.
+No did-close/popup-return appears before the harness forces its owned editor
+cleanup. Therefore the explicit request is admitted and the real menu delegate
+opens, but external action acknowledgement is not accepted. This is not
+external navigation, reader acceptance or a completed product gate.
+
+The external action takes approximately 0.59 ms on x64 and 0.46 ms on ARM
+between the surrounding check timestamps. It is not a prolonged modal timeout.
+Apple distinguishes
+[`attributeUnsupported` (-25205)](https://developer.apple.com/documentation/applicationservices/axerror/attributeunsupported)
+from
+[`cannotComplete` (-25204)](https://developer.apple.com/documentation/applicationservices/axerror/cannotcomplete)
+and
+[`actionUnsupported` (-25206)](https://developer.apple.com/documentation/applicationservices/axerror/actionunsupported).
+Preserve those categories rather than interpreting -25205 as no value,
+unsupported action or a timeout. Native trace and external acknowledgement
+are independent evidence surfaces; the trace does not prove their exact IPC
+ordering or AppKit's internal reason for this error.
+
+There is also an important relationship distinction: the modern
+[`NSAccessibility.Attribute.shownMenu`](https://developer.apple.com/documentation/appkit/nsaccessibility-swift.struct/attribute/shownmenu)
+is the current menu as a single `id`, while the separately documented Carbon
+[`kAXShownMenuUIElementAttribute`](https://developer.apple.com/documentation/applicationservices/kaxshownmenuuielementattribute)
+describes an array of contextual/Dock menus. Earlier helper observations queried
+the latter literal, not the modern AppKit constant. They cannot prove the
+modern getter's wire relationship is absent. The next read-only discriminator
+uses AppKit's actual `shownMenu.rawValue`, preserves the Carbon observation
+under its own name, checks action-name membership and counts exact owned menu
+matches after the failed action. It still fails the original action assertion
+and selects no menu item. No production metadata/legacy action-name override
+or proxy-backed-menu change is justified from the present facts alone.
+
 ### Corrected native BOOL lifecycle execution
 
 CI 36794910486 / `e439942` passes the actual in-process combined probes on both
