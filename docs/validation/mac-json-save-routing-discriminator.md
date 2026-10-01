@@ -230,3 +230,86 @@ AX menu-action control (one Save per process, not a retry), could discriminate
 later boundaries. Neither is implemented/approved by this readonly diagnostic.
 Until a safe independent handler/result witness exists, keep the failure censored
 and its causal attribution explicitly open.
+
+## Proposed smallest selector/admission witness (design only)
+
+Static inspection at `d9ddda9` identifies this exact path:
+
+```text
+MacEditorShell.Save (moteSave:)
+  -> NotifyAfterComposition -> CommitPendingText -> SaveRequested
+  -> NativeEditorController.Save -> StartSave(false)
+  -> CommitPendingText / saving / recovery / path guards
+  -> _saving = true -> Task.Run -> Document.SaveAsync
+```
+
+There are two composition checks, not one. Place `selector_entered` at the start
+of `MacEditorShell.Save`, before resolving `s_current`; place
+`controller_admitted` immediately after `StartSave` sets `_saving=true`, before
+`Task.Run`. The latter means the ordinary persistence path passed its synchronous
+guards, **not** that scheduling, worker execution or I/O succeeded. Do not alter
+`NotifyAfterComposition`, add a second callback, or instrument ordinary keyDown.
+Two positive witnesses distinguish native selector entry from admission; a missing
+admission remains ambiguous among composition, controller guards and witness loss.
+
+Existing `MOTE_NATIVE_MAC_STAGE_TRACE=1` calls synchronous
+`Console.Error.WriteLine` in `MacTextInputIsland.TraceStage` and the AX prototype.
+Its K0/K1/K2 stages surround text-view keyDown, not `moteSave:`. The JSON pilot
+currently redirects child stderr to `DEVNULL`. Normal telemetry uses a buffered
+64 KiB FileStream and flushes on rotation/normal shutdown, not each event. The
+36809964231 ARM64 large sample failed its one owned Close with `RuntimeError`,
+then was killed; its trace is exactly zero bytes. Neither existing mechanism is
+a retained selector/admission witness. Enabling broad K/AX logging or flushing
+the normal telemetry sink per Save would add unnecessary timing/persistence work.
+
+**Proposed transport:** a separate Mac-only opt-in
+`MOTE_NATIVE_MAC_SAVE_TRACE=1`, disabled by default, with one process-lifetime
+bounded enum channel and one dedicated background writer. Initialize before
+the AppKit loop. UI hooks only `TryWrite` fixed enum values; no string formatting,
+disk/pipe writes, waiting, synchronous consumer continuation or Task.Run per
+marker. Capacity 16, `FullMode=Wait`, `AllowSynchronousContinuations=false`;
+`TryWrite=false` increments a bounded loss flag. The existing telemetry sink's
+producer/consumer shape can be reused conceptually without modifying its flush
+contract. Microsoft's [channel contract](https://learn.microsoft.com/en-us/dotnet/core/extensions/channels)
+supports immediate failed TryWrite under this full mode; dropping modes must not
+silently conceal loss. A dedicated writer avoids relying on the same thread pool
+whose Save work is under investigation. Disabled mode creates no channel/thread
+and reads no clock on ordinary input.
+
+Use fixed ASCII lines `mote-save-diag-v1:<stage>\n`, where the complete whitelist
+is `ready`, `selector_entered`, `controller_admitted`, `overflow`, `completed`.
+No source, path, title, exception message, event payload, pointer or document
+identity is allowed. `ready` means the writer emitted its startup record;
+`completed` is only emitted after producer closure and queue drain on orderly
+exit. The writer writes each small record directly to an inherited stderr pipe,
+not a buffered target file, and catches its own failures. It never calls fsync.
+Diagnostic failure cannot escape an unmanaged selector or change Save behavior.
+
+The parent starts a bounded collector **before** launch, continuously drains the
+exact child's stderr, accepts at most 16 known records/64 bytes per line/4 KiB
+retained data, and discards unknown output without persisting it. After normal
+exit or the existing failure cleanup/kill, drain to EOF with a separate bounded
+2-second collector join; never extend a command deadline or delay killing to
+obtain a missing marker. Preserve sanitized stages/loss flags and parent-local
+receipt times in the existing result `finally`, under repo `.cache/.temp`. Parent
+receipt time is not selector execution time. The parent still alive after killing
+its child preserves already received evidence without a target normal-exit flush.
+Normal diagnostic shutdown closes admission and attempts a short bounded writer
+drain; it must never hold up normal app shutdown on a stuck pipe.
+
+**Negative-evidence limit:** an abrupt kill may still lose queued or unwritten
+markers. `ready` proves only initial liveness. Without a healthy completed channel
+or a later target-owned heartbeat proving the relevant producer-to-collector
+watermark, missing stages mean **not observed**, never "callback did not run".
+This minimal design adds no heartbeat, so forced-cleanup absence stays censored;
+positive received markers alone can narrow the boundary. Channel overflow,
+collector truncation or unavailable startup also censor negative interpretation.
+
+The opt-in can perturb scheduling; it is a synthetic diagnostic, not a reliability
+fix or an ordinary performance sample. Keep the one-attempt Save, byte/trace/
+reopen oracle, focus/trust/ownership guards, all phase deadlines and no target
+file reads during Save unchanged. No activation, AX mutation, global event tap,
+permission request or Save retry. Before implementation, review hooks/transport
+and tests for disabled no-op, bounded producer/drop reporting, parser redaction,
+forced-child-exit retention and unavailable-channel classification. This document
+authorizes no product, probe or CI change.
