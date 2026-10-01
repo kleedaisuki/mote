@@ -144,7 +144,8 @@ python -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p test_prob
 persistent copy pending→timeout, nontransient copy failure and pending
 edit/Save/close rejection, and no stale copy recount after client timeout.
 Scoped `git diff --check` is clean. No product source, driver, workflow or
-unrelated review file was modified; this review is not committed.
+unrelated review file was modified by that reviewer. Review evidence is now
+persisted in repository history.
 
 These tests still mock client reports and do not compile/execute the new Swift
 branch. Hosted Mac compile/execution and complete ordinary edit/Save/reopen
@@ -152,42 +153,11 @@ acceptance remain required. Pending copy timeout remains a failed sample;
 internal successful analysis or cleanup-only normal exit cannot substitute
 for the unobserved external endpoint.
 
-## Subsequent scoped review: bounded window-copy pending state
 
-Date: 2026-10-01. Inspected the subsequent uncommitted client/driver/four-test
-change following hosted run 36802378381. The earlier copy-fatal description
-above records the prior patch, not the new behavior. **No substantive finding
-in this narrow follow-up.** No source edits, native launch, redundant portable
-suite run or trace mutation recheck was performed; trace certification was
-untouched.
+### Second independent static confirmation
 
-- Only application `AXWindows` bounded copy returning `.cannotComplete` (-25204)
-  joins count messaging failure as read-only pending. A fresh Swift report still
-  has ready=false and no source/window handles; successful count1 does not imply
-  a successful copied window. Other copy errors and incorrect successful copied
-  counts remain fatal. This is not blanket AX retry behavior.
-- Native `main` rejects unresolved count **or** copy before every non-observe
-  transaction; Python independently rejects an observed pending report for
-  edit/Save/close. No non-idempotent event is resent and no permission/global
-  focus/input behavior changes. Parent wait deadline, child liveness, observer
-  polling and client watchdog remain unchanged, including the prior bounded
-  final-call overrun limitation.
-- Summary distinguishes count-pending from copy-pending observations, first/last
-  copy errors and copy-call count. Only a newly validated report is counted;
-  client timeout retains the previous report for failure evidence without
-  treating it as another AX call. Total attempts remains distinct from validated
-  observations. All added fields are sanitized numeric metadata, not AX text.
-- Added tests inspect pending-copy recovery, persistent copy timeout, other-copy
-  failure plus modifying guard rejection, and no double-counting stale metadata
-  after a tool failure. Owner reports 19/19 portable tests; this reviewer inspected
-  their assertions without repeating the suite. Mocked reports do not verify
-  Swift compilation or AppKit/AX runtime acceptance.
-
-Evidence interpretation remains narrow: owner reports ARM64 100 MiB reached
-source binding and then count success1/copy -25204 during the initial Full wait
-at about13.6s, before any edit. That supports testing read-only copy recovery
-under the same bound; it does not establish that recovery will occur. Reported
-x64 1 MiB Save-ack timeout with dirty source and original disk bytes is separate
-and **not fixed or diagnosed by this patch**. A future Save-action report change
-requires its own review. Hosted current-source compilation and exact
-edit/Save/reopen/terminal evidence remain necessary.
+A second reviewer independently inspected this same copy-pending source diff,
+its modifying guards, fresh-report counters and four regressions: no substantive
+blocker. That reviewer did not repeat the suite, launch native processes or
+re-run the untouched trace mutation discriminator. This confirms the inspected
+contract, not future hosted recovery or a diagnosis of the separate Save timeout.
