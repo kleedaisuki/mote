@@ -35,6 +35,158 @@ class ProbeTests(unittest.TestCase):
             path.rmdir() if path.is_dir() else path.unlink()
         self.directory.rmdir()
 
+    def test_environment_strips_inherited_witness(self):
+        """Default, runtime-control and reopen cannot inherit opt-in instrumentation."""
+        with patch.dict(probe.os.environ, {probe.ENVIRONMENT_KEY: "1"}):
+            env = probe.environment(self.directory)
+        self.assertNotIn(probe.ENVIRONMENT_KEY, env)
+        self.assertEqual(env["MOTE_TRACE"], "1")
+
+    def test_witness_is_original_child_only_and_collected_before_reopen(self):
+        """Normal original evidence is finalized before child replacement; oracles stay intact."""
+        case = probe.prepare(self.directory, [1])[0]
+        sample_dir = self.directory / "sample"
+        sample_dir.mkdir()
+        events, children = [], []
+        class Collector:
+            """Observe association/lifecycle without launching any diagnostic thread."""
+            def __init__(self):
+                """Require initialization before the original Popen call."""
+                events.append("initialize")
+            def attach(self, stream):
+                """Associate with only the original pipe."""
+                self_stream = stream
+                events.append("attach")
+                if self_stream is not children[0].stderr:
+                    raise AssertionError("wrong child association")
+            def finish(self):
+                """Mark the bounded evidence collection boundary."""
+                events.append("finish")
+                return {"positive_original_only": True}
+        class Driver:
+            """Model an ordinary source, no input activation or retries."""
+            def __init__(self, *arguments):
+                """No native APIs are initialized."""
+            def observe(self, version):
+                """Certify the preexisting source/semantic predicates."""
+                return {"ready": True, "complete": True}
+            def observation_summary(self):
+                """Keep the Mac diagnostic metadata interface inert."""
+                return {}
+            def edit(self):
+                """Record exactly one original edit dispatch."""
+                events.append("edit")
+            def close(self):
+                """Record unchanged ordinary close dispatch."""
+                events.append("close")
+        def launch(*arguments, **kwargs):
+            """Assert explicit opt-in on only the original process."""
+            first = not children
+            self.assertEqual(kwargs["stderr"], probe.subprocess.PIPE if first else probe.subprocess.DEVNULL)
+            self.assertEqual(kwargs["env"].get(probe.ENVIRONMENT_KEY), "1" if first else None)
+            if not first:
+                self.assertIn("finish", events)
+            events.append("original-launch" if first else "reopen-launch")
+            child = SimpleNamespace(pid=42, stderr=object(), poll=lambda: None)
+            def exited(timeout):
+                """Transition the fake owned process only on normal wait."""
+                child.poll = lambda: 0
+                return 0
+            child.wait = exited
+            children.append(child)
+            return child
+        def save(child, driver, working, size, expected, result):
+            """Perform the fixture's exact one-byte mutation, preserving later byte oracles."""
+            events.append("save")
+            with working.open("r+b") as stream:
+                stream.seek(probe.EDIT_OFFSET)
+                stream.write(b"X")
+        with patch.object(probe, "SaveDiagnosticCollector", Collector), \
+             patch.object(probe, "WindowsDriver", Driver), patch.object(probe, "MacDriver", Driver), \
+             patch.object(probe, "bounded_command"), patch.object(probe.subprocess, "Popen", side_effect=launch), \
+             patch.object(probe, "save_exact", side_effect=save), \
+             patch.object(probe, "trace_evidence", return_value={"endpoint_integrity": "pass"}):
+            result = probe.sample(Path("unused"), case, sample_dir, None, True)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["mac_save_witness"], {"positive_original_only": True})
+        self.assertEqual(events.count("attach"), 1)
+        self.assertEqual(events.count("finish"), 1)
+        self.assertEqual(events.count("edit"), 1)
+        self.assertEqual(events.count("save"), 1)
+        self.assertLess(events.index("initialize"), events.index("original-launch"))
+        self.assertLess(events.index("finish"), events.index("reopen-launch"))
+
+    def test_witness_finalized_after_forced_original_cleanup(self):
+        """Failed Save/edit does not trigger retry, and retained facts survive owned kill."""
+        case = probe.prepare(self.directory, [1])[0]
+        sample_dir = self.directory / "sample"
+        sample_dir.mkdir()
+        events = []
+        class Child:
+            """A live owned process that only forced cleanup can terminate."""
+            pid, stderr, alive = 42, object(), True
+            def poll(self):
+                """Keep existing liveness checks faithful to child ownership."""
+                return None if self.alive else -9
+            def kill(self):
+                """Observe ordering relative to collector finalization."""
+                events.append("kill")
+                self.alive = False
+            def wait(self, timeout):
+                """Bounded wait follows termination."""
+                events.append("wait")
+                return -9
+        class Collector:
+            """Return already received positive markers after the forced exit."""
+            def attach(self, stream):
+                """Attach only to the original owned pipe."""
+                events.append("attach")
+            def finish(self):
+                """Retain evidence only after owned process cleanup."""
+                events.append("finish")
+                return {"retained_selector": True, "stream_completion": "censored"}
+        class Driver:
+            """Model one timed-out edit and a failed normal-close attempt."""
+            def __init__(self, *arguments):
+                """Do not initialize native APIs."""
+            def observe(self, version):
+                """Let unchanged initial predicates pass."""
+                return {"ready": True, "complete": True}
+            def observation_summary(self):
+                """Preserve Mac diagnostic shape."""
+                return {}
+            def failure_observation(self):
+                """Return no source content during cleanup."""
+                return {}
+            def edit(self):
+                """Consume exactly one attempt before failing."""
+                events.append("edit")
+                raise TimeoutError()
+            def close(self):
+                """Prevent normal cleanup without retrying Save."""
+                raise TimeoutError()
+        with patch.object(probe, "SaveDiagnosticCollector", Collector), \
+             patch.object(probe, "WindowsDriver", Driver), patch.object(probe, "MacDriver", Driver), \
+             patch.object(probe, "bounded_command"), patch.object(probe.subprocess, "Popen", return_value=Child()):
+            result = probe.sample(Path("unused"), case, sample_dir, None, True)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["forced_cleanup"])
+        self.assertTrue(result["mac_save_witness"]["retained_selector"])
+        self.assertEqual(events, ["attach", "edit", "kill", "wait", "finish"])
+
+    def test_witness_startup_failure_is_censored_without_child(self):
+        """Popen failure still finalizes preinitialized diagnostic state without fake EOF."""
+        case = probe.prepare(self.directory, [1])[0]
+        sample_dir = self.directory / "sample"
+        sample_dir.mkdir()
+        with patch.object(probe, "bounded_command"), \
+             patch.object(probe.subprocess, "Popen", side_effect=OSError("private startup text")):
+            result = probe.sample(Path("unused"), case, sample_dir, None, True)
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["mac_save_witness"]["eof"])
+        self.assertEqual(result["mac_save_witness"]["records"], [])
+        self.assertNotIn("private startup text", json.dumps(result))
+
     def test_corpus_and_local_edit_oracle(self):
         """One exact-size valid array and only one in-string byte change are witnessed."""
         case = probe.prepare(self.directory, [1])[0]

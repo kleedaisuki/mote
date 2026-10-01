@@ -241,3 +241,72 @@ explores declarative/composable performance experiments; here we adopt the
 explicit workload/driver/evidence contract, not its framework. One pilot cannot
 replace randomized/paired replicated evaluation, and API-level observation
 cannot silently be promoted to a different physical endpoint.
+
+## Opt-in original Mac Save witness
+
+`--mac-save-witness` is **Mac-only and disabled by default**. It adds
+`MOTE_NATIVE_MAC_SAVE_TRACE=1` only to the original ordinary GUI process, not the
+runtime launch-control or fresh GUI reopen. Both report and sample explicitly use
+`save_witness_mode=diagnostic-on-not-performance-sample`; these observations must
+not be pooled with ordinary performance samples. Acceptance still requires the
+same exact saved bytes, original/reopen normal exits, native version observations
+and separate terminal trace audits. A witness never turns a failed Save into a
+pass. There are no extra input attempts, activation, permissions or phase deadline
+changes.
+
+```sh
+python -B -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p 'test*.py' -v
+python -B benchmarks/NativeJsonLargeAcceptance/probe.py \
+  --executable src/Mote.Native/bin/Release/net10.0/osx-arm64/publish/mote \
+  --rid osx-arm64 --mac-save-witness \
+  --output .cache/native-json-large/NEW-diagnostic-report.json
+```
+
+`save_diagnostic.py` preinitializes collector state before `Popen`, receives only
+the owned child's unbuffered inherited stderr pipe and immediately starts a daemon
+reader. Fixed **1024-byte reads** and a **64-byte frame accumulator** bound memory
+before framing; overlong frames are discarded through LF. Only exact ASCII
+`mote-save-diag-v1:` stages `ready`, `selector_entered`, `controller_admitted`,
+`overflow`, `completed` survive. Unknown/non-ASCII frames, raw exception text and
+partial tail bytes are never retained. The reader continues draining to EOF after
+its **16-record retention limit**, with all metadata counters saturated at
+**65535** and explicit loss/capping flags. A bounded **2-second join** does not
+close a pipe concurrently with a blocked reader, wait forever, or change the
+existing child-kill deadline. Normal original evidence is finalized before
+replacing the child for reopen; failure evidence is finalized after owned cleanup.
+Startup failure leaves a censored empty witness, not fabricated EOF.
+
+Each sample's `mac_save_witness` has this content-free schema:
+
+| Field | Contract |
+| --- | --- |
+| `schema_version`, `protocol`, `session`, `mode`, `clock` | Fixed schema1 / v1 protocol / original-GUI-only / diagnostic-on / parent-local receipt clock classifications |
+| `records` | At most16 `{stage, parent_receipt_ms}` rows; duplicate valid stages preserved; receipt duration starts at collector initialization, not target execution or GUI launch |
+| `stage_counts` | Five fixed whitelisted keys, independently saturated integer counts; still updated after retention cap |
+| `rejected_frames`, `overlong_frames` | Saturated counts only, never discarded content |
+| `partial_tail`, `malformed` | EOF with incomplete frame; any unknown/overlong/partial output |
+| `retention_loss`, `counter_capped`, `loss` | Local retention/counter censoring or target `overflow` |
+| `read_error`, `attach_error`, `eof`, `join_timeout` | Transport/lifecycle facts; no exception text |
+| `protocol_order_valid` | Exactly one initial `ready`, no stage after terminal, admission follows a selector; checked even after retention cap |
+| `healthy_completed_stream` | Ready+completed, coherent order, EOF and no target/local loss, malformed output, transport error or join timeout |
+| `stream_completion` | `healthy-producer-watermark` or `censored`; terminal is not Save acceptance |
+| `absence_interpretation` | Always `not-proof-of-callback-nonexecution`; no unsupported negative callback claim |
+
+A positive selector marker witnesses selector entry; positive admission witnesses
+ordinary synchronous Save guards passing, not Save worker start or persistence.
+Even a healthy stream does not independently prove missing callbacks did not
+execute. Forced termination can preserve **already received positive markers** but
+censors all undelivered/queued output. Instrumentation changes scheduling and is
+not a reliability repair. The enabled top-level report pins the collector source
+SHA-256 separately from the driver/client/auditor identities.
+
+Portable verification includes generated **8 MiB unterminated output** with peak
+Python allocation below128 KiB, overlong recovery, unknown/non-ASCII/partial
+frames, fragmented reads, saturation with continued terminal drain, protocol
+ordering, target overflow, broken pipe, bounded blocked-read join, detached
+snapshot stability, and a real owned Python subprocess killed only after its
+positive markers were received. Pilot integration tests verify original-only
+association, collection before reopen, inherited environment removal, forced
+cleanup ordering and startup failure. No AppKit or hosted Native AOT result is
+implied by these tests; actual target compatibility still requires the opt-in
+Mac pilot and raw original-process report audit.

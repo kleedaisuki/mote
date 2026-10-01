@@ -20,6 +20,8 @@ import sys
 import time
 import uuid
 
+from save_diagnostic import ENVIRONMENT_KEY, SaveDiagnosticCollector
+
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("native_acceptance", ROOT / "benchmarks/NativeAcceptance/acceptance.py")
 acceptance = importlib.util.module_from_spec(spec)
@@ -92,6 +94,7 @@ def inventory(executable, rid):
 def environment(home):
     """Isolate configuration, cache and local traces before starting a timer."""
     env = os.environ.copy()
+    env.pop(ENVIRONMENT_KEY, None)
     env["MOTE_HOME"] = str(home)
     env["MOTE_TRACE"] = "1"
     return env
@@ -427,7 +430,7 @@ def trace_evidence(home, editing):
     return audit
 
 
-def sample(executable, case, directory, client):
+def sample(executable, case, directory, client, mac_save_witness=False):
     """Run one fresh ordinary process, exact local edit/Save and fresh GUI reopen."""
     working = acceptance.artifact_path(directory / "working.json", ".temp")
     shutil.copyfile(case["fixture"], working)
@@ -438,6 +441,8 @@ def sample(executable, case, directory, client):
                    "trace_enabled": True, "route": "ordinary-product-no-launch-flags", "edit_attempts": 0,
                    "normal_exit": False, "reopen_normal_exit": False, "poll_interval_ms": 50})
     child = None
+    collector = SaveDiagnosticCollector() if mac_save_witness else None
+    result["save_witness_mode"] = "diagnostic-on-not-performance-sample" if collector else "disabled"
     driver = None
     driver_type = WindowsDriver if sys.platform == "win32" else MacDriver
     try:
@@ -446,8 +451,14 @@ def sample(executable, case, directory, client):
         result["parent_runtime_control_exit_ms"] = (time.perf_counter_ns() - started) / 1e6
         result["phase"] = "launch-to-source-bound"
         started = time.perf_counter_ns()
+        if collector is not None:
+            env[ENVIRONMENT_KEY] = "1"
         child = subprocess.Popen([str(executable), str(working)], cwd=ROOT, env=env,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.PIPE if collector else subprocess.DEVNULL,
+                                 bufsize=0 if collector else -1)
+        if collector is not None:
+            collector.attach(child.stderr)
         driver = driver_type(child.pid, case["size_bytes"], client)
         def ready(version):
             observed = driver.observe(version)
@@ -487,6 +498,9 @@ def sample(executable, case, directory, client):
         if child.wait(timeout=15) != 0:
             raise RuntimeError("editor normal exit failed")
         result["normal_exit"] = True
+        if collector is not None:
+            result["mac_save_witness"] = collector.finish()
+            collector = None
         result["phase"] = "trace-audit"
         result["trace_evidence"] = trace_evidence(home, True)
         if result["trace_evidence"]["endpoint_integrity"] != "pass":
@@ -538,6 +552,8 @@ def sample(executable, case, directory, client):
             child.kill()
             child.wait(timeout=10)
             result["forced_cleanup"] = True
+        if collector is not None:
+            result["mac_save_witness"] = collector.finish()
         # Always retain the immutable-fixture witness even if trust/focus blocks
         # the probe. A failed Save may legitimately leave working bytes changed;
         # record its opaque digest without pretending the expected oracle passed.
@@ -553,7 +569,11 @@ def main():
     parser.add_argument("--rid", choices=("win-x64", "win-arm64", "osx-x64", "osx-arm64"), required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--sizes", type=int, choices=(1, 100), nargs="+", default=[1, 100])
+    parser.add_argument("--mac-save-witness", action="store_true",
+                        help="Opt-in original Mac child Save witness; diagnostic-on, not a performance sample")
     args = parser.parse_args()
+    if args.mac_save_witness and (sys.platform != "darwin" or not args.rid.startswith("osx-")):
+        parser.error("--mac-save-witness requires a native Mac pilot")
     output = acceptance.artifact_path(args.output, ".cache")
     if output.exists():
         raise ValueError("refuse report overwrite")
@@ -564,11 +584,14 @@ def main():
               "clock_contract": "parent-and-child-monotonic-durations-never-subtracted",
               "os": platform.system(), "host_release": platform.release(), "python": platform.python_version(),
               "runner_image": os.environ.get("ImageVersion"), "source_commit": os.environ.get("GITHUB_SHA"),
-              "scratch_id": directory.name, "samples": []}
+              "scratch_id": directory.name, "samples": [],
+              "save_witness_mode": "diagnostic-on-not-performance-sample" if args.mac_save_witness else "disabled"}
     try:
         executable, identity = inventory(args.executable, args.rid)
         report.update(identity)
         report["driver_sha256"] = digest(Path(__file__))
+        if args.mac_save_witness:
+            report["save_witness_collector_sha256"] = digest(Path(__file__).with_name("save_diagnostic.py"))
         report["artifact_auditor_sha256"] = digest(ROOT / "benchmarks/NativeAcceptance/acceptance.py")
         client = None
         if sys.platform == "darwin":
@@ -581,7 +604,7 @@ def main():
         for case in cases:
             sample_directory = acceptance.artifact_path(directory / str(case["size_mib"]), ".temp")
             sample_directory.mkdir()
-            report["samples"].append(sample(executable, case, sample_directory, client))
+            report["samples"].append(sample(executable, case, sample_directory, client, args.mac_save_witness))
         report["status"] = "pass" if all(row["status"] == "pass" for row in report["samples"]) else "incomplete"
         report["binary_sha256_after"] = digest(executable)
         if report["binary_sha256_after"] != report["binary_sha256"]:
