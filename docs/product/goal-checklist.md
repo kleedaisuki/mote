@@ -49,6 +49,23 @@ They are now implemented as test-only Unix link cleanup and supervisor ancestry
 inspection through native attributes, with 12/12 and 10/10 respective focused
 Windows checks. Their repaired macOS execution remains pending a new source run.
 
+### Subsequent qualified checkpoint: 065585ca
+
+[CI 36890601478](https://github.com/kleedaisuki/mote/actions/runs/36890601478)
+completed at `065585ca31db41ad0a0236cefc6a3ced33a58f49`. Both main suites now
+pass 3436/3436 with no skips, plus Themes 14/14 and Configuration 9/9. This
+supplies the previously missing macOS cleanup evidence; it does not rewrite the
+older failed run. All four single-binary inventories and actual seven-check
+published codec runs pass with correct architecture and stable image hashes.
+
+Both macOS source experiments complete all three exact Save/fresh-Document
+reopen journeys and normal trace shutdown. However, dense-JSON post-edit verified
+publication still takes 4.961 seconds (x64) / 2.732 seconds (ARM64). Both Windows
+experiments still time out during the second dense publication. Therefore the
+native surface remains an experiment, not a smooth-editing or default-product
+certificate. Windows detached TOM ranges and Mac native-attribute delta
+publication are the next scoped implementations, not yet hosted speedup results.
+
 - Established: implementation exists with relevant scoped evidence.
 - Partial: implementation exists, but required behavior or acceptance remains open.
 - Local integration: new source/model tests exist; current published four-RID
@@ -81,10 +98,10 @@ Windows checks. Their repaired macOS execution remains pending a new source run.
 
 | Stream | Actual progress | Remaining qualification |
 | --- | --- | --- |
-| Native editing locus | One-source full-resident native adapter capability experiment implemented on both OSes; coordinated builds, 33 model checks and 12 admission checks qualified, without changing ordinary default or LegacyPage. | Both Windows runs have slow initial dense-JSON native styling and time out during post-edit publication; Mac routes did not launch. Controlled input is not real IME or a delivered default surface. |
-| Ordinary YAML semantics | Graph-key structural identity implemented/reviewed, 153 affected checks and 21 frozen output comparisons; skipped erroneous-key completeness correction implemented with qualified scoped evidence. | Current macOS suite's two failures are separate fixture cleanup failures; retained collection-span boundary and other policy limits remain. |
+| Native editing locus | One-source full-resident native experiment implemented on both OSes; Mac completes three controlled journeys at 065585ca, without changing ordinary default or LegacyPage. | Windows still times out; Mac post-edit dense styles stall for seconds. Detached Windows ranges and actual Mac attribute deltas require new hosted qualification. Controlled input is not real IME or a delivered default surface. |
+| Ordinary YAML semantics | Graph-key identity and erroneous-key completeness corrections are implemented/reviewed. Explicit flow closer spans are now corrected in ordinary/streamed paths, with 75 affected checks, separate 12 streamed fixtures and a frozen 21-row comparison. | New delimiter-span source awaits integrated CI; intended +1 range changes are documented. Other recovery, resource and conformance limits remain. |
 | Unicode edit difference | Shared scalar-safe difference implemented/reviewed; real pre-fix Apply failures, focused regression evidence and passing current Windows integrated suite retained. | Native ingress and real composition acceptance remain scoped; scalar safety is not full grapheme/IME acceptance. |
-| Explicit source encoding | Eight-codec engine API qualified; native explicit choice/menu/controller and published-AOT codec probe implemented with portable checks. Both Windows published codec checks passed. | Both Mac routes failed before launch in the supervisor; Mac codec runtime acceptance and real native chooser behavior remain open. Never guess the user's file encoding. |
+| Explicit source encoding | Eight-codec engine API, explicit chooser/controller and four-RID seven-check published-codec runs are qualified at 065585ca. | Real native chooser interaction remains open; seven fixed checks are not exhaustive encoding-standard conformance. Never guess the user's file encoding. |
 | Runtime evidence | Owned Windows cleanup controls passed 0/124 at the previous baseline; separate adapter graph exists on both RIDs. Mac edit reports now preserve the rejected transaction independently of later cleanup. | Original Grid failure, new x64 post-GoTo unknown, and Mac native workflow/Save failures remain open. The previous 1 MiB Mac failure occurred in external AX preflight before any edit event, not a demonstrated editor edit fault. |
 
 ## Primary internal evidence
@@ -100,6 +117,8 @@ Windows checks. Their repaired macOS execution remains pending a new source run.
 - [Current macOS test failure and scoped cleanup repair](../validation/native-source-admission-macos-cleanup.md),
   [codec/source supervisor qualification](../validation/native-codec-source-workflow.md).
 - [Actual native source costs and next bounded investigation](../performance/native-source-capability-timeout.md).
+- [YAML flow closer correction](../validation/yaml-flow-collection-spans.md),
+  [Mac native publication costs and candidate](../performance/mac-native-source-style-publication.md).
 
 This checklist intentionally does not assign a completion percentage. The
 remaining native-user requirements are not proportional to file/test counts.

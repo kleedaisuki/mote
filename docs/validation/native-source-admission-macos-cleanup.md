@@ -81,3 +81,15 @@ The repaired Unix path is grounded in the exact hosted failure and upstream
 implementation, but has **not yet executed on macOS**. The next normal exact-source
 CI must supply that runtime result. No complete suite rerun or native GUI test was
 performed for this repair. Native encoding/workflow failures are separate work.
+
+## Subsequent actual macOS qualification
+
+[CI 36890601478](https://github.com/kleedaisuki/mote/actions/runs/36890601478)
+executed the repair at exact source `065585ca31db41ad0a0236cefc6a3ced33a58f49`.
+The macOS and Windows complete main suites each report 3436 passed, zero failed
+and zero skipped, including these admission fixtures; Themes 14/14 and
+Configuration 9/9 also pass. The Unix cleanup branch is no longer unexecuted.
+This is a new passing source run, not retroactive qualification of the old
+3434/3436 result. No native UI or performance acceptance follows from fixture
+cleanup success. Exact logs and source/codec artifacts are indexed in
+[the corrected hosted execution record](native-codec-source-workflow.md#corrected-hosted-execution-source-065585ca-ci-36890601478).
