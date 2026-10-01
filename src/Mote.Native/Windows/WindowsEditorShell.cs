@@ -23,7 +23,7 @@ namespace Mote.Native.Windows;
 /// No native library ships with mote: msftedit.dll and comdlg32.dll are Windows components.
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class WindowsEditorShell : INativeCanvasShell
+internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodingShell
 {
     /// <summary>One opt-in source draw interval; preview and status never complete it.</summary>
     private readonly NativeDrawTrace _sourceDrawTrace = new();
@@ -50,6 +50,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     private const int GoToLineId = 215;
     private const int CutId = 216;
     private const int ReloadSettingsId = 217;
+    private const int OpenWithEncodingId = 218;
     private const nuint StyleTimerId = 1;
     private const uint SelectionMessage = Win32.WM_APP + 1;
     private const uint CompositionSettledMessage = Win32.WM_APP + 2;
@@ -221,6 +222,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     public event Action? NewRequested;
     /// <inheritdoc />
     public event Action? OpenRequested;
+    /// <summary>Requests deliberate codec selection without changing ordinary Open.</summary>
+    public event Action? OpenWithEncodingRequested;
     /// <inheritdoc />
     public event Action<NativeSaveRequest>? SaveRequested;
     /// <inheritdoc />
@@ -780,6 +783,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
     /// <inheritdoc />
     public string? PickOpenFile() => PickFile(save: false, null);
 
+    /// <summary>Shows an owned chooser; cancellation never implies a default codec.</summary>
+    public DocumentTextEncoding? ChooseOpenEncoding() => Win32EncodingPrompt.Show(_window);
+
     /// <inheritdoc />
     public string? PromptFind()
     {
@@ -1155,6 +1161,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         var view = Win32.CreatePopupMenu();
         Win32.AppendMenuW(file, Win32.MF_STRING, NewId, "&New\tCtrl+N");
         Win32.AppendMenuW(file, Win32.MF_STRING, OpenId, "&Open…\tCtrl+O");
+        Win32.AppendMenuW(file, Win32.MF_STRING, OpenWithEncodingId, "Open with &Encoding…");
         Win32.AppendMenuW(file, Win32.MF_STRING, SaveId, "&Save\tCtrl+S");
         Win32.AppendMenuW(file, Win32.MF_STRING, SaveAsId, "Save &As…\tCtrl+Shift+S");
         Win32.AppendMenuW(file, Win32.MF_SEPARATOR, 0, null);
@@ -1211,6 +1218,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         {
             case NewId: NewRequested?.Invoke(); break;
             case OpenId: OpenRequested?.Invoke(); break;
+            case OpenWithEncodingId: DispatchOpenWithEncoding(); break;
             case SaveId: DispatchSave(NativeSaveKind.Save); break;
             case SaveAsId: DispatchSave(NativeSaveKind.SaveAs); break;
             case ExitId: Win32.PostMessageW(_window, Win32.WM_CLOSE, 0, 0); break;
@@ -1226,6 +1234,17 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
             case GoToLineId: GoToLineRequested?.Invoke(); break;
             case PreviousId: PagePreviousRequested?.Invoke(); break;
             case NextId: PageNextRequested?.Invoke(); break;
+        }
+    }
+
+    /// <summary>New command failures cannot unwind through the shell's user32 callback.</summary>
+    private void DispatchOpenWithEncoding()
+    {
+        try { OpenWithEncodingRequested?.Invoke(); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            try { SetStatusNotice("Open with Encoding failed before completion."); }
+            catch (Exception noticeError) when (noticeError is not OutOfMemoryException) { }
         }
     }
 
