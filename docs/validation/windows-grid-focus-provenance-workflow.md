@@ -124,3 +124,54 @@ The wrapper's supervisor phase stays `error_class=build` after compilation, misl
 Evidence is retained in `.cache/ci-36874262096-focus-provenance/`: x64 control/build/supervisor/summary files under `artifacts/windows-grid-focus-provenance-win-x64/`, ARM64 under `final-artifacts/windows-grid-focus-provenance-win-arm64/`, completed job logs (x64 110409529982, ARM64 110409529582), run metadata and artifact enumeration (`per_page=100`). The original separate external AOT Grid reports remain **product-fail / numeric exit 1 on both RIDs**, source pin `C6894B4EDCF931BAA322B878AF8965759AC7E44EFC10291200737A18C1AD5509`; no new control failure is reinterpreted as that existing product oracle's root cause.
 
 Scoped integration regression: Windows/macOS main suites both **3253/3253**, Themes14/14, Configuration9/9, zero failed/skipped; all four delivery inventories retain one executable. Both blocking Mac callback/Flow controls actually succeed with both fixed markers and ready (ARM64 14:15:54 UTC, x64 14:17:53 UTC). Ordinary JSON is **7/8, not 8/8**: x64 Mac 100 MiB times out at `save-exact-bytes`, editor numeric exit **-9**, no reopen (null exit), original working/fixture hashes unchanged. Its independently parsed retained **12,502-byte / 36-complete-row prefix** has menu-ready1/input-ready1, no input candidate/menu entry/return/Save request/normal terminal, no discarded partial row. Witness is ready-only and censored; one external two-event Command-S attempt has `execution_acknowledged=false`. These missing records do not certify callback absence, loss-free coverage or a Save root cause; candidate-to-menu/menu-to-request edges remain unknown. The other seven summaries retain pass with exits0/0. No old successful raw-chain/recovery audit or local GUI experiment was repeated.
+
+## Shared cleanup-deadline correction — source 2f2d413
+
+The original counterexample above is retained, not relabeled. Source inspection
+identified a concrete observation defect: after querying the job empty, the
+supervisor used only `WaitForSingleObject(process, 0)` and silently discarded a
+non-signaled handle or failed exit-code read. It never waited for the independent
+process-handle witness. The raw JSON cannot distinguish that ordering from an
+exit-query failure; a specific kernel scheduling race remains an inference.
+
+The correction creates **one** cleanup stopwatch at `finally` entry, before
+forced termination. Job polling and the retained process-handle wait both consume
+the remaining portion of the same original **10-second** cleanup budget. It adds
+neither a second ten-second wait nor a longer client/control deadline. Numeric
+exit is published only after a successful signaled-handle wait and checked
+`GetExitCodeProcess`. If either witness remains unavailable, exit stays null and
+the closed error category is `cleanup`; job-empty remains an independent positive
+query fact. It never substitutes expected timeout exit 124. The existing normal
+and timeout control predicates, including their strict numeric exit and exact
+error-class requirements, are unchanged.
+
+Wrapper phase is now `supervisor` before compiling/installing the embedded helper
+and `control` before the two ownership controls. The summary's closed error
+vocabulary accepts `control`, preserving the distinction from successful build
+and a UIA client which has not started. Old retained `error_class=build` reports
+are not rewritten or inferred into new runtime facts.
+
+Affected portable verification on 2026-10-01:
+- **19/19** summary/ownership-contract fixtures passed (the earlier 17 remain
+  intact; two focused fixtures cover control-phase classification and the shared
+  job-drain→process-signal→exit-read ordering).
+- Updated embedded C# compiled, managed ABI checks passed, and **eight** elapsed
+  time boundary cases verified remaining cleanup budgets: negative/zero, 1, 20,
+  9,999, 10,000, 10,001 and `Int64.MaxValue` milliseconds.
+- PowerShell AST passed. No old quoting/native/product experiments were repeated.
+- Native invocations and GUI launches were **zero**. These checks verify budget
+  arithmetic and source contracts, not actual Windows signal ordering or resolved
+  hosted ownership controls.
+
+Artifacts: `.cache/validation/windows-grid-focus-workflow/cleanup-followup/`
+contains the actual test log, extracted compiled supervisor source and managed
+check JSON. The extracted source SHA256 is
+`583BF724C55C6ADC888FF89BCAEDF44CDEEE436A94C0A620D0D23A77A88340D2`.
+Both hosted RIDs must still exercise the corrected controls before the sole UIA
+attempt; no retry or product-focus success is claimed by this local correction.
+
+Microsoft's [termination contract](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess)
+requires waiting on the process handle to establish completed termination;
+[process-object signaling](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process)
+is the explicit wait witness. Neither reference makes a successful job-accounting
+query a replacement for that process-handle observation.
