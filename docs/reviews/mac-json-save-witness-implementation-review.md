@@ -8,14 +8,14 @@ artifact; it does not modify product code, collectors or workflows.
 
 ## Verdict
 
-**No substantive defect found in the reviewed target transport and hook changes.**
+**Initial transport review found no loss-watermark defect; the follow-up review below identifies one necessary writer-wakeup correction.**
 The implementation satisfies design-review R2 for the stated two UI-thread
 producer boundaries. It is suitable for the scoped diagnostic-on integration,
 subject to the independent parent-collector review (R1) and actual hosted Mac
 Native AOT build/launch validation. This is not Save reliability acceptance, a
 performance result, or proof that an unwitnessed callback did not execute.
 
-No mandatory product correction is requested by this review.
+The initial verdict is superseded by finding F1 below until its correction is reviewed.
 
 ## Evidence and lifetime analysis
 
@@ -97,3 +97,107 @@ physical input, trust/TCC change or Save/trace/reopen acceptance was performed b
 this review. The diagnostic adds enabled-mode scheduling work and must retain its
 explicit diagnostic-on/not-performance-sample labeling. The current Mac Save
 failure cause remains unresolved.
+
+
+## Follow-up: collector and workflow integration
+
+Reviewed collector/probe refinement `9f439b0`, workflow commit `77547c7`, and
+transport/tests commit `19aeabf`. No tests were rerun by this reviewer; the owner
+reported nine focused C# tests plus seven existing Save/recovery tests passing.
+The deterministic blocked-terminal test now establishes the late-terminal scope
+limit described above rather than claiming that an already-started syscall can
+be canceled.
+
+### F1 — Writer wake still depends on the shared thread pool (necessary correction)
+
+**Location:** `NativeSaveDiagnosticSession.WriteLoop`,
+`WaitToReadAsync().AsTask().GetAwaiter().GetResult()`. **Confidence: high.**
+
+When the queue is empty, WaitToReadAsync returns a pending channel operation.
+AsTask registers a continuation to complete its Task. With synchronous
+continuations disabled, channel producer completion queues that continuation on
+the shared thread pool. The dedicated writer blocks on this Task and cannot wake
+until that pool executes the completion continuation. Therefore thread-pool
+starvation can delay both markers and terminal drain even though the actual
+stream writes execute on the dedicated thread. This undermines the explicit
+purpose of avoiding the Save task pool as a prerequisite for positive witnesses.
+It does not falsify received positive stages or the producer/loss watermark.
+
+The version-matched .NET 10 sources show the chain:
+[BoundedChannel.WaitToReadAsync](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Threading.Channels/src/System/Threading/Channels/BoundedChannel.cs)
+creates the waiting operation using its asynchronous-continuation setting;
+[ValueTask.AsTask](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Private.CoreLib/src/System/Threading/Tasks/ValueTask.cs)
+registers the conversion continuation;
+[AsyncOperation.SignalCompletion](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Threading.Channels/src/System/Threading/Channels/AsyncOperation.cs)
+queues that continuation when forced asynchronous. Source inspection establishes
+the dependency; this review did not reproduce actual Save-worker starvation.
+
+**Remedy:** keep bounded TryWrite/TryRead and producer admission semantics, but
+replace asynchronous readiness waiting with a dedicated synchronous wake or
+bounded diagnostic-only polling. A wake must cover successful enqueue and final
+closure without missed signals or concurrent disposal against producers. Do not
+fix this by enabling synchronous channel continuations on the UI hook or by
+adding another Task.Run. Review the corrected wake and its tests before enabling
+the hosted diagnostic. This finding was communicated promptly to the owner, who
+is implementing the correction.
+
+### R1 collector boundedness and privacy: no substantive issue found
+
+- Reads request 1024 bytes from an unbuffered owned subprocess pipe. The frame
+  accumulator never exceeds 64 bytes; a longer frame is discarded through its
+  next LF before any whole-line allocation. Only a bounded frame is converted
+  to bytes for whitelist lookup.
+- Only five fixed stage names, bounded counters/flags and parent-local durations
+  are retained. Unknown/non-ASCII/partial/overlong frames never enter artifacts.
+  Records cap at 16; counters saturate at 65535; record retention and counter loss
+  remain explicit. The reader continues draining after either cap.
+- Thread-start/read/close errors are content-free state. The daemon is joined for
+  at most two seconds; a blocked reader is not concurrently closed. Snapshots
+  copy the rows/counts under the lock and cannot subsequently mutate.
+- Health requires independent original normal exit, EOF, correct ordering, exactly
+  one ready/completed, no overflow/retention/counter loss, no malformed framing,
+  no read/attach error and no join timeout. Completed plus EOF after forced kill
+  is explicitly censored, even if the terminal preceded that kill.
+
+The tests exercise generated multi-megabyte no-newline streams with a bounded
+memory check, recovery after LF, rejection privacy, fragment boundaries, caps with
+continued draining, ordering, errors, bounded joins/detached snapshots and a real
+child kill after positive records including completed were received. The actual
+kill test distinguishes positive retention from normal-exit certification.
+
+### Original-child association and acceptance: no substantive issue found
+
+Collector state exists before Popen and draining attaches immediately afterward.
+`original_child` remains distinct from the mutable `child` used for reopen;
+`original_forced_cleanup` is recorded before its kill. Successful original
+collection finishes before trace audit and reopen, and is not overwritten by
+reopen evidence. Failure cleanup happens before collection; an original exit-code
+zero can certify transport completeness without changing a failed workload to
+Save acceptance. Popen failure retains censored preinitialized state.
+
+Environment construction strips an inherited witness switch. Runtime control
+runs before explicit original-child opt-in; reopen constructs a fresh stripped
+environment and retains DEVNULL stderr. Windows/default runs create no collector.
+The CLI rejects the Mac witness flag on a non-Mac host/RID. Reports retain driver,
+collector and binary hashes plus source commit and explicit diagnostic-on labels.
+
+No edits were made to Save input dispatch, one-attempt counting, exact-byte
+comparison, source readiness/semantics, normal-exit checks, trace checks, reopen
+checks, trust/focus guards or original phase deadlines. The separate bounded
+collector join does not postpone killing. Witness availability never changes the
+workload's pass/fail predicate.
+
+### Workflow scope
+
+Commit `77547c7` changes only the existing non-gating JSON step: test discovery
+includes both portable suites, a Mac-only CLI flag enables original-child witness,
+and successful Mac output explicitly denies reliability-fix/performance claims.
+The two-case report predicates, 20-minute step budget, continue-on-error status
+and existing artifact upload remain unchanged. This commit does not change Grid
+steps; the unrelated Grid hash update elsewhere in the branch is outside this
+review. A green job still cannot substitute for raw diagnostic/report acceptance.
+
+Actual hosted Mac pipe behavior, Native AOT compilation, launch, complete report
+and the unresolved Save failure remain outside this source review. Overall
+integration verdict is **await F1 writer-wakeup correction**, not a failure of
+R1 framing or R2 producer/loss accounting.
