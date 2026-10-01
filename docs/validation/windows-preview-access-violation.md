@@ -130,6 +130,52 @@ fixture 127 ms). No production source changed.
 
 ## Next discriminating evidence
 
+### First guarded hosted rerun: strict pass, different image from the crash
+
+Independently audited the raw log and job/step metadata for
+[CI 36802378381, Windows job 110179342636](https://github.com/kleedaisuki/mote/actions/runs/36802378381/job/110179342636)
+at `c453506c84e249dbff7c73748140314f6760ff33`. The strict Windows solution test
+actually ran with `--blame --results-directory .cache/ci-test-results/windows`
+and completed successfully: **Mote.Tests 1158/1158**, **Themes 14/14**,
+**Configuration 9/9**, no skipped test cases. The reported Mote.Tests duration
+was 51 s. Both the test step and the job concluded success; the following
+benchmark build ran. This is direct successful-test evidence, not an inference
+from an unrelated non-gating diagnostic's green conclusion. The guarded theme
+fixture is included in this full test assembly; the minimal logger does not
+provide separate per-case output.
+
+The environment recording step retained:
+
+| Run | Outcome | Hosted image version | RichEdit file version / SHA-256 |
+| --- | --- | --- | --- |
+| 36797859586 / `833ef480` | Earlier strict pass | `20260922.246.2` | Not recorded |
+| 36800944850 / `99fbe39` | Fatal `0xC0000005`, test host aborted | `20260925.250.1` | Not recorded |
+| 36802378381 / `c453506c` | Guarded strict pass, 1158/1158 | `20260922.246.2` | `10.0.26100.1` (WinBuild.160101.0800); `CDA138C1ACA66C607F47E9C595C16AC45C1DE10B09D4FED83D2DF70C67ED89C3` |
+
+All three report `windows-2025-vs2026`, Windows Server 2025 / 10.0.26100. The new
+run is comparable to the earlier pass at the **named image-version level**;
+the missing earlier DLL inventory prevents proving exact native-component
+identity. It returned to the earlier passing image rather than validating the
+guards against the crashing image. The log reports OS version
+`Microsoft Windows NT 10.0.26100.0`; the recorded System32 DLL is also different
+from the local Windows 11 DLL used in the negative probes above.
+
+`Upload Windows crash sequence` was **skipped** because the job succeeded. The
+run's complete artifact listing contains no Windows test-sequence artifact and
+the test log reports no sequence attachment. Therefore no `*_Sequence.xml` is
+retained for this successful hosted run; these observations do not prove whether
+a temporary sequence file existed at any instant inside the runner. No native
+dump was collected or claimed. Raw audit log is retained locally at
+`.cache/windows-preview-av-ci-36802378381.log`.
+
+This confirms one successful guarded hosted execution, **not** the crash's root
+cause, a production fix, elimination of the failure, or a reliability
+distribution. Image-version-dependent behavior is a concrete follow-up lead,
+but with one failure, changed test coverage and different scheduling it is not
+yet a demonstrated explanation. Retain environment inventory on future strict
+runs; if the crash recurs, correlate the exact image/DLL and sequence before
+deciding whether native dump collection is needed.
+
 The root workstream has added strict Windows VSTest `--blame`, results under
 `.cache/ci-test-results/windows`, and failure-only `Sequence.xml` upload without
 masking the job outcome. This captures test sequence, **not a native dump**; a
