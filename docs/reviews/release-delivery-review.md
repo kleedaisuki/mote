@@ -369,3 +369,75 @@ Reviewed source SHA-256:
 No production behavior, timeout, test, GUI or CI rerun was changed/executed by
 this reviewer. Narrow review ready for integration and new exact-source hosted
 qualification; no public-release completion claim is made.
+
+## Pre-publication .NET servicing hold: primary-source applicability review
+
+Date checked: 2026-10-02. The passed candidate used SDK 10.0.400/runtime
+10.0.11; no tag/download publication has occurred. Official
+[10.0.12 release notes](https://github.com/dotnet/core/blob/main/release-notes/10.0/10.0.12/10.0.12.md)
+identify SDK 10.0.401 and runtime/ILCompiler 10.0.12, released September 8.
+Updating the pinned release toolchain and rebuilding is a sound servicing action,
+not a new performance project. **Do not describe the six-CVE release-note list
+as six demonstrated exploitable vulnerabilities in mote's shipped editor.**
+
+| Advisory | Actual affected component | mote applicability assessment |
+| --- | --- | --- |
+| [CVE-2026-69439](https://github.com/dotnet/runtime/security/advisories/GHSA-527h-q9f6-p7qx) | Windows Microsoft.DiaSymReader.Native Portable-PDB parsing, patched package 18.9.0-beta1.26405.2 | No shipped production dependency/PDB input path established; relevant developer/toolchain component must be serviced if present |
+| [CVE-2026-71328](https://github.com/dotnet/runtime/security/advisories/GHSA-63gh-g2x5-x69v) | Same package, Windows MSFZ-PDB parsing | Same bounded conclusion; AOT itself is not evidence that a symbol-reader vulnerability executes while editing text |
+| [CVE-2026-69522](https://github.com/dotnet/runtime/security/advisories/GHSA-2j8r-3c22-8565) | Same package, Windows PDB parsing | Same bounded conclusion; current production package references do not establish this vulnerable parser is shipped |
+| [CVE-2026-69304](https://github.com/dotnet/announcements/issues/443) | Windows ASP.NET Core IIS out-of-process request decompression, runtime 10.0.11 and earlier | Mote.Native is not an ASP.NET/IIS application and ships no ASP.NET hosting path; this advisory alone cannot prove editor exposure |
+| [CVE-2026-58649](https://github.com/dotnet/sdk/security/advisories/GHSA-v6m7-gj7w-5p3g) | SDK dotnet-watch BrowserRefresh WebSocket-origin validation | Development tool, not shipped editor; advisory explicitly lists SDK 10.0.400 as already patched |
+| [CVE-2026-69806](https://github.com/dotnet/sdk/security/advisories/GHSA-rm38-hxmq-7wmw) | Linux SDK dotnet-watch Aspire service argument exposure/code injection | Not Windows/macOS shipped editor or current watch-free pipeline; advisory explicitly lists SDK 10.0.400 as already patched |
+
+MSRC links returned JavaScript shells; official maintainer GitHub advisories were
+read rather than guessing from the release notes' `TBD` titles. Conclusions
+separate missing demonstrated application reachability from a blanket security
+certificate: no exploit experiment or whole dependency-security audit was run.
+
+[Microsoft Native AOT documentation](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
+confirms required runtime libraries are app-contained. Consequently changing a
+user's shared .NET installation cannot service already-linked mote native images.
+The publisher must rebuild with verified runtime/compiler packs, requalify all
+four packages, update matching notices/provenance and distribute complete new
+images. Upgrading setup-dotnet's requested SDK label alone is not sufficient:
+resolved ILCompiler/runtime pack versions and actual selected SDK must be checked.
+Incoming upgrade diff review remains pending in this subsection until frozen.
+
+### Servicing upgrade source review complete
+
+Reviewed the frozen incoming `global.json`, release workflow, toolchain/package
+helpers, changed negative tests and servicing documentation. **No substantive
+implementation defect found in this servicing correction.** Exact SDK401 is
+selected with disabled roll-forward; native restore requests runtime12; the
+precompile resolver checks actual Core runtime, host ILCompiler and target
+NativeAOT pack items and their installed nuspec identities. Publish uses
+`--no-restore` and the same runtime property. Target/host RID names are exact for
+the native-host matrix, so another architecture or old runtime/compiler cannot
+pass merely because the SDK label changed.
+
+The path-free summary binds source/run/RID/SDK/runtime/compiler and hashes raw
+resolved metadata plus individual nuspecs. Package construction and verification
+both validate it; consolidated assets reuse that verification. CLI/helper import
+paths and the synthetic test import registration are coherent. Empty/missing,
+wrong-RID, old-version, duplicate compiler, nuspec mismatch, SDK400 and source/run
+mismatch inputs fail closed. Existing whole-package hashes, source archive and
+joint test/package release barrier are unchanged. Package/source guards include
+the updated global SDK pin.
+
+Read existing focused logs: **17 packaging methods** and **8 toolchain methods**
+passed separately; these are header/installed-metadata fixtures, not SDK401 AOT
+builds. The producer downloaded matching runtime12 original license/notice texts
+and reports they are byte-identical to the previously tracked texts; the notice
+source/version pointer is updated. No local SDK installation, GUI, compilation,
+test rerun or CI was performed by this reviewer. New exact-source four-RID
+qualification remains required; the previous green run does not qualify changed
+native images or their embedded toolchain provenance.
+
+Frozen reviewed hashes:
+
+| File | SHA-256 |
+| --- | --- |
+| `packaging/release_toolchain.py` | `e86ffeafd6fa2b816deec8bd1a2f248750bb63a67d918fc4153d57e05cbac2cd` |
+| `packaging/release_package.py` | `5c1c65fde1edc4aaef19af74663155f6c100b7ef039706d37148a258be77051d` |
+| `.github/workflows/release.yml` | `c3b4a79e89ae2f7a29c4b97c1fd93a4152c0da544e41d7bdae70f88bb2a5adeb` |
+| `global.json` | `4e7d5022b2a5a8d02bb951bb264a4c8613eabc332572a0af5f9743d23f23d84e` |
