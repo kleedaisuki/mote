@@ -189,8 +189,11 @@ internal sealed class RopeNode
 
     private static RopeNode Branch(RopeNode left, RopeNode right) => new(null, left, right);
 
+    /// <summary>Counts logical breaks without normalizing source or splitting CRLF into two breaks.</summary>
+    /// <remarks>LF-only spans use framework counting; a trailing CR stays local for cross-leaf correction.</remarks>
     private static int CountBreaks(ReadOnlySpan<char> text)
     {
+        if (!text.Contains('\r')) return text.Count('\n');
         var count = 0;
         for (var i = 0; i < text.Length; i++)
             if (text[i] == '\r')
