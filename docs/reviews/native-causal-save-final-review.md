@@ -120,3 +120,47 @@ Retained execution evidence was read, not rerun:
 These runs are not summed into an independently verified final full-suite
 count. The focused follow-up closes the source-backed finding; hosted
 platform-native acceptance and full current-HEAD integration remain separate.
+## Schema-1 Save failure compatibility: `f75ccbb`
+
+The strict Windows Save positive control identified a real integration
+regression: the causal orchestration removed the established
+`RecordSaveFailure(ex)` call. The reported failed run retained typed failure
+phases and original disk/dirty-state evidence but omitted the documented
+`save.failure.replace` event. That absence violates an existing observable
+contract; it is not a stale-parser problem and must not be repaired by weakening
+the positive-control oracle.
+
+Source review of `f75ccbb` finds the correction aligned with this obligation:
+
+- `RunSaveAsync` now records the legacy filesystem failure once, inside its
+  nonfatal failure catch, under the explicit coarse Save mark. This is additive
+  to typed Engine phases, not a replacement or duplicate commit attempt.
+- The public one-argument `RecordSaveFailure(Exception)` implementation and
+  signature are unchanged. A new explicit-parent overload uses
+  `TryAcquireOriginal`, retaining the original trace/parent identity and
+  refusing/counting stale-session work on the original sink rather than
+  redirecting into a newly configured session.
+- The overload accepts only `IOException`/`UnauthorizedAccessException`, maps
+  phase strings through the existing fixed `SaveFailureName` allowlist, emits
+  the original signed numeric HResult and actual observed snapshot version,
+  and contains nonfatal optional `Exception.Data` access failures. Unknown
+  phase becomes the fixed `save.failure.unknown`. No message, path, arbitrary
+  Data entry or source content is serialized.
+- A default/disabled parent returns before inspecting optional evidence or
+  allocating telemetry objects. No long producer lease survives the method.
+
+The new controller test injects Replace failure `0x80070020`, asserts exact
+original target bytes and dirty state, one legacy replacement failure,
+truthful typed phase/HResult/version and shared coarse ancestry; its success
+control requires no legacy failure. Additional request tests cover rejecting
+Data, unknown phase, non-filesystem omission, old-session rejection with the
+original rejection counter, and warmed disabled zero-allocation behavior.
+
+**Assessment: no substantive defect found in this correction.** The worker
+reported a Release focused run of 54/54 passing with no skips (filter:
+`NativeSaveFailureCompatibilityTests|TelemetryRequestTests|TelemetryTests.Save_failure|NativeSaveRequestTests|NativeTelemetryOutcomeTests`).
+At review time no retained TRX/log path was provided for that run; the count is
+worker-reported rather than independently re-read execution evidence. No
+completed tests were rerun. A current Native AOT strict positive-control run
+must independently re-establish the legacy event in real Windows execution;
+source approval is not that runtime certificate.
