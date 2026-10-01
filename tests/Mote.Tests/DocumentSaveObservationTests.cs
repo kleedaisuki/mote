@@ -336,9 +336,13 @@ public sealed class DocumentSaveObservationTests
     /// <summary>Blocks only the first commit so queued snapshot capture is deterministic.</summary>
     private sealed class BlockingMove : DocumentSaveOperations, IDisposable
     {
+        /// <summary>Signals first entry without executing test continuations inside the Save hook.</summary>
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>Keeps the first commit pending until the second Save is queued and edited.</summary>
         internal readonly ManualResetEventSlim Release = new();
+        /// <summary>Only the first Move participates in the controlled hold.</summary>
         private int _calls;
+        /// <inheritdoc />
         internal override void Move(string stage, string target)
         {
             if (Interlocked.Increment(ref _calls) == 1)

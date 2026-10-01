@@ -55,3 +55,14 @@ Result: **19 passed / 0 failed / 0 skipped**, test duration **322 ms**. Raw TRX:
 normal ordering and byte/version oracles locally; it does not demonstrate the
 unknown hosted scheduling condition has been reproduced. Hosted strict-suite
 validation remains the integration check owned by the parent agent.
+
+## Integration review
+
+The parent independently inspected `5742d55` and the retained TRX: all 19 cases
+executed and passed, with no failed, aborted or unexecuted cases. The five-second
+entry deadline and ten-second intentional hold are unchanged; the second-task
+pending assertion and exact first-save bytes strengthen the existing oracle.
+`Task.WhenAll` in cleanup observes every started Save before either its document
+or synchronization primitive is disposed. No completed test was rerun for this
+review. XML comments now state the signal and hold lifetime invariants. A later
+hosted pass must be recorded as new evidence, not assumed from this review.
