@@ -1061,3 +1061,80 @@ Artifacts and raw `job.log` files are under
 summary: `.cache/ci-36820725850-prefix-audit.py` and
 `.cache/ci-36820725850-prefix-summary.json`. Only the general CI ledger was
 edited; no product/probe/workflow was modified or native workload rerun.
+
+## Ordinary Mac 1 MiB edit preflight failure — CI 36877121813
+
+2026-10-01. Artifact-only investigation of [CI 36877121813](https://github.com/kleedaisuki/mote/actions/runs/36877121813), frozen source
+`f1b929843563254ff15fb6586041d0ea2a069038`. This concerns ordinary-file
+reliability, **not additional 100 MiB optimization**. The source/report identities
+were checked using the frozen Git blobs rather than the concurrently changing
+worktree. Driver LF SHA-256 is
+`47b09ee4b138ee75abb9cd7092795788955f8b9ad39aed23990ec6b0127dca74`;
+Swift client LF SHA-256 is
+`e17197620f5cc5b48def1d008fc4184c1fa5fb28c02d909979984a575a4abac8`.
+The reported x64 executable is 17,162,352 bytes, unchanged before/after SHA-256
+`30fbee650f487c930c67246be477b3780e603868f855cb107ea9b53da5079f67`;
+this is retained hosted identity, not a locally downloaded binary certificate.
+
+| Boundary | Actual retained observation | What it does not prove |
+| --- | --- | --- |
+| Open/source | Bound source at 351.571612 ms parent duration; source has 1,048,576 units; later Complete/zero diagnostics v0 | Startup SLA, pixels or repeated-run reliability |
+| Edit transaction | `status=failed`, `guard_stage=window-count`, `ax_error=-25204`, `dispatched_events=0` | An accepted edit, product edit callback failure or physical input delivery |
+| Cleanup | One owned AX close attempted; cleanup normal exit true; actual editor exit 0 | Accepted edit/Save workflow; acceptance `normal_exit` remains false |
+| File/reopen | Working and immutable fixture retain original `9004bc8156e480461b02205536ee607414186c776078a8f35b20716c7e668355`; reopen exit null | Edited-byte oracle or successful reopen |
+
+**Classification: external AX edit-transaction preflight failure before any
+reported key posts; ordinary workflow remains incomplete, product root cause
+unattributed.** Frozen `MacClient.swift` rejects a modifying transaction after a
+CannotComplete window-count/window-copy read, before navigation or replacement.
+Python's legacy `edit_attempts=1` witnesses the call into that transaction, not
+one delivered replacement. The error is not evidence of an editor crash,
+unresponsive owner thread, absent edit callback or Save failure. Apple documents
+[`AXError.cannotComplete = -25204`](https://developer.apple.com/documentation/applicationservices/axerror/cannotcomplete)
+as a broad failure code, not a causal diagnosis; no particular memory, IPC,
+thread or scheduling cause is inferred here.
+
+The retained original trace has **4,715 bytes / 14 complete schema-valid records**,
+SHA-256 `9b4c07948e39c67e0500bcc87647025ef2d143bfb8dd34bd09eeb880755e1031`,
+one session, unique spans and successful recorded statuses. Positive records
+include startup, open, draw-submission, parse/publication/presentation, installed
+menu/input observations, input-monitor removal and normal session terminal.
+No edit/Save request record is retained. Missing input Save candidates cannot
+certify callback absence, and these are not relevant evidence of a Save failure
+because this transaction was rejected at edit preflight. The earlier summary's
+`trace_health=missing` refers to the absent successful-workload `trace_evidence`
+field; it must not be read as absence of the uploaded raw trace.
+
+The same x64 run's **100 MiB Save acknowledgement timeout / forced exit -9** is a
+different failure. The other six size/RID samples report accepted workflows with
+numeric original/reopen exits 0/0; their healthy raw Save audits were not repeated
+for this investigation. None of those outcomes establishes repeated reliability.
+
+### Narrow harness correction and discriminating evidence
+
+The confirmed evidence-retention defect is that `MacDriver.last_report` is shared
+by edit, later read-only polls and close. The general last failure observation can
+therefore lose the edit transaction's own validated boundary. The driver now
+retains `last_edit_report`, projected into `mac_edit_transaction_report` immediately
+after edit returns or raises. Only the existing closed `mac_report` projection is
+used; malformed/foreign/unreturned metadata remains null rather than reusing a
+ready observation. This adds no target telemetry, API queries, GUI actions, input
+retry, new deadline, accepted outcome or product-source change.
+
+Portable tests retain rejected zero-post preflight across successful cleanup,
+retain an acknowledged edit report across a subsequent failed observation, keep
+unknown boundaries null after timeout/malformed JSON/foreign identity, and verify
+the sample remains failed with editor exit 0/no reopen. Final affected suite:
+**47/47** (`python -B -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p test_probe.py -v`).
+An explicit old-method-body control fails the metadata-retention test with the
+missing edit snapshot, demonstrating that the test distinguishes the correction;
+it is not represented as execution of a frozen native product.
+
+Artifacts: `.cache/ci-36877121813-focus-exit-followup/failure-artifacts/native-json-large-osx-x64/`;
+reproducible artifact-only assertion script `.cache/audit-ordinary-mac-edit-preflight.py`
+and output `.cache/ordinary-mac-edit-preflight-audit.json`;
+portable suite log `.cache/ordinary-mac-edit-preflight-tests.log`;
+old-body control script/log `.cache/ordinary-mac-edit-old-body-control.{py,log}`.
+No local GUI/input/TCC modification, workflow dispatch, failed-binary retry or
+production Mac source fix occurred. The next already-planned source CI can retain
+this independent transaction witness without expanding the diagnostic matrix.

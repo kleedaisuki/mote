@@ -70,6 +70,17 @@ success or a green hosting job; a killed process can therefore report its real
 platform exit code while acceptance remains failed/censored. No additional wait,
 input retry or cleanup route is introduced.
 
+`edit_attempts` counts entry into the external driver transaction, **not keyboard
+posts, accepted edits or target callback delivery**. On macOS,
+`mac_edit_transaction_report` separately retains the existing closed, validated
+guard projection immediately after that transaction, including rejected preflight
+reports. `dispatched_events` counts the client's posted navigation/selection/edit
+events collectively; it is not a replacement-only count or execution receipt.
+An unvalidated return (timeout, malformed JSON or foreign identity) retains null,
+not an earlier ready observation. Subsequent polling and normal cleanup cannot
+overwrite this snapshot. Existing workload oracles, failure status, single-attempt
+input policy and deadlines are unchanged. See the [ordinary Mac preflight audit](../../docs/validation/native-json-large-ci.md#ordinary-mac-1-mib-edit-preflight-failure--ci-36877121813).
+
 Portable verification: `test_acceptance.py` passes **7/7**, `test_probe.py` passes
 **38/38** after the additive change. New cases cover all five checkpoint names,
 closed content-free shape, unchanged complete Save classification, repeated

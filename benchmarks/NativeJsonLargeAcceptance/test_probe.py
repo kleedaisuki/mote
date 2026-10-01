@@ -764,6 +764,98 @@ class ProbeTests(unittest.TestCase):
         self.assertIsNotNone(summary["first_ready_ms"])
         self.assertEqual(result["window_copy_count"], 1)
 
+    def test_mac_rejected_edit_preflight_survives_cleanup_report(self):
+        """Transaction entry is not input dispatch; later close cannot erase it."""
+        failed = {"status": "failed", "requested_pid": 42, "guard_stage": "window-count",
+                  "ax_error": -25204, "dispatched_events": 0,
+                  "private_ax_value": "must never enter report"}
+        closed = {"status": "observed", "requested_pid": 42, "guard_stage": "complete"}
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        returns = [SimpleNamespace(stdout=json.dumps(row).encode()) for row in (failed, closed)]
+        with patch.object(probe, "bounded_command", side_effect=returns) as command:
+            with self.assertRaises(RuntimeError):
+                driver.edit()
+            retained = driver.last_edit_report
+            driver.close()
+        self.assertEqual([call.args[0][3] for call in command.call_args_list], ["edit", "close"])
+        self.assertIs(driver.last_edit_report, retained)
+        self.assertEqual(retained["guard_stage"], "window-count")
+        self.assertEqual(retained["dispatched_events"], 0)
+        self.assertEqual(driver.last_report["guard_stage"], "complete")
+        self.assertNotIn("private_ax_value", retained)
+
+    def test_mac_acknowledged_edit_report_survives_later_read_failure(self):
+        """A failed ready poll must not replace the independent edit transaction."""
+        edited = {"status": "observed", "requested_pid": 42, "guard_stage": "edit-ack",
+                  "dispatched_events": 22, "selection_start": 10, "selection_length": 0}
+        pending = {"status": "failed", "requested_pid": 42, "guard_stage": "window-count",
+                   "ax_error": -25204, "dispatched_events": 0}
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        returns = [SimpleNamespace(stdout=json.dumps(row).encode()) for row in (edited, pending)]
+        with patch.object(probe, "bounded_command", side_effect=returns) as command:
+            driver.edit()
+            with self.assertRaises(RuntimeError):
+                driver.observe(1)
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual(driver.last_edit_report["guard_stage"], "edit-ack")
+        self.assertEqual(driver.last_edit_report["dispatched_events"], 22)
+        self.assertEqual(driver.last_report["guard_stage"], "window-count")
+
+    def test_mac_unvalidated_edit_never_reuses_ready_report(self):
+        """Timeout, malformed JSON and foreign identity leave this boundary unknown."""
+        ready = {"status": "observed", "requested_pid": 42, "guard_stage": "ready"}
+        for response, error in ((TimeoutError(), TimeoutError),
+                                (SimpleNamespace(stdout=b"not-json"), ValueError),
+                                (SimpleNamespace(stdout=json.dumps({**ready, "requested_pid": 99}).encode()), ValueError)):
+            driver = probe.MacDriver(42, 1048576, Path("unused"))
+            driver.last_report = probe.mac_report(ready)
+            driver.last_edit_report = probe.mac_report(ready)
+            with patch.object(probe, "bounded_command", side_effect=[response]) as command:
+                with self.assertRaises(error):
+                    driver.edit()
+            self.assertEqual(command.call_count, 1)
+            self.assertIsNone(driver.last_edit_report)
+            self.assertEqual(driver.last_report["guard_stage"], "ready")
+
+    def test_sample_retains_rejected_mac_edit_without_promoting_cleanup(self):
+        """The reported zero-post transaction remains failed despite editor exit zero."""
+        case = probe.prepare(self.directory, [1])[0]
+        sample_dir = self.directory / "edit-preflight"
+        sample_dir.mkdir()
+        child = SimpleNamespace(pid=42, alive=True)
+        child.poll = lambda: None if child.alive else 0
+        child.wait = lambda timeout: 0
+        operations = []
+        ready = {"status": "observed", "requested_pid": 42, "guard_stage": "ready",
+                 "ready": True, "complete": True}
+        failed = {"status": "failed", "requested_pid": 42, "guard_stage": "window-count",
+                  "ax_error": -25204, "dispatched_events": 0}
+        def client(arguments, *unused):
+            """Only owned close changes fake child liveness; no OS action occurs."""
+            if "--check-runtime" in arguments:
+                return SimpleNamespace(stdout=b"")
+            operation = arguments[3]
+            operations.append(operation)
+            row = failed if operation == "edit" else ready
+            if operation == "close":
+                child.alive = False
+            return SimpleNamespace(stdout=json.dumps(row).encode())
+        with patch.object(probe.sys, "platform", "darwin"), \
+             patch.object(probe.subprocess, "Popen", return_value=child), \
+             patch.object(probe, "bounded_command", side_effect=client), \
+             patch.object(probe, "save_chain_evidence", return_value={"status": "unobserved"}):
+            result = probe.sample(Path("unused"), case, sample_dir, Path("client"))
+        self.assertEqual(operations, ["observe", "observe", "edit", "close"])
+        self.assertEqual(result["mac_edit_transaction_report"]["dispatched_events"], 0)
+        self.assertEqual(result["mac_edit_transaction_report"]["guard_stage"], "window-count")
+        self.assertEqual(result["edit_attempts"], 1)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["phase"], "native-local-edit")
+        self.assertEqual(result["editor_exit_code"], 0)
+        self.assertTrue(result["failure_cleanup_normal_exit"])
+        self.assertFalse(result["normal_exit"])
+        self.assertIsNone(result["reopen_exit_code"])
+
     def test_persistent_mac_count_cannot_complete_times_out(self):
         """Persistent messaging refusal remains a censored failure, never empty-window success."""
         pending = {"status": "observed", "requested_pid": 42, "guard_stage": "window-count",

@@ -236,6 +236,7 @@ class MacDriver:
         """Retain only process identity, ASCII character count and compiled client."""
         self.pid, self.size, self.client = pid, size, client
         self.last_report = None
+        self.last_edit_report = None
         self.observation_started_ns = time.perf_counter_ns()
         self.observation_attempts = 0
         self.first_ax_error = None
@@ -311,8 +312,19 @@ class MacDriver:
                 "clock_scope": "parent-driver-attach-to-observation-return-including-client-overhead"}
 
     def edit(self):
-        """Each navigation/edit action is sent once; failures never resend an edit."""
-        self.command("edit", 0)
+        """Retain this transaction's validated guard report without retrying input.
+
+        Later observation and cleanup commands replace ``last_report``. Keep the
+        edit boundary separately, including a rejected preflight with zero posts.
+        An unvalidated client return must not reuse the preceding ready report.
+        """
+        previous_report = self.last_report
+        self.last_edit_report = None
+        try:
+            self.command("edit", 0)
+        finally:
+            if self.last_report is not previous_report:
+                self.last_edit_report = self.last_report
 
     def save(self):
         """Only the exact process receives Command-S; source focus is rechecked."""
@@ -570,9 +582,14 @@ def sample(executable, case, directory, client, mac_save_witness=False):
             raise ValueError("open mutated source")
         result["phase"] = "native-local-edit"
         started = time.perf_counter_ns()
-        # Count attempted non-idempotent dispatch before invoking the driver.
+        # This legacy count witnesses transaction entry, not keyboard posts or
+        # delivery. The Mac transaction report retains its separate post count.
         result["edit_attempts"] = 1
-        driver.edit()
+        try:
+            driver.edit()
+        finally:
+            if isinstance(driver, MacDriver):
+                result["mac_edit_transaction_report"] = getattr(driver, "last_edit_report", None)
         result["edited_source_observation"] = wait(child, lambda: ready(1), 15)
         result["parent_edit_dispatch_to_source_ack_ms"] = (time.perf_counter_ns() - started) / 1e6
         result["phase"] = "edited-whole-document-semantics"
