@@ -169,4 +169,3 @@ public sealed class NativeGridFocusTelemetryTests
     /// <summary>Returns only the fixed operation identifier for assertions.</summary>
     private static string Op(JsonElement row) => row.GetProperty("operation").GetString()!;
 }
-
