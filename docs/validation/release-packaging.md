@@ -143,6 +143,34 @@ is removed; this is a dependency-graph scheduling change only. The narrow YAML
 graph check verifies identity-only package admission and the unchanged joint
 barrier; no test rerun is needed for this edit.
 
+### Exact SDK selection after the third hosted qualification
+
+Run `36919898449` at source `677` passed both managed test jobs and all four
+Native AOT publish invocations, but the two Windows pack jobs correctly failed
+the unchanged exact-SDK/license-inventory guard. Their retained
+`release-evidence-win-x64/dotnet-info.txt` and
+`release-evidence-win-arm64/dotnet-info.txt` both report selected SDK **10.0.401**,
+whereas both macOS reports selected **10.0.400**. Installing10.0.400 through
+setup-dotnet did not select it on Windows images containing a newer SDK. The
+artifacts are retained under `.cache/release-ci-36919898449/evidence/`.
+
+Repository `global.json` now sets version10.0.400, `rollForward: disable` and
+`allowPrerelease: false`; early workflow checks require actual `dotnet --version`
+to equal10.0.400 before restore/build and before AOT publish and retain the value
+as `selected-sdk.txt`. Package guard and original runtime license inventory remain
+unchanged. Microsoft documents that SDK selection is independent of runtime
+selection; macOS reports' host10.0.12 does not alone identify which Native AOT
+runtime pack was linked. The locally inspected SDK10.0.400
+`Microsoft.NETCoreSdk.BundledVersions.props` declares
+BundledNETCoreAppPackageVersion10.0.11, matching the notice source; the next
+hosted run remains necessary to establish selected toolchains and native results.
+
+Validation for this fix is limited to exact JSON structure, actual local SDK
+selection and YAML/PowerShell syntax. No test suite or GUI is rerun. Developers
+must install the exact SDK pin; updating it requires deliberate runtime notice
+updates rather than relaxing the packaging guard. Primary reference:
+[Microsoft global.json SDK selection](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json).
+
 The root owner must freeze commit/version/default profile and run the workflow.
 Only a complete successful release-assets job for the intended commit is eligible.
 Before upload, inspect run/job evidence and verify checksum/index identities. A

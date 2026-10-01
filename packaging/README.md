@@ -34,7 +34,12 @@ is 15.0; hosted qualification records its actual OS version, not all versions.
 invocable via `workflow_dispatch`. It requires a full immutable lowercase Git
 SHA and canonical stable version. The source project version must agree. The
 workflow pins SDK 10.0.400/runtime 10.0.11 to match the distributed notice texts;
-a toolchain upgrade must deliberately update the runtime notice inventory.
+repository `global.json` selects exactly that installed SDK with roll-forward
+disabled and prerelease SDKs excluded. Merely installing the SDK is not enough
+when a hosted image has a newer SDK. Early actual `dotnet --version` checks run
+before restore/build and before native publish. Developers must install exactly
+SDK10.0.400; a toolchain upgrade must deliberately update the global pin and
+runtime notice inventory together.
 
 After source identity passes, two branches run concurrently: complete solution
 tests and packer/oracle negative controls on Windows/macOS; and native-architecture
