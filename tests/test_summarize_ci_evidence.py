@@ -192,6 +192,21 @@ class SummaryTests(unittest.TestCase):
             "contract": "native-save-causal-v1", "status": "SECRET", "requests": "PRIVATE",
             "absence_certified": "false", "normal_exit": 1}}), {"status": "unverified"})
 
+    def test_markdown_exposes_save_claim_request_count_and_normal_exit_privately(self):
+        row = self.report("native-json-large", {"status": "incomplete", "samples": [
+            {"status": "failed", "save_causal_evidence": {"contract": "native-save-causal-v1",
+             "status": "censored", "requests": [{"reason": "SECRET"}], "normal_exit": False,
+             "trace_sha256": "PRIVATE", "discarded_partial_files": ["PRIVATE-PATH"]}}]})
+        output = summary.markdown({"rid": "win-x64", "diagnostics": [row], "unrecognized_inventory_reports": 0})
+        self.assertIn("Save-chain=censored, requests=1, normal-exit=False", output)
+        self.assertNotIn("SECRET", output)
+        self.assertNotIn("PRIVATE", output)
+
+    def test_markdown_save_claim_missing_fields_remain_unknown(self):
+        self.assertEqual(summary.causal_markdown({}), "not-recorded")
+        self.assertEqual(summary.causal_markdown({"save_causal_evidence": {"status": "unverified"}}),
+            "unverified, requests=unknown, normal-exit=unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,9 @@ Booleans. These are separate from the document's result and ordinary trace
 health. Unknown contracts remain unverified. Request payloads, trace SHA values,
 and discarded-file paths are not copied. The summary reports the reader's
 claim; it does not replace its route/version completeness checks.
+The Actions Step Summary also renders the fixed Save-chain status, recorded
+request count, and normal-exit Boolean. Missing fields remain `unknown`, and
+non-JSON diagnostics without this evidence display `not-recorded`.
 
 ## Privacy boundary
 
@@ -89,14 +92,15 @@ python -B -m unittest discover -s tests -p test_summarize_ci_evidence.py -v
 python -B tests/summarize_ci_evidence.py --rid win-x64 --output .cache/ci-inventory/win-x64/evidence-summary.json
 ```
 
-Local validation: 23 deterministic fixtures passed. They cover all four RID
+Local validation: 25 deterministic fixtures passed. They cover all four RID
 manifests; missing/malformed reports; unknown report privacy; fake typed exits;
 control completion vs product pass; censored expected kills; forced cleanup;
 JSON exact two-case coverage; observed trace drops; hidden worker exits; and
 repeat-run self-summary exclusion. Added fixtures verify missing/empty/pending
 request evidence, explicit normal outcomes, negative drop-count rejection,
 Grid nested failures, C0/P0 reply retention, fake Boolean/string exit rejection,
-and native Save claim contract/typed-field/privacy boundaries.
+native Save claim contract/typed-field/privacy boundaries, and visible Markdown
+Save-chain evidence with missing-field and privacy checks.
 A cached real hosted osx-arm64 JSON pilot
 report was summarized: both 1/100 MiB claims and no-observed-drops retained,
 other unavailable reports explicitly missing, no inferred numeric exits.

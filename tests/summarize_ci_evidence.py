@@ -235,6 +235,16 @@ def summarize(root, rid):
             "diagnostics": [summarize_report(identity, path) for identity, path in reports]}
 
 
+def causal_markdown(item):
+    """Show fixed Save-chain claims and typed evidence rather than hide them in JSON."""
+    evidence = item.get("save_causal_evidence")
+    if not isinstance(evidence, dict):
+        return "not-recorded"
+    return (f"{evidence.get('status', 'unverified')}, "
+            f"requests={evidence.get('recorded_requests', 'unknown')}, "
+            f"normal-exit={evidence.get('normal_exit', 'unknown')}")
+
+
 def markdown(report):
     """Render allowlisted generated values, never arbitrary report strings."""
     lines = ["## Native diagnostic evidence / " + report["rid"],
@@ -248,7 +258,7 @@ def markdown(report):
                            f"{item.get('evidence_health', 'unknown')}, trace={item.get('trace_health', 'not-applicable')}, "
                            f"exits={','.join(f'{key}={item[key]}' for key in EXIT_FIELDS if key in item) or 'unknown'}, "
                            f"AX-reply={item.get('ax_reply', 'not-applicable')}, "
-                           f"Save-chain={item.get('save_causal_evidence', {}).get('status', 'not-applicable')}"
+                           f"Save-chain={causal_markdown(item)}"
                            for item in row["nested"]) or "not-recorded"
         if "recorded_checks" in row:
             nested += f"; checks={row['passed_checks']}/{row['recorded_checks']}, failed={row['failed_checks']}"
