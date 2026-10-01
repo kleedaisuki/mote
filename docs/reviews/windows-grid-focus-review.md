@@ -151,6 +151,101 @@ add a reproducible owned synchronous callback discriminator and then repair the
 publication transaction coherently rather than patching one HasKeyboardFocus
 property or forcing focus.
 
+## Proposed Focus provenance contract review after CI 36858899063
+
+Inspected the separately owned final-source CI audit and the proposed construction
+in `docs/csv-grid-accessibility-implementation.md`. Both actual owned-HWND tests
+passed on each RID; the unchanged published-AOT external client still reports
+the original seven errors on each. This is material negative evidence against
+calling passive visibility a demonstrated historical cure. No completed native
+validation was rerun for this review.
+
+The opt-in provider-boundary construction is appropriate, with the following
+implementation constraints. These are review requirements, not newly demonstrated
+production defects or permission to change the legacy oracle.
+
+### Exact boundary and minimal types
+
+1. Define whether `received` means every `WindowsGridUiaNode.SetFocus` entry,
+   including stale/header early returns, or only the sole admitted attempt to
+   call the adapter action. The proposal currently says actual provider invocation
+   and sole adapter action. Choose one precise contract and test early returns;
+   do not silently omit refused requests while describing complete provider
+   coverage. Targets outside table/cell must not be mislabeled cell.
+2. Keep a Windows-only observation interface returning a value-type sample:
+   native callback-thread relation, managed admission relation, and physical
+   pane. Use closed enums for each independently. Native owner-thread equality
+   does not substitute for the existing managed owner check. Unknown is not
+   non_owner, false or refusal. A sample capture failure should produce unknown/
+   unavailable observations without changing the action's return.
+3. Capture the exact eight-valued `GridAccessibilityResult` from the original
+   adapter invocation before the existing HRESULT translation. Unsupported,
+   NotReady and CompositionBlocked all map to the same HRESULT; Applied and
+   NoChange both map to success. A translated HRESULT alone cannot reconstruct
+   the admission result. If the original action throws, record a fixed fault
+   terminal best-effort and preserve the original exception/COM conversion;
+   never swallow it into a guessed success or new unsupported result.
+4. A typed receipt should own its original sink and persisted receipt span; a
+   fresh terminal span points to that anchor and completes at most once. Do not
+   invent ambient Activity parents or fall back to the current newer session.
+   Request-local state must contain no HWND, event or content retention. No
+   cross-process client ID is supplied by the original UIA contract.
+
+### Source identity and disabled path
+
+The shell's actual source handle is stronger evidence than the external client's
+arbitrary focus sample. `EnsureGrid` currently has access to legacy `_editor` or
+Canvas `_canvasIsland.InputHandle`; the Canvas input is constructed once and
+cleared at native destruction, not replaced by ordinary binding updates.
+Therefore passing the actual identity at Grid construction is reasonable, but
+capture must validate its current native liveness, PID and owner-thread relation
+when enabled. Zero/missing Canvas input must remain unavailable; do not fall back
+to a legacy source HWND solely to produce a source classification. A retained,
+destroyed/reused numeric HWND is not identity evidence. No foreign text, class,
+window title or UIA metadata is required to classify a focus handle outside the
+known owned panes.
+
+Disabled observation must branch before constructing observation payloads,
+querying native threads/focus, acquiring an observation interface or creating a
+capturing delegate. A wrapper lambda allocating on every default-off request
+would violate the declared contract even if telemetry drops it internally. Keep
+the original direct action path and exactly-once invocation. Enabled capture and
+serialization faults must be isolated from original action failures; do not
+catch both under one broad catch that masks which operation failed. No user-facing
+error UI, focus setter or retry belongs to the observation path.
+
+### Attribution and privacy
+
+Server receipt/terminal edges establish one actual method-call lifetime. Client
+begin/end labels establish sequential client observations. Timestamp overlap,
+one visible successful COM return, or even one observed server pair does not
+prove a client-to-server edge when the API carries no explicit correlation token
+and the transport may drop unrelated requests. Keep both graphs independent and
+report temporal/sequential compatibility, not certified correlation. Multiple
+pairs, drops, missing terminal, unavailable identity or censored shutdown require
+incomplete/ambiguous attribution, never proof of absence.
+
+Operation-specific readers must reject unknown enum integers/strings, unexpected
+fields, invalid receipt/terminal parent/status combinations and these attributes
+on unrelated operations. Append event identifiers without renumbering existing
+schema-1 operations. Serialize only the closed pane/thread/target/result facts;
+do not serialize native handles, thread IDs, PID, coordinates, content or exception
+messages. Explicitly freeze how unavailable/faulted observations map to terminal
+status: observation uncertainty is not by itself proof that the focus action
+failed. Portable serializer/action-transparency/default-off tests support these
+contracts but do not prove native COM delivery.
+
+### Review verdict and next evidence
+
+No conceptual blocker to the proposed opt-in design. Resolve the exact boundary,
+independent thread relations, identity validation and terminal status mapping
+before implementation. The independently sequenced client must retain the old
+client/source pins and negative result, avoid all repair/reset/resend behavior,
+and capture native child identity before UIA inspection. One actual published-AOT
+execution per RID with raw report/traces and numeric exits is the next required
+evidence; no local GUI execution or production implementation was performed by
+this review.
+
 ## Addendum: scoped dual-architecture hosted focus step
 
 Independent workflow-only review on 2026-10-01 examined the additive 26-line
