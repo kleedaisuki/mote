@@ -18,7 +18,8 @@ STATUS = {"pass": "pass", "passed": "pass", "failed": "failed",
           "completed-success-observed": "experiment-completed-success-observed",
           "completed-failure-observed": "experiment-completed-failure-observed"}
 EXIT_FIELDS = ("exit_code", "owner_exit_code", "child_exit_code", "target_exit",
-               "clang_exit_code", "client_exit_code", "swift_exit_code")
+               "clang_exit_code", "client_exit_code", "swift_exit_code",
+               "editor_exit_code", "reopen_exit_code")
 
 
 def scalar_fields(data):

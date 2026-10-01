@@ -207,6 +207,32 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(summary.causal_markdown({"save_causal_evidence": {"status": "unverified"}}),
             "unverified, requests=unknown, normal-exit=unknown")
 
+    def test_json_actual_editor_and_reopen_exits_are_retained_and_rendered(self):
+        row = self.report("native-json-large", {"status": "incomplete", "samples": [
+            {"size_mib": 1, "status": "failed", "editor_exit_code": -9, "reopen_exit_code": 7,
+             "forced_cleanup": True, "normal_exit": False, "reopen_normal_exit": False,
+             "error": "PRIVATE-PATH"}]})
+        self.assertEqual(row["nested"][0]["editor_exit_code"], -9)
+        self.assertEqual(row["nested"][0]["reopen_exit_code"], 7)
+        self.assertEqual(row["nested"][0]["evidence_health"], "censored")
+        output = summary.markdown({"rid": "win-x64", "diagnostics": [row], "unrecognized_inventory_reports": 0})
+        self.assertIn("editor_exit_code=-9", output)
+        self.assertIn("reopen_exit_code=7", output)
+        self.assertNotIn("PRIVATE", output)
+
+    def test_json_exit_booleans_and_unlaunched_null_never_become_zero(self):
+        for fields in ({"editor_exit_code": None, "reopen_exit_code": None},
+                       {"editor_exit_code": True, "reopen_exit_code": False},
+                       {"editor_exit_code": "0", "reopen_exit_code": "PRIVATE"}, {}):
+            row = self.report("native-json-large", {"status": "pass", "samples": [
+                {"size_mib": 1, "status": "pass", "normal_exit": True, "reopen_normal_exit": True, **fields}]})
+            self.assertNotIn("editor_exit_code", row["nested"][0])
+            self.assertNotIn("reopen_exit_code", row["nested"][0])
+            output = summary.markdown({"rid": "win-x64", "diagnostics": [row], "unrecognized_inventory_reports": 0})
+            self.assertIn("exits=unknown", output)
+            self.assertNotIn("editor_exit_code=0", output)
+            self.assertNotIn("PRIVATE", output)
+
 
 if __name__ == "__main__":
     unittest.main()

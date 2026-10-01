@@ -46,6 +46,12 @@ original numeric AX reply. `completed-success-observed` and
 not a product pass. A zero owner/client exit can coexist with a failing AX reply.
 No numeric editor exit is invented when a report contains only a normal-exit
 Boolean. This summary reads retained report fields, not GitHub step conclusions.
+Ordinary JSON samples can now retain `editor_exit_code` and `reopen_exit_code`
+from each owned subprocess's actual `poll()` result after cleanup. Only strict
+integers are copied and rendered in the Actions Step Summary. An unlaunched
+reopen, missing value, null result, Boolean, or string remains unknown; neither
+`normal_exit=true` nor a pass claim synthesizes zero. A forced-cleanup numeric
+exit is termination evidence, not normal completion or absence certification.
 
 Trace health is separate: an explicitly valid causal-integrity report with zero
 observed drops is `no-observed-drops`, not proof of zero producer loss. Missing
@@ -92,7 +98,7 @@ python -B -m unittest discover -s tests -p test_summarize_ci_evidence.py -v
 python -B tests/summarize_ci_evidence.py --rid win-x64 --output .cache/ci-inventory/win-x64/evidence-summary.json
 ```
 
-Local validation: 25 deterministic fixtures passed. They cover all four RID
+Local validation: 27 deterministic fixtures passed. They cover all four RID
 manifests; missing/malformed reports; unknown report privacy; fake typed exits;
 control completion vs product pass; censored expected kills; forced cleanup;
 JSON exact two-case coverage; observed trace drops; hidden worker exits; and
@@ -100,7 +106,9 @@ repeat-run self-summary exclusion. Added fixtures verify missing/empty/pending
 request evidence, explicit normal outcomes, negative drop-count rejection,
 Grid nested failures, C0/P0 reply retention, fake Boolean/string exit rejection,
 native Save claim contract/typed-field/privacy boundaries, and visible Markdown
-Save-chain evidence with missing-field and privacy checks.
+Save-chain evidence with missing-field and privacy checks. Actual editor/reopen
+exit fields additionally have numeric retention/rendering and null/fake-type
+non-promotion fixtures. These fixtures do not claim new hosted exit observations.
 A cached real hosted osx-arm64 JSON pilot
 report was summarized: both 1/100 MiB claims and no-observed-drops retained,
 other unavailable reports explicitly missing, no inferred numeric exits.
