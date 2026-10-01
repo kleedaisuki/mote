@@ -242,3 +242,50 @@ call its eventual success a causal Save repair, ordinary performance sample or
 complete release acceptance. Previously stated Mac/native/physical-input review
 limits remain in force. No production, probe or workflow file was edited by this
 reviewer and no workflow was dispatched or branch pushed.
+
+## Hosted invocation defect and narrow wrapper correction
+
+Follow-up review, 2026-10-01: inspected the retained original Mac job logs under
+`.cache/ci-36816778414-save-witness/` for
+[run 36816778414](https://github.com/kleedaisuki/mote/actions/runs/36816778414),
+source `d6b355b`. Both report 41 portable tests passing, then argparse exit 2 with
+`unrecognized arguments: - - m a c - s a v e - w i t n e s s`, followed by the
+wrapper's failure and missing JSON report warning. These are **prelaunch harness
+failures**, not product Save failures or absence of selector/admission execution.
+No original JSON pilot process, Save outcome or witness stream from this run can
+be inferred. The prior source review missed this PowerShell scalar-output/splat
+integration defect; its successful verdict did not establish actual hosted argv.
+
+Reviewed the owner's narrow working-tree correction to `.github/workflows/ci.yml`
+and new `benchmarks/NativeJsonLargeAcceptance/test_invocation.ps1`. No substantive
+issue found in the correction:
+
+- The workflow first assigns `$witness = @()`, then assigns the one-element array
+  inside the Mac branch. It no longer assigns an if statement's enumerated output
+  to the variable, so neither the Mac scalar string nor the Windows null branch
+  is splatted. The actual `@witness` invocation remains unchanged.
+- The guard requires one exact production two-line block; it replaces only the
+  automatic platform variable with its test-owned Boolean. The scriptblock's
+  unary-comma return prevents guard output from flattening the returned array.
+  It checks array identity and passes the actual splat to a real Python argv-echo
+  child for both Mac RIDs and both Windows RIDs. Expected argv is exactly one
+  complete flag on Mac and zero optional arguments on Windows, not a substring
+  or PowerShell-only simulation.
+- I independently recalculated the guard's normalized LF and CRLF SHA-256 values;
+  both match the workflow pins. A guard throw is terminating under Stop error
+  handling, and therefore prevents the following Python suite/pilot invocation.
+  Native argv-control failures are explicitly checked too.
+- The correction changes only invocation construction and its guard, not target
+  hooks, collector/probe code, Save attempt count, exact-byte/trace/reopen oracle,
+  phase deadlines or Grid workflow steps. The owner reports 4/4 local argv
+  controls passing; this reviewer did not duplicate that completed test run.
+
+The array/output behavior is consistent with Microsoft's
+[PowerShell array documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_arrays)
+and [unary comma operator documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators).
+
+**Correction approved for commit.** Hosted execution of the corrected wrapper and
+actual original-child Mac witness collection remain unverified until the next
+run. Neither the initial green parent job nor the local argv controls establish
+Mac Save acceptance. This review edited only this artifact and did not push or
+dispatch any workflow.
