@@ -52,6 +52,20 @@ INPUT_FAILURE_OPERATIONS = frozenset("""native.input.monitor.unavailable
 native.input.monitor.callback_failed native.input.monitor.removal_failed""".split())
 INPUT_OPERATIONS = INPUT_SUCCESS_OPERATIONS | INPUT_FAILURE_OPERATIONS
 OPERATIONS |= INPUT_OPERATIONS
+# Adapter observations have their own exact dimensions, never global attributes.
+FOCUS_RECEIPT_OPERATION = "native.grid.focus.adapter.received"
+FOCUS_TERMINAL_OPERATION = "native.grid.focus.adapter"
+FOCUS_OPERATIONS = frozenset((FOCUS_RECEIPT_OPERATION, FOCUS_TERMINAL_OPERATION))
+FOCUS_RELATIONS = frozenset(("unknown", "owner", "non_owner"))
+FOCUS_PANES = frozenset("""unavailable none source table row_scroller column_scroller
+coordinate owned_other outside""".split())
+FOCUS_TARGETS = frozenset(("table", "cell"))
+FOCUS_RESULTS = frozenset("""applied no_change unsupported stale not_ready invalid_coordinate
+unavailable composition_blocked fault""".split())
+FOCUS_RECEIPT_ATTRIBUTES = frozenset(("native_thread_relation", "managed_admission_relation",
+                                    "focus_before", "focus_target"))
+FOCUS_TERMINAL_ATTRIBUTES = FOCUS_RECEIPT_ATTRIBUTES | {"focus_after", "focus_result"}
+OPERATIONS |= FOCUS_OPERATIONS
 STATUSES = ("success", "cancelled", "failure", "skipped")
 ATTRIBUTES = {"format", "size_bucket", "version", "count", "hresult", "reason"}
 # Match JsonlTraceSink's closed producer vocabulary, including its enum fallback.
@@ -161,6 +175,31 @@ def valid_hex(value, length):
     return isinstance(value, str) and re.fullmatch(f"[0-9a-f]{{{length}}}", value) is not None
 
 
+def validate_focus_record(row):
+    """Check adapter-only closed dimensions; graph correlation is a separate audit.
+
+    A receipt denotes an adapter attempt, not every provider entry. Native and
+    managed ownership are independent observations; neither implies the other.
+    """
+    receipt = row["operation"] == FOCUS_RECEIPT_OPERATION
+    attrs = row["attributes"]
+    required = FOCUS_RECEIPT_ATTRIBUTES if receipt else FOCUS_TERMINAL_ATTRIBUTES
+    if set(attrs) != required or row["parent_span_id"] is None:
+        raise ValueError("invalid focus adapter dimensions/parent")
+    dimensions = (("native_thread_relation", FOCUS_RELATIONS),
+                  ("managed_admission_relation", FOCUS_RELATIONS),
+                  ("focus_before", FOCUS_PANES), ("focus_target", FOCUS_TARGETS))
+    if not receipt:
+        dimensions += (("focus_after", FOCUS_PANES), ("focus_result", FOCUS_RESULTS))
+    for key, vocabulary in dimensions:
+        if not isinstance(attrs[key], str) or attrs[key] not in vocabulary:
+            raise ValueError("unsupported focus adapter dimension")
+    expected_status = ("success" if receipt or attrs["focus_result"] in
+                       ("applied", "no_change") else "failure")
+    if row["status"] != expected_status or (receipt and row["duration_us"] != 0):
+        raise ValueError("invalid focus adapter outcome/duration")
+
+
 def load_records(paths, *, discard_partial=False):
     """Bound and validate records; optionally discard only an unterminated final row."""
     records = []
@@ -196,7 +235,11 @@ def load_records(paths, *, discard_partial=False):
                 if parent is not None and not valid_hex(parent, 16):
                     raise ValueError("invalid parent identifier")
                 attrs = row.get("attributes")
-                if not isinstance(attrs, dict) or set(attrs) - ATTRIBUTES:
+                if not isinstance(attrs, dict):
+                    raise ValueError("unsupported trace attributes")
+                if row["operation"] in FOCUS_OPERATIONS:
+                    validate_focus_record(row)
+                elif set(attrs) - ATTRIBUTES:
                     raise ValueError("unsupported trace attributes")
                 if row["operation"] in MENU_OPERATIONS and (
                         row["duration_us"] != 0 or row["status"] != "success"
