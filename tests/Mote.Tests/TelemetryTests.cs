@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Security;
 using System.Collections;
+using System.Diagnostics;
 using Mote.Telemetry;
 
 namespace Mote.Tests;
@@ -168,6 +169,190 @@ public sealed class TelemetryTests
         Assert.Contains(lines, line => line.Contains("\"operation\":\"telemetry.dropped\"", StringComparison.Ordinal));
     }
 
+    /// <summary>An already admitted background scope records before the terminal session, even when close starts first.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Shutdown_drains_scope_admitted_before_close_without_dropping_it(bool child)
+    {
+        using var temp = new RepoTemp();
+        var output = temp.File("trace");
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = output });
+        var scope = child
+            ? MoteTelemetry.StartChild(TelemetryOperation.AnalysisParse, MoteTelemetry.Mark())
+            : MoteTelemetry.Start(TelemetryOperation.AnalysisParse);
+        Assert.NotNull(scope);
+        try
+        {
+            // Shutdown executes synchronously up to its first incomplete await.
+            // The scope is deliberately held until after closure starts: no sleeps.
+            var shutdown = MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(10));
+            Assert.Null(MoteTelemetry.Start(TelemetryOperation.Save));
+            scope.SetStatus(TelemetryStatus.Cancelled);
+            scope.Dispose();
+            await shutdown;
+        }
+        finally { scope.Dispose(); await MoteTelemetry.ShutdownAsync(); }
+        var lines = await ReadLinesAsync(output);
+        Assert.Single(lines, line => line.Contains("\"operation\":\"analysis.parse\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("\"operation\":\"telemetry.dropped\"", StringComparison.Ordinal));
+        Assert.Contains("\"operation\":\"mote.session\"", lines[^1], StringComparison.Ordinal);
+    }
+
+    /// <summary>Admission precedes Activity creation, whose listener can synchronously begin shutdown.</summary>
+    [Fact]
+    public async Task Scope_activity_creation_racing_shutdown_keeps_admitted_record()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        Task? shutdown = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = static source => source.Name == "Mote",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStarted = _ => shutdown = MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(10))
+        };
+        ActivitySource.AddActivityListener(listener);
+        try
+        {
+            using (var scope = MoteTelemetry.Start(TelemetryOperation.AnalysisParse))
+                Assert.NotNull(scope);
+            Assert.NotNull(shutdown);
+            await shutdown;
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        var lines = await ReadLinesAsync(temp.Path);
+        Assert.Single(lines, line => line.Contains("\"operation\":\"analysis.parse\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("\"operation\":\"telemetry.dropped\"", StringComparison.Ordinal));
+    }
+
+    /// <summary>An external Activity listener throwing during creation cannot strand a producer lease.</summary>
+    [Fact]
+    public async Task Throwing_activity_listener_releases_scope_admission()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = static source => source.Name == "Mote",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStarted = static _ => throw new InvalidOperationException("synthetic-listener")
+        };
+        ActivitySource.AddActivityListener(listener);
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => MoteTelemetry.Start(TelemetryOperation.AnalysisParse));
+            await MoteTelemetry.ShutdownAsync(TimeSpan.FromSeconds(10)).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
+        Assert.Contains(await ReadLinesAsync(temp.Path),
+            line => line.Contains("\"operation\":\"mote.session\"", StringComparison.Ordinal));
+    }
+
+    /// <summary>Invalid oversized deadlines remain nonthrowing and still seal the writer.</summary>
+    [Fact]
+    public async Task Oversized_shutdown_deadline_preserves_nonthrowing_contract()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        var mark = MoteTelemetry.Mark();
+        var scope = MoteTelemetry.Start(TelemetryOperation.AnalysisParse);
+        Assert.NotNull(scope);
+        try
+        {
+            await MoteTelemetry.ShutdownAsync(TimeSpan.MaxValue);
+            Assert.True(mark.Sink!.IsFaulted);
+            Assert.False(mark.Sink.TryAcquireProducer());
+        }
+        finally
+        {
+            scope.Dispose();
+            await mark.Sink!.ShutdownAsync(TimeSpan.FromSeconds(10));
+            await MoteTelemetry.ShutdownAsync();
+        }
+        using var session = JsonDocument.Parse((await ReadLinesAsync(temp.Path)).Single(
+            line => line.Contains("\"operation\":\"mote.session\"", StringComparison.Ordinal)));
+        Assert.Equal("cancelled", session.RootElement.GetProperty("status").GetString());
+    }
+
+    /// <summary>Even the smallest negative deadline retains immediate, nonthrowing closure.</summary>
+    [Fact]
+    public async Task Negative_shutdown_deadline_preserves_immediate_closure()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        var mark = MoteTelemetry.Mark();
+        await MoteTelemetry.ShutdownAsync(TimeSpan.MinValue);
+        Assert.False(mark.Sink!.TryAcquireProducer());
+        await mark.Sink.ShutdownAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>A closed empty queue rejects a late scope: this loss is not capacity overflow.</summary>
+    [Fact]
+    public async Task Zero_budget_shutdown_does_not_wait_for_scope_and_accounts_for_late_record()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        var mark = MoteTelemetry.Mark();
+        var scope = MoteTelemetry.Start(TelemetryOperation.AnalysisParse);
+        Assert.NotNull(scope);
+        try
+        {
+            // Zero budget synchronously seals the queue, independently of writer scheduling.
+            await MoteTelemetry.ShutdownAsync(TimeSpan.Zero);
+            Assert.Equal(0, mark.Sink!.Health.DroppedRecords);
+            Assert.False(mark.Sink.TryAcquireProducer());
+            Assert.Null(MoteTelemetry.Start(TelemetryOperation.Save));
+            Assert.Null(MoteTelemetry.StartChild(TelemetryOperation.Save, mark));
+            MoteTelemetry.Record(TelemetryEvent.SaveCompleted);
+            MoteTelemetry.RecordSaveFailure(new IOException("synthetic"));
+            Assert.Equal(0, mark.Sink.Health.DroppedRecords);
+            scope.Dispose();
+            Assert.Equal(1, mark.Sink.Health.DroppedRecords);
+            scope.Dispose();
+            Assert.Equal(1, mark.Sink.Health.DroppedRecords);
+            MoteTelemetry.RecordElapsed(TelemetryOperation.EditToPresentation, mark);
+            Assert.Equal(2, mark.Sink.Health.DroppedRecords);
+        }
+        finally
+        {
+            scope.Dispose();
+            await mark.Sink!.ShutdownAsync(TimeSpan.FromSeconds(10));
+            await MoteTelemetry.ShutdownAsync();
+        }
+        using var session = JsonDocument.Parse((await ReadLinesAsync(temp.Path)).Single(
+            line => line.Contains("\"operation\":\"mote.session\"", StringComparison.Ordinal)));
+        Assert.Equal("cancelled", session.RootElement.GetProperty("status").GetString());
+    }
+
+    /// <summary>The shutdown deadline includes a stalled producer, not just writer I/O.</summary>
+    [Fact]
+    public async Task Positive_budget_shutdown_remains_bounded_with_unfinished_scope()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = true, OutputDirectory = temp.Path });
+        var mark = MoteTelemetry.Mark();
+        var scope = MoteTelemetry.Start(TelemetryOperation.AnalysisParse);
+        Assert.NotNull(scope);
+        try
+        {
+            // A separate completion deadline catches indefinite producer waits, without
+            // assuming precise host scheduling or a disk-flush duration.
+            await MoteTelemetry.ShutdownAsync(TimeSpan.FromMilliseconds(10))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            scope.Dispose();
+            Assert.Equal(1, mark.Sink!.Health.DroppedRecords);
+        }
+        finally
+        {
+            scope.Dispose();
+            await mark.Sink!.ShutdownAsync(TimeSpan.FromSeconds(10));
+            await MoteTelemetry.ShutdownAsync();
+        }
+        using var session = JsonDocument.Parse((await ReadLinesAsync(temp.Path)).Single(
+            line => line.Contains("\"operation\":\"mote.session\"", StringComparison.Ordinal)));
+        Assert.Equal("cancelled", session.RootElement.GetProperty("status").GetString());
+    }
     /// <summary>A child started later links to the delayed parent span, not merely its trace.</summary>
     [Fact]
     public async Task Cross_callback_child_preserves_explicit_parent_span()

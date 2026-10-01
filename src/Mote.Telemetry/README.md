@@ -82,8 +82,12 @@ fixed `save.failure.<phase>` operation and the original signed numeric
 `save.failure.unknown`; exception messages, paths, and other `Exception.Data`
 values are never serialized. This is diagnostic evidence, not an automatic
 retry or a claim that a localized error message identifies the Win32 cause.
-At normal process exit call `await MoteTelemetry.ShutdownAsync()`; its default
-two-second deadline is intentionally shorter than a user save. Inspect
+At normal process exit call `await MoteTelemetry.ShutdownAsync()` after closing
+controller-owned delayed intervals. Shutdown closes new producer admission,
+allows already admitted scopes to enqueue their final records, then drains the
+writer. Producer completion and writer flushing share the same default
+two-second deadline; a stalled scope cannot extend it. Do not await shutdown
+from inside a scope you still hold. Inspect
 `MoteTelemetry.Health` for `SinkFaulted` and `DroppedRecords` and show a warning
 in the diagnostics UI if the sink fails. A write failure disables the sink; the
 exception text is never displayed or persisted because it may contain a path.
@@ -106,10 +110,26 @@ The JSONL writer rotates by file size or age and retains at most
 another process/session. Producers use non-blocking `TryWrite`; overflow drops
 new records, increments `Health.DroppedRecords`, and emits a later
 `telemetry.dropped` aggregate where possible. A normal shutdown drains the
-queue and flushes to the OS durable path. An abrupt process or power failure
+queue and flushes to the OS durable path. The drop counter also accounts for
+records attempted after the queue closes, including scopes that outlive the
+shutdown budget and old delayed marks; it does not exclusively mean queue
+overflow. A late loss after the final aggregate cannot be appended to an
+already closed file. If shutdown exhausts its budget with admitted scopes
+unfinished, the terminal `mote.session` has status `cancelled`, not success;
+this signals incomplete evidence without inventing a dropped count.
+Delayed marks do not hold admission indefinitely, and
+must be completed/cancelled by their owner before process shutdown. An abrupt process or power failure
 can leave an incomplete final line; JSONL readers should ignore only a malformed
 trailing line, not silently discard earlier valid lines. There is no claim of
 per-record `fsync` durability.
+
+Producer admission is the shutdown acceptance boundary, not a prior read of
+the process-wide sink reference. Fresh scopes/events that lose admission to
+shutdown are inert (`Start`/`StartChild` return null), like disabled tracing;
+they were never accepted. Existing scopes hold admission through their final
+enqueue, while retained delayed marks that miss closure remain counted as
+losses. Zero dropped records therefore describes accepted trace work, not an
+audit of every concurrent instrumentation call or every unfinished mark.
 
 The `OutputDirectory` override is an explicit local diagnostics destination,
 not a network export. No retention policy spans distinct sessions; users or a

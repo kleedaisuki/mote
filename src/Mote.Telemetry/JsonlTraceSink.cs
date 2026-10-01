@@ -33,6 +33,12 @@ internal sealed class JsonlTraceSink
     private long _dropped;
     private long _pendingDropped;
     private int _faulted;
+    /// <summary>The sign bit closes admission; remaining bits count producers owning an enqueue lease.</summary>
+    private int _producers;
+    /// <summary>Completes when closed admission has no producers; continuations never run on a producer.</summary>
+    private readonly TaskCompletionSource _producersFinished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>Remains set when closure abandoned admitted work, so the session cannot certify a complete drain.</summary>
+    private int _producerDrainIncomplete;
 
     internal JsonlTraceSink(TelemetryOptions options)
     {
@@ -68,14 +74,40 @@ internal sealed class JsonlTraceSink
     internal bool IsFaulted => Volatile.Read(ref _faulted) != 0;
     internal TelemetryHealth Health => new(true, IsFaulted, Interlocked.Read(ref _dropped));
 
+    /// <summary>Atomically admits work before shutdown closes admission, without a writer lock.</summary>
+    internal bool TryAcquireProducer()
+    {
+        var current = Volatile.Read(ref _producers);
+        while (current >= 0)
+        {
+            var observed = Interlocked.CompareExchange(ref _producers, current + 1, current);
+            if (observed == current) return true;
+            current = observed;
+        }
+        return false;
+    }
+
+    /// <summary>Releases admission only after the producer's final enqueue attempt.</summary>
+    internal void ReleaseProducer()
+    {
+        if (Interlocked.Decrement(ref _producers) == int.MinValue)
+            _producersFinished.TrySetResult();
+    }
+
+    /// <summary>Accounts for an existing delayed interval that misses the shutdown admission boundary.</summary>
+    internal void RecordRejected()
+    {
+        Interlocked.Increment(ref _dropped);
+        Interlocked.Increment(ref _pendingDropped);
+    }
+
     /// <summary>Enqueues a bounded record or accounts for its loss, never blocking.</summary>
     internal void TryRecord(TraceRecord record)
     {
         if (IsFaulted) return;
         if (!_channel.Writer.TryWrite(record))
         {
-            Interlocked.Increment(ref _dropped);
-            Interlocked.Increment(ref _pendingDropped);
+            RecordRejected();
             return;
         }
 
@@ -89,16 +121,34 @@ internal sealed class JsonlTraceSink
     /// <summary>Drains queued writes, with a caller-selected shutdown deadline.</summary>
     internal async Task ShutdownAsync(TimeSpan timeout)
     {
-        _channel.Writer.TryComplete();
-        if (timeout <= TimeSpan.Zero) return;
+        var started = Stopwatch.GetTimestamp();
+        var previous = Interlocked.Or(ref _producers, int.MinValue);
+        if (previous == 0) _producersFinished.TrySetResult();
         try
         {
-            await _writer.WaitAsync(timeout).ConfigureAwait(false);
+            if (timeout > TimeSpan.Zero)
+                await _producersFinished.Task.WaitAsync(timeout).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            // The worker may finish in the background; shutdown must not hold a save.
+            // A stalled producer cannot extend the user's shutdown budget.
         }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Invalid deadlines retain the existing nonthrowing shutdown contract.
+            Volatile.Write(ref _faulted, 1);
+        }
+        if (!_producersFinished.Task.IsCompleted)
+            Volatile.Write(ref _producerDrainIncomplete, 1);
+        _channel.Writer.TryComplete();
+        if (timeout <= TimeSpan.Zero) return;
+        var remaining = timeout - Stopwatch.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero) return;
+        try
+        {
+            await _writer.WaitAsync(remaining).ConfigureAwait(false);
+        }
+        catch (TimeoutException) { /* The worker may finish; never hold a user save. */ }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Diagnostics must never prevent an application shutdown.
@@ -160,7 +210,8 @@ internal sealed class JsonlTraceSink
             await AppendAsync(new TraceRecord(
                 DateTimeOffset.UtcNow, SessionTraceId, SessionSpanId, default,
                 "mote.session", Stopwatch.GetElapsedTime(_started).Ticks / 10,
-                TelemetryStatus.Success, default)).ConfigureAwait(false);
+                Volatile.Read(ref _producerDrainIncomplete) == 0
+                    ? TelemetryStatus.Success : TelemetryStatus.Cancelled, default)).ConfigureAwait(false);
 
             if (stream is not null)
             {

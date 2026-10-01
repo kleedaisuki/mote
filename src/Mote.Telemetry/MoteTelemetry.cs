@@ -79,24 +79,30 @@ public static class MoteTelemetry
 
     /// <summary>
     /// Starts an Activity-backed operation. Use a using declaration and call
-    /// SetStatus before disposal for failures or cancellations.
+    /// SetStatus before disposal for failures or cancellations. Returns null
+    /// when disabled or when shutdown has closed producer admission.
     /// </summary>
     public static TelemetryScope? Start(TelemetryOperation operation, TelemetryDimensions dimensions = default)
     {
         var sink = Volatile.Read(ref _sink);
-        if (sink is null || sink.IsFaulted) return null;
-        var parent = Activity.Current;
-        var activity = parent is null
-            ? Source.StartActivity(OperationName(operation), ActivityKind.Internal,
-                new ActivityContext(sink.SessionTraceId, sink.SessionSpanId, ActivityTraceFlags.Recorded))
-            : Source.StartActivity(OperationName(operation), ActivityKind.Internal);
-        return new TelemetryScope(sink, activity, operation, dimensions);
+        if (sink is null || sink.IsFaulted || !sink.TryAcquireProducer()) return null;
+        try
+        {
+            var parent = Activity.Current;
+            var activity = parent is null
+                ? Source.StartActivity(OperationName(operation), ActivityKind.Internal,
+                    new ActivityContext(sink.SessionTraceId, sink.SessionSpanId, ActivityTraceFlags.Recorded))
+                : Source.StartActivity(OperationName(operation), ActivityKind.Internal);
+            return new TelemetryScope(sink, activity, operation, dimensions);
+        }
+        catch { sink.ReleaseProducer(); throw; }
     }
 
     /// <summary>
     /// Starts a child of a previously captured cross-callback mark. This keeps
     /// parse and presentation spans causally attached to the edit that scheduled
     /// them even when work runs on another thread or after an async delay.
+    /// Returns null when disabled or shutdown has closed producer admission.
     /// </summary>
     public static TelemetryScope? StartChild(
         TelemetryOperation operation,
@@ -106,9 +112,14 @@ public static class MoteTelemetry
         var sink = Volatile.Read(ref _sink);
         if (sink is null || sink.IsFaulted) return null;
         if (!ReferenceEquals(sink, parent.Sink)) return Start(operation, dimensions);
-        var context = new ActivityContext(parent.TraceId, parent.SpanId, ActivityTraceFlags.Recorded);
-        var activity = Source.StartActivity(OperationName(operation), ActivityKind.Internal, context);
-        return new TelemetryScope(sink, activity, operation, dimensions);
+        if (!sink.TryAcquireProducer()) return null;
+        try
+        {
+            var context = new ActivityContext(parent.TraceId, parent.SpanId, ActivityTraceFlags.Recorded);
+            var activity = Source.StartActivity(OperationName(operation), ActivityKind.Internal, context);
+            return new TelemetryScope(sink, activity, operation, dimensions);
+        }
+        catch { sink.ReleaseProducer(); throw; }
     }
 
     /// <summary>
@@ -146,10 +157,16 @@ public static class MoteTelemetry
         TelemetryStatus status = TelemetryStatus.Success)
     {
         if (!mark.IsActive) return;
-        var elapsedUs = Stopwatch.GetElapsedTime(mark.Timestamp).Ticks / 10;
-        mark.Sink!.TryRecord(new TraceRecord(
-            DateTimeOffset.UtcNow, mark.TraceId, mark.SpanId, mark.ParentSpanId,
-            OperationName(operation), elapsedUs, status, dimensions));
+        var sink = mark.Sink!;
+        if (!sink.TryAcquireProducer()) { sink.RecordRejected(); return; }
+        try
+        {
+            var elapsedUs = Stopwatch.GetElapsedTime(mark.Timestamp).Ticks / 10;
+            sink.TryRecord(new TraceRecord(
+                DateTimeOffset.UtcNow, mark.TraceId, mark.SpanId, mark.ParentSpanId,
+                OperationName(operation), elapsedUs, status, dimensions));
+        }
+        finally { sink.ReleaseProducer(); }
     }
 
     /// <summary>Records one numeric, privacy-safe instantaneous event.</summary>
@@ -160,12 +177,16 @@ public static class MoteTelemetry
         TelemetryStatus status = TelemetryStatus.Success)
     {
         var sink = Volatile.Read(ref _sink);
-        if (sink is null || sink.IsFaulted) return;
-        var parent = Activity.Current;
-        sink.TryRecord(new TraceRecord(
-            DateTimeOffset.UtcNow, parent?.TraceId ?? sink.SessionTraceId,
-            ActivitySpanId.CreateRandom(), parent?.SpanId ?? sink.SessionSpanId,
-            EventName(kind), 0, status, dimensions with { Count = value }));
+        if (sink is null || sink.IsFaulted || !sink.TryAcquireProducer()) return;
+        try
+        {
+            var parent = Activity.Current;
+            sink.TryRecord(new TraceRecord(
+                DateTimeOffset.UtcNow, parent?.TraceId ?? sink.SessionTraceId,
+                ActivitySpanId.CreateRandom(), parent?.SpanId ?? sink.SessionSpanId,
+                EventName(kind), 0, status, dimensions with { Count = value }));
+        }
+        finally { sink.ReleaseProducer(); }
     }
 
     /// <summary>
@@ -178,22 +199,29 @@ public static class MoteTelemetry
         var sink = Volatile.Read(ref _sink);
         if (sink is null || sink.IsFaulted || error is not (IOException or UnauthorizedAccessException))
             return;
-        string? phase = null;
-        try { phase = error.Data["Mote.Engine.SavePhase"] as string; }
-        catch (Exception evidenceError) when (evidenceError is not OutOfMemoryException)
+        if (!sink.TryAcquireProducer()) return;
+        try
         {
-            // Optional provider evidence is unavailable; record the primary code as unknown phase.
+            string? phase = null;
+            try { phase = error.Data["Mote.Engine.SavePhase"] as string; }
+            catch (Exception evidenceError) when (evidenceError is not OutOfMemoryException)
+            {
+                // Optional provider evidence is unavailable; record the primary code as unknown phase.
+            }
+            var parent = Activity.Current;
+            sink.TryRecord(new TraceRecord(
+                DateTimeOffset.UtcNow, parent?.TraceId ?? sink.SessionTraceId,
+                ActivitySpanId.CreateRandom(), parent?.SpanId ?? sink.SessionSpanId,
+                SaveFailureName(phase), 0, TelemetryStatus.Failure, default, error.HResult));
         }
-        var parent = Activity.Current;
-        sink.TryRecord(new TraceRecord(
-            DateTimeOffset.UtcNow, parent?.TraceId ?? sink.SessionTraceId,
-            ActivitySpanId.CreateRandom(), parent?.SpanId ?? sink.SessionSpanId,
-            SaveFailureName(phase), 0, TelemetryStatus.Failure, default, error.HResult));
+        finally { sink.ReleaseProducer(); }
     }
 
     /// <summary>
-    /// Completes the queue, drains it, and flushes the current file. The caller
-    /// may supply a short timeout to bound UI shutdown; timed-out writes may be
+    /// Closes admission, awaits already admitted scopes, then drains and flushes.
+    /// Producer completion and writer drain share the caller's single deadline.
+    /// Dispose caller-owned scopes before awaiting shutdown. The caller may
+    /// supply a short timeout to bound UI shutdown; timed-out writes may be
     /// lost, but a user document save is never blocked by tracing.
     /// </summary>
     public static async Task ShutdownAsync(TimeSpan? timeout = null)
@@ -296,7 +324,10 @@ public readonly struct TelemetryMark
     internal bool IsActive => Sink is not null;
 }
 
-/// <summary>One Activity-backed trace interval that records on disposal.</summary>
+/// <summary>
+/// One admitted Activity-backed interval. Disposal records once and releases
+/// admission; an undisposed scope can consume the bounded shutdown budget.
+/// </summary>
 public sealed class TelemetryScope : IDisposable
 {
     private readonly JsonlTraceSink _sink;
@@ -336,8 +367,12 @@ public sealed class TelemetryScope : IDisposable
         var traceId = _activity?.TraceId ?? _sink.SessionTraceId;
         var spanId = _activity?.SpanId ?? ActivitySpanId.CreateRandom();
         var parentSpanId = _activity?.ParentSpanId ?? _sink.SessionSpanId;
-        _activity?.Dispose();
-        _sink.TryRecord(new TraceRecord(DateTimeOffset.UtcNow, traceId, spanId,
-            parentSpanId, MoteTelemetry.OperationName(_operation), durationUs, _status, _dimensions));
+        try
+        {
+            _activity?.Dispose();
+            _sink.TryRecord(new TraceRecord(DateTimeOffset.UtcNow, traceId, spanId,
+                parentSpanId, MoteTelemetry.OperationName(_operation), durationUs, _status, _dimensions));
+        }
+        finally { _sink.ReleaseProducer(); }
     }
 }
