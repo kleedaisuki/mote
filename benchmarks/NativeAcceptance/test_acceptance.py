@@ -123,6 +123,32 @@ class AcceptanceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tool.load_records([str(path)])
 
+    def test_closed_dimensions_match_producer_and_reject_disguised_content(self):
+        """Allow every producer value, not content hidden inside a permitted field name."""
+        path = self.directory / "closed-dimensions.jsonl"
+        for attributes in ([{"format": value} for value in tool.TRACE_FORMATS] +
+                           [{"size_bucket": value} for value in tool.SIZE_BUCKETS] +
+                           [{"hresult": value} for value in (-(2**31), -2147024864, 0, 2**31 - 1)]):
+            row = record("document.open", 2, 1)
+            row["attributes"] = attributes
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with self.subTest(valid=attributes):
+                self.assertEqual(tool.load_records([str(path)])[0], [row])
+        for attributes in ([{"format": value} for value in ("private-document", "JSON", 1, None, [])] +
+                           [{"size_bucket": value} for value in ("private-source", "1MiB", 1, None, {})] +
+                           [{"hresult": value} for value in (True, False, "-2147024864", 1.0, None,
+                                                            -(2**31) - 1, 2**31)]):
+            row = record("document.open", 2, 1)
+            row["attributes"] = attributes
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with self.subTest(invalid=attributes), self.assertRaises(ValueError):
+                tool.load_records([str(path)])
+        row = record("mote.session", 1)
+        row["schema_version"] = True
+        path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            tool.load_records([str(path)])
+
     def test_independent_menu_checkpoints_have_closed_content_free_shape(self):
         """Admit all five fixed names without weakening existing schema privacy."""
         rows = [record("mote.session", 1)]

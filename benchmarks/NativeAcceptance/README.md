@@ -105,6 +105,16 @@ fields/operations and lines over 16 KiB, over 100,000 records per sample, files
 over 32 MiB, and over eight rotation files per process. Failures must be retained
 and classified; do not remove inconvenient samples until the summary is green.
 
+The schema-one reader checks **dimension values**, not only permitted attribute
+names: `format` and `size_bucket` use the closed vocabulary emitted by
+[`JsonlTraceSink`](../../src/Mote.Telemetry/JsonlTraceSink.cs), including its
+`unknown` format fallback; `hresult` is a signed 32-bit integer, never a Boolean
+or string. These constraints prevent document content disguised as a format or
+bucket from becoming accepted evidence. Schema version must be an integer 1.
+The focused parser regression suite passes **9/9** (2026-10-01), retained at
+`.cache/validation/closed-trace-dimensions/reader-tests.log`; this is artifact-only
+validation, not another GUI or product persistence experiment.
+
 Records are joined by `(session_id, trace_id, span_id)`, not adjacency, UTC
 subtraction, or duration sorting. The first version-matched source draw callback
 may precede semantic handoff and parent serialization. Successful durations have

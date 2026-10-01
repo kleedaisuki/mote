@@ -54,6 +54,11 @@ INPUT_OPERATIONS = INPUT_SUCCESS_OPERATIONS | INPUT_FAILURE_OPERATIONS
 OPERATIONS |= INPUT_OPERATIONS
 STATUSES = ("success", "cancelled", "failure", "skipped")
 ATTRIBUTES = {"format", "size_bucket", "version", "count", "hresult", "reason"}
+# Match JsonlTraceSink's closed producer vocabulary, including its enum fallback.
+TRACE_FORMATS = frozenset("plain_text markdown toml json yaml csv unknown".split())
+SIZE_BUCKETS = frozenset(("<1KiB", "1-4KiB", "4-16KiB", "16-64KiB", "64-256KiB",
+                          "256KiB-1MiB", "1-4MiB", "4-16MiB", "16-64MiB",
+                          "64-256MiB", "256MiB-1GiB", ">=1GiB"))
 
 
 def artifact_path(value, area=None):
@@ -178,7 +183,7 @@ def load_records(paths, *, discard_partial=False):
                            "span_id", "parent_span_id", "operation", "duration_us", "status", "attributes"}
                 required = allowed - {"run_id"}
                 if (not isinstance(row, dict) or set(row) - allowed or required - set(row)
-                        or row.get("schema_version") != 1):
+                        or type(row.get("schema_version")) is not int or row["schema_version"] != 1):
                     raise ValueError("unsupported trace schema")
                 if row.get("operation") not in OPERATIONS or row.get("status") not in STATUSES:
                     raise ValueError("unknown operation/status")
@@ -205,6 +210,12 @@ def load_records(paths, *, discard_partial=False):
                 for key in ("version", "count"):
                     if key in attrs and (type(attrs[key]) is not int or attrs[key] < 0):
                         raise ValueError("invalid numeric attribute")
+                for key, vocabulary in (("format", TRACE_FORMATS), ("size_bucket", SIZE_BUCKETS)):
+                    if key in attrs and (not isinstance(attrs[key], str) or attrs[key] not in vocabulary):
+                        raise ValueError("unsupported closed dimension")
+                if "hresult" in attrs and (type(attrs["hresult"]) is not int or
+                                          not -(2**31) <= attrs["hresult"] < 2**31):
+                    raise ValueError("invalid signed HResult")
                 if "reason" in attrs and (not isinstance(attrs["reason"], str) or attrs["reason"] not in REASONS):
                     raise ValueError("unsupported terminal reason")
                 records.append(row)
