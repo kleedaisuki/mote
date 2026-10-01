@@ -344,3 +344,37 @@ but the original AXShowMenu action assertion still fails. See
 [exact permissions and external verdict](mac-grid-table-proxy.md#live-selector-permission-discriminator-ci-36799464145).
 This rejects a live selector-permission-refusal explanation without claiming
 external action, navigation or close acceptance.
+
+## Independent downstream diagnostic after failed action
+
+The next test-only candidate preserves the original failed
+`context-menu-accessible` check and whole-report failed / Swift exit 1, but may
+investigate downstream behavior through a independently verified native menu.
+Admission requires **exactly 25 previous checks, all true**, original error
+attributeUnsupported (-25205), advertised showMenu, and a freshly queried exact-
+PID Table shown-menu AXMenu with at most 128 children and exactly one AXMenuItem
+matching both the known coordinate Title and the established label predicate.
+A missing/ambiguous/foreign/overbound relation refuses admission without a menu
+action. ShowMenu is never retried; the independent route never discovers its
+menu through the pruned app tree and adds no readiness wait.
+
+After admission it reuses the existing unique-item, menu press, exact prompt,
+1001:17 input, absolute/local coordinate/value, stale-node selection/retirement,
+full-source and normal-close assertions, unchanged and fail-fast. The report
+adds a separate `downstream` object with status, phase, originalActionError and
+content-free assertion note. Guard-refused, failed and completed are distinct.
+Even completed downstream returns whole failed and exit 1; it cannot be used as
+release or original action acceptance. A later failed assertion is retained
+alongside the original false check, not masked by it.
+
+For a completed independent close, Run.ps1 validates that the original action
+is the sole false check, Swift still exited 1, close was attempted and the
+trusted client reached complete. It then separately requires actual normal
+owned-editor exit 0; `editor_normal_exit=false` is not successful lifetime
+acceptance. Earlier failure still forces only the owned child cleanup. Existing
+12,000 admissions, 55-second client lifetime, 75-second wrapper watchdog,
+per-call timeout and old readiness bounds remain unchanged.
+
+Portable fixture/path and driver syntax preflight passes. Native Swift/AppKit
+compilation and the actual independent workflow require fresh two-target CI;
+no downstream execution success is yet claimed.

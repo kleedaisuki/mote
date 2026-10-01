@@ -30,7 +30,11 @@ struct OrdinalObservation: Codable {
 /// Synthetic-only evidence; does not certify VoiceOver, IME, paint or performance.
 struct Report: Codable {
     let status: String; let phase: String; let editorPID: Int32; let clientPID: Int32
-    let trusted: Bool; let closedByProbe: Bool; let admissionCount: Int; let diagnostics: Diagnostics?; let checks: [Check]; let observations: [OrdinalObservation]; let note: String
+    let trusted: Bool; let closedByProbe: Bool; let admissionCount: Int; let diagnostics: Diagnostics?; let downstream: DownstreamReport?; let checks: [Check]; let observations: [OrdinalObservation]; let note: String
+}
+/// Independent downstream evidence never replaces a failed action acknowledgment.
+struct DownstreamReport: Codable {
+    let status: String; let phase: String; let originalActionError: Int32; let note: String
 }
 /// Fail-closed termination with an intentionally content-free reason.
 struct GateFailure: Error { let reason: String }
@@ -55,6 +59,9 @@ final class Probe {
     var actionNamesError: Int32? = nil
     var actionNamesCount: Int? = nil
     var showMenuActionAdvertised: Bool? = nil
+    var originalActionError: Int32? = nil
+    var downstreamStatus = "not-exercised"
+    var downstreamNote = ""
     var actionFailureFollowup = "not-exercised"
     var shownMenuRelations: [MenuRelationObservation] = []
     var maximumTreeNodes = 0
@@ -165,6 +172,21 @@ final class Probe {
         guard let names = raw as? [String], names.count == count else { return }
         showMenuActionAdvertised = names.contains(NSAccessibility.Action.showMenu.rawValue)
     }
+    /// Admit one exact owned command through the Table relation, never general tree discovery.
+    func ownedCoordinateItem(_ table: AXUIElement) throws -> AXUIElement? {
+        let (error, raw) = try attribute(table, NSAccessibility.Attribute.shownMenu.rawValue)
+        guard error == .success, let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        let menu = unsafeBitCast(raw, to: AXUIElement.self)
+        try admit(menu)
+        guard try text(menu, "AXRole") == "AXMenu" else { return nil }
+        var matches: [AXUIElement] = []
+        for item in try elements(menu, "AXChildren", limit: 128) {
+            if try text(item, "AXRole") == "AXMenuItem",
+               try text(item, "AXTitle") == "Go to row:column…",
+               try label(item) == "Go to row:column…" { matches.append(item) }
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
     /// String attributes remain optional: absence is not an invented empty value.
     func text(_ node: AXUIElement, _ name: String) throws -> String? {
         try attribute(node, name).1 as? String
@@ -219,9 +241,13 @@ final class Probe {
         }
     }
     /// Persist the first falsifier before aborting dependent actions.
-    func require(_ name: String, _ passed: Bool, _ detail: String = "") throws {
+    func record(_ name: String, _ passed: Bool, _ detail: String = "") {
         checks.append(Check(name: name, passed: passed, detail: detail,
                             admissionCount: queries, elapsedSeconds: ProcessInfo.processInfo.systemUptime - started))
+    }
+    /// Ordinary assertions remain fail-fast; only the original action falsifier is recorded separately.
+    func require(_ name: String, _ passed: Bool, _ detail: String = "") throws {
+        record(name, passed, detail)
         if !passed { throw GateFailure(reason: name) }
     }
     /// Mutates only a previously validated node within the editor PID.
@@ -423,9 +449,12 @@ final class Probe {
 
             phase = "logical-navigation"
             let menuError = try action(table, "AXShowMenu")
+            var goItem: AXUIElement?
             if menuError != .success {
-                // Diagnose once, read-only, and preserve the original action falsifier.
-                // No retry, menu press, relaxed predicate, or readiness wait is admitted.
+                // Preserve the original failed assertion before any independent diagnostic.
+                record("context-menu-accessible", false, "AX=\(menuError.rawValue); no key-injection fallback")
+                originalActionError = menuError.rawValue
+                downstreamStatus = "guard-refused"
                 phase = "action-failure-diagnostic"
                 do {
                     try observeActionNames(table)
@@ -433,23 +462,29 @@ final class Probe {
                     try observeShownMenu(app, category: "application-modern", key: NSAccessibility.Attribute.shownMenu.rawValue)
                     try observeShownMenu(table, category: "table-legacy")
                     try observeShownMenu(app, category: "application-legacy")
-                    _ = try matches("AXMenuItem", "Go to row:column…")
                     actionFailureFollowup = "completed-read-only"
+                    if menuError == .attributeUnsupported, checks.count == 26,
+                       checks.dropLast().allSatisfy({ $0.passed }), showMenuActionAdvertised == true {
+                        goItem = try ownedCoordinateItem(table)
+                    }
                 } catch {
                     actionFailureFollowup = error is GateFailure ? "bounded-gate-failure" : "client-error"
                 }
                 phase = "logical-navigation"
+                guard goItem != nil else { throw GateFailure(reason: "downstream-admission-refused") }
+                try require("unique-coordinate-menu-item", true, "Exact owned Table relation guard; no app-tree menu discovery")
+                downstreamStatus = "running"
+            } else {
+                try require("context-menu-accessible", true, "AX=0; no key-injection fallback")
+                try observeShownMenu(table, category: "table-modern", key: NSAccessibility.Attribute.shownMenu.rawValue)
+                try observeShownMenu(table, category: "table-legacy")
+                try observeShownMenu(app, category: "application-legacy")
+                let menuFound = try wait(3) {
+                    let items = try self.matches("AXMenuItem", "Go to row:column…")
+                    if items.count == 1 { goItem = items[0]; return true }; return false
+                }
+                try require("unique-coordinate-menu-item", menuFound)
             }
-            try require("context-menu-accessible", menuError == .success, "AX=\(menuError.rawValue); no key-injection fallback")
-            try observeShownMenu(table, category: "table-modern", key: NSAccessibility.Attribute.shownMenu.rawValue)
-            try observeShownMenu(table, category: "table-legacy")
-            try observeShownMenu(app, category: "application-legacy")
-            var goItem: AXUIElement?
-            let menuFound = try wait(3) {
-                let items = try self.matches("AXMenuItem", "Go to row:column…")
-                if items.count == 1 { goItem = items[0]; return true }; return false
-            }
-            try require("unique-coordinate-menu-item", menuFound)
             guard let goItem else { throw GateFailure(reason: "coordinate menu unavailable") }
             try require("coordinate-menu-press", try action(goItem, "AXPress") == .success)
             var field: AXUIElement?, goButton: AXUIElement?
@@ -530,9 +565,20 @@ final class Probe {
             // requires normal editor exit before accepting this close phase.
             try require("closed-cell-no-old-value", noOldValue, "AX=\(staleError.rawValue); conditional on wrapper normal exit")
             phase = "complete"
+            if originalActionError != nil {
+                downstreamStatus = "completed"
+                downstreamNote = "Independent downstream checks completed; primary action remains failed; normal exit requires wrapper evidence"
+                return report("failed", trusted, "context-menu-accessible")
+            }
             return report("passed", trusted, "External bounded AX API gate only; no VoiceOver/IME/geometry/performance acceptance")
         } catch {
-            return report("failed", trusted, (error as? GateFailure)?.reason ?? "client-error")
+            let reason = (error as? GateFailure)?.reason ?? "client-error"
+            if originalActionError != nil {
+                if downstreamStatus == "running" { downstreamStatus = "failed" }
+                downstreamNote = reason
+                return report("failed", trusted, "context-menu-accessible")
+            }
+            return report("failed", trusted, reason)
         }
     }
     /// Preserve prior checks without promoting a partial run to acceptance.
@@ -543,16 +589,17 @@ final class Probe {
                 actionNamesCount: actionNamesCount, showMenuActionAdvertised: showMenuActionAdvertised, shownMenuRelations: shownMenuRelations, elapsedSeconds: ProcessInfo.processInfo.systemUptime - started,
                 phaseAdmissions: phaseAdmissions, phasePolls: phasePolls, phaseTraversals: phaseTraversals,
                 maximumTreeNodes: maximumTreeNodes, lastTreeMenus: lastTreeMenus, lastTreeMenuItems: lastTreeMenuItems,
-                lastExactMenuMatches: lastExactMenuMatches, lastExactMenuTitleMatches: lastExactMenuTitleMatches), checks: checks, observations: observations, note: note)
+                lastExactMenuMatches: lastExactMenuMatches, lastExactMenuTitleMatches: lastExactMenuTitleMatches),
+            downstream: originalActionError.map { DownstreamReport(status: downstreamStatus, phase: phase, originalActionError: $0, note: downstreamNote) }, checks: checks, observations: observations, note: note)
     }
 }
 
 var result: Report
 if CommandLine.arguments.count == 3, let pid = Int32(CommandLine.arguments[1]), pid > 0 {
     do { result = try Probe(pid: pid, fixture: CommandLine.arguments[2]).run() }
-    catch { result = Report(status: "probe-error", phase: "fixture", editorPID: pid, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, diagnostics: nil, checks: [], observations: [], note: "synthetic fixture unavailable") }
+    catch { result = Report(status: "probe-error", phase: "fixture", editorPID: pid, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, diagnostics: nil, downstream: nil, checks: [], observations: [], note: "synthetic fixture unavailable") }
 } else {
-    result = Report(status: "probe-error", phase: "arguments", editorPID: 0, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, diagnostics: nil, checks: [], observations: [], note: "expected editor PID and synthetic CSV")
+    result = Report(status: "probe-error", phase: "arguments", editorPID: 0, clientPID: getpid(), trusted: false, closedByProbe: false, admissionCount: 0, diagnostics: nil, downstream: nil, checks: [], observations: [], note: "expected editor PID and synthetic CSV")
 }
 let encoder = JSONEncoder()
 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

@@ -154,6 +154,21 @@ try {
             $result.editor_normal_exit = $editor.WaitForExit(10000) -and $editor.ExitCode -eq 0
             if (-not $result.editor_normal_exit) { $result.status = 'failed'; $result.error = 'Editor failed normal exit after AXClose.' }
         }
+        elseif ($result.status -ceq 'failed' -and
+            $result.swift_report.PSObject.Properties.Name -contains 'downstream' -and
+            $null -ne $result.swift_report.downstream -and
+            $result.swift_report.downstream.status -ceq 'completed') {
+            $failedChecks = @($result.swift_report.checks | Where-Object { -not $_.passed })
+            if ($probe.ExitCode -ne 1 -or -not $result.swift_report.closedByProbe -or
+                -not $result.swift_report.trusted -or $result.swift_report.phase -cne 'complete' -or
+                $failedChecks.Count -ne 1 -or $failedChecks[0].name -cne 'context-menu-accessible' -or
+                $result.swift_report.downstream.originalActionError -ne -25205) {
+                throw 'Independent downstream completion lost the original action failure or close evidence.'
+            }
+            $result.editor_normal_exit = $editor.WaitForExit(10000) -and $editor.ExitCode -eq 0
+            if (-not $result.editor_normal_exit) { $result.error = 'Independent downstream close lacks normal editor exit.' }
+            # Whole-result failure and Swift exit 1 are intentional even when downstream completes.
+        }
         elseif ($result.status -ceq 'external-accessibility-unavailable' -and
             ($probe.ExitCode -ne 0 -or $result.swift_report.trusted)) { throw 'Permission-unavailable classification inconsistent.' }
     }
