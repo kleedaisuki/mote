@@ -118,7 +118,7 @@ failed-phase timing sampled after error-report serialization/fsync. The runner
 now samples elapsed time and allocation immediately upon catching the action
 failure, before recording it; the original counterexample is retained in that
 review. Saved byte identity is also emitted as **observed before assertion**;
-`exact` is emitted only after verification. The final runner SHA-256 is
+`exact` is emitted only after verification. At that checkpoint the runner SHA-256 was
 `E7872B18EEEF5682EC0E8D7F2B9D865DE80060AC727EEE75331A47F0E77573A3`.
 
 Those runner-only changes received a final Native Release compilation:
@@ -174,5 +174,16 @@ always passes its actual Environment.CurrentDirectory; relative output arguments
 resolve against that same root, preserving normal invocation semantics. Portable
 tests pass their discovered actual repository root without changing process cwd
 or environment variables. This adds no public API, CLI option or environment
-override. The corrected 12-case qualification and affected build remain pending;
-the unchanged 33 binding/model cases must not be replayed solely for this seam.
+override. The matching affected Release build completed with **zero warnings and
+errors**, 12.00 s; the same 12 cases then passed **12/12**, zero failures/skips,
+84 ms. Live-target and dangling-target directory links, plus a dangling output
+link, were all actually created/read as reparse points and rejected without
+elevation or target changes. No global cwd/environment mutation, subprocess,
+native object or GUI was used. The prior 33 binding/model cases were not replayed.
+
+The qualified [admission evidence](native-source-admission.md) freezes runner
+SHA-256 `7097EF0924FC5F792EB1E9A118EF4613FE8824EAD8B7B2EEB4CA65CCAF3971E0`
+and actual loaded `mote.dll` SHA-256
+`A9DC93829CCE6115C76FEB63463E4216DCE8C97A06D92D86113E4D3D65EE6DFF`.
+This closes the scoped pure admission qualification, not hosted native editing
+or secure host attestation. Those native observations remain pending.
