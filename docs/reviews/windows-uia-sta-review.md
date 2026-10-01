@@ -83,3 +83,46 @@ No external script or full native application session was rerun by this reviewer
 the parent/experiment owner owns those potentially GUI-sensitive checks. No claim
 is made of Windows ARM64, a Native AOT interface agility result, successful external
 Select, every initialization error mode, or complete screen-reader support.
+
+## Follow-up: entry-point STA and source provider options
+
+Reviewed the subsequently authorized minimal production diff:
+
+- `Program.Main` receives `[STAThread]`.
+- `UiaEditorObject` and `UiaFragmentRootObject` retain ServerSideProvider (2)
+  and add UseComThreading (0x20), producing 34.
+- `UiaFragmentDocumentObject` retains ServerSideProvider, OverrideProvider (8)
+  and ProviderOwnsSetFocus (16), and adds UseComThreading, producing 58.
+- The external client acquires `target.Handle` before sending WM_CLOSE, keeping
+  process exit-status observation available after the PID retires. The existing
+  `using` scope disposes this acquired handle.
+
+**No substantive defect established in these exact changes.** Microsoft documents
+[UseComThreading](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-provideroptions)
+as directing STA-based provider calls to their own apartment thread; the flag is
+valid here because the three providers are server-side providers. The entry-point
+attribute and pre-window scope establish the intended apartment before provider
+creation. Existing override/focus flags and WrongThread/composition guards remain
+unchanged. The process-handle addition concerns the diagnostic's lifecycle, not
+editor source behavior, and does not broaden its target scope.
+
+The parent reports an isolated Native AOT comparison: default Main observed MTA
+with RPC_E_CHANGED_MODE, attributed Main observed MAINSTA with S_FALSE, and four
+source CCWs returned E_NOINTERFACE for IAgileObject and IMarshal. These observations
+are parent-provided evidence, not independently rerun by this reviewer; the original
+production executable's external selection retest remains separate acceptance
+work. No programmatic post-and-wait queue or relaxed thread validation was added.
+
+Independent local command:
+
+```powershell
+dotnet test tests/Mote.Tests/Mote.Tests.csproj --no-restore --filter 'FullyQualifiedName~WindowsUiaBridgePrototypeTests|FullyQualifiedName~WindowsUiaFragmentExperimentTests' --logger 'console;verbosity=minimal'
+```
+
+Result: **3 passed, 0 failed**, 45 ms reported test duration. Existing tests exercise
+source-generated range/fragment interfaces, identity, source access and off-thread
+focus rejection, but do not assert GetProviderOptions. Recommended nonblocking
+regression addition: invoke the raw simple-provider ABI options slot for all three
+objects and assert their exact flag masks; retain an entry-point STA-attribute
+regression. These tests alone must not be represented as an external marshaling
+or successful Native AOT Select proof.

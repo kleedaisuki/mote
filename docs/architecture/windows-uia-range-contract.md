@@ -261,3 +261,22 @@ Run pure boundary tests first, generated COM ABI tests next, then an independent
 external Windows UIA client against win-x64 and win-arm64 Native AOT executables.
 Keep artifacts under repository `.cache/` or `.temp/`. A passing movement unit
 test is not a reader, real-IME, bounding-rectangle or full-pattern release pass.
+
+## Integrated Windows x64 acceptance, 2026-10-01
+
+Original-source Native AOT SHA-256
+`20B5BD467899EB7618AF6737DCD10E875F90FA5B1E71A5B384A4F1052B9D8CED`
+passes the independent external source range workflow after the minimal
+`[STAThread]` entry-point and source provider `UseComThreading` changes. Selection
+HRESULT is zero; global GetSelection is exactly `[1,3)` / `bc`; clones are
+independent; normal close returns zero and retained ranges become unavailable.
+The controller's owner-thread check was not bypassed. This closes the historical
+x64 Select failure for this artifact; see
+[the raw-evidence record](../validation/windows-uia-range-external.md).
+
+The separate ordinary GUI open/edit/Save/reopen workflow also passes exact
+BOMless UTF-8 bytes and both normal exits. Affected managed controller, input
+window, Canvas interaction and COM tests pass **225/225** (42 seconds); dedicated
+range/STA declaration and three raw option-mask guards pass **38/38** (534 ms).
+No physical IME, Narrator/NVDA speech, arm64, full TextPattern geometry/find/event
+or four-RID hosted acceptance is inferred from these results.

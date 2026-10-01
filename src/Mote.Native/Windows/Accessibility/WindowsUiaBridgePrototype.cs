@@ -259,7 +259,13 @@ internal sealed partial class UiaEditorObject : IRawElementProviderSimpleAbi, IT
     internal void BindWindow(nint window) => _window = window;
 
     /// <inheritdoc />
-    public int GetProviderOptions(out int options) { options = 2; return 0; }
+    public int GetProviderOptions(out int options)
+    {
+        // UseComThreading preserves the non-agile generated provider's STA
+        // affinity. Canonical selection never mutates the UI from an RPC worker.
+        options = 2 | 0x20;
+        return 0;
+    }
 
     /// <inheritdoc />
     public int GetPatternProvider(int patternId, out nint provider)

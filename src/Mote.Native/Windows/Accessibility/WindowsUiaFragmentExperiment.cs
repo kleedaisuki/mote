@@ -202,7 +202,7 @@ internal sealed partial class UiaFragmentRootObject : IRawElementProviderSimpleA
     }
 
     /// <inheritdoc />
-    public int GetProviderOptions(out int options) { options = 2; return 0; }
+    public int GetProviderOptions(out int options) { options = 2 | 0x20; return 0; }
 
     /// <inheritdoc />
     public int GetPatternProvider(int patternId, out nint provider)
@@ -372,7 +372,7 @@ internal sealed partial class UiaFragmentDocumentObject : IRawElementProviderSim
     }
 
     /// <inheritdoc />
-    public int GetProviderOptions(out int options) { options = 2 | 8 | 16; return 0; }
+    public int GetProviderOptions(out int options) { options = 2 | 8 | 16 | 0x20; return 0; }
 
     /// <inheritdoc />
     public int GetPatternProvider(int patternId, out nint provider)

@@ -8,6 +8,7 @@ namespace Mote.Native;
 internal static class Program
 {
     /// <summary>Starts one OS-native single-document editor process.</summary>
+    [STAThread] // Windows source UIA providers use standard COM owner-apartment dispatch.
     private static int Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "--check-runtime")

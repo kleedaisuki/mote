@@ -79,6 +79,8 @@ internal static class Program
             Check(original.GetText(-1) == before && selection[0].GetText(-1) == "bc", "Range mutation must not mutate original or selection clone");
             report["stage"] = "normal-close"; Write(path, report);
             using var target = Process.GetProcessById(pid);
+            // Acquire a process handle before close so exit status survives PID retirement.
+            _ = target.Handle;
             target.Refresh(); Check(target.MainWindowHandle != 0, "Target window missing");
             Check(PostMessageW(target.MainWindowHandle, 0x0010, 0, 0), "Target-owned WM_CLOSE failed");
             Check(target.WaitForExit(10000) && target.ExitCode == 0, "Target must exit normally");
