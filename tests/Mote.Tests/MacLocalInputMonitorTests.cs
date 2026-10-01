@@ -7,21 +7,23 @@ namespace Mote.Tests;
 
 /// <summary>Checks ownership and event identity without loading AppKit on the test host.</summary>
 [SupportedOSPlatform("macos")]
+[Collection("Telemetry")]
 public sealed class MacLocalInputMonitorTests
 {
-    /// <summary>Runs failed-removal last because its deliberately passive owner lives forever.</summary>
+    /// <summary>Uses a private admission slot so failed-removal ownership cannot poison the test host.</summary>
     [Fact]
     public void AdmissionObservationAndTeardownPreserveBorrowedOwnership()
     {
+        var admission = new MacLocalInputMonitor.Admission();
         var unavailable = new FakeApi();
-        Assert.Null(MacLocalInputMonitor.Install(unavailable, false, true));
+        Assert.Null(MacLocalInputMonitor.Install(unavailable, false, true, admission));
         Assert.Empty(unavailable.Events);
-        Assert.Null(MacLocalInputMonitor.Install(unavailable, true, false));
+        Assert.Null(MacLocalInputMonitor.Install(unavailable, true, false, admission));
         Assert.Equal(0, unavailable.Adds);
         Assert.Equal([TelemetryEvent.NativeInputMonitorUnavailable], unavailable.Events);
 
         var nil = new FakeApi { Token = 0 };
-        Assert.Null(MacLocalInputMonitor.Install(nil, true, true));
+        Assert.Null(MacLocalInputMonitor.Install(nil, true, true, admission));
         Assert.Equal(1, nil.Adds);
         Assert.Equal(0, nil.Retains);
         Assert.Equal(0, nil.Removes);
@@ -29,13 +31,13 @@ public sealed class MacLocalInputMonitorTests
         Assert.Equal([TelemetryEvent.NativeInputMonitorUnavailable], nil.Events);
 
         var addFailure = new FakeApi { ThrowAdd = true };
-        Assert.Null(MacLocalInputMonitor.Install(addFailure, true, true));
+        Assert.Null(MacLocalInputMonitor.Install(addFailure, true, true, admission));
         Assert.Equal(1, addFailure.Adds);
         Assert.Equal(0, addFailure.Removes);
         Assert.Equal(0, addFailure.Releases);
 
         var retainFailure = new FakeApi { ThrowRetain = true };
-        Assert.Null(MacLocalInputMonitor.Install(retainFailure, true, true));
+        Assert.Null(MacLocalInputMonitor.Install(retainFailure, true, true, admission));
         Assert.Equal(1, retainFailure.Adds);
         Assert.Equal(1, retainFailure.Retains);
         Assert.Equal(1, retainFailure.Removes);
@@ -44,10 +46,10 @@ public sealed class MacLocalInputMonitorTests
             TelemetryEvent.NativeInputMonitorRemoved], retainFailure.Events);
 
         var success = new FakeApi();
-        var owner = Assert.IsType<MacLocalInputMonitor>(MacLocalInputMonitor.Install(success, true, true));
+        var owner = Assert.IsType<MacLocalInputMonitor>(MacLocalInputMonitor.Install(success, true, true, admission));
         Assert.Equal([TelemetryEvent.NativeInputMonitorReady], success.Events);
         var competing = new FakeApi();
-        Assert.Null(MacLocalInputMonitor.Install(competing, true, true));
+        Assert.Null(MacLocalInputMonitor.Install(competing, true, true, admission));
         Assert.Equal(0, competing.Adds);
         Assert.Equal([TelemetryEvent.NativeInputMonitorUnavailable], competing.Events);
 
@@ -73,6 +75,8 @@ public sealed class MacLocalInputMonitorTests
         Assert.Equal(1, success.Releases);
         Assert.Equal(new[] { "add", "retain", "remove", "release" }, success.Ownership);
         Assert.Equal(TelemetryEvent.NativeInputMonitorRemoved, success.Events[^1]);
+        Assert.True(owner.RemovedSuccessfully);
+        Assert.Null(admission.Current);
         owner.Dispose();
         Assert.Equal(1, success.Removes);
         Assert.Equal(1, success.Releases);
@@ -82,30 +86,81 @@ public sealed class MacLocalInputMonitorTests
         // A throwing telemetry sink must not prevent successful admission or cleanup.
         var recordFailure = new FakeApi { ThrowRecord = true };
         var recordingOwner = Assert.IsType<MacLocalInputMonitor>(
-            MacLocalInputMonitor.Install(recordFailure, true, true));
+            MacLocalInputMonitor.Install(recordFailure, true, true, admission));
         recordingOwner.Dispose();
         Assert.Equal(1, recordFailure.Removes);
         Assert.Equal(1, recordFailure.Releases);
 
-        // This scenario must remain last: failed native removal permanently reserves admission.
+        // Failed native removal permanently reserves this private slot, not the production singleton.
         var removalFailure = new FakeApi { ThrowRemove = true };
         var passiveOwner = Assert.IsType<MacLocalInputMonitor>(
-            MacLocalInputMonitor.Install(removalFailure, true, true));
+            MacLocalInputMonitor.Install(removalFailure, true, true, admission));
         removalFailure.DuringRemove = () => Assert.Equal((nint)333, passiveOwner.Observe(333));
         passiveOwner.Dispose();
         Assert.Empty(removalFailure.Observed);
         Assert.Equal(1, removalFailure.Removes);
         Assert.Equal(0, removalFailure.Releases);
         Assert.Equal(TelemetryEvent.NativeInputMonitorRemovalFailed, removalFailure.Events[^1]);
+        Assert.False(passiveOwner.RemovedSuccessfully);
+        Assert.Same(passiveOwner, admission.Current);
         passiveOwner.Dispose();
         Assert.Equal((nint)444, passiveOwner.Observe(444));
         Assert.Empty(removalFailure.Observed);
         Assert.Equal(1, removalFailure.Removes);
         Assert.Equal(0, removalFailure.Releases);
         var forbidden = new FakeApi();
-        Assert.Null(MacLocalInputMonitor.Install(forbidden, true, true));
+        Assert.Null(MacLocalInputMonitor.Install(forbidden, true, true, admission));
         Assert.Equal(0, forbidden.Adds);
         Assert.Equal([TelemetryEvent.NativeInputMonitorUnavailable], forbidden.Events);
+    }
+
+    /// <summary>A failed explicit release keeps a passive owner and never repeats removal or release.</summary>
+    [Fact]
+    public void ReleaseFailureRetainsPrivateAdmissionWithoutClaimingSuccessfulRemoval()
+    {
+        var admission = new MacLocalInputMonitor.Admission();
+        var api = new FakeApi { ThrowRelease = true };
+        var owner = Assert.IsType<MacLocalInputMonitor>(
+            MacLocalInputMonitor.Install(api, true, true, admission));
+        Assert.False(owner.RemovedSuccessfully);
+        owner.Dispose();
+        Assert.False(owner.RemovedSuccessfully);
+        Assert.Same(owner, admission.Current);
+        Assert.Equal(1, api.Removes);
+        Assert.Equal(1, api.Releases);
+        Assert.Equal(TelemetryEvent.NativeInputMonitorRemovalFailed, api.Events[^1]);
+        Assert.DoesNotContain(TelemetryEvent.NativeInputMonitorRemoved, api.Events);
+        Assert.Equal((nint)555, owner.Observe(555));
+        Assert.Empty(api.Observed);
+        owner.Dispose();
+        Assert.Equal(1, api.Removes);
+        Assert.Equal(1, api.Releases);
+        var forbidden = new FakeApi();
+        Assert.Null(MacLocalInputMonitor.Install(forbidden, true, true, admission));
+        Assert.Equal(0, forbidden.Adds);
+    }
+
+    /// <summary>The production disabled guard must avoid AppKit loading and warmed managed allocation.</summary>
+    [Fact]
+    public async Task DisabledProductionAdmissionDoesNotAllocateOrWrite()
+    {
+        using var temp = new RepoTemp();
+        MoteTelemetry.Configure(new TelemetryOptions { Enabled = false, OutputDirectory = temp.Path });
+        try
+        {
+            Assert.Null(MacLocalInputMonitor.TryInstall(true));
+            Assert.Null(MacLocalInputMonitor.TryInstall(false));
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+            {
+                MacLocalInputMonitor.TryInstall(true);
+                MacLocalInputMonitor.TryInstall(false);
+            }
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(0, allocated);
+            Assert.Empty(Directory.GetFileSystemEntries(temp.Path));
+        }
+        finally { await MoteTelemetry.ShutdownAsync(); }
     }
 
     /// <summary>Checks both supported 64-bit Block layouts against their ABI field offsets.</summary>
@@ -135,7 +190,7 @@ public sealed class MacLocalInputMonitorTests
         /// <summary>Borrowed opaque token returned by Add, including the nil-token case.</summary>
         public nint Token = 789;
         /// <summary>Independent failure switches for native ownership and optional observation calls.</summary>
-        public bool ThrowAdd, ThrowRetain, ThrowRemove, ThrowClassify, ThrowRecord;
+        public bool ThrowAdd, ThrowRetain, ThrowRemove, ThrowRelease, ThrowClassify, ThrowRecord;
         /// <summary>Attempt counts include throwing calls so retry errors remain observable.</summary>
         public int Adds, Retains, Removes, Releases;
         /// <summary>Reentrant callback used to verify passivation before native removal.</summary>
@@ -181,6 +236,7 @@ public sealed class MacLocalInputMonitorTests
             Assert.Equal(Token, token);
             Releases++;
             Ownership.Add("release");
+            if (ThrowRelease) throw new InvalidOperationException("release failure");
         }
 
         /// <inheritdoc />
