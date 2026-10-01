@@ -10,10 +10,12 @@ is not evidence for the ordinary Continuous Canvas route.
 
 The new diagnostic launches the published executable with only its disposable
 fixture filename. It does not select a legacy, experimental Canvas or test-only
-product route. Its current status is **portable contracts passed; first hosted attempt blocked
-by a harness setup defect before registry mutation or editor launch; corrected
-harness awaiting another hosted observation**. No registry setting was changed on the local developer
-machine, and no product implementation was modified to satisfy the checks.
+product route. Its current status is **portable contracts passed; the corrected
+owner reached both native targets, but the first dark-phase source-readiness
+predicate failed on both RIDs; restoration and unchanged-file cleanup passed**.
+No live palette or source-selection acceptance has yet been established. No
+registry setting was changed on the local developer machine, and no product
+implementation was modified to satisfy the checks.
 
 ## Acceptance basis
 
@@ -206,3 +208,98 @@ and adding the readonly-HOME red/green setup checks. This closes the specific
 harness setup defect, not the hosted Canvas theme acceptance. A subsequent run
 must still supply all three exact phase reports/rasters, source UIA assertions,
 normal exit, unchanged input hash and verified registry restoration.
+
+## Corrected hosted audit: run 36802378381
+
+Run [36802378381](https://github.com/kleedaisuki/mote/actions/runs/36802378381),
+head `c453506`, passed the reviewed harness byte pins and the portable
+readonly-HOME red/green setup, `13` restoration/fidelity/watchdog and `7`
+source-range contracts on both RIDs. The old setup failure did not recur.
+Nevertheless, the nested native diagnostic and its first GUI worker both
+returned **exit 1**. Green Native AOT/non-gating step conclusions do not override
+these observed failures.
+
+| RID | Job ID | Owner/worker status | Owner cleanup | Artifact ID |
+| --- | --- | --- | --- | --- |
+| win-x64 | 110179342793 | failed / dark-before / exit 1 | registry restored, input hash unchanged, normal exit all true | 11136462885 |
+| win-arm64 | 110179342824 | failed / dark-before / exit 1 | same three checks true | 11135443306 |
+
+Published executable SHA-256:
+
+- win-x64: `526C45D6F6DF34861F4FE0B86D3C27D30C5D37BD8D7AC68D22FF25FB51408B15`.
+- win-arm64: `1D1050838A13150671DD71C41095E55BD6FC37E99BA9A9DC0AE3EB9EC1E40EF7`.
+
+Unlike the previous run, both artifacts contain an owner report, one
+`dark-before.json`, its stderr and an empty stdout file. Both phase reports have
+identical SHA-256
+`C5130410032B003BB00C042AEEE0B99777B6FF1ECE913778697A5749653AAB37`,
+`launch_observation=null`, `cases=[]`, and the precise first failure:
+
+> Ordinary Canvas did not expose target-owned source Document and visible input island.
+
+Raw command exit-1 records occur at `2026-10-01T01:45:44.9046983Z` (x64) and
+`2026-10-01T01:45:37.0650339Z` (ARM64). Neither worker timed out at its independent
+30-second owner deadline: `completed=true`, `exit_code=1` indicates a worker that
+returned its own failed source-readiness polling result. Neither artifact has a
+PNG, light phase, or dark-after phase.
+
+### What is and is not established
+
+The worker's control-flow guards found and owner-verified the launched editor,
+direct Canvas, input child 301 and status child before entering the failing
+source-readiness loop. This is bounded native target reachability, not the full
+source contract. The failed loop conjunctively requires process/automation-ID/
+Document control-type identity, exact bounded `alpha LF beta LF` source text,
+and visible input/Canvas HWNDs. Its current report does not retain each conjunct's
+last observed value. Consequently, this evidence **does not identify** which
+condition failed, nor distinguish a provider contract defect from an observer
+assumption such as text representation. It does not contain a foreground/occlusion
+check, so it cannot be classified as a proven foreground blockage either.
+
+The failure occurs **before** `sourceRange.Select()`, source-state acceptance,
+target `WM_SETTINGCHANGE`, raster color sampling, and PrintWindow. Thus there is:
+
+- no verified global `[1,3)` selection or theme-preserved source-provider text;
+- no editing/undo/history acceptance (those operations are not part of this
+  diagnostic even on a pass);
+- no accepted dark palette, no dark -> light -> dark transition, and no observed
+  product color failure;
+- no draw-callback, compositor/physical-display or real IME evidence;
+- no immutable engine-version evidence, as already declared by the reports.
+
+The owner reports **do** establish their narrowly scoped cleanup checks on both
+real native targets: original Personalize key and AppsUseLightTheme value existed
+with kind DWord, exact raw kind/data restoration verification succeeded,
+`source_sha256_unchanged=true`, and clean owned-editor shutdown returned
+`normal_exit=true`. These are not merely inferred from a green job and must not
+be extended into unexecuted theme/editing assertions.
+
+### Reproducibility and next discriminating observation
+
+All downloaded audit files stay under repository
+`.cache/canvas-theme-36802378381/`, with raw logs `win-x64.log` and `win-arm64.log`
+and separately named artifact extraction directories. Commands:
+
+```powershell
+gh run download 36802378381 --name native-canvas-theme-win-x64 `
+  --dir .cache/canvas-theme-36802378381/win-x64
+gh run download 36802378381 --name native-canvas-theme-win-arm64 `
+  --dir .cache/canvas-theme-36802378381/win-arm64
+gh api repos/kleedaisuki/mote/actions/jobs/110179342793/logs `
+  > .cache/canvas-theme-36802378381/win-x64.log
+gh api repos/kleedaisuki/mote/actions/jobs/110179342824/logs `
+  > .cache/canvas-theme-36802378381/win-arm64.log
+```
+
+When inspecting inventory use pagination, e.g.
+`gh api --paginate 'repos/kleedaisuki/mote/actions/runs/36802378381/artifacts?per_page=100'`;
+the default first page did not include the ARM64 theme artifact. Absence from a
+partial inventory is not artifact absence.
+
+The smallest informative next diagnostic is content-free last-observation
+metadata for each source-readiness conjunct (owner PID match, automation ID,
+control type, exact synthetic newline-variant booleans/length, Canvas/input
+visibility). Keep the acceptance predicate unchanged until the metadata
+identifies whether its expectation or actual product contract is wrong; do not
+select the hidden legacy control or weaken the source requirement to make the
+palette check run. No product, harness or CI code was changed by this audit.
