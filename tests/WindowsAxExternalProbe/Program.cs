@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
+using Mote.WindowsAxExternalProbe;
 
 /// <summary>External Windows UI Automation client for the published Native AOT canvas.</summary>
 internal static class Program
@@ -27,16 +28,17 @@ internal static class Program
             return 2;
         }
 
-        if (args.Length is < 3 or > 4 ||
-            (args.Length == 4 && args[3] != "--uia-fragment-experimental"))
+        var launch = args.Length is >= 3 and <= 4
+            ? ProbeLaunchRoute.Parse(args.Length == 4 ? args[3] : null) : null;
+        if (launch is null)
         {
-            Console.Error.WriteLine("Usage: WindowsAxExternalProbe <published-mote.exe> <scratch-directory> <report.json> [--uia-fragment-experimental]");
+            Console.Error.WriteLine("Usage: WindowsAxExternalProbe <published-mote.exe> <scratch-directory> <report.json> [--uia-fragment-experimental | --product-continuous]");
             return 2;
         }
 
         var report = new ProbeReport();
-        var fragmentExperiment = args.Length == 4;
-        report.Mode = fragmentExperiment ? "fragment-experimental" : "canvas-baseline";
+        report.Mode = launch.Mode;
+        report.PresentationArguments = launch.PresentationArguments;
         var reportPath = Path.GetFullPath(args[2]);
         try
         {
@@ -45,7 +47,7 @@ internal static class Program
             if (!File.Exists(exe)) throw new FileNotFoundException("Published executable is missing", exe);
             Directory.CreateDirectory(scratch);
             report.ExecutableSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(exe)));
-            Run(exe, scratch, report, fragmentExperiment);
+            Run(exe, scratch, report, launch);
         }
         catch (Exception exception)
         {
@@ -67,8 +69,9 @@ internal static class Program
     }
 
     /// <summary>Runs all checks against the real published process, retaining the original UIA proxy across the oversized call.</summary>
-    private static void Run(string exe, string scratch, ProbeReport report, bool fragmentExperiment)
+    private static void Run(string exe, string scratch, ProbeReport report, ProbeLaunchRoute launch)
     {
+        var sourceFragment = launch.UsesSourceFragment;
         var fixture = Path.Combine(scratch, "ax-many-lines.md");
         var source = string.Concat(Enumerable.Range(0, 9000).Select(index => $"row-{index:D6} hello\n"))
             + TailMarker + "\n";
@@ -82,8 +85,7 @@ internal static class Program
             CreateNoWindow = true,
             RedirectStandardError = true
         };
-        start.ArgumentList.Add("--canvas-experimental");
-        if (fragmentExperiment) start.ArgumentList.Add("--uia-fragment-experimental");
+        foreach (var argument in launch.PresentationArguments) start.ArgumentList.Add(argument);
         start.ArgumentList.Add(fixture);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Native editor did not start");
         report.ProcessId = process.Id;
@@ -95,7 +97,7 @@ internal static class Program
             WaitFor(() => Title(main).Contains("ax-many-lines", StringComparison.Ordinal) ? main : 0, process);
 
             var element = AutomationElement.FromHandle(canvas);
-            var sourceElement = WaitForSourceElement(canvas, process, fragmentExperiment);
+            var sourceElement = WaitForSourceElement(canvas, process, sourceFragment);
             var text = (TextPattern)sourceElement.GetCurrentPattern(TextPattern.Pattern);
             var originalRange = text.DocumentRange;
             var prefix = originalRange.GetText(128);
@@ -110,7 +112,7 @@ internal static class Program
             var hostElement = AutomationElement.FromHandle(input);
             if (hostElement.TryGetCurrentPattern(TextPattern.Pattern, out var hostPattern))
             {
-                if (fragmentExperiment)
+                if (sourceFragment)
                 {
                     var hostPrefix = ((TextPattern)hostPattern).DocumentRange.GetText(128);
                     report.HostPatternPrefixUtf16Length = hostPrefix.Length;
@@ -135,11 +137,11 @@ internal static class Program
             var rawDocuments = DocumentsInView(element, TreeWalker.RawViewWalker);
             var controlDocuments = DocumentsInView(element, TreeWalker.ControlViewWalker);
             var contentDocuments = DocumentsInView(element, TreeWalker.ContentViewWalker);
-            var focus = CaptureFocus(canvas, input, process, fragmentExperiment);
+            var focus = CaptureFocus(canvas, input, process, sourceFragment);
             report.Focus = focus;
-            if (fragmentExperiment && focus.Status.StartsWith("focus-inconclusive-", StringComparison.Ordinal))
+            if (sourceFragment && focus.Status.StartsWith("focus-inconclusive-", StringComparison.Ordinal))
                 report.Inconclusive.Add(focus.Status);
-            if (fragmentExperiment && focus.Status == "focus-inconsistent-mote-foreground")
+            if (sourceFragment && focus.Status == "focus-inconsistent-mote-foreground")
                 report.ReleaseBlockers.Add($"Mote was stably foreground, but source UIA focus and global FocusedElement disagreed: {focus.Focused}");
             report.Tree = new TreeObservation(
                 Describe(element), Describe(sourceElement), Describe(hostElement), Describe(rawChild), Describe(controlChild),
@@ -177,7 +179,7 @@ internal static class Program
             var cachedHealthy = TryReadPattern(text, report, "cached-after-oversize");
             report.Check("cached-pattern-usable-after-budget-failure", cachedHealthy,
                 cachedHealthy ? "selection and visible ranges returned" : "one or both cached calls failed");
-            var freshText = (TextPattern)WaitForSourceElement(canvas, process, fragmentExperiment)
+            var freshText = (TextPattern)WaitForSourceElement(canvas, process, sourceFragment)
                 .GetCurrentPattern(TextPattern.Pattern);
             report.Check("fresh-pattern-usable-after-budget-failure",
                 TryReadPattern(freshText, report, "fresh-after-oversize"), "fresh proxy selection and visible ranges");
@@ -198,7 +200,7 @@ internal static class Program
                 "main HWND after New");
             report.Check("old-range-rejected-after-new", IsStale(originalRange, report, "after-new"),
                 "old source range must not resolve against new document");
-            var newRange = ((TextPattern)WaitForSourceElement(canvas, process, fragmentExperiment)
+            var newRange = ((TextPattern)WaitForSourceElement(canvas, process, sourceFragment)
                 .GetCurrentPattern(TextPattern.Pattern)).DocumentRange;
             report.Check("new-document-empty", newRange.GetText(-1).Length == 0, "fresh same-HWND range");
 
@@ -264,7 +266,7 @@ internal static class Program
     /// generic Document type: RichEdit is also a Document but holds only an island.
     /// </summary>
     private static AutomationElement WaitForSourceElement(nint canvas, Process process,
-        bool fragmentExperiment)
+        bool sourceFragment)
     {
         var watch = Stopwatch.StartNew();
         while (watch.ElapsedMilliseconds < 10_000)
@@ -272,7 +274,7 @@ internal static class Program
             try
             {
                 var element = AutomationElement.FromHandle(canvas);
-                var source = fragmentExperiment
+                var source = sourceFragment
                     ? element.FindFirst(TreeScope.Descendants,
                         new PropertyCondition(AutomationElement.AutomationIdProperty,
                             "mote.source.document"))
@@ -286,7 +288,7 @@ internal static class Program
             if (process.HasExited) break;
             Thread.Sleep(50);
         }
-        throw new InvalidOperationException(fragmentExperiment
+        throw new InvalidOperationException(sourceFragment
             ? "Published fragment did not expose source Document AutomationId mote.source.document and TextPattern"
             : "Published canvas did not expose an external UIA TextPattern");
     }
@@ -317,7 +319,7 @@ internal static class Program
     /// or an attributed provider defect.
     /// </summary>
     private static FocusObservation CaptureFocus(nint canvasHwnd, nint inputHwnd,
-        Process process, bool fragmentExperiment)
+        Process process, bool sourceFragment)
     {
         var preflight = GetForegroundWindow();
         Thread.Sleep(30);
@@ -326,7 +328,7 @@ internal static class Program
         // Avoid reusing the tree traversal's RCWs. This specifically tests how
         // UIAutomationClient merges the new fragment provider and HWND host.
         var canvas = AutomationElement.FromHandle(canvasHwnd);
-        var source = WaitForSourceElement(canvasHwnd, process, fragmentExperiment);
+        var source = WaitForSourceElement(canvasHwnd, process, sourceFragment);
         var host = AutomationElement.FromHandle(inputHwnd);
         var focused = AutomationElement.FocusedElement;
         var sourceFocus = ReadFocusProperties(source);
@@ -337,11 +339,16 @@ internal static class Program
         var stableMoteForeground = preflight != 0 && preflight == before && before == after &&
             beforeThread != 0 && beforeThread == afterThread &&
             beforePid == process.Id && afterPid == process.Id;
-        var focusedIsSource = focused is not null &&
+        // Desktop-global focus can belong to an unrelated application. Its PID
+        // is sufficient to reject ownership; never read/serialize its name,
+        // runtime identity, control type, HWND, or patterns in that branch.
+        var inspectFocused = ProbeFocusScope.CanInspect(stableMoteForeground, process.Id,
+            focused?.Current.ProcessId ?? 0);
+        var focusedIsSource = inspectFocused && focused is not null &&
             focused.GetRuntimeId().SequenceEqual(source.GetRuntimeId());
-        var focusedIsHost = focused is not null &&
+        var focusedIsHost = inspectFocused && focused is not null &&
             focused.GetRuntimeId().SequenceEqual(host.GetRuntimeId());
-        var expectedFocus = fragmentExperiment
+        var expectedFocus = sourceFragment
             ? focusedIsSource && sourceFocus.AllTrue && hostFocus.AllTrue
             : focusedIsHost && hostFocus.AllTrue;
         var status = !stableMoteForeground
@@ -351,7 +358,7 @@ internal static class Program
                 : "focus-inconsistent-mote-foreground";
         return new FocusObservation(status, preflight.ToInt64(), before.ToInt64(),
             after.ToInt64(), beforeThread, afterThread, beforePid, afterPid, process.Id,
-            Describe(focused), focusedIsSource,
+            inspectFocused ? Describe(focused) : "<focus-identity-not-inspected>", focusedIsSource,
             focusedIsHost, canvasFocus, sourceFocus, hostFocus);
     }
 
@@ -428,6 +435,8 @@ internal sealed class ProbeReport
 {
     public string Schema { get; } = "mote-windows-ax-external-v1";
     public string Mode { get; set; } = "canvas-baseline";
+    /// <summary>Exact presentation flags; product mode is empty and the synthetic fixture path is omitted.</summary>
+    public string[] PresentationArguments { get; set; } = [];
     public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
     public DateTimeOffset CompletedUtc { get; set; }
     public string OsVersion { get; } = RuntimeInformation.OSDescription;

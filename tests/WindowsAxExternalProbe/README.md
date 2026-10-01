@@ -1,7 +1,8 @@
 # Published Windows canvas: external UIA diagnostic
 
 This is a **separate WPF UIAutomationClient process** querying the real HWND of a
-published, one-file Native AOT `mote.exe --canvas-experimental`. It is not a
+published, one-file Native AOT `mote.exe`. It supports the ordinary continuous
+product and the preserved `--canvas-experimental` diagnostic A/B. It is not a
 managed provider unit test, an in-process COM vtable call, or a screen-reader
 speech/IME acceptance test. The executable under test is never rebuilt here.
 
@@ -22,8 +23,24 @@ runner. The wrapper builds **only this WPF client**, putting its bin/obj under
 Allow approximately one minute and run it in a Windows interactive runner
 session. CI should use `continue-on-error: true` and `if: always()` artifact
 upload for the report; nonzero is intentional while the duplicate-Document
-release blocker remains. An exit code of zero requires all checks and no
+blocker remains in the historical baseline route. That route is **not** the
+ordinary product and cannot establish a current default-product blocker.
+An exit code of zero requires all checks, no inconclusive focus, and no
 release blockers; do **not** redefine an expected failure as a passing test.
+
+For the **ordinary product**, add `-ProductContinuous` and use a distinct report
+such as `.cache/windows-ax-external/win-x64/product-report.json`. This switch
+belongs to the client wrapper, **not mote**: the editor receives exactly the
+synthetic fixture path and no presentation flags. The report has
+`Mode=product-continuous` and `PresentationArguments=[]`; all source-fragment
+identity, input-HWND routing, exact text, stale-range and focus checks apply.
+`-ProductContinuous` and `-FragmentExperiment` are mutually exclusive.
+
+| Wrapper mode | Exact editor presentation arguments | Source provider expectation |
+| --- | --- | --- |
+| No mode switch (preserved baseline) | `--canvas-experimental` | Historical canvas Document plus bounded RichEdit Document |
+| `-FragmentExperiment` | `--canvas-experimental --uia-fragment-experimental` | Pane with one source Document |
+| `-ProductContinuous` | None; fixture path only | Ordinary product Pane with one source Document |
 
 For the **separately opt-in** UIA fragment-tree experiment, run the *same
 published binary* in a fresh process with `-FragmentExperiment` and a distinct
@@ -64,6 +81,14 @@ with UIA host fallback; that negative-control JSON is
 `.cache/windows-ax-external/win-x64/old-30008-external.json`. The later
 provider property-ID correction must be checked against a newly published
 binary, not inferred from the direct COM unit test alone.
+
+The current client reads only the desktop-focused element's owner PID before
+authorizing identity inspection. Unless foreground is stably mote-owned and
+the focused element belongs to mote, `Focused` is
+`<focus-identity-not-inspected>`: no foreign name, runtime ID, HWND, type or
+patterns are inspected/serialized. This does not turn foreign foreground into
+a focus pass. Older reports predate this guard; do not copy their unrelated
+application metadata into new documentation.
 
 The fixture is 9,000 LF rows plus `TAIL_AX_MARKER_世界😀` (>65,536 UTF-16
 units). The client checks exact 128-unit document prefix, source versus bounded
@@ -158,3 +183,34 @@ The race-aware external sample above separately records stable mote foreground
 versus an inconclusive foreign/changing foreground without inventing a product
 verdict. Neither hosted run exercised Pinyin candidates or actual Narrator/NVDA
 speech.
+
+## Scope correction and ordinary launch evidence (2026-10-01)
+
+Run [36794910486](https://github.com/kleedaisuki/mote/actions/runs/36794910486)
+still demonstrates the retained **diagnostic A/B**, not ordinary launch. Both
+RIDs have 19/19 checks in both modes. Baseline is 2/2/2 Documents with a tree
+blocker; fragment is 1/1/1 with no tree blocker. Per-RID executable hashes match
+across A/B: x64 `9FF531651ED116C509FF21696B7BAF0BAC6599120886093D510F5AD634E086E9`,
+ARM64 `2FDE6E7E2EAFB70747E2D6E8F5874CE34F00210C612CB3D5A5EAEC1182D4F296`.
+x64 fragment focus is consistent; ARM64 fragment focus is inconclusive due to
+foreign foreground. Retained artifacts are under
+`.cache/windows-uia-scope-36794910486/`.
+
+Source routing separately proves ordinary `Product(Continuous)` always passes
+`UsesWindowsSourceFragment=true` through `NativeShellFactory` to the Windows
+shell, while `--legacy-page` and historical Canvas A/B remain unchanged.
+`NativePresentationProfileTests` exercise that contract; this is not a substitute
+for a target-host ordinary-launch test.
+
+The new ordinary-launch client was exercised locally against the existing
+strict-AOT `.cache/windows-grid-accessibility/aot/mote.exe`, SHA-256
+`BE2D17B41853A586F080F4DA3094203C2E9DD0A2AF57FF6B653DDB5B8708D0A0`,
+Windows build 26200, x64. It observed 19/19 checks, one Document in each view,
+physical RichEdit length 16 and source prefix length 128. Focus may become
+inconclusive when an unrelated foreground app wins the race; this is not an
+editor defect or permission to steal focus. The final privacy-guarded report
+is `.cache/windows-uia-scope-client/product-local.json`. This existing local
+binary is **not a build of the current repository HEAD**. Fresh hosted x64 and
+ARM64 ordinary-launch validation, screen-reader speech and real IME coexistence
+remain separate gates; do not call the duplicate diagnostic baseline a default
+product release blocker.

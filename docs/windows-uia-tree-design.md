@@ -2,6 +2,20 @@
 
 Status: **focused design and reversible experiment, not an accepted tree**, 2026-09-29. This document addresses only the duplicate-document tree of the opt-in Windows continuous canvas. Whole-source ranges, request budgets, and incomplete TextPattern methods remain in [accessibility-provider-design.md](accessibility-provider-design.md); IME ownership remains in [input-island-design.md](input-island-design.md). No Narrator/NVDA or real CJK-composition pass follows from the tree proposal.
 
+**2026-10-01 scope update:** the implemented fragment is a canvas **Pane** with
+one source-backed **Document child**, and that child overrides the known RichEdit
+HWND; it is not the older root-Document/raw-only proxy sketch below. Ordinary
+`Product(Continuous)` already selects this fragment in `NativeShellFactory`.
+`--canvas-experimental` without the fragment flag intentionally preserves the
+historical two-Document A/B baseline; its 2/2/2 report is not evidence that the
+ordinary product has two source Documents. No provider/input architecture
+change is warranted by that report. The external client now has an explicit
+`-ProductContinuous` mode that launches only the fixture path; current local
+and hosted diagnostic evidence and remaining gates are recorded in
+[the external probe README](../tests/WindowsAxExternalProbe/README.md#scope-correction-and-ordinary-launch-evidence-2026-10-01).
+Do not confuse the implemented one-node identity with complete reader/IME
+acceptance, or infer an ordinary hosted result from a flagged diagnostic run.
+
 ## Observed failure, not an inferred one
 
 The canvas HWND is a child of the main window; the visible `RICHEDIT50W` input HWND is a child of the canvas and receives actual Win32 keyboard focus for editing and IME. The canvas `WM_GETOBJECT` path returns the engine-backed `IRawElementProviderSimple`/TextPattern; the input HWND's existing subclass forwards `WM_GETOBJECT` to RichEdit unchanged. An external WindowsDesktop UIA client queried a published win-x64 Native AOT binary on Windows 10.0.26200.0. In `.cache/ax-uia-external/invalid-operation.txt`, `AutomationElement.FromHandle(input)` is `Document / RichEdit Control` with 16 UTF-16 units; the canvas's first RawView and ContentView child is the same `Document`, while the canvas itself exposes the source-backed Document/TextPattern and its offscreen tail. `HasKeyboardFocus` and `GetFocusedElement` identify **RichEdit**, not canvas. A separate ControlView query also found the child Document. This is two semantic documents in all three views, with focus on the bounded one. There is no speech evidence yet.

@@ -1,22 +1,26 @@
-# Build an isolated WPF UIA client and inspect a published one-file Windows canvas.
-# The diagnostic intentionally returns nonzero for both behavioral failures and
-# the known duplicate-Document release blocker; CI should use continue-on-error.
+# Inspect a published Windows source provider; preserve the historical Canvas A/B.
+# Nonzero includes behavior/tree defects and explicitly inconclusive host focus.
 param(
     [Parameter(Mandatory)][string] $ExecutablePath,
     [Parameter(Mandatory)][string] $Rid,
     [string] $ReportPath,
-    [switch] $FragmentExperiment
+    [switch] $FragmentExperiment,
+    [switch] $ProductContinuous
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'External UI Automation probing requires Windows.' }
+if ($FragmentExperiment -and $ProductContinuous) {
+    throw 'ProductContinuous and FragmentExperiment are mutually exclusive.'
+}
 if ($Rid -notin @('win-x64', 'win-arm64')) { throw "Unsupported Windows RID: $Rid" }
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $cache = [IO.Path]::GetFullPath((Join-Path $root ".cache/windows-ax-external/$Rid"))
 $scratch = [IO.Path]::GetFullPath((Join-Path $root ".temp/windows-ax-external/$Rid"))
-$defaultReport = if ($FragmentExperiment) { 'fragment-report.json' } else { 'report.json' }
+$defaultReport = if ($ProductContinuous) { 'product-report.json' }
+    elseif ($FragmentExperiment) { 'fragment-report.json' } else { 'report.json' }
 $report = if ($ReportPath) { [IO.Path]::GetFullPath($ReportPath) } else { Join-Path $cache $defaultReport }
 $cacheRoot = [IO.Path]::GetFullPath((Join-Path $root '.cache'))
 if (-not $report.StartsWith($cacheRoot + [IO.Path]::DirectorySeparatorChar,
@@ -35,7 +39,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Isolated WPF UIA probe build failed with $LASTEXITCODE." }
     $probe = Join-Path $output 'Release/net10.0-windows/WindowsAxExternalProbe.exe'
     if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) { throw "Probe executable missing: $probe" }
-    if ($FragmentExperiment) {
+    if ($ProductContinuous) {
+        & $probe $exe $scratch $report '--product-continuous'
+    }
+    elseif ($FragmentExperiment) {
         & $probe $exe $scratch $report '--uia-fragment-experimental'
     }
     else {

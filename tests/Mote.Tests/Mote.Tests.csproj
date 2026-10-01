@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Compile Include="../WindowsAxExternalProbe/ProbeLaunchRoute.cs" Link="WindowsAxProbeLaunchRoute.cs" />
   </ItemGroup>
 
   <ItemGroup>
