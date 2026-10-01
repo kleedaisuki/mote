@@ -52,6 +52,11 @@ foreach ($mutation in @(
     { param($v) $v.identity.audit_admissions = 129 },
     { param($v) $v.actions.begin_recorded = $false },
     { param($v) $v.trusted = 'true' },
+    { param($v) $v.owned_target = 1 },
+    { param($v) $v.identity.retained_equal_current = 1 },
+    { param($v) $v.identity.parent_equal_discovered_group = 1 },
+    { param($v) $v.identity.window_equal_discovered_window = 1 },
+    { param($v) $v.identity.top_level_equal_window = 1 },
     { param($v) $v.discovery.nodes = 1.5 }
 )) {
     $value = $baseline | ConvertFrom-Json
@@ -59,6 +64,25 @@ foreach ($mutation in @(
     $refused = $false
     try { Assert-ClientReport $value } catch { $refused = $_.Exception.Message -ceq 'report-schema-invalid' }
     if (-not $refused) { throw 'Invalid client schema admitted.' }
+    $checks++
+}
+# False/unknown are distinct supported scalar facts, never truthy numeric coercion.
+foreach ($scalar in @($false, $null)) {
+    $value = $baseline | ConvertFrom-Json
+    foreach ($key in @('retained_equal_current', 'parent_equal_discovered_group', 'window_equal_discovered_window', 'top_level_equal_window')) {
+        $value.identity.$key = $scalar
+    }
+    Assert-ClientReport $value
+    $checks++
+}
+# Source-contract checks do not compile Foundation; hosted JSON must still prove Boolean serialization.
+$native = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Client.m') -Raw
+foreach ($pattern in @(
+    'static NSNumber \*PairBoolean\(BOOL value\)\s*\{\s*return value \? @YES : @NO;\s*\}',
+    'return PairBoolean\(CFEqual\(',
+    '@"owned_target":PairBoolean\(found!=nil\)'
+)) {
+    if ($native -cnotmatch $pattern) { throw 'Canonical native JSON Boolean conversion missing.' }
     $checks++
 }
 $serverBaseline = @'
