@@ -26,7 +26,9 @@ follow from this adapter.
 
 * Import and readback use the existing explicit-length UTF-16 NSString bridge;
   embedded NUL, CR, LF and CRLF are neither normalized nor guessed. A changed
-  replica fails the operation. No successful offset map is synthesized.
+  replica fails the caller's separate exact-readback certification phase. Import
+  itself performs no readback so those two timed phases remain distinct. No
+  successful offset map is synthesized.
 * Native selection is a sorted global UTF-16 NSRange. Controlled insertion uses
   one `insertText:replacementRange:` with that range and checks the exact final
   text. `allowsUndo` is disabled because canonical engine history owns undo.
@@ -39,7 +41,9 @@ follow from this adapter.
   replace characters or complete attribute dictionaries. Text and selection are
   checked and the captured viewport restored. Native font attributes remain.
 * Exact checks copy the complete native NSString. Their allocation/time is part
-  of these adapter methods. Do not relabel this guarded publication timing as
+  of guarded insertion and publication methods, together with native selection
+  and viewport preservation checks. Do not relabel insertion as physical input
+  latency or guarded publication timing as
   pure attribute mutation or native paint cost. Autoreleased colors and strings
   live until host disposal; this first bounded capability experiment is not a
   steady-state memory/performance certification.

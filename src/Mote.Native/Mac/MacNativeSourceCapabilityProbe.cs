@@ -67,13 +67,12 @@ internal static class MacNativeSourceCapabilityProbe
             }
         }
 
-        /// <summary>Imports plain characters and refuses any native newline or embedded-NUL transformation.</summary>
+        /// <summary>Imports plain characters; the caller separately certifies exact native readback.</summary>
         public void Install(string display)
         {
             Check();
             ArgumentNullException.ThrowIfNull(display);
             ObjC.Send(_text, ObjC.Sel("setString:"), ObjC.String(display));
-            Exact(display);
         }
 
         /// <summary>Copies NSString by explicit UTF-16 length, including embedded NUL characters.</summary>
