@@ -104,7 +104,7 @@ follow-up, so the already-passing menu cases were not repeated.
 
 ## Owned AppKit queue fault control (hosted execution pending)
 
-`MacPostedCallbackProbe` extends the existing strict in-process Mac Flow
+`MacPostedCallbackProbe` extends the existing non-gating in-process Mac Flow
 diagnostic, without a new CLI mode, workflow, production fault hook, or tracing
 configuration. Once the actual shell is shown, the diagnostic queues one
 throwing callback through `MacEditorShell.Post`, followed by its ordinary
@@ -124,7 +124,7 @@ exception text in telemetry. Production guard code is unchanged.
 This control distinguishes actual created-AppKit queue continuation from the
 portable helper and uncreated Windows-shell checks above. Native AOT
 compilation alone does **not** establish that continuation occurred. Actual
-execution on both macOS RIDs remains pending in the next hosted strict Flow
+execution on both macOS RIDs remains pending in the next hosted non-gating Flow
 run; record the fixed marker and original process exit before upgrading this
 claim. The control does not certify telemetry emission (tracing stays at its
 existing setting), native Objective-C exception containment, fatal recovery,
@@ -138,3 +138,11 @@ Mac execution or the subsequently integrated Flow call sites. Source checks
 confirm that the hostile getter throws during argument evaluation, before
 `ShowError`, and that the existing posted guard excludes out-of-memory faults;
 the injected exceptions are ordinary `Exception`/`InvalidOperationException`.
+
+## Actual created-AppKit continuation — CI 36836309613
+
+The previously pending created-shell control now executes on **both** Mac Native AOT RIDs at exact source `b4093b84e8e242a00d99fb3e3c8ef0249d24a467`, [CI 36836309613](https://github.com/kleedaisuki/mote/actions/runs/36836309613). Completed x64 job 110284447321 at 08:30:27.620 UTC and ARM64 job 110284447436 at 08:31:40.150 UTC each print `Mac posted callback primary/report fault containment passed.`, then the local-monitor control marker and `mote-native-mac-flow-rendering-ready`. Thus the real created AppKit queue contains the primary callback exception and the separately throwing Message getter, checks exactly one invocation of each, and continues to the subsequent ordinary Flow work.
+
+The actual Flow diagnostic step concludes success for both RIDs. At this audited source it is **non-gating** (`continue-on-error: true`); a green AOT job is not the proof. The pinned PowerShell script directly invokes the binary, captures `$LASTEXITCODE`, and requires exit 0 plus exact Flow-ready output. This enforces original process exit 0 but does not separately serialize a numeric-exit report. Any later blocking-step promotion is not retroactive evidence here. Raw logs, step metadata and pinned script are retained in `.cache/ci-36836309613-input-evidence/`; [the accompanying hosted input audit](native-local-input-monitor.md#hosted-first-runtime-verification--ci-36836309613) records the independent ordinary 8/8 Save/reopen and 16/16 recovery regressions.
+
+This closes the specific **created-AppKit primary/report exception containment and later queue continuation** evidence gap, not Windows created-target injection, native Objective-C exception handling, fatal recovery, wake completeness, telemetry emission, physical input or performance. Tracing remains disabled in this in-process control. Historical ordinary Mac Save failures and other non-gating product gaps remain open.

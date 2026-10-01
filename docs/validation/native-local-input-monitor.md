@@ -80,7 +80,7 @@ exact retain/remove/release counts, no double cleanup, and passive permanent
 admission after teardown failure. It independently checks literal/descriptor
 sizes and field offsets. These portable checks **do not execute AppKit**.
 
-The existing strict Mac Flow command now runs `MacLocalInputMonitorProbe.Verify`:
+The existing non-gating Mac Flow diagnostic command now runs `MacLocalInputMonitorProbe.Verify`:
 actual system `_Block_copy`/`_Block_release`, literal/descriptor/flags/isa/signature
 inspection, typed nil and nonnil synthetic s/S/x pointer identity before/during/
 after real local monitor Add/Remove, and an explicit `RemovedSuccessfully`
@@ -118,3 +118,48 @@ Windows telemetry measurements do not certify this new AppKit per-key callback.
 * Source integration additionally ran a 24-case input/menu/posted/monitor subset
   before holder isolation; that older run is not substituted for the final
   isolated monitor tests. `git diff --check` reports no whitespace errors.
+
+## Hosted first runtime verification — CI 36836309613
+
+Date: 2026-10-01. Exact source `b4093b84e8e242a00d99fb3e3c8ef0249d24a467`, [completed CI 36836309613](https://github.com/kleedaisuki/mote/actions/runs/36836309613). This section upgrades only the pending native control and ordinary-route positive evidence above; it does not erase earlier Mac Save failures or certify reliability.
+
+All ten jobs conclude success. Actual Windows and macOS strict logs each report **Mote.Tests 1369/1369, Themes 14/14, Configuration 9/9**, zero failed/skipped tests. All four single-binary AOT delivery checks and three strict native clipboard jobs succeed. Evidence is retained under `.cache/ci-36836309613-input-evidence/`: completed run/step metadata, strict and four AOT logs, artifact listing (`per_page=100`, all 87 artifacts), four ordinary reports and summaries, all 16 ordinary traces, all 16 recovery traces, and independent reparse/count outputs. The checks use `python -B`; no experiment, production edit or push was performed.
+
+### Actual native control, not a retroactive CI gate
+
+At this source, `Diagnose native macOS Flow rendering (non-gating)` has `continue-on-error: true`. Its **actual step conclusion is success on both Mac RIDs**, and each completed log contains exactly one of all three required observations:
+
+| RID / completed job | Runtime marker time (UTC) | Observations |
+| --- | --- | --- |
+| osx-x64 / 110284447321 | 08:30:27.620 | `Mac posted callback primary/report fault containment passed.`; `Mac local input monitor global Block ABI/install/remove control passed.`; `mote-native-mac-flow-rendering-ready` |
+| osx-arm64 / 110284447436 | 08:31:40.150 | Same three markers |
+
+The pinned `tests/NativeMacFlowRendering.ps1` runs the executable directly with `&`, captures `$LASTEXITCODE`, and throws unless exit is 0 **and** the exact ready marker is present. The successful step thus enforces original process exit 0; it is **not a separately retained numeric-exit JSON field**, and no explicit `WaitForExit` implementation is claimed. Green AOT job conclusion alone would not establish this control. This first actual two-RID success proves the scoped system Block ABI/copy/release, install/remove and synthetic pointer-return controls described above, not physical/external input delivery or every AppKit tracking-loop route. Any later promotion to a blocking step is a different workflow/source.
+
+### Independent ordinary-route evidence
+
+All eight ordinary 1/100 MiB JSON samples pass exact saved-byte/hash, unchanged original fixture, complete diagnostic/version, fresh reopen and explicit numeric editor/reopen exit **0/0** contracts. Independent complete-prefix parsing classifies exactly one successful native Save request with captured snapshot version **1** per edited trace; reopen traces contain no Save request. Row counts:
+
+| RID | Edited trace rows, 1 / 100 MiB | Reopen rows, 1 / 100 MiB |
+| --- | --- | --- |
+| win-x64 | 56 / 61 | 13 / 18 |
+| win-arm64 | 56 / 64 | 13 / 18 |
+| osx-x64 | 68 / 74 | 14 / 19 |
+| osx-arm64 | 71 / 74 | 14 / 19 |
+
+Each of the **four Mac edited traces** has the following six-operation input inventory; vectors are **success / failure / cancelled / skipped**. Both fresh reopen sizes/RIDs have the same ready/removed vectors but candidate `[0/0/0/0]`.
+
+| Fixed operation | Each edited Mac trace |
+| --- | --- |
+| `native.input.monitor.ready` | `[1/0/0/0]` |
+| `native.input.monitor.unavailable` | `[0/0/0/0]` |
+| `native.input.monitor.callback_failed` | `[0/0/0/0]` |
+| `native.input.monitor.removed` | `[1/0/0/0]` |
+| `native.input.monitor.removal_failed` | `[0/0/0/0]` |
+| `native.input.save_family_candidate` | `[1/0/0/0]` |
+
+`check_input.py` independently verifies all eight Mac traces' raw input/menu rows: empty attributes, success status, zero duration and parent identity exactly their own normal session root; all six-by-four edited counters exactly match each raw report. Each edited Mac menu inventory separately has ready 1, entry 1, returned-true 1, unavailable/returned-false 0. Windows input/menu inventories remain unobserved, appropriate to Mac-only instrumentation. The new candidate rows are **actual ordinary external-route target-local positives**, distinct from the synthetic ABI control. They do not establish event identity, pairing, physical key receipt, candidate-to-menu or menu-to-request causal edges. Those edges remain explicitly `unknown`, request correlation `none`, absence certification false.
+
+Both Mac completed logs actually render all six input counter vectors, normal-exit-observed boundary, explicit exits and Save chain, plus the unknown-edge/no-absence warnings in their Markdown summaries; this is not JSON-only storage. The summaries still expose original Grid **40/41 / Swift exit 1**, and C0/P0 **AX 0 / -25205** despite owner/client exits 0. Windows ARM Continuous and many-100MiB remain inconclusive. No ordinary sample is censored in this run; prior censored prefixes retain their interpretation, and normal zero/no-observed-drop counters cannot certify negative callback execution or loss-free coverage.
+
+All **16 synthetic recovery controls pass** their reports and independent existing-contract reclassification: each RID has held/normal/receipt-save/receipt-save-as rows **5/12/1/1**; normal classifies success and exits 0; the other three classify censored and exit 1 on Windows / -9 on Mac. Recovery is infrastructure evidence, not ordinary persistence. This successful ordinary run is not a Mac reliability estimate or root-cause fix for CI 36831903238. New Mac per-key monitoring startup/edit overhead, physical IME and physical display endpoints remain unmeasured here.
