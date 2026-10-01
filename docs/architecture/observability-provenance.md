@@ -1,23 +1,64 @@
 # Runtime observability and causal provenance
 
-Date: 2026-10-01. Status: implementation contract and migration plan, **not an
-assertion that the changes below are implemented or have passed Native AOT**.
+Date: 2026-10-01. Status: **implemented Save causal contract with local
+verification; final hosted four-RID acceptance pending**. This document separates
+shipped instrumentation, retained evidence, and possible follow-up contracts.
+Implemented does not mean every endpoint or transport failure is certified.
 Scope: opt-in local tracing of mote's native single-file editor. The first
 implementation slice is Save/Save As, recoverable trace prefixes, and truthful
 outcomes; existing edit/analysis/source-draw tracing is reused, not replaced.
 
+## Current implementation and verification entry point
+
+The committed implementation is in
+[`MoteTelemetry.Requests.cs`](../../src/Mote.Telemetry/MoteTelemetry.Requests.cs),
+[`DocumentSaveObservation.cs`](../../src/Mote.Engine/DocumentSaveObservation.cs),
+[`NativeEditorController.Save.cs`](../../src/Mote.Native/NativeEditorController.Save.cs),
+and the two native shell dispatch sites. The single typed `SaveRequested` event
+is migrated across production and fake/probe shells; this is no longer a proposed
+API. The Engine's existing two-argument Save methods remain compatible with
+additive explicit three-argument observer overloads.
+
+The implemented chain is target callback receipt -> controller admission ->
+worker entry -> Engine gate and exact captured snapshot -> actual staged-file
+I/O and route-specific commit -> local UI post return -> guarded UI completion.
+Its fixed receipt names are **`command.save.received`** and
+**`command.save_as.received`**; the historical design's generic
+`command.received` name is not emitted.
+Entry rows retain their own identity, while terminal duration rows are distinct
+children measured from the entry timestamp. A lost terminal does not erase the
+positive meaning of a retained entry.
+
+| Evidence | Retained result | Limit |
+| --- | --- | --- |
+| [Engine observer review](../reviews/engine-save-observer.md) | Exact captured version, outside-state-lock observations, unchanged persistence policy and contained nonfatal observer faults | Not a native UI certificate |
+| [Telemetry request review](../reviews/telemetry-causal-requests.md) | Typed anchors, original-sink rejection, nonambient contexts, once-only request terminal | Bounded lossy transport, not total delivery |
+| [Native final review](../reviews/native-causal-save-final-review.md) | Modal reentry/lifetime guards and asynchronous completion exception containment | Not proof of external OS input or every unrelated native callback |
+| Local integration TRX `.cache/causal-integration-tests/causal-integration.trx` | **1329 executed / 1329 passed**, zero failed, aborted or not-executed | Baseline before completion-containment follow-up |
+| Focused TRX `.cache/save-completion-containment/save-completion-containment.trx` | **4 executed / 4 passed**, zero failed, aborted or not-executed | New callback fault cases; not summed into a final full-suite certificate |
+| [Ordinary Save reader review](../reviews/native-save-causal-acceptance-review.md) and [CI summary review](../reviews/causal-ci-evidence-review.md) | Route-aware phases, exact saved-version consistency, original-process association and conservative failure/censorship classification | Final hosted reports/raw traces still require audit |
+
+`tests/causal_save_trace_reader.py` distinguishes the **native Save contract**
+from the **recovery probe contract**. A held/receipt-only owned-process kill
+validates recoverable prefix handling, not Engine persistence. Ordinary native
+1/100 MiB acceptance retains exact bytes, clean acknowledgement, normal original
+exit, fresh reopen and unchanged fixture requirements, additionally requiring
+the native causal chain. A green non-gating Actions job is not that certificate.
+Historical audits and failed hosted observations retain their original scope;
+they are not rewritten as tests of these newly integrated APIs.
+
 ## 1. Decision and evidence motivating it
 
-Keep the existing `Mote.Telemetry` bounded channel, fixed-schema JSONL, monotonic
-clock, and explicit marks. Add two missing capabilities:
+The implementation keeps `Mote.Telemetry`'s bounded channel, fixed-schema JSONL,
+monotonic clock, and explicit marks, and adds two previously missing capabilities:
 
 1. **One target-owned request identity** beginning at the native Save callback,
    carried through composition settlement, controller admission, worker
    scheduling, engine snapshot capture and Save phases, and UI completion.
 2. **A live, recoverable readable prefix** maintained by the existing writer,
-   with low-frequency entry/checkpoint records, periodic buffer flushing and
-   conservative health/watermarks. A never-finishing scope must leave evidence
-   of entry before its eventual terminal record.
+   with low-frequency entry/checkpoint records and periodic buffer flushing.
+   Conservative watermarks remain an unimplemented follow-up, not a certificate.
+   Retained entry records provide positive evidence without awaiting a terminal.
 
 Do not add a database, exporter, generic command bus, global native input hook,
 per-key file writes, or telemetry-owned business state. Tracing stays default
@@ -53,7 +94,8 @@ the [existing endpoint contract](../end-to-end-tracing.md).
 external action attempt                       [observer clock, not target parent]
     |
 native owned Save callback
-    +-- command.received                      [request context's retained anchor]
+    +-- command.save.received OR command.save_as.received
+         |                                    [request context's retained anchor]
          +-- composition settlement / blocked
          +-- controller guards, picker, recovery redirect
          +-- save.admitted                    [event, before Task.Run submission]
@@ -61,7 +103,7 @@ native owned Save callback
          +-- document.save.entered            [coarse worker phase anchor]
          |    +-- overwrite approval / declined
          |    +-- save.gate_wait.entered       [phase anchor; terminal is its child]
-         |    +-- save.snapshot_captured       [actual immutable saved version]
+         |    +-- save.snapshot_capture.entered [Engine snapshot phase anchor]
          |    +-- save.target_check
          |    +-- save.temp_encode_write
          |    +-- save.temp_flush
@@ -72,8 +114,7 @@ native owned Save callback
          |    +-- save.bookkeeping
          |    +-- failure cleanup/inspection   [only if actually executed]
          |    +-- document.save               [distinct duration child of coarse anchor]
-         +-- save.ui_local_queued               [if directly observed by shell]
-         +-- save.ui_wake_requested             [if directly observed by shell]
+         +-- save.snapshot_captured             [instant request child; exact saved version]
          +-- save.ui_post_returned              [local post returned; not native wake receipt]
          +-- save.ui_started
          +-- save.completed OR failure/cancel/stale/deferred result
@@ -85,7 +126,7 @@ child of a mark which will exist only when the operation finally finishes:
 
 ```text
 S  known session context                      (mote.session terminal may be absent after kill)
-└─ R  command.received                        span_id=R, parent_span_id=S
+└─ R  typed command receipt                    span_id=R, parent_span_id=S
    ├─ E  save.admitted / worker/UI checkpoint  fresh event ID, parent_span_id=R
    ├─ D  document.save.entered                span_id=D, parent_span_id=R
    │  ├─ P  save.temp_flush.entered           span_id=P, parent_span_id=D
@@ -95,7 +136,8 @@ S  known session context                      (mote.session terminal may be abse
 ```
 
 `BeginRequest` serializes the request mark's **own SpanId exactly once** as
-`command.received`, with parent equal to its known session context. `BeginPhase`
+`command.save.received` or `command.save_as.received`, parented to the known
+session context. `BeginPhase`
 creates an explicit child mark and serializes that mark's **own SpanId exactly
 once** as the fixed `*.entered` record. The coarse worker phase is a child of
 the request anchor; engine phase anchors are children of the coarse anchor.
@@ -149,15 +191,15 @@ internal readonly record struct NativeSaveRequest(
     NativeSaveKind Kind, TelemetryRequest? Trace);
 
 /// <summary>
-/// Raised exactly once after native composition settlement succeeds.
-/// The shell records and ends blocked/failed requests without dispatching.
+/// Raised once from target command dispatch; controller admission settles native text.
+/// A shell-side blocked/failed request ends without controller dispatch.
 /// </summary>
 event Action<NativeSaveRequest>? SaveRequested;
 ```
 
-Remove the separate internal Save As event and route both kinds through this
-contract. Update approximately six internal fake/probe shells and controller
-wiring in one integration slice. This changes no menu, shortcut, input,
+The separate internal Save As event was removed; both kinds now use this
+contract, including internal fake/probe shells and controller wiring. This
+changes no menu, shortcut, input,
 composition, Save As approval, or external user behavior.
 
 Create the request at the very first target-owned Save/Save As callback, before
@@ -170,23 +212,24 @@ managed error through an unmanaged callback.
 
 ### 2.2 Explicit context, not a long-lived ambient Activity
 
-Add an enabled-only `TelemetryRequest` holding a `TelemetryMark`, fixed command
+The enabled-only `TelemetryRequest` holds a `TelemetryMark`, fixed command
 kind, initial dimensions, and an atomic terminal flag. It contains no document,
 snapshot, shell, arbitrary tags, or path. Disabled creation returns null and
 allocates nothing; the native request itself is a value type.
 
-Required Telemetry API semantics, with names finalized before implementation:
+Implemented Telemetry API semantics:
 
 - `BeginRequest(fixedOperation, dimensions)` captures identity and start time,
-  enqueues `command.received` with the mark's own SpanId immediately, and returns
-  the enabled-only owner. The anchor must not wait for a terminal scope.
+  enqueues the corresponding typed receipt with the mark's own SpanId immediately,
+  and returns the enabled-only owner. The anchor must not wait for a terminal scope.
 - `RecordChild(fixedEvent, parentMark, dimensions, status)` uses the explicit
   parent even in a later UI callback. Do not rely on `Activity.Current` there.
 - `BeginPhase(fixedOperation, parentMark, dimensions)` creates a current-time
   child context and immediately records `*.entered` using that context's own
   SpanId; `EndPhase` records a distinct original-timestamp duration child.
-- `StartChild` remains for local duration scopes; asynchronous work captures
-  the request mark explicitly before scheduling.
+- Existing `StartChild` remains compatible for older local duration scopes. New
+  request/phase work uses the explicit original-sink APIs, **not** its legacy
+  fallback; asynchronous work captures the request before scheduling.
 - `EndOnce(status, fixedReason, dimensions)` atomically selects one terminal
   enqueue attempt, using a distinct forked duration child of the retained
   request anchor. Requests do not keep Activity ambient across the native loop.
@@ -213,9 +256,9 @@ BOM, state ID and expected target fingerprint. The UI's pre-scheduling or
 completion version can differ. Do not freeze the document early for telemetry,
 read a later snapshot to infer it, or persist an internal state ID as a version.
 
-Keep `Mote.Engine` independent of `Mote.Telemetry`. Add a narrow optional typed
-observer to new explicit overloads, preserving existing public signatures and
-their argument binding:
+`Mote.Engine` remains independent of `Mote.Telemetry`. Its narrow optional typed
+observer is exposed through explicit overloads, preserving existing public
+signatures and their argument binding:
 
 ```csharp
 /// <summary>
@@ -241,12 +284,13 @@ public Task SaveAsync(string? path, CancellationToken cancellationToken,
 
 An equivalent three-argument overload applies to `SaveOverAsync`; old methods
 delegate with null observer. Do **not** add an optional second observer argument
-which makes existing `SaveAsync(path, default)` ambiguous. If a narrower
-internal boundary can serve every actual caller without a public API addition,
-it is acceptable, but keep the same no-telemetry-dependency and snapshot rules.
+which makes existing `SaveAsync(path, default)` ambiguous. The committed
+public additive overloads preserve that binding and the no-telemetry-dependency
+and exact-snapshot rules.
 
-Phase and edge enums are closed; edges are entry/success/failure/cancelled or a
-fixed instantaneous milestone. The native adapter maps them to fixed trace
+Phase and edge enums are closed: `Entered`, `Succeeded`, `Failed`, `Cancelled`
+and `Skipped`. `Skipped` explicitly covers lifetime-ended bookkeeping; it is
+not a successful clean-state update. The native adapter maps them to fixed trace
 operations under the explicit request/coarse Save parent, using one active
 phase mark at a time. Each engine phase has its own retained `*.entered` anchor
 under the coarse Save anchor, and a distinct duration child on exit. Exact
@@ -258,6 +302,8 @@ paths, fingerprints, encoding strings or exception `Data` enumeration.
 
 Observer invocations run outside `_gate`, at existing phase boundaries, and
 must not affect return values, exception identity, cancellation or cleanup.
+Callbacks can still run under `_saveGate`: they must not synchronously await
+another Save on the same document or acquire UI locks.
 Contain nonfatal observer failures at the boundary; do not let tracing throw
 after a real file replacement and turn a successful Save into an apparent
 product failure. A null observer is one branch at each coarse phase, not a
@@ -323,7 +369,8 @@ actually entered on the UI thread. None implies the next one. Initial controller
 tracing may certify only post return and callback entry; label intermediate
 facts unobserved rather than inventing them.
 
-Concrete next contract if wake failures need attribution: migrate the internal
+**Unimplemented follow-up, not current API:** if wake failures need attribution,
+migrate the internal
 `Post(Action)` return from void to a path-free `NativePostReceipt` containing
 `Queued` and a closed wake outcome (`NotRequested`, `RequestedUnacknowledged`,
 `AcceptedByOs`, `RejectedByOs`). Ordinary existing callers can ignore the result.
@@ -348,9 +395,12 @@ variants if the resulting request evidence stops at `ui_post_returned`.
 New request/phase scopes are non-success until their explicit normal completion.
 Existing generic `MoteTelemetry.Start` default-success behavior is preserved for
 compatibility; locally initialize uncertain scopes as cancelled or failure and
-set success only at the correct endpoint. The known overwrite-declined Save and
-throwing idle-analysis publication paths must be fixed directly with focused
-tests. Outer catches after `using` disposal cannot repair an already emitted
+set success only at the correct endpoint. The overwrite-declined Save and
+throwing idle-analysis publication paths
+were corrected with focused tests; idle publication also rechecks ownership
+after reentrant native view callbacks. See the
+[native telemetry outcomes review](../reviews/native-telemetry-outcomes-review.md).
+Outer catches after `using` disposal cannot repair an already emitted
 success record.
 
 ## 5. Integrate, do not multiply, the edit-to-draw causal chain
@@ -386,7 +436,7 @@ rotation, buffer flushes and files remain writer owned. Start/checkpoint events
 are low frequency (startup/session, command, Save phases); ordinary edits do not
 each require a flush or a persistent begin record.
 
-The transport-only implementation being integrated uses **250 ms** dirty flush
+The implemented writer transport uses **250 ms** dirty flush
 turns or **64 KiB** of unflushed written records. Reuse that tested policy; do
 not reimplement it with a different threshold. No unconditional session-start
 record is added by the transport slice because existing probes depend on exact
@@ -417,7 +467,7 @@ health instead of claiming a hard real-time guarantee. No dedicated tracing
 thread is added without evidence that the shared writer scheduler defeats the
 required recovery tests; such a thread would still not prove UI liveness.
 
-### 6.2 Conservative watermarks and schema v1
+### 6.2 Current schema v1; unimplemented watermark follow-up
 
 Keep all existing schema-v1 required fields, types, status strings and operation
 meanings. The transport-only slice changes none of them. The causal/evidence
@@ -428,8 +478,9 @@ the captured snapshot. No free-form `reason` or arbitrary property bag is allowe
 The initial causal slice needs **only** the optional closed terminal `reason`
 attribute. It introduces no context-ID, sequence or watermark attribute.
 Retained parentage is expressed by existing `span_id` / `parent_span_id` fields
-as specified in section 2. Later explicit evidence-mode attributes, not required
-for the first causal slice, are:
+as specified in section 2. The following table describes **possible future
+evidence-mode attributes, not
+implemented fields** (except the closed terminal `reason` already implemented):
 
 | Attribute | Type / scope | Meaning |
 | --- | --- | --- |
@@ -445,7 +496,8 @@ receive it. Therefore sequence continuity **does not mean zero producer loss**.
 Use the drop counter too. Files removed by existing per-session retention make
 the retained prefix incomplete even when the remaining sequence is continuous.
 
-On a periodic cycle, append a health checkpoint carrying the **previous
+In that future mode, a periodic cycle would append a health checkpoint carrying
+the **previous
 successful flush watermark**, then flush all pending records and update the
 in-memory watermark. The next checkpoint acknowledges that returned flush.
 This needs one periodic flush, not a recursive "flush the acknowledgement of
@@ -462,8 +514,9 @@ in-memory visible even when no failure record can be written. Retain the normal
 shutdown admission/drain protocol and its existing two-second total budget; add
 terminal drop totals before the final flush, not after the session terminal.
 
-The current privacy test asserts an exact old attribute allowlist; update it to
-assert the explicit expanded allowlist and types, not to permit arbitrary keys.
+Current privacy tests and readers allow only the closed operation/reason
+vocabulary and existing typed dimensions, not arbitrary keys. Any future mode
+requires its own explicit allowlist migration.
 Historical schema-v1 files lacking health attributes remain readable as
 `legacy_health_unknown`; a new causal slice without those attributes also has
 unknown transport health, not a fabricated healthy stream. Readers ignore
@@ -484,7 +537,7 @@ stage. Unknown schema versions are unsupported, not successful acceptance.
 | Request terminal plus complete normal drain, no drops, expected stages | Instrumented scoped chain complete; no assertion about uninstrumented earlier OS events |
 | Dropped records, sink fault, truncated retention, shutdown timeout or absent terminal | Coverage degraded/censored, even if some successful spans remain |
 
-The reader indexes a new request by **the `command.received` anchor's SpanId**,
+The reader indexes a new request by **the typed receipt anchor's SpanId**,
 not by the distinct `command.save` terminal SpanId. A request terminal refers to
 that anchor through `parent_span_id`. It follows retained phase ancestry rather
 than assuming every child of a duration is attached to a final-only request.
@@ -521,13 +574,18 @@ process termination; malformed earlier complete lines, duplicate terminal
 request IDs or invalid watermark order are integrity failures. Live readers
 must retain a partial line for the next read, not discard its eventual suffix.
 
-## 7. Tests, fault injection, and performance gates
+## 7. Validation contracts and remaining performance gates
 
 Do not repeat completed hosted acceptance merely for a new report. Add focused
 deterministic tests and one bounded infrastructure workflow, then reuse actual
 ordinary workflow artifacts for integration evidence.
 
-### Required deterministic tests
+### Deterministic contracts (implementation tests versus future-mode requirements)
+
+Current tests/reviews linked above cover the request, Engine and native-lifetime
+contracts. Requirements involving watermarks, sequence continuity or periodic
+health remain future-mode requirements; this checklist is not an assertion that
+every item has executed on all platforms.
 
 1. **Causality:** two received requests, one admitted and one already-saving;
    children of each remain distinct across `Task.Run` and queued UI callbacks.
@@ -591,7 +649,7 @@ clipboard, input-source, permission, global activation or user-profile changes.
 | --- | --- |
 | Tracing off | No trace files or writer/timer; zero warmed instrumentation allocation; no hot-path disk I/O |
 | Tracing on producer | No waits/locks on writer, serialization or fsync; bounded queue saturation records drops without blocking edit/Save |
-| Prefix recovery | Held-phase entry survives owned-process kill after actual observed watermark; all four RIDs report true censorship |
+| Prefix recovery | Held-phase entry survives owned-process kill after parent observes a readable linked prefix; no watermark is implemented; hosted four-RID audit pending |
 | Ordinary workflows | Exact bytes + fresh reopen + causal stage chain + normal drain; any non-gating nested failure remains a failure in its report |
 | Native editing overhead | Alternating off/on fresh-process repetitions, identical synthetic edit workload and binary, report median/p95/p99 with sample counts, allocations, drop rate and trace completeness |
 
@@ -605,7 +663,7 @@ declare the experiment inconclusive instead of manufacturing a pass. Do not
 enable broad key logging, sampling/compression or a tracing thread to rescue an
 unmeasured regression.
 
-## 8. Implementation partitions and integration order
+## 8. Implementation partitions and integration order (retained design rationale)
 
 One writer per file area; API agreement precedes integration. No repository-wide
 edit lock is necessary.
@@ -619,6 +677,8 @@ edit lock is necessary.
 | CI/reader worker | Existing JSON workflow reader, trace reader module, assigned workflow steps | Backward-compatible v1 parsing, scoped chain completeness and recoverable-prefix job, actual nested status surfaced |
 | Reviewer/curator | Review and existing trace/validation documentation only | Independent invariant, privacy, safety and evidence audit; no production fixes |
 
+The integration followed this dependency order; its remaining hosted/performance
+audit is separate from the completed source implementation.
 Order: (1) fix proven misleading outcomes; (2) implement/test writer prefix
 and explicit context APIs; (3) engine phase observer; (4) migrate native typed
 dispatch and end-to-end Save ownership; (5) integrate reader, owned-process kill

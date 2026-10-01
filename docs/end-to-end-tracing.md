@@ -1,5 +1,62 @@
 # Native end-to-end tracing: causal endpoints and evidence
 
+## Current scope and evidence status
+
+Updated 2026-10-01. There are now two complementary implemented chains:
+**accepted canonical mutation -> analysis/version-matched source draw return**,
+and **target Save/Save As callback receipt -> exact Engine saved snapshot/I/O ->
+local UI completion**. Neither begins at a physical keyboard nor ends at photons.
+The detailed current contract and evidence entry point is
+[Runtime observability and causal provenance](architecture/observability-provenance.md).
+
+The Save receipt anchors are `command.save.received` and
+`command.save_as.received`, followed by explicit admission/worker checkpoints,
+`document.save.entered`, actual Engine phase anchors and terminal children,
+`save.snapshot_captured`, local `save.ui_post_returned`/`save.ui_started`, and a
+once-only `command.save`/`command.save_as` terminal. Each retained entry uses its
+own span ID. The terminal is a **distinct child** measured from the entry's
+original monotonic timestamp, not a second row reusing its ID. All asynchronous
+children use the original explicit sink/context; a stale context is rejected
+and counted against its original sink, never redirected into a new session.
+
+Engine observers are content-free and optional, observe the exact snapshot
+captured after Save gate acquisition, and run outside the state lock (but may
+hold the Save gate). Nonfatal observer faults do not change persistence.
+Retiring a request cancels UI intent, not an already admitted file commit.
+Native completion checks document reference/generation and disposal before
+publication and after reentrant boundaries; nonfatal presentation/error-dialog
+failures are contained rather than escaping into the native dispatcher.
+
+The writer now exposes dirty buffered output on **250 ms** periodic turns or
+**64 KiB** unflushed output, including idle small traces. This is writer-only
+`FlushAsync` to the OS, not producer I/O, a guaranteed flush deadline, or a
+power-loss durability certificate. There are **no sequence/flushed watermarks,
+periodic health rows, or unconditional session-start rows** in this slice.
+A retained incomplete request after owned process termination is censored;
+missing receipt or terminal records never prove callback nonexecution. Readers
+ignore only an unterminated final physical JSONL row after termination; malformed
+newline-complete rows are integrity failures.
+
+| Boundary | Current positive evidence | Remaining gap |
+| --- | --- | --- |
+| External OS action -> target callback | Typed Save/Save As receipt at mote-owned native dispatch | Helper action attempt is not acknowledgement of delivery; no physical-key/input-to-callback certificate |
+| Callback -> worker -> Engine | Explicit linked admission, worker, gate, snapshot, route-specific staged-file/commit phases | Missing/lost records remain unknown; no total transport certificate |
+| Engine -> local UI | Post returned, actual UI callback entry, current-document completion or explicit deferred/stale/failure outcome | Local post return is not OS wake acknowledgement or UI liveness |
+| Accepted edit -> semantic/source draw | Version/generation-matched existing endpoints | Real IME/preedit before canonical mutation and natural-input coverage not complete |
+| Draw return -> visible screen | CPU native source drawing return only | GPU/compositor, scan-out and photons unmeasured |
+| Process termination -> retained trace | Periodically readable prefix and owned-kill reader/harness | Unflushed tail, stalled/faulted writer, retention loss; no power-loss/crash durability or complete loss certificate |
+
+Local integration evidence is **1329/1329** baseline tests before the completion
+containment follow-up, plus **4/4 focused** containment cases, as retained in the
+[independent final Native review](reviews/native-causal-save-final-review.md).
+These separate results are not summed into a final full-suite count. The
+[ordinary Save reader](reviews/native-save-causal-acceptance-review.md) requires
+route-aware successful phases and exact captured-version consistency in addition
+to exact bytes, normal original exit and fresh reopen. The separate recovery
+harness validates typed retained prefixes, not Engine Save. Final hosted
+four-RID raw reports/traces for this integrated slice remain pending audit;
+non-gating green job status must not be promoted to acceptance.
+
 ## Decision and implementation
 
 Reuse `Mote.Telemetry`'s opt-in, local-only, bounded JSONL pipeline; do not add a
@@ -7,7 +64,7 @@ SQLite/native dependency or a generic UI event bus. Configuration keeps traces
 under the resolved `~/.mote` trace directory by convention, with the existing
 configuration path override. `MOTE_TRACE=1` or the existing trace configuration
 enables persistence. No network exporter exists. The schema remains version 1;
-only fixed operation names are added. The old `EditToPaint` enum/name remains
+fixed operation names and an optional closed terminal `reason` are added. The old `EditToPaint` enum/name remains
 compatible, but native editor code does **not** emit it.
 
 This answers a narrower, reproducible question: **where does CPU time go between
@@ -113,11 +170,16 @@ counter and sink-fault health remain authoritative. Callback instrumentation
 performs no synchronous file I/O and takes no writer lock. The disabled mark
 and fork paths are inert; inactive draw bookkeeping does not even query
 `GetUpdateRect`. Only normalized format, coarse size bucket, numeric version,
-count and the existing allowlisted save HResult can be serialized. No document
+count, the existing allowlisted save HResult and closed terminal `reason` can
+be serialized. No document
 generation, binding nonce, source text, file path/name, exception message, IME
 text, window title, pointer coordinate or arbitrary tag is emitted.
 
-## Verification completed in this workspace
+## Historical edit/draw verification completed in this workspace
+
+The counts and target runs below belong to the earlier edit/draw slice. They
+remain valid scoped evidence, not current Save-chain or final current-HEAD
+full-suite acceptance.
 
 Environment: Windows x64 developer host, .NET 10 Release JIT test harness; this
 is **not** a Native AOT GUI latency benchmark.
@@ -189,9 +251,16 @@ motivates common instrumentation points and low overhead; it is a technical
 report, not a claim that distributed-request timing transfers unchanged to
 desktop rendering.
 
-The next consequential measurements are an alternating tracing-off/on **real native editing workload** with
-enough process repetitions to distinguish queue/profiling overhead from runner
-noise. Existing startup-smoke timing cannot establish typing overhead. SQLite
+The [native trace overhead record](performance/native-trace-overhead.md)
+contains an earlier frozen win-x64 AOT alternating off/on workload: 20 pairs,
+synthetic visible-background editing, exact Save/Undo/Redo checks and normal
+exits. Its paired acknowledgement median difference was +0.150 ms, with
+[-0.280, +0.716] ms uncertainty interval; no repeatable effect was established.
+That binary predates the recoverable writer prefix and new causal Save chain.
+It is not current-binary, macOS/ARM, foreground physical-input or IME evidence.
+The next consequential performance measurement must use the **new integrated
+binary**, matched workloads and enough fresh-process pairs to separate overhead
+from runner noise. Existing startup-smoke timing cannot establish typing overhead. SQLite
 indexing or trace sampling should be considered only if real JSONL analysis or
 enabled tracing becomes a measured bottleneck, not because another storage
 abstraction looks sophisticated.
