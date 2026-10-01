@@ -1286,6 +1286,43 @@ jobs:
           path: .cache/ci-inventory/${{ matrix.rid }}/mac-grid-ax-external.json
           if-no-files-found: warn
           retention-days: 14
+      # Independent AppKit classes discriminate modern/legacy action dispatch;
+      # this never launches mote or interprets menu opening as AX success.
+      - name: Diagnose macOS Grid AX ShowMenu bridge (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/MacGridAxActionContractProbe/Contract.m'; hashes = @('60ECD9D078DC997F98D3EB7D265C916C847D9FA15F2A909B0AA1A9C6B2EB046A', 'DD487E9465D70346E6E8D660345B00BB84A97FAD2D3DE09AFED707AA6E19C20F') },
+            @{ path = 'tests/MacGridAxActionContractProbe/Run.ps1'; hashes = @('D7038ABE0E2A9A26ADD39422F0B70168F59FDE7801497235DBF9D11B1B86F306', '2826735F126B5AE6B4DEAAC546532C6852A3E571E1A26EAF24D1796E056D7BCF') },
+            @{ path = 'tests/MacGridAxActionContractProbe/Test-Guards.ps1'; hashes = @('5776BFF7E3D7261762B316B592A28235BCDC0432A7A1EACEAEB247C04FF3843C', '0A5FD1E213259D14D3B0B2C485C056443CD4B2933988D2202801898D97B5378B') }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if ($actual -cnotin $pin.hashes) { throw 'Mac Grid action control differs from reviewed bytes.' }
+          }
+          & ./tests/MacGridAxActionContractProbe/Test-Guards.ps1
+          pwsh -NoProfile -File tests/MacGridAxActionContractProbe/Run.ps1 `
+            -RuntimeIdentifier $rid `
+            -ReportPath ".cache/ci-inventory/mac-grid-action-contract-$rid.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Mac Grid action control incomplete (exit $LASTEXITCODE); inspect the $rid report."
+          }
+      - name: Upload macOS Grid AX ShowMenu control
+        if: always() && startsWith(matrix.rid, 'osx-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-grid-action-contract-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/mac-grid-action-contract-${{ matrix.rid }}.json
+            .cache/mac-grid-action-contract/${{ matrix.rid }}/server.json
+            .cache/mac-grid-action-contract/${{ matrix.rid }}/client.json
+          if-no-files-found: warn
+          retention-days: 14
       # Two process-owned hidden NSScroller instances only; probe source bytes
       # are independently reviewed and no clipboard or desktop input is used.
       - name: Diagnose native macOS logical Grid scrollers (non-gating)
