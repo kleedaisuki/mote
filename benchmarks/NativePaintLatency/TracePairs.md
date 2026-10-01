@@ -120,8 +120,7 @@ python -B benchmarks/NativePaintLatency/summarize_trace_pairs.py `
   --series .cache/benchmarks/native-trace-pairs/<series-id>
 ```
 
-The first actual hosted run must still establish runtime compatibility and
-qualification. Parser/fixture success is not a native measurement certificate.
+The first actual hosted run, Benchmarks 36841148501 at c19f4c6, qualifies all 20 predeclared pairs; see docs/performance/causal-trace-overhead.md for inspected raw evidence and conditional estimates. Parser/fixture success alone remains insufficient, and this Windows study does not establish AppKit cost.
 
 Initial artifact-only validation: 22/22 independent fixtures plus both
 PowerShell AST parses, Windows/Python 3.14.6; retained output lives at
