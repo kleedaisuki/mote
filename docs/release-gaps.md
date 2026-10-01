@@ -51,16 +51,19 @@ The **osx-x64 in-process Canvas AX selector/lifecycle** report is a distinct unr
 
 ## Active gates
 
-### Current hosted checkpoint — CI 36858899063 / c856816
+### Current hosted checkpoint — CI 36863766458 / 5d0fcb6
 
-[CI 36858899063](https://github.com/kleedaisuki/mote/actions/runs/36858899063)
-at `c856816` completes **all ten jobs**. Windows/macOS main suites each pass
-**3132/3132**, Themes 14/14 and Configuration 9/9, with four one-executable
+[CI 36863766458](https://github.com/kleedaisuki/mote/actions/runs/36863766458)
+at `5d0fcb6` completes **all ten jobs**. Windows/macOS main suites each pass
+**3218/3218**, Themes 14/14 and Configuration 9/9, with four one-executable
 Native AOT inventories. Both Mac blocking Flow/ABI/fault controls execute their
 actual markers, and ordinary JSON summaries retain **8/8**, numeric editor/reopen
 exits 0/0. This integrates the normative TOML/scanner/cache/public-recovery/scalar
-source checkpoint; it does not independently certify arbitrary TOML native GUI
-semantics or physical edit latency.
+source checkpoint and subsequent valid-tree certification. The additional 86 main
+tests are retained contracts, not new native TOML GUI/performance coverage
+([exact hosted audit](validation/toml-tree-certification.md#hosted-clean-tree-integration--ci-36863766458)).
+The next Windows focus-provenance source is not included in this pushed checkpoint;
+its local build/portable validation does not supply hosted coverage.
 
 Both Windows architectures actually execute the new blocking owned-HWND pane
 checks: **2/2 per RID**, with correct native host/test architecture. Source-first
@@ -71,13 +74,15 @@ assertions. They lack a serialized initial Source→Table or callback-thread
 witness; managed/native-HWND success is not external UIA acceptance or a causal
 historical fix ([actual reports and scope](validation/windows-grid-accessibility-ci.md)).
 
-The automatically selected [Benchmarks 36858899230](https://github.com/kleedaisuki/mote/actions/runs/36858899230)
+The previous source checkpoint `c856816` automatically selected [Benchmarks 36858899230](https://github.com/kleedaisuki/mote/actions/runs/36858899230)
 qualifies a separate declared 20-pair/40-indexed-return checkpoint for changed
 binary `4d12c303…538a51a8` (7,211,008 bytes). All five endpoint intervals contain
 zero; unchanged classifier/hash results and 40 normal-process reports were checked
 without repeating the prior raw 60-chain audit. No pooling of the different-binary
-series or zero-cost/tail claim follows
-([current-binary study](performance/causal-trace-overhead.md)).
+series or zero-cost/tail claim follows. The later TOML-only `5d0fcb6` push did
+not select another native trace benchmark; this is evidence for its stated prior
+binary, not a performance measurement of the current executable
+([declared-binary study](performance/causal-trace-overhead.md)).
 
 The following foundational checkpoints retain their original scopes.
 
@@ -149,14 +154,15 @@ native GUI latency or arbitrary invalid-file diagnostic completeness
 [final source review](reviews/toml-uniform-validation-review.md)).
 
 Windows passive Grid publication uses `SW_SHOWNA` instead of an activating show.
-Source-first phase checks and complete bidirectional pane-focus tests are prepared
-for both Windows architectures in CI. Historical external `sourceFocus` labels
+Source-first phase checks and complete bidirectional pane-focus tests execute
+and pass on both Windows architectures at the current hosted checkpoint. Historical
+external `sourceFocus` labels
 actually include a Table HWND, and fixed off-owner prose is not a thread witness;
 this changes what the old failures establish, not their retained failure status.
 The mechanism is reviewed and both owned native controls pass, **not a demonstrated historical external-probe fix**
 ([focus review](reviews/windows-grid-focus-review.md)).
 
-**Subsequent local clean-tree candidate, hosted verification pending:** `a813852`
+**Clean-tree implementation integrated by hosted `5d0fcb6`:** `a813852`
 removes the second grammar construction only after full read-only tree certification;
 all unknown/invalid paths retain the existing uniform recovery. Independent controls
 pass **915/915** plus **48/48**, and all **703 decoded** frozen corpus outputs match
@@ -169,9 +175,12 @@ public double-parse cost without deleting checks, not arbitrary semantic/GUI
 completeness or native latency ([tree evidence](validation/toml-tree-certification.md),
 [costs and qualification](performance/toml-statement-cost.md)).
 
-Next: quantify current Mac monitor cost and pursue real IME/accessibility
-coexistence and larger semantic workloads without replaying the completed
-Windows study. Enabled Mac monitor cost remains unmeasured. Mac Grid's
+Current work closes Windows Grid adapter-boundary provenance and adds an
+independently supervised external observation, without replacing the failing
+original acceptance probe or inventing client/server causal joins. Next, quantify
+Mac monitor cost and pursue real IME/accessibility coexistence and larger semantic
+workloads without replaying the completed Windows study. Enabled Mac monitor cost
+remains unmeasured. Mac Grid's
 original failing AX reply, Windows ARM inconclusive workflows, historical
 Windows AV, arbitrary-format semantic domains, physical presentation and real
 IME/reader coexistence remain open. No signing work or Gatekeeper acceptance.
