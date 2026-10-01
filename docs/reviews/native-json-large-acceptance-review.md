@@ -7,7 +7,11 @@ Reused `docs/native-latency-acceptance.md` and the existing NativeAcceptance
 artifact/schema/causal auditor. No production, harness, or workflow file was
 modified by this review. No repeated native acceptance or complete test run.
 
-## P2: action-trace certification can accept failed or wrongly versioned witnesses
+## Findings
+
+**No unresolved substantive finding after the correction below.**
+
+### Resolved P2: action-trace certification accepted failed or wrongly versioned witnesses
 
 Location: `probe.py`, `trace_evidence`. The reused `acceptance.audit` checks
 caller-supplied record counts, terminal success, causal structure and draw-parent
@@ -29,9 +33,24 @@ product traces, `document.edit` describes pre-edit v0 and `edit.committed` the
 accepted v1; open/Save completion spans can lack version attributes. Preserve
 that absence explicitly instead of inventing version evidence, but reject
 contradictory supplied versions (open0/Save1). Add regressions for failed action
-spans and conflicting available versions. Implementation owner acknowledged the
-finding and this instrumentation distinction; correction is pending at this
-review snapshot. Confidence: high.
+spans and conflicting available versions. Implementation owner corrected the predicate and added portable regressions.
+Confidence: high.
+
+Independent closure recheck (no native launch): the exact two-field mutation
+above now returns `endpoint_integrity: incomplete` and `endpoint_issues` includes
+both `document.edit` and `document.save`. Inspection confirms every claimed
+startup/open/edit/presentation/commit/Save witness must occur exactly once and
+succeed, with required v0/v1 versions and conflict rejection for optional I/O
+versions. The new regressions cover individual failed action witnesses,
+contradictory versions and explicitly unavailable I/O versions; the owner's
+9/9 test result was not redundantly re-run.
+
+Independently re-audited the retained original stale-binary 1 MiB raw trace in
+`.temp/native-json-large/3d4a384b9a6841f998eac462295babe6/1/home/traces`:
+tightened predicate passes with no endpoint issues. Observed versions were
+startup/open-editable/open-draw/edit=0, committed/edit-presentation/edit-draw=1,
+and document.open/document.save/save.completed=null. This is reuse of existing
+raw evidence, not new native execution or current-source/100 MiB acceptance.
 
 ## Other reviewed boundaries
 
