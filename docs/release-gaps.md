@@ -1,6 +1,6 @@
 # Release gap audit — strict one-binary product
 
-Audit date: 2026-10-01 (new scoped evidence through [CI 36836309613](https://github.com/kleedaisuki/mote/actions/runs/36836309613) at `b4093b8`; current verdict below; historical checkpoints retain their original scope). This is a **moving source audit**, not a claim about a shipped release. `P0` means the hard user contract cannot yet be met; `P1` means substantial verification or integration remains. Owners and decisive experiments are included so a gap can be closed by evidence. Target architecture: [architecture.md](architecture.md); incremental migration: [incremental-plan.md](incremental-plan.md); local-path/theme contracts: [configuration.md](configuration.md), [themes.md](themes.md).
+Audit date: 2026-10-01 (implementation evidence [CI 36836309613](https://github.com/kleedaisuki/mote/actions/runs/36836309613) / `b4093b8`, blocking-gate followup [CI 36837499493](https://github.com/kleedaisuki/mote/actions/runs/36837499493) / `a33c5ca`; current verdict below; historical checkpoints retain their original scope). This is a **moving source audit**, not a claim about a shipped release. `P0` means the hard user contract cannot yet be met; `P1` means substantial verification or integration remains. Owners and decisive experiments are included so a gap can be closed by evidence. Target architecture: [architecture.md](architecture.md); incremental migration: [incremental-plan.md](incremental-plan.md); local-path/theme contracts: [configuration.md](configuration.md), [themes.md](themes.md).
 
 ## What is already established
 
@@ -70,8 +70,17 @@ or menu-to-request edge. Historical censored failures remain reliability
 counterexamples, not repaired by this eight-case pass
 ([scoped hosted evidence](validation/native-local-input-monitor.md)).
 
-Next: preserve the bounded native ABI/fault controls as a blocking future gate,
-then measure current-binary trace-off/on startup and editing on qualified
+The workflow-only followup **CI 36837499493 / a33c5ca** actually executes and
+passes the new blocking Flow/ABI step on both Mac RIDs; all ten jobs and strict
+1369/14/9 suites pass. New ordinary reports retain 8/8 and numeric exits 0/0;
+unchanged-source raw-chain/recovery checks are reused, not independently repeated.
+Its opt-in Windows canvas-baseline still observes duplicate Documents (2/2/2),
+and external Windows Grid still fails physical F6/scroller/off-owner focus
+contracts despite positive semantic focus; the prior run has the same blockers.
+Green jobs do not close these separately non-gating acceptance failures
+([precise followup](validation/native-local-input-monitor.md#blocking-gate-execution-followup--ci-36837499493)).
+
+Next: measure current-binary trace-off/on startup and editing on qualified
 disposable desktops. Enabled Mac monitor cost remains unmeasured. Mac Grid's
 original failing AX reply, Windows ARM inconclusive workflows, historical
 Windows AV, arbitrary-format semantic domains, physical presentation and real
