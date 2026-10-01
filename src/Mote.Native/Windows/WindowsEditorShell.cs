@@ -301,7 +301,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         Win32.UpdateWindow(_window);
         Win32.SetFocus(_canvasIsland?.InputHandle ?? _editor);
         Shown?.Invoke();
-        while (_posted.TryDequeue(out var queued)) queued();
+        DrainPosted();
 
         while (true)
         {
@@ -930,6 +930,17 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
         }
     }
 
+    /// <summary>Runs queued callbacks once; nonfatal failures do not discard later UI work.</summary>
+    private void DrainPosted()
+    {
+        while (_posted.TryDequeue(out var action))
+        {
+            var error = NativePostedCallback.Invoke(action);
+            if (error is not null)
+                NativePostedCallback.Report(error, failure => ReportCallbackFailure("Posted", failure));
+        }
+    }
+
     private void ReportCallbackFailure(string kind, Exception error)
     {
         _ = error; // Never display exception text: it may contain a user path.
@@ -1031,7 +1042,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell
                 Win32.PostQuitMessage(0);
                 return 0;
             case Win32.WM_APP:
-                while (_posted.TryDequeue(out var action)) action();
+                DrainPosted();
                 return 0;
             default:
                 return Win32.DefWindowProcW(window, message, wParam, lParam);

@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Mote.Telemetry;
 
 /// <summary>Session-only, content-free native menu observation checkpoints.</summary>
@@ -20,14 +18,6 @@ public static partial class MoteTelemetry
             TelemetryEvent.NativeMenuSaveFamilyReturnedTrue or
             TelemetryEvent.NativeMenuSaveFamilyReturnedFalse))
             throw new ArgumentOutOfRangeException(nameof(kind));
-        var sink = Volatile.Read(ref _sink);
-        if (sink is null || sink.IsFaulted || !sink.TryAcquireProducer()) return;
-        try
-        {
-            sink.TryRecord(new TraceRecord(DateTimeOffset.UtcNow, sink.SessionTraceId,
-                ActivitySpanId.CreateRandom(), sink.SessionSpanId, EventName(kind),
-                0, TelemetryStatus.Success, default));
-        }
-        finally { sink.ReleaseProducer(); }
+        RecordSessionCheckpoint(kind, TelemetryStatus.Success);
     }
 }

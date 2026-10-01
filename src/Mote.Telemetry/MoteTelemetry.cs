@@ -322,6 +322,8 @@ public static partial class MoteTelemetry
         TelemetryEvent.NativeMenuSaveFamilyEntered => "native.menu.save_family.entered",
         TelemetryEvent.NativeMenuSaveFamilyReturnedTrue => "native.menu.save_family.returned_true",
         TelemetryEvent.NativeMenuSaveFamilyReturnedFalse => "native.menu.save_family.returned_false",
+        TelemetryEvent.NativePostedCallbackFailed => "native.posted.callback.failed",
+        TelemetryEvent.NativePostedCallbackReportFailed => "native.posted.callback.report_failed",
 
         _ => "unknown"
     };

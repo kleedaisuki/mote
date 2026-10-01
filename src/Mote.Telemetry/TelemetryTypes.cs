@@ -104,6 +104,10 @@ public enum TelemetryEvent
     NativeMenuSaveFamilyReturnedTrue,
     /// <summary>Superclass did not handle this menu call; not failed Save.</summary>
     NativeMenuSaveFamilyReturnedFalse,
+    /// <summary>A queued native UI callback threw; no request identity or disk outcome is implied.</summary>
+    NativePostedCallbackFailed,
+    /// <summary>Optional reporting of a queued callback failure also threw.</summary>
+    NativePostedCallbackReportFailed,
 }
 
 /// <summary>Normalized document format; filenames and extensions are never accepted.</summary>

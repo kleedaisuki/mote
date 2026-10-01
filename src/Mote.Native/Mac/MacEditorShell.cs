@@ -2168,7 +2168,15 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell
     {
         var shell = s_current;
         if (shell is null) return;
-        while (shell._posted.TryDequeue(out var action)) shell.Notify(action);
+        while (shell._posted.TryDequeue(out var action)) shell.NotifyPosted(action);
+    }
+
+    /// <summary>Contains both queued UI work and secondary presentation faults at the AppKit boundary.</summary>
+    private void NotifyPosted(Action action)
+    {
+        var error = NativePostedCallback.Invoke(action);
+        if (error is not null)
+            NativePostedCallback.Report(error, failure => ShowError(failure.Message));
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

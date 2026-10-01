@@ -44,6 +44,7 @@ MENU_OPERATIONS = frozenset("""native.menu.observation.ready native.menu.observa
 native.menu.save_family.entered native.menu.save_family.returned_true
 native.menu.save_family.returned_false""".split())
 OPERATIONS |= MENU_OPERATIONS
+OPERATIONS |= {"native.posted.callback.failed", "native.posted.callback.report_failed"}
 STATUSES = ("success", "cancelled", "failure", "skipped")
 ATTRIBUTES = {"format", "size_bucket", "version", "count", "hresult", "reason"}
 
