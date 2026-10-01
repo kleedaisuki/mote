@@ -564,3 +564,27 @@ Artifacts/raw logs: `.cache/ci-36800944850-mac-grid/`. Binary bytes/SHA-256:
   `9E60AEA84E588339CB9A7CE9D36AFB2A9B27629C73463EBE2C4F9A593A3564A1`.
 - ARM64: 16,489,288;
   `EC1E61195123AB387558873887CDD90819323ED74B5CF254E6E45F8D52351D5B`.
+
+### Fresh integration corroboration: CI 36802378381
+
+[Run 36802378381](https://github.com/kleedaisuki/mote/actions/runs/36802378381)
+/ `c453506` freshly republishes both targets after unrelated integration changes.
+Both actual combined native markers and Swift typecheck pass (ARM job
+110179342771, x64 job 110179342948). Both external reports retain failed / exit 1
+with 41 checks, exactly 40 true and the sole original context-menu-accessible
+false (-25205). Independent downstream again reaches complete, including the
+exact numeric prompt/jump, absolute value/selection, old-node retirement and
+normal close. Wrapper observes actual editor exit 0 on both, no forced cleanup,
+unchanged input and no error. This corroborates the prior conditional workflow;
+it does not fix or accept the primary action reply.
+
+Native trace again records one request/open/close with six phases through
+popup-return(result=1); both permissions remain true. All original budgets hold:
+x64 3,843 admissions / 2.204s; ARM 5,594 / 3.334s. These are synthetic client
+measurements, not interaction-tail benchmarks or a reliability distribution.
+No regression is observed in the exercised workflow. Artifacts/raw logs are
+under `.cache/ci-36802378381-mac-grid/`. Binary SHA-256: x64
+`1B24D7357ECCCA349E73884221037AB3FEAF2F19781E6A168CD85A6621126D21`;
+ARM `3CC3683D0BB7F57920762EA08E131B37433FC09236F8680DD9AE563A3A180E91`.
+Containing green non-gating jobs remain distinct from the intentionally failed
+whole external AX gate.
