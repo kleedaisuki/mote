@@ -240,6 +240,10 @@ The modified Native project compiled in Release with zero warnings/errors; log
 is `.cache/validation/windows-grid-focus/focus-native-build.log`. The final test
 source had previously compiled cleanly, but a subsequent concurrent TOML fixture
 resource addition temporarily made the full test project build fail with
-`CS1566` until that resource was materialized. That unrelated build observation
-is not a Grid test result. Runtime correctness remains unverified until the
-actual hosted owned seams and unchanged external client execute.
+`CS1566` until that resource was materialized. After its writer confirmed a
+complete write, one final `dotnet build tests/Mote.Tests/Mote.Tests.csproj
+--no-restore -v minimal` completed with zero warnings/errors; retained log is
+`.cache/validation/windows-grid-focus/focus-discriminator-final-build.log`.
+The missing-resource failure remains separately retained. Neither compilation
+result is a Grid runtime test result. Runtime correctness remains unverified
+until the actual hosted owned seams and unchanged external client execute.
