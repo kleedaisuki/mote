@@ -121,3 +121,53 @@ allocation/population fault containment also requires its own controlled witness
 - [Microsoft IsDialogMessageW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-isdialogmessagew), including ordinary-window use and DM_GETDEFID/DM_SETDEFID interaction.
 - [Apple NSPopUpButton initializer](https://developer.apple.com/documentation/appkit/nspopupbutton/init%28frame%3Apullsdown%3A%29). The rendered page required JavaScript; its official documentation JSON at `https://developer.apple.com/tutorials/data/documentation/appkit/nspopupbutton/init(frame:pullsdown:).json` was fetched to check rectangle/Boolean parameters, false-as-popup semantics and possible nil initialization. This API documentation is not proof of actual cross-architecture P/Invoke execution.
 - Existing platform implementation notes: `docs/validation/windows-open-encoding-ui.md` and `docs/validation/mac-open-encoding-ui.md`, with their explicit remaining native/runtime gaps.
+
+## Supplemental published-image codec probe review
+
+The later narrow review inspected `NativeEncodingRuntimeProbe.cs` and
+`NativeEncodingRuntimeProbeTests.cs`; no substantive defect was found in this
+bounded helper. The Program command routing and workflow gates are owned and
+reviewed separately. Source byte SHA-256:
+
+- Probe: `36CF853A4030A417DC410789A0B74384E74E69A29ED94EFD1EBC806EA6F66DA8`.
+- Test: `1F0C1CE16F30615718CFEFD4717067B19AC009F456B840519DE7F2EB0B9A31AC`.
+- Controller after restoring the single-argument `StartOpen` wrapper:
+  `B0F475995744AC1EC0DDE5BCC3B5C931F16765F4E7A689D730C83539C18078A1`.
+  The former four-argument implementation is now `StartOpenCore`; explicit and
+  retry callers select it directly. This preserves default-open reflection
+  callers without changing the reviewed admission semantics.
+
+`Run` checks the hosted environment marker, actual Windows/macOS identity against
+`RUNNER_OS`, and a checkout `.git` identity before admitting scratch. Normalized
+paths must be strict descendants of the checkout's `.cache/` or `.temp/`, not
+prefix siblings or those directories themselves. Existing scratch targets and
+existing reparse-point ancestors are refused. The helper neither recursively
+deletes nor reads user paths. All fixtures and report use `FileMode.CreateNew`;
+normal Save replaces only its newly owned fixed fixtures. The environment gate
+is an accidental-use safeguard, not authentication against an adversary capable
+of setting process environment or racing filesystem paths on the disposable
+runner; no such stronger boundary is claimed.
+
+Seven completed checks are appended only after their actual assertions pass:
+three exact selected-codec saves, GBK and Big5 unrepresentable-edit protection,
+default UTF-8 refusal, and Unicode BOM conflict plus matching exact save. GB18030
+includes a literal supplementary-scalar byte fixture. Protection checks require
+dirty state, no retained recovery, no staging file and unchanged original bytes.
+Unexpected successful opens in expected-failure checks are disposed before
+rejecting the check. No codec guessing, loss repair, global registration or GUI
+occurs. Current labels, status, architecture and error-kind fields are closed;
+the report serializes no paths, text, exception messages or native identifiers.
+
+Recoverable admission/check failures cannot produce a success marker. Report
+creation/write/durable flush failure returns nonzero. The success marker is
+written only after all checks and durable report output complete. Partial checks
+remain a failure report, not a repaired success. Fatal allocation failure is not
+misrepresented as a recoverable healthy result.
+
+The existing `.cache/validation/explicit-open-encoding/native-encoding-runtime-body.trx`
+was inspected: the single fixed-codec-body test passed, counters 1 executed /
+1 passed / 0 failed. No test was rerun. It invokes only the actual check body in
+repository-local scratch, so it proves neither host admission nor report/marker
+behavior nor Native AOT execution. Four-RID published-image evidence remains
+pending; even that will establish the seven codec checks, not native chooser,
+IME, accessibility or arbitrary encoded-file correctness.
