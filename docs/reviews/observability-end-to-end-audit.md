@@ -2,6 +2,8 @@
 
 Date: 2026-10-01. Source inspected: `1171d0f9b3c02c14c0d6e57b6a7f6d8d2fd3246d` and current same-area production hooks. This is an independent review, not a production patch or a claim that unexecuted paths passed.
 
+> Current follow-up: CI 36820725850 verifies a recoverable hosted abnormal prefix and the narrow outcome fixes. The original findings below retain their historical evidence; see the final follow-up for current resolution and remaining gaps.
+
 ## Verdict
 
 Mote has a real, privacy-constrained tracing implementation, not merely lexical log statements. Its strongest causal coverage is **accepted canonical mutation -> analysis/publication -> revision-matched native source draw return**, plus accepted open -> editable/draw and coarse Save. It is **not complete user-action-to-durable-save observability**, nor input-to-photon telemetry. The current hard Mac Save investigation has two material observability explanations: receipt/admission are outside built-in tracing, and a small abnormal session can lose all buffered trace records. Adding a narrowly scoped witness was reasonable, but that witness is a separate diagnostic transport, not evidence that the permanent telemetry covers these boundaries.
@@ -59,7 +61,7 @@ For the x64 failed case, pre-Save and failure observations say app active/frontm
 
 ## Material findings and narrow corrections
 
-### P1 - failure traces can be wholly censored during the failures we need to diagnose
+### Original P1 - failure traces can be wholly censored during the failures we need to diagnose (buffered-prefix mechanism repaired; entry checkpoints remain open)
 
 Location: `JsonlTraceSink.WriteLoopAsync` uses a 64 KiB FileStream and flushes on rotation/closure; scopes generally serialize only on disposal. Latest failing 1 MiB Mac session is 0 B despite completed edit/analysis being observed externally. Earlier failed cases also retained 0-byte files. This is demonstrated evidence loss, not a claim of a data-loss bug in editor Save.
 
@@ -79,7 +81,7 @@ Remedy: one bounded operation-owned command mark from **target selector receipt*
 
 Tests: blocked composition, already-saving, picker cancel, rejected overwrite, failure/cancellation before and after commit, edit-during-save, and old completion after document replacement must produce exactly one attributable terminal outcome or declared censoring; saved snapshot version must not be guessed from current UI version. Existing exact-byte oracle remains independently necessary.
 
-### P2 - at least two outcome paths still default to misleading success
+### Original P2 - at least two outcome paths still default to misleading success (resolved; hosted follow-up below)
 
 Locations: `NativeEditorController.StartSave` sets `cancelled=true` when overwrite confirmation is declined, but does not set the live Save scope to Cancelled before disposal. The later callback returns without SaveCompleted. `ApplyIdleAnalysis` around lines 2057-2068 opens AnalysisToPresentation with default Success and can throw from projection/native publication without locally marking Failure.
 
@@ -100,3 +102,40 @@ Disabled mark/fork/draw-path allocation tests establish zero managed allocation 
 [.NET tracing concepts](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/distributed-tracing-concepts) justify explicit trace/span parentage rather than timestamp adjacency. [FileStream.Flush](https://learn.microsoft.com/en-us/dotnet/api/system.io.filestream.flush?view=net-10.0) distinguishes stream flushing from flush-to-disk: a diagnostic readable-prefix policy need not fsync every record. [Google Dapper](https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/) supports common instrumentation points and low overhead, but is a production technical report, not a proof that desktop input/compositor boundaries are captured. The relevant research lesson is **causal reconstruction plus explicit missing evidence**, not importing distributed-service infrastructure into a single-process editor.
 
 No universal claim about crash durability, natural keyboard latency, physical presentation, all formats, IME, accessibility, or cross-RID overhead follows from this audit. The priority is recoverable low-frequency command evidence and a single request-owned causal chain, not more scattered debug prints or another telemetry database.
+
+
+## Hosted follow-up: CI 36820725850 at 8a24e90
+
+2026-10-01: independently audited the completed [run 36820725850](https://github.com/kleedaisuki/mote/actions/runs/36820725850), source `8a24e90b16ca9886d25274a2ce1921b6d9cecaca`. This is a bounded transport/outcome follow-up, not a duplicate four-RID JSON acceptance audit. Artifacts and raw logs are retained under `.cache/ci-36820725850-observability`; `raw-trace-audit.json` records each original JSONL length, SHA-256, LF completeness, schema, span uniqueness, terminal and operation inventory. No native workload or completed test was rerun locally.
+
+### Strict test evidence and what it establishes
+
+Both strict Windows/macOS jobs concluded success. Independently downloaded raw job logs report Mote.Tests **1273/1273**, Mote.Themes.Tests **14/14**, and Mote.Configuration.Tests **9/9**, zero failures/skips on each OS. Build logs contain zero errors. The commands test the complete Release solution without a test-name filter. The frozen source includes the five `TelemetryRecoverablePrefixTests` and eleven `NativeTelemetryOutcomeTests`; the passing unfiltered assembly certifies integration of those test populations on both hosts.
+
+The default console logs do not list each passing test name or persist a per-case TRX for this suite. Therefore this review does not claim independently downloaded per-case timing/output. Source inspection confirms the tests actually exercise the specified contracts: idle readability before shutdown; killing only an owned child after observing its prefix while a Save scope is held unfinished; failed/stalled writer and bounded nonwaiting producer behavior; LF-complete corruption rejection; approve/decline overwrite with actual byte/dirty-state assertions; projection/native publication exceptions; and post-callback idle-publication supersession. These are managed testhost tests, not a four-RID Native AOT abnormal-kill harness.
+
+### Direct ordinary Mac Native AOT evidence
+
+Independently downloaded both `native-json-large-osx-*` artifacts and parsed every retained JSONL. Every physical file ends in LF, every row parses as schema 1, and no file duplicates a span ID. The following are exact observed counts/lengths, not copied acceptance status alone:
+
+| RID / case | Edited trace | Reopen trace | Terminal/drop evidence |
+| --- | --- | --- | --- |
+| osx-arm64 / 1 MiB | 35 records / 11,933 B | 11 / 3,758 B | one Success session root each, no drop records |
+| osx-arm64 / 100 MiB | 38 / 13,115 B | 16 / 5,550 B | same |
+| osx-x64 / 1 MiB | 31 / 10,597 B | 11 / 3,760 B | same |
+| osx-x64 / 100 MiB | **33 / 11,521 B** | none | **no session root, no drop records; forced termination remains censored** |
+
+The last case actually fails `save-exact-bytes` with TimeoutError and forced cleanup despite the overall green run and green AOT job. Its original and final working hashes still match the original 100 MiB fixture, not the edited oracle. Its saved JSONL is now a readable prefix containing successful startup/open, canonical edit/commit, edit-to-analysis/presentation, and edit-to-draw-submission records. It contains **no document.save or save.completed**, but this cannot establish that a selector, controller admission, worker, or unfinished Save did not execute: operation records are still generally emitted on completion, and transport loss remains possible after the readable prefix. No terminal root means absence of a telemetry.dropped record is not a zero-loss certificate.
+
+The failed-case independent pipe witness contains only ready (ready=1, selector=0, admission=0, completed=0); healthy_completed_stream=false and stream_completion=censored. External command report again says two attempted `CGEvent.postToPid` events and execution_acknowledged=false. Source first-responder, target active/frontmost, and window main are true, window AXFocused false. These observations do not turn the censored witness into callback absence proof and do not locate Save I/O as the fault.
+
+Three successful cases have normal edit/reopen closure and complete independent witness transport. They preserve six Success terminal roots with no drop records. No physical presentation, natural IME, or tail-latency claim follows.
+
+### Updated finding status
+
+1. **Buffered-prefix mechanism: repaired and hosted useful.** `ba5b89f` moves flushing onto the sole writer with a 250 ms timer/64 KiB trigger, no synchronous producer I/O. Current failing ordinary Mac Native AOT run retains 11,521 B of useful earlier operations rather than an empty artifact. This is direct evidence of improved abnormal observability, not a matched controlled performance comparison or proof of every crash prefix. Timer/scheduling/queue/I/O stalls can exceed 250 ms; periodic FlushAsync establishes OS-readable buffering, not per-record fsync or power-loss durability. The controlled child-kill tests cover the transport contract on both strict hosts. **Low-frequency entry/checkpoint records remain necessary** to expose a never-completed command/Save span; that portion of the original P1 is not closed by flushing.
+2. **Outcome misclassification: resolved.** `316d7c9` marks rejected overwrite Cancelled while the Save scope is live and initializes complete idle publication Failure. `4f0ad17` additionally rechecks source/request/presentation ownership after both external callbacks before certifying Success. The integrated passing outcome tests plus independent source/review evidence support this narrow resolution. They do not establish complete Save causal provenance or change the held-scope failure limitation.
+3. **Request-level command/Save provenance: not certified in this frozen run.** The audited hosted failure demonstrates why the remaining P2 matters: a readable prefix reaches edit/draw but cannot classify receipt/admission/worker/commit. `docs/architecture/observability-provenance.md` describes separate causal integration work. Concurrent subsequent working-tree changes are outside source 8a24e90 and outside this hosted audit; this follow-up does not adjudicate or certify them. Saved-version attribution, request-linked outcomes, fixed rejection reasons, entry checkpoints and Save phase timing require their own integrated review and targeted acceptance.
+
+The correct updated claim is **recoverable completed-operation prefixes plus truthful reviewed outcomes**, not crash-complete telemetry or complete command-to-durable-save coverage.
+
