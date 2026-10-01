@@ -1,14 +1,12 @@
-using System.Buffers;
-using System.Text;
 using Mote.Engine;
 using Tomlyn.Parsing;
-using Tomlyn.Syntax;
 
 namespace Mote.Formats;
 
 /// <summary>
 /// Per-document TOML analysis with validated whole-document semantics for ordinary files and
-/// a bounded lexical viewport for large files. No parser tree or source copy survives a call.
+/// a bounded lexical viewport for large files. Compact validated statement IR supports edit
+/// reuse; no parser tree, full source copy or value contents survive a call.
 /// </summary>
 /// <remarks>
 /// Tomlyn's lossless syntax parser validates cross-table key ownership but requires
@@ -16,8 +14,8 @@ namespace Mote.Formats;
 /// parsing and does not report duplicate-key/table or scalar-prefix conflicts that the
 /// validated syntax parser detects. A slice cannot establish table context or whether it
 /// begins inside a multiline value. Therefore large-file output is explicitly provisional:
-/// it makes no semantic or diagnostic completeness claim for a Visible request. A Full request
-/// may become Complete only for the restricted language accepted by TryAnalyzeLarge: every
+/// a cold Visible request makes no global completeness claim. A validated cached snapshot
+/// can also provide Complete Visible output. A Full request may become Complete only when every
 /// bounded logical statement is individually accepted by Tomlyn, statement boundaries occur
 /// only at top-level newlines outside strings/collections, and the trie holds every key binding.
 /// Scalar and inline-table bindings seal their path. Header-created implicit parents may
@@ -32,11 +30,20 @@ internal sealed class TomlIncrementalSession : IFormatSession
     private const int VisibleLimit = 256 * 1024;
     private const int Context = 4096;
     private const int MaxValueProjection = 4096;
-    private const int MaxStatement = 256 * 1024;
-    private const int MaxStatementLines = 64;
-    private const int MaxStatements = 120_000;
     private readonly TomlPolicy _policy;
-    private long? _committedVersion;
+    /// <summary>One successfully committed Complete snapshot; never a history of parser roots.</summary>
+    private TomlStatementCache? _cache;
+    /// <summary>Rejects reentrant analysis/disposal; callers must serialize this document session.</summary>
+    private bool _analyzing;
+
+    /// <summary>Actual characters supplied to standalone syntax parsers in the latest large call.</summary>
+    internal long LastParsedCharacters { get; private set; }
+    /// <summary>Actual logical-boundary character visits in the latest large call.</summary>
+    internal long LastScannedCharacters { get; private set; }
+    /// <summary>External namespace actions replayed in the latest large call; trivia is excluded.</summary>
+    internal int LastOwnershipTransitions { get; private set; }
+    /// <summary>Deterministic cancellation/reentrancy seam for retained tests, never a public setting.</summary>
+    internal Action<string>? AnalysisHook { get; set; }
     private bool _disposed;
 
     /// <summary>Creates isolated state for one document lifetime.</summary>
@@ -52,24 +59,102 @@ internal sealed class TomlIncrementalSession : IFormatSession
         Validate(snapshot, request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // The authoritative immutable snapshot is always reparsed; a missing or malformed
-        // change chain cannot make this session publish stale facts. We record only version.
-        var result = snapshot.Length <= CompleteLimit
-            ? AnalyzeComplete(snapshot, request, cancellationToken)
-            : request.Scope == AnalysisScope.Full
-                ? AnalyzeLarge(snapshot, request.VisibleRange, cancellationToken)
-                : AnalyzeVisible(snapshot, request.VisibleRange, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_committedVersion is null || snapshot.Version >= _committedVersion)
-            _committedVersion = snapshot.Version;
-        return result;
+        if (_analyzing) throw new InvalidOperationException("TOML session calls must be serialized and non-reentrant.");
+        _analyzing = true;
+        LastParsedCharacters = LastScannedCharacters = 0;
+        LastOwnershipTransitions = 0;
+        try
+        {
+            if (snapshot.Length <= CompleteLimit)
+            {
+                var small = AnalyzeComplete(snapshot, request, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                _cache = null;
+                return small;
+            }
+            return AnalyzeWithCache(snapshot, changesSinceCommittedState, request, cancellationToken);
+        }
+        finally { _analyzing = false; }
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
-        _committedVersion = null;
+        if (_analyzing) throw new InvalidOperationException("TOML session calls must be serialized and non-reentrant.");
+        _cache = null;
+        AnalysisHook = null;
         _disposed = true;
+    }
+
+    /// <summary>Stages repair, global dependencies and projection before one cancellation-gated commit.</summary>
+    private DocumentAnalysis AnalyzeWithCache(TextSnapshot snapshot, IReadOnlyList<VersionedEdit> edits,
+        AnalysisRequest request, CancellationToken ct)
+    {
+        TomlStatementCache? candidate = null;
+        Diagnostic? error = null;
+        bool repaired = false;
+        if (_cache is not null && ReferenceEquals(_cache.Snapshot, snapshot)) candidate = _cache;
+        else if (_cache?.Repair(snapshot, edits, ct) is { } repair)
+        {
+            LastParsedCharacters = repair.ParsedCharacters;
+            LastScannedCharacters = repair.ScannedCharacters;
+            AnalysisHook?.Invoke("repair");
+            if (repair.Cache is { } mapped)
+            {
+                repaired = true;
+                if (repair.SameEffects || CheckOwnership(mapped.Statements, ct, out error)) candidate = mapped;
+            }
+        }
+        if (candidate is null && !repaired && request.Scope == AnalysisScope.Full)
+        {
+            AnalysisHook?.Invoke("full");
+            var outcome = TryAnalyzeLarge(snapshot, request.VisibleRange, ct);
+            LastParsedCharacters += outcome.ParsedCharacters;
+            LastScannedCharacters += outcome.ScannedCharacters;
+            LastOwnershipTransitions += outcome.OwnershipTransitions;
+            candidate = outcome.Cache;
+            error = outcome.KnownError;
+        }
+        var lexical = AnalyzeVisible(snapshot, request.VisibleRange, ct);
+        var result = candidate is not null ? ProjectCache(candidate, request.VisibleRange, lexical, ct)
+            : error is not null ? new DocumentAnalysis(lexical.Version, lexical.Coverage, lexical.Completeness,
+                lexical.Root, [error], lexical.Tokens, null) : lexical;
+        AnalysisHook?.Invoke("projection");
+        ct.ThrowIfCancellationRequested();
+        _cache = candidate;
+        return result;
+    }
+
+    /// <summary>Changed namespace effects invalidate all following off-screen dependencies.</summary>
+    private bool CheckOwnership(IReadOnlyList<TomlStatement> statements, CancellationToken ct, out Diagnostic? error)
+    {
+        var index = new TomlOwnershipIndex();
+        foreach (var statement in statements)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (statement.Summary.Action != TomlStatementAction.Trivia) LastOwnershipTransitions++;
+            error = statement.Summary.Apply(index, statement.Start);
+            if (error is not null || !index.IsExhaustive) return false;
+        }
+        error = null;
+        return true;
+    }
+
+    /// <summary>A Complete projection can remain viewport-bounded without retaining whole-file nodes.</summary>
+    private static DocumentAnalysis ProjectCache(TomlStatementCache cache, TextSpan visible,
+        DocumentAnalysis lexical, CancellationToken ct)
+    {
+        var nodes = new List<SemanticNode>();
+        foreach (var statement in cache.Statements)
+        {
+            ct.ThrowIfCancellationRequested();
+            var node = statement.Summary.Project(statement.Start, visible);
+            if (node is not null) nodes.Add(node);
+        }
+        return new DocumentAnalysis(cache.Snapshot.Version, new TextSpan(0, cache.Snapshot.Length),
+            AnalysisCompleteness.Complete,
+            new SemanticNode("document", new TextSpan(0, cache.Snapshot.Length), children: nodes),
+            Array.Empty<Diagnostic>(), lexical.Tokens, 0);
     }
 
     /// <summary>Runs Tomlyn's whole-document syntax and semantic validation once.</summary>
@@ -102,7 +187,8 @@ internal sealed class TomlIncrementalSession : IFormatSession
     private static DocumentAnalysis AnalyzeVisible(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
     {
         int start = Math.Max(0, visible.Start - Context);
-        int length = Math.Min(VisibleLimit, snapshot.Length - start);
+        int wanted = (int)Math.Min(int.MaxValue, (long)visible.End - start + Context);
+        int length = Math.Min(VisibleLimit, Math.Min(wanted, snapshot.Length - start));
         var source = snapshot.GetText(start, length);
         var lexer = TomlLexer.Create(source);
         var tokens = new List<SemanticToken>();
@@ -132,165 +218,34 @@ internal sealed class TomlIncrementalSession : IFormatSession
                 ? new DocumentAnalysis(lexical.Version, lexical.Coverage, lexical.Completeness,
                     lexical.Root, new[] { error }, lexical.Tokens, null)
                 : lexical;
-        return new DocumentAnalysis(snapshot.Version, new TextSpan(0, snapshot.Length),
-            AnalysisCompleteness.Complete,
-            new SemanticNode("document", new TextSpan(0, snapshot.Length), children: outcome.Nodes!),
-            Array.Empty<Diagnostic>(), lexical.Tokens, 0);
+        return ProjectCache(outcome.Cache!, visible, lexical, ct);
     }
 
-    /// <summary>
-    /// Certifies line-delimited TOML with independently valid logical statements and a bounded
-    /// ownership trie. Unsupported, malformed, or oversized statements fall back to Provisional.
-    /// Each physical segment is scanned once; the line cap remains an explicit resource policy.
-    /// </summary>
+    /// <summary>Validates streamed syntax plus normative ownership, retaining compact immutable IR only.</summary>
     private static LargeAnalysisResult TryAnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
     {
-        using var reader = new SnapshotTextReader(snapshot, 0, snapshot.Length, ct);
-        var buffer = ArrayPool<char>.Shared.Rent(8192);
-        var statement = new StringBuilder();
         var ownership = new TomlOwnershipIndex();
-        var nodes = new List<SemanticNode>();
-        int offset = 0, statementStart = 0, count = 0, statementLines = 0;
-        var boundary = new TomlStatementBoundary();
-        int scanned = 0;
-        try
+        Diagnostic? error = null;
+        int transitions = 0;
+        bool Accept(TomlStatement statement)
         {
-            int read;
-            while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                ct.ThrowIfCancellationRequested();
-                for (int i = 0; i < read; i++)
-                {
-                    char ch = buffer[i];
-                    statement.Append(ch);
-                    offset++;
-                    if (statement.Length > MaxStatement) return default;
-                    if (ch != '\n') continue;
-                    if (++statementLines > MaxStatementLines) return default;
-                    bool continues = boundary.Continues(statement, scanned);
-                    scanned = statement.Length;
-                    if (continues) continue;
-                    if (++count > MaxStatements) return default;
-                    string source = statement.ToString();
-                    var outcome = ProcessStatement(source, statementStart, visible, ownership, nodes);
-                    if (!outcome.Accepted) return new(false, null, outcome.KnownError);
-                    statement.Clear();
-                    statementStart = offset;
-                    statementLines = 0;
-                    boundary = default;
-                    scanned = 0;
-                }
-            }
-            if (statement.Length > 0)
-            {
-                var source = statement.ToString();
-                if (++count > MaxStatements || boundary.Continues(statement, scanned)) return default;
-                var outcome = ProcessStatement(source, statementStart, visible, ownership, nodes);
-                if (!outcome.Accepted) return new(false, null, outcome.KnownError);
-            }
-            if (!ownership.IsExhaustive || !ownership.IsCertifiable) return default;
-            ct.ThrowIfCancellationRequested();
-            return new(true, nodes, null);
+            if (statement.Summary.Action != TomlStatementAction.Trivia) transitions++;
+            error = statement.Summary.Apply(ownership, statement.Start);
+            return error is null && ownership.IsExhaustive;
         }
-        finally { ArrayPool<char>.Shared.Return(buffer); }
+        var scan = TomlStatementReader.Read(snapshot, 0, Accept, null, ct);
+        if (!scan.Valid || !ownership.IsExhaustive)
+            return new(false, ownership.IsExhaustive ? error : null, null,
+                scan.ParsedCharacters, scan.ScannedCharacters, transitions);
+        var statements = scan.Statements.ToArray();
+        var cache = new TomlStatementCache(snapshot, statements);
+        return new(true, null, cache, scan.ParsedCharacters, scan.ScannedCharacters, transitions);
     }
 
-    /// <summary>Validates one standalone statement, then updates global key ownership.</summary>
-    private static StatementOutcome ProcessStatement(string source, int start, TextSpan visible,
-        TomlOwnershipIndex ownership, List<SemanticNode> nodes)
-    {
-        if (!ownership.IsExhaustive || !ownership.IsCertifiable) return default;
-        var syntax = SyntaxParser.Parse(source, validate: true);
-        if (syntax.Diagnostics.Count != 0) return default;
-        var pairs = syntax.KeyValues.ToArray();
-        var tables = syntax.Tables.ToArray();
-        // Only the parser may certify trivia. C# whitespace includes form feed and
-        // vertical tab, and blindly skipping comments also admitted a trailing bare CR.
-        if (pairs.Length + tables.Length == 0) return new(true, null);
-        if (pairs.Length + tables.Length != 1) return default;
-        if (pairs.Length == 1)
-        {
-            var pair = pairs[0];
-            if (pair.Key is null || pair.Value is null) return default;
-            var outcome = OwnershipOutcome(ownership.AddAssignment(pair.Key, pair.Value, start), ownership);
-            if (!outcome.Accepted) return outcome;
-            var span = Shift(pair.Span, start);
-            if (Intersects(span, visible))
-                nodes.Add(new SemanticNode("entry", span, pair.Key.ToString().Trim(),
-                    children: [new SemanticNode(ValueKind(pair.Value), Shift(pair.Value.Span, start))]));
-            return new(true, null);
-        }
-        var table = tables[0];
-        if (table.Name is null || table.Items.Any()) return default;
-        var headerOutcome = OwnershipOutcome(ownership.AddHeader(table.Name, table is TableArraySyntax, start), ownership);
-        if (!headerOutcome.Accepted) return headerOutcome;
-        var tableSpan = Shift(table.Span, start);
-        if (Intersects(tableSpan, visible))
-            nodes.Add(new SemanticNode(table is TableArraySyntax ? "array-table" : "table",
-                tableSpan, table.Name.ToString().Trim()));
-        return new(true, null);
-    }
-
-    /// <summary>
-    /// A conflict is a counterexample only when this transition preserved the certified prefix.
-    /// Unsupported traversal may discover a conflict in the same call; do not publish that fact.
-    /// </summary>
-    private static StatementOutcome OwnershipOutcome(Diagnostic? error, TomlOwnershipIndex ownership) =>
-        !ownership.IsExhaustive || !ownership.IsCertifiable ? default : new(error is null, error);
-
-    /// <summary>Distinguishes success, uncertainty and a bounded first-error observation.</summary>
-    private readonly record struct LargeAnalysisResult(bool Complete,
-        IReadOnlyList<SemanticNode>? Nodes, Diagnostic? KnownError);
-
-    /// <summary>An accepted statement or a stop with an optional certified ownership error.</summary>
-    private readonly record struct StatementOutcome(bool Accepted, Diagnostic? KnownError);
-
-    /// <summary>Finds continuation through arrays, inline tables, and triple-quoted strings.</summary>
-    private static bool Continues(string source)
-    {
-        char quote = '\0';
-        bool triple = false, comment = false;
-        int depth = 0;
-        for (int i = 0; i < source.Length; i++)
-        {
-            char ch = source[i];
-            if (comment) { if (ch == '\n') comment = false; continue; }
-            if (quote != '\0')
-            {
-                if (ch == '\\' && quote == '"') { i++; continue; }
-                if (ch != quote) continue;
-                if (!triple) { quote = '\0'; continue; }
-                if (i + 2 < source.Length && source[i + 1] == quote && source[i + 2] == quote)
-                { quote = '\0'; triple = false; i += 2; }
-                continue;
-            }
-            if (ch == '#') { comment = true; continue; }
-            if (ch is '"' or '\'')
-            {
-                quote = ch;
-                triple = i + 2 < source.Length && source[i + 1] == ch && source[i + 2] == ch;
-                if (triple) i += 2;
-            }
-            else if (ch is '[' or '{') depth++;
-            else if (ch is ']' or '}') depth--;
-        }
-        return triple || depth > 0;
-    }
-
-    /// <summary>Shifts a statement-local Tomlyn span into snapshot coordinates.</summary>
-    private static TextSpan Shift(SourceSpan span, int offset) => new(offset + span.Offset, span.Length);
-
-    /// <summary>Projects only the value's semantic category on the large certified path.</summary>
-    private static string ValueKind(ValueSyntax value) => value switch
-    {
-        StringValueSyntax => "string",
-        IntegerValueSyntax or FloatValueSyntax => "number",
-        BooleanValueSyntax => "boolean",
-        DateTimeValueSyntax => "datetime",
-        ArraySyntax => "array",
-        InlineTableSyntax => "inline-table",
-        _ => "invalid"
-    };
+    /// <summary>Separates an exact valid certificate from a bounded first-error witness and work counts.</summary>
+    private readonly record struct LargeAnalysisResult(bool Complete, Diagnostic? KnownError,
+        TomlStatementCache? Cache, int ParsedCharacters, int ScannedCharacters,
+        int OwnershipTransitions);
 
     /// <summary>Trims a complete semantic tree to the requested viewport without changing spans.</summary>
     private static SemanticNode? Project(SemanticNode node, TextSpan visible, bool all)

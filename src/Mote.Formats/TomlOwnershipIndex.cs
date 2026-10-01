@@ -32,10 +32,13 @@ internal sealed class TomlOwnershipIndex
 
     /// <summary>Opens a table or creates one new array-of-tables element.</summary>
     internal Diagnostic? AddHeader(KeySyntax key, bool array, int sourceOffset)
+        => AddHeader(Parts(key), array, new TextSpan(sourceOffset + key.Span.Offset, key.Span.Length));
+
+    /// <summary>Replays decoded statement semantics without retaining a parser syntax tree.</summary>
+    internal Diagnostic? AddHeader(IReadOnlyList<string> parts, bool array, TextSpan keySpan)
     {
-        var parts = Parts(key);
-        if (parts.Count == 0) return Conflict("Invalid table path.", key, sourceOffset);
-        var parent = ResolveParent(_root, parts, Origin.ImplicitHeader, key, sourceOffset, out var problem);
+        if (parts.Count == 0) return Conflict("Invalid table path.", keySpan);
+        var parent = ResolveParent(_root, parts, Origin.ImplicitHeader, keySpan, out var problem);
         if (problem is not null) return problem;
         if (parent is null) return null;
         var name = parts[^1];
@@ -60,27 +63,30 @@ internal sealed class TomlOwnershipIndex
             _current = binding.Scope!;
             return null;
         }
-        return Conflict($"Table '{string.Join('.', parts)}' is already defined.", key, sourceOffset);
+        return Conflict($"Table '{string.Join('.', parts)}' is already defined.", keySpan);
     }
 
     /// <summary>Registers one assignment in the current table, including dotted-key parents.</summary>
     internal Diagnostic? AddAssignment(KeySyntax key, ValueSyntax value, int sourceOffset)
+        => AddAssignment(Parts(key), new TextSpan(sourceOffset + key.Span.Offset, key.Span.Length));
+
+    /// <summary>All validated assignment values seal the external namespace, regardless of category.</summary>
+    internal Diagnostic? AddAssignment(IReadOnlyList<string> parts, TextSpan keySpan)
     {
-        var parts = Parts(key);
-        if (parts.Count == 0) return Conflict("Invalid key.", key, sourceOffset);
-        var parent = ResolveParent(_current, parts, Origin.Dotted, key, sourceOffset, out var problem);
+        if (parts.Count == 0) return Conflict("Invalid key.", keySpan);
+        var parent = ResolveParent(_current, parts, Origin.Dotted, keySpan, out var problem);
         if (problem is not null) return problem;
         if (parent is null) return null;
         var name = parts[^1];
         if (parent.Children.ContainsKey(name))
-            return Conflict($"Key '{string.Join('.', parts)}' is already defined.", key, sourceOffset);
-        NewBinding(parent, name, value is InlineTableSyntax ? Origin.InlineTable : Origin.Value);
+            return Conflict($"Key '{string.Join('.', parts)}' is already defined.", keySpan);
+        NewBinding(parent, name, Origin.Value);
         return null;
     }
 
     /// <summary>Traverses parents, preserving the latest element of every array table.</summary>
     private Scope? ResolveParent(Scope start, IReadOnlyList<string> parts, Origin newParentOrigin,
-        KeySyntax key, int sourceOffset, out Diagnostic? problem)
+        TextSpan keySpan, out Diagnostic? problem)
     {
         problem = null;
         var scope = start;
@@ -93,7 +99,7 @@ internal sealed class TomlOwnershipIndex
             }
             if (binding.Origin is Origin.Value or Origin.InlineTable)
             {
-                problem = Conflict($"Key '{parts[i]}' cannot contain another key or table.", key, sourceOffset);
+                problem = Conflict($"Key '{parts[i]}' cannot contain another key or table.", keySpan);
                 return null;
             }
             // A header-created parent remains implicit until a dotted assignment
@@ -104,7 +110,7 @@ internal sealed class TomlOwnershipIndex
                 if (binding.Origin == Origin.ImplicitHeader) binding.Origin = Origin.Dotted;
                 else if (binding.Origin is Origin.ExplicitTable or Origin.ArrayTable)
                 {
-                    problem = Conflict($"Key '{parts[i]}' cannot redefine an explicitly defined table.", key, sourceOffset);
+                    problem = Conflict($"Key '{parts[i]}' cannot redefine an explicitly defined table.", keySpan);
                     return null;
                 }
             }
@@ -124,7 +130,7 @@ internal sealed class TomlOwnershipIndex
     }
 
     /// <summary>Uses decoded Tomlyn key components, so escaped-equivalent names collide.</summary>
-    private static List<string> Parts(KeySyntax key)
+    internal static List<string> Parts(KeySyntax key)
     {
         var parts = new List<string>();
         if (key.Key is not null) parts.Add(Name(key.Key));
@@ -142,9 +148,9 @@ internal sealed class TomlOwnershipIndex
     };
 
     /// <summary>Anchors ownership conflicts at the statement's actual key.</summary>
-    private static Diagnostic Conflict(string message, KeySyntax key, int sourceOffset) =>
+    private static Diagnostic Conflict(string message, TextSpan keySpan) =>
         new(DiagnosticSeverity.Error, "TOML_OWNERSHIP", message,
-            new TextSpan(sourceOffset + key.Span.Offset, key.Span.Length));
+            keySpan);
 
     /// <summary>One table namespace, independent for each array-table element.</summary>
     private sealed class Scope

@@ -1,6 +1,6 @@
 # TOML statement semantics and edit reuse
 
-Status: proposed implementation, 2026-10-01. Read together with
+Status: ownership correction and compact edit reuse implemented, 2026-10-01. Read together with
 [`../toml-large-semantics.md`](../toml-large-semantics.md). This is a route toward
 general large-file semantics, not a claim that existing resource refusals are complete.
 
@@ -104,10 +104,37 @@ decoded values or all possible syntax. Separate tests exercise the >4 MiB dispat
    valid ownership result. Otherwise replay summaries in source order, including
    every off-screen dependent header/assignment. This first representation still
    has O(statement count) mapping and potentially O(binding count) ownership replay;
-   it must not be advertised as fully sublinear incremental analysis.
+   it must not be advertised as fully sublinear incremental analysis. A record containing
+   position plus shared summary maps the source without cloning every semantic object.
 7. Unknown syntax, resource refusal, cancellation or malformed boundary invalidates
    the staged candidate. Cold Visible remains bounded and Provisional; reuse of an
    already certified complete snapshot may provide Complete Visible output.
+
+The first implemented repair path accepts one contiguous actual edit. Multiple committed
+edits, missing history or a mismatched chain safely use Full rebuilding; broader edit-chain
+reuse remains a performance opportunity, not a correctness fallback gap. Exact inserted
+payload agreement is checked as well as unchanged prefix/suffix. A repaired ownership error
+keeps its current first witness and retires the cache without reparsing already validated
+syntax. Only one committed snapshot reference is retained; cancellation leaves that prior
+certificate intact and never publishes staged state. Disposal and analysis are serialized
+and non-reentrant. A small-file call retires large cached roots.
+
+The lexer projection now reads the requested viewport plus 4,096 UTF-16 units of context
+on either side (at most 256 KiB), rather than automatically reading 256 KiB for a tiny
+viewport. It is still a bounded lexical projection, not a new context-sensitive highlighting
+proof for windows beginning inside multiline values. Namespace semantics and projected
+value categories are certified; richer cached token context is a separate rendering task.
+`LastParsedCharacters` / `LastScannedCharacters` / `LastOwnershipTransitions` count only
+their named work. Source verification, metadata mapping, projection and lexical parsing
+remain real work outside those counters; zero parser input is not zero-cost analysis.
+
+Validation: existing changed-algorithm regression **766/766**, retained independent reuse
+controls **57/57** (`.cache/toml-reuse/{toml-ir-existing,toml-reuse-final}.trx`), plus earlier
+stateful integration **968/968**. A cold same-implementation oracle checks reuse equivalence,
+while pinned normative fixtures supply independent validity expectations. Independent
+reviews are `docs/reviews/toml-normative-ownership-review.md` and
+`docs/reviews/toml-statement-reuse-review.md`; no GUI, AOT, macOS or arbitrary-size language
+claim is inferred from those portable checks.
 
 Existing diagnostic IDs, UTF-16 anchoring, public policy/session interfaces and AOT
 dependencies stay unchanged. Existing statement/binding budgets remain explicit
