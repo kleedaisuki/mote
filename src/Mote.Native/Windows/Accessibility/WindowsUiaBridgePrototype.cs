@@ -99,16 +99,16 @@ internal partial interface ITextRangeProviderAbi
 }
 
 /// <summary>
-/// Opt-in Win32 UIA registration probe. The experimental canvas shell calls
-/// HandleGetObject from WM_GETOBJECT and Close from WM_DESTROY; default page
-/// editing does not use this incomplete provider.
+/// Win32 UIA registration for the source-backed Canvas. The shell calls
+/// HandleGetObject from WM_GETOBJECT and Close from WM_DESTROY. Legacy page
+/// editing still uses the native control provider.
 /// </summary>
 /// <remarks>
 /// This prototype sketches an AOT-compatible COM registration path and exact
 /// source GetText/ScrollIntoView plumbing. Its text pattern is intentionally
-/// incomplete (word/character movement, hit-test, geometry and events return
-/// E_NOTIMPL), so it must not be enabled in the default editor or counted as a
-/// screen-reader pass. Test x64/arm64 ABI and COM lifetime before integration.
+/// incomplete (find, attributes, hit-test, geometry and events remain open).
+/// Source range navigation and canonical selection are distinct from full
+/// screen-reader acceptance. Test x64/arm64 ABI and COM lifetime independently.
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal sealed partial class WindowsUiaBridgePrototype
@@ -363,7 +363,8 @@ internal sealed partial class UiaRangeObject : ITextRangeProviderAbi
     private const int E_NOTIMPL = unchecked((int)0x80004001);
     private const int E_FAIL = unchecked((int)0x80004005);
     private readonly WindowsTextProviderCore _core;
-    private readonly AccessibleRange _range;
+    private AccessibleRange _range;
+    private readonly object _rangeGate = new();
 
     /// <summary>Captures one source interval without copying document text.</summary>
     internal UiaRangeObject(WindowsTextProviderCore core, AccessibleRange range)
@@ -378,8 +379,8 @@ internal sealed partial class UiaRangeObject : ITextRangeProviderAbi
         range = 0;
         try
         {
-            _core.ValidateRange(_range);
-            range = UiaComInterface.Pointer(new UiaRangeObject(_core, _range),
+            var current = Current();
+            range = UiaComInterface.Pointer(new UiaRangeObject(_core, current),
                 typeof(ITextRangeProviderAbi).GUID);
             return 0;
         }
@@ -388,12 +389,38 @@ internal sealed partial class UiaRangeObject : ITextRangeProviderAbi
     }
 
     /// <inheritdoc />
-    public int Compare(nint other, out int equal) { equal = 0; return E_NOTIMPL; }
+    public int Compare(nint other, out int equal)
+    {
+        equal = 0;
+        try
+        {
+            var peer = Peer(other);
+            var current = Current();
+            _core.ValidateRange(peer);
+            equal = current == peer ? 1 : 0;
+            return 0;
+        }
+        catch (Exception error) { return RangeError(error); }
+    }
     /// <inheritdoc />
     public int CompareEndpoints(int endpoint, nint other, int otherEndpoint, out int result)
-    { result = 0; return E_NOTIMPL; }
+    {
+        result = 0;
+        try
+        {
+            CheckEndpoint(endpoint);
+            CheckEndpoint(otherEndpoint);
+            var peer = Peer(other);
+            var current = Current();
+            _core.ValidateRange(peer);
+            result = Endpoint(current, endpoint) - Endpoint(peer, otherEndpoint);
+            return 0;
+        }
+        catch (Exception error) { return RangeError(error); }
+    }
     /// <inheritdoc />
-    public int ExpandToEnclosingUnit(int unit) => E_NOTIMPL;
+    public int ExpandToEnclosingUnit(int unit) => Change(range =>
+        new WindowsTextRangeNavigation(_core, range).Expand(range, unit));
     /// <inheritdoc />
     public int FindAttribute(int attributeId, UiaVariant value, int backward, out nint range)
     { range = 0; return E_NOTIMPL; }
@@ -414,21 +441,72 @@ internal sealed partial class UiaRangeObject : ITextRangeProviderAbi
     public int GetText(int maxLength, out nint bstr)
     {
         bstr = 0;
-        var result = _core.TryGetText(_range, maxLength);
+        WindowsTextResult result;
+        try { result = _core.TryGetText(Current(), maxLength); }
+        catch (Exception error) { return RangeError(error); }
         if (result.HResult != 0) return result.HResult;
         try { bstr = Marshal.StringToBSTR(result.Text!); return 0; }
         catch (OutOfMemoryException) { return WindowsTextResult.E_OUTOFMEMORY; }
     }
 
     /// <inheritdoc />
-    public int Move(int unit, int count, out int moved) { moved = 0; return E_NOTIMPL; }
+    public int Move(int unit, int count, out int moved)
+    {
+        moved = 0;
+        try
+        {
+            lock (_rangeGate)
+            {
+                var result = new WindowsTextRangeNavigation(_core, _range).Move(_range, unit, count);
+                _core.ValidateRange(result.Range);
+                _range = result.Range;
+                moved = result.Moved;
+                return 0;
+            }
+        }
+        catch (Exception error) { return RangeError(error); }
+    }
     /// <inheritdoc />
     public int MoveEndpointByUnit(int endpoint, int unit, int count, out int moved)
-    { moved = 0; return E_NOTIMPL; }
+    {
+        moved = 0;
+        try
+        {
+            CheckEndpoint(endpoint);
+            lock (_rangeGate)
+            {
+                var result = new WindowsTextRangeNavigation(_core, _range)
+                    .MoveEndpoint(Endpoint(_range, endpoint), unit, count);
+                var next = WithEndpoint(_range, endpoint, result.Offset);
+                _core.ValidateRange(next);
+                _range = next;
+                moved = result.Moved;
+                return 0;
+            }
+        }
+        catch (Exception error) { return RangeError(error); }
+    }
     /// <inheritdoc />
-    public int MoveEndpointByRange(int endpoint, nint target, int targetEndpoint) => E_NOTIMPL;
+    public int MoveEndpointByRange(int endpoint, nint target, int targetEndpoint)
+    {
+        try
+        {
+            CheckEndpoint(endpoint);
+            CheckEndpoint(targetEndpoint);
+            // Capture the peer before locking this range: reciprocal concurrent
+            // calls must not acquire two mutable-range locks in opposite order.
+            var peer = Peer(target);
+            _core.ValidateRange(peer);
+            return Change(range => WithEndpoint(range, endpoint, Endpoint(peer, targetEndpoint)));
+        }
+        catch (Exception error) { return RangeError(error); }
+    }
     /// <inheritdoc />
-    public int Select() => E_NOTIMPL;
+    public int Select()
+    {
+        try { return _core.Select(Current()); }
+        catch (Exception error) { return RangeError(error); }
+    }
     /// <inheritdoc />
     public int AddToSelection() => E_NOTIMPL;
     /// <inheritdoc />
@@ -437,11 +515,77 @@ internal sealed partial class UiaRangeObject : ITextRangeProviderAbi
     public int ScrollIntoView(int alignToTop) =>
         ScrollCurrentIntoView(alignToTop != 0);
 
+    /// <summary>Captures one validated mutable interval without retaining source text.</summary>
+    private AccessibleRange Current()
+    {
+        lock (_rangeGate)
+        {
+            _core.ValidateRange(_range);
+            return _range;
+        }
+    }
+
+    /// <summary>Resolves only this provider's own generated CCWs, never an arbitrary native pointer.</summary>
+    private AccessibleRange Peer(nint pointer)
+    {
+        if (pointer == 0) throw new ArgumentException("A peer text range is required.");
+        var id = new Guid("00000000-0000-0000-C000-000000000046");
+        var hr = Marshal.QueryInterface(pointer, in id, out var unknown);
+        if (hr < 0) throw new ArgumentException("The peer is not an IUnknown range.");
+        try
+        {
+            if (!ComWrappers.TryGetObject(unknown, out var value) ||
+                value is not UiaRangeObject peer || !ReferenceEquals(peer._core, _core))
+                throw new ArgumentException("The peer belongs to another text provider.");
+            return peer.Current();
+        }
+        finally { Marshal.Release(unknown); }
+    }
+
+    /// <summary>Commits computed endpoints once, only after current-source validation succeeds.</summary>
+    private int Change(Func<AccessibleRange, AccessibleRange> change)
+    {
+        try
+        {
+            lock (_rangeGate)
+            {
+                _core.ValidateRange(_range);
+                var next = change(_range);
+                _core.ValidateRange(next);
+                _range = next;
+                return 0;
+            }
+        }
+        catch (Exception error) { return RangeError(error); }
+    }
+
+    private static int Endpoint(AccessibleRange range, int endpoint) =>
+        endpoint == 0 ? range.Start : range.End;
+
+    private static void CheckEndpoint(int endpoint)
+    {
+        if (endpoint is not (0 or 1)) throw new ArgumentOutOfRangeException(nameof(endpoint));
+    }
+
+    /// <summary>Crossing an endpoint collapses the opposite endpoint, as required by UIA.</summary>
+    private static AccessibleRange WithEndpoint(AccessibleRange range, int endpoint, int offset) =>
+        endpoint == 0
+            ? range with { Start = offset, End = Math.Max(offset, range.End) }
+            : range with { Start = Math.Min(offset, range.Start), End = offset };
+
+    private static int RangeError(Exception error) => error switch
+    {
+        AccessibleRequestTooLargeException => WindowsTextResult.UIA_E_INVALIDOPERATION,
+        InvalidOperationException => WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+        ArgumentException => WindowsTextResult.E_INVALIDARG,
+        OutOfMemoryException => WindowsTextResult.E_OUTOFMEMORY,
+        _ => E_FAIL
+    };
     private int ScrollCurrentIntoView(bool alignToTop)
     {
         try
         {
-            return _core.ScrollIntoView(_range, alignToTop) switch
+            return _core.ScrollIntoView(Current(), alignToTop) switch
             {
                 AccessibleRevealResult.Revealed => 0,
                 AccessibleRevealResult.StaleRange => WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,

@@ -132,6 +132,27 @@ internal sealed class WindowsTextProviderCore
         return _document.LineRange(line);
     }
 
+    /// <summary>Creates a checked interval without changing canonical selection.</summary>
+    internal AccessibleRange MakeRange(int start, int end)
+    {
+        EnsureAttached();
+        return _document.MakeRange(start, end);
+    }
+
+    /// <summary>Requests synchronous canonical selection; never mutates an input host itself.</summary>
+    internal int Select(AccessibleRange range)
+    {
+        ValidateRange(range);
+        if (_viewport is not IAccessibleSelection selection)
+            return WindowsTextResult.UIA_E_INVALIDOPERATION;
+        return selection.TrySelect(range) switch
+        {
+            AccessibleSelectionResult.Selected => WindowsTextResult.S_OK,
+            AccessibleSelectionResult.StaleRange => WindowsTextResult.UIA_E_ELEMENTNOTAVAILABLE,
+            _ => WindowsTextResult.UIA_E_INVALIDOPERATION
+        };
+    }
+
     /// <summary>Equivalent of ITextRangeProvider.ScrollIntoView; no input-island rebind occurs here.</summary>
     internal AccessibleRevealResult ScrollIntoView(AccessibleRange range, bool alignToTop)
     {
