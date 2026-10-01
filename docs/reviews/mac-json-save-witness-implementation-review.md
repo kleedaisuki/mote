@@ -8,14 +8,14 @@ artifact; it does not modify product code, collectors or workflows.
 
 ## Verdict
 
-**Initial transport review found no loss-watermark defect; the follow-up review below identifies one necessary writer-wakeup correction.**
+**Final verdict: no outstanding substantive issue in the reviewed diagnostic integration. F1 was identified and corrected in `83f469b`; its evidence and resolution are retained below.**
 The implementation satisfies design-review R2 for the stated two UI-thread
 producer boundaries. It is suitable for the scoped diagnostic-on integration,
 subject to the independent parent-collector review (R1) and actual hosted Mac
 Native AOT build/launch validation. This is not Save reliability acceptance, a
 performance result, or proof that an unwitnessed callback did not execute.
 
-The initial verdict is superseded by finding F1 below until its correction is reviewed.
+The final verdict includes collector refinement `9f439b0`, scoped workflow `77547c7`, and independently reviewed wake correction `83f469b`. No mandatory correction remains in this scope.
 
 ## Evidence and lifetime analysis
 
@@ -132,7 +132,7 @@ registers the conversion continuation;
 queues that continuation when forced asynchronous. Source inspection establishes
 the dependency; this review did not reproduce actual Save-worker starvation.
 
-**Remedy:** keep bounded TryWrite/TryRead and producer admission semantics, but
+**Remedy (implemented in `83f469b`):** keep bounded TryWrite/TryRead and producer admission semantics, but
 replace asynchronous readiness waiting with a dedicated synchronous wake or
 bounded diagnostic-only polling. A wake must cover successful enqueue and final
 closure without missed signals or concurrent disposal against producers. Do not
@@ -201,3 +201,44 @@ Actual hosted Mac pipe behavior, Native AOT compilation, launch, complete report
 and the unresolved Save failure remain outside this source review. Overall
 integration verdict is **await F1 writer-wakeup correction**, not a failure of
 R1 framing or R2 producer/loss accounting.
+
+
+## F1 resolution and final integration verdict
+
+Reviewed the exact wake correction committed as `83f469b` before commit; the
+owner subsequently reported 10/10 focused transport tests passing. Collector
+refinement `9f439b0` has 41/41 reported portable collector/probe tests passing.
+These are owner execution results, not redundant reruns by this reviewer.
+
+The writer now drains only via TryRead and waits synchronously on AutoResetEvent.
+No WaitToReadAsync, ValueTask conversion or task-pool readiness continuation
+remains. Successful enqueue signals before producer release. A retained event
+signal bridges the interval between observing an empty queue and WaitOne; a
+collapsed duplicate signal is harmless because the reader drains all available
+stages. Final producer closure signals too. Observing `int.MinValue` proves
+closed admission and no remaining admitted producer; the second drain after
+that observation catches any enqueue between the preceding empty read and
+closure observation. Loss publication still precedes the stable watermark.
+
+Only successful writer join retires the wake handle, once. Abandonment retains
+it rather than disposing beneath a live WaitOne. A final producer can publish
+its decrement just before its redundant channel-complete/signal and race an
+already-joined writer's wake retirement; its Set exception is contained and
+cannot escape the unmanaged hook or modify the already-stable loss watermark.
+Raw output disposal remains writer-owned. Repeated Shutdown joins do not
+redispose the wake handle.
+
+The new open-lifetime test waits for selector output before recording admission,
+and then waits for admission output before shutdown. Thus a closure wake cannot
+mask a missing record wake. The existing blocked-terminal test preserves honest
+late-write semantics. The source removes the identified shared-thread-pool wake
+dependency; neither this test nor this review is a global ThreadPool starvation
+experiment, nor proof that the historical Mac Save failure was starvation.
+
+**Final verdict: F1 resolved; no outstanding substantive finding in reviewed
+R1/R2 target transport, original-child collector, acceptance integration or scoped
+JSON workflow.** Proceed with the planned hosted diagnostic-on validation; do not
+call its eventual success a causal Save repair, ordinary performance sample or
+complete release acceptance. Previously stated Mac/native/physical-input review
+limits remain in force. No production, probe or workflow file was edited by this
+reviewer and no workflow was dispatched or branch pushed.
