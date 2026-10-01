@@ -12,6 +12,31 @@ namespace Mote.Tests;
 /// <summary>Portable whole-source controller workflows against an independently maintained native replica.</summary>
 public sealed class NativeSourceControllerTests
 {
+    /// <summary>A queued presentation failure keeps its attempted version after a newer canonical edit.</summary>
+    [Fact]
+    public async Task Presentation_failure_does_not_relabel_stale_attempt_as_current_document()
+    {
+        using var temp = new RepoTemp();
+        var shell = new SourceShell();
+        using var controller = Create(shell, temp.Path);
+        controller.Run();
+        shell.EditSource("one");
+        shell.EditSource("two");
+        shell.EditSource("three");
+        var stamp = shell.Installation!.Stamp;
+        var serial = controller.CurrentAnalysisSerial;
+        typeof(NativeEditorController).GetMethod("PostAnalysis", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(controller, [stamp, serial, (Action)(() => throw new InvalidOperationException("private detail"))]);
+        shell.EditSource("four");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => shell.Until(() => true));
+        var failure = Assert.IsType<NativeAnalysisFailure>(controller.LastAnalysisFailure);
+        Assert.Equal(stamp, failure.Stamp);
+        Assert.Equal(3, failure.Stamp.Version);
+        Assert.Equal(4, Canonical(controller).Snapshot.Version);
+        Assert.False(failure.Matches(shell.Installation!.Stamp, controller.CurrentAnalysisSerial));
+        Assert.Equal("four", Canonical(controller).Snapshot.GetText());
+    }
+
     /// <summary>OS-delivered paths use ordinary dirty/marked-input admission and never a file picker.</summary>
     [Fact]
     public async Task External_open_preserves_rejected_input_and_uses_canonical_open()

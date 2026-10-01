@@ -15,6 +15,12 @@ namespace Mote.Native;
 /// </summary>
 internal sealed partial class NativeEditorController : IDisposable, IAccessibleViewport, IAccessibleSelection
 {
+    /// <summary>Last contained UI presentation failure; observation does not retry or change canonical state.</summary>
+    private NativeAnalysisFailure? _lastAnalysisFailure;
+    /// <summary>Diagnostic readback on the UI thread; an older witness is not automatically a current failure.</summary>
+    internal NativeAnalysisFailure? LastAnalysisFailure => _lastAnalysisFailure;
+    /// <summary>Current UI-owned request identity for qualifying a retained diagnostic failure.</summary>
+    internal long CurrentAnalysisSerial => _analysisSerial;
     internal const int PageSize = 64 * 1024;
     internal const int PageSlack = 8 * 1024;
     private const int FullAnalysisLimit = 2 * 1024 * 1024;
@@ -1674,6 +1680,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         var policy = _policy;
         var pageStart = _pageStart;
         var pageLength = _pageLength;
+        var attemptStamp = new NativeDocumentStamp(_canvasGeneration, snapshot.Version);
         if (!hadPreview)
         {
             PresentAnalysis(new NativeAnalysisView([], "Analysis pending; global diagnostics unknown.",
@@ -1707,7 +1714,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 var text = full ? snapshot.GetText() : snapshot.GetText(pageStart, pageLength);
                 var analysis = AnalyzeTraced(policy, text, cancellation.Token, editMark, snapshot);
                 cancellation.Token.ThrowIfCancellationRequested();
-                PostAnalysis(serial, () =>
+                PostAnalysis(attemptStamp, serial, () =>
                 {
                     if (_disposed || cancellation.IsCancellationRequested ||
                         serial != _analysisSerial || !ReferenceEquals(document, _document) ||
@@ -1768,6 +1775,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         int pageStart, int pageLength, CancellationTokenSource cancellation,
         long serial, TelemetryMark editMark, bool gridViewport)
     {
+        var attemptStamp = new NativeDocumentStamp(_canvasGeneration, snapshot.Version);
         var scope = snapshot.Length <= FullAnalysisLimit ? AnalysisScope.Full : AnalysisScope.Visible;
         var request = new AnalysisRequest(new Mote.Formats.TextSpan(pageStart, pageLength), scope);
         var gridRequest = policy.Kind == DocumentKind.Csv && PreviewVisible()
@@ -1812,7 +1820,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                 }
                 var result = presentation.Analysis;
                 cancellation.Token.ThrowIfCancellationRequested();
-                PostAnalysis(serial, () =>
+                PostAnalysis(attemptStamp, serial, () =>
                 {
                     if (_disposed || cancellation.IsCancellationRequested ||
                         serial != _analysisSerial || !ReferenceEquals(document, _document) ||
@@ -1932,11 +1940,12 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
     }
 
     /// <summary>Retains truthful failure status when native semantic installation throws on the UI thread.</summary>
-    private void PostAnalysis(long serial, Action action) => Post(() =>
+    private void PostAnalysis(NativeDocumentStamp attemptStamp, long serial, Action action) => Post(() =>
     {
         try { action(); }
-        catch
+        catch (Exception error)
         {
+            _lastAnalysisFailure = NativeAnalysisFailure.Capture(attemptStamp, serial, error);
             if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Failure);
             if (serial == _analysisSerial && _policy.Kind == DocumentKind.Csv && _gridFrame is not null)
             {

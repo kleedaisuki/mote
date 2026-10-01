@@ -119,3 +119,31 @@ Both suites retain artifacts under repository `.cache`/`.temp`. Process watchdog
 bound runner resources; they are not user-approved responsiveness targets. CI
 and release owners must attach exact executable/source identities and hosted
 results before describing the candidate as promoted or a release as delivered.
+
+## Bounded presentation-failure provenance
+
+The later default/final-view run `36928548957` passed both Windows AOT package
+tasks but failed both Mac CSV final-ready guards. Its traces also retain an
+older version-3 presentation failure before successful version-4 Save, parse,
+publication and styling. An opaque phase timeout cannot classify that older
+fault or prove it caused a newer guard failure.
+
+The controller now keeps one immutable `NativeAnalysisFailure` record: a closed
+category, numeric HResult, attempted document generation/version and analysis
+serial. Both callers capture the attempted stamp on the UI thread **before**
+background work starts and pass it into `PostAnalysis`. Catch handling preserves
+its existing behavior and does not read a potentially disposed/current document
+to invent a failed version. No exception object, message, path or stack is kept.
+The diagnostic's `Matches` operation requires generation, version and serial,
+so an old version-3 failure is not assigned to current version 4.
+
+Three focused tests verify classification/privacy, stale identity, and an actual
+queued controller callback failing after canonical text advances from version
+3 to 4: `.temp/release-controller/analysis-failure-attempt.trx`. The integrated
+affected source-controller/failure/Mac-release/actual-CSV selection then passed
+**71/71**, zero warnings/errors, in
+`.temp/release-controller/release-mac-observer-final.trx`; counts overlap earlier
+selections. macOS refusal and historical-success companion evidence preserve
+this fixed record separately from current ready-view certification. See the
+Mac qualification record for the AX-coupled observer correction and the still
+required instrumented hosted verification.
