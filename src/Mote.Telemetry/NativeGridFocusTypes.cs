@@ -11,12 +11,13 @@ public enum TelemetryFocusThreadRelation
     NonOwner
 }
 
-/// <summary>Identity-checked physical focus category, never a window handle.</summary>
+/// <summary>Identity-checked owner GUI-queue focus category, never a window handle.
+/// GetGUIThreadInfo(ownerThread).hwndFocus is not global keyboard focus or foreground/delivery evidence.</summary>
 public enum TelemetryFocusPane
 {
     /// <summary>Native evidence could not be obtained.</summary>
     Unavailable,
-    /// <summary>No native focus window exists.</summary>
+    /// <summary>The owner GUI queue reports no focus window.</summary>
     None,
     /// <summary>The source editor owns focus.</summary>
     Source,
@@ -30,7 +31,7 @@ public enum TelemetryFocusPane
     Coordinate,
     /// <summary>Another identity-checked application window owns focus.</summary>
     OwnedOther,
-    /// <summary>A window outside the checked application owns focus.</summary>
+    /// <summary>The owner GUI queue reports a window outside the checked application.</summary>
     Outside
 }
 
@@ -69,7 +70,7 @@ public enum TelemetryFocusOutcome
 /// <summary>Content-free admission and native focus evidence sampled before the adapter call.</summary>
 /// <param name="NativeThreadRelation">Callback thread versus native window creation thread.</param>
 /// <param name="ManagedAdmissionRelation">Callback thread versus existing managed owner admission.</param>
-/// <param name="Pane">Identity-checked physical focus category.</param>
+/// <param name="Pane">Identity-checked owner GUI-queue focus category; not foreground or physical delivery.</param>
 public readonly record struct TelemetryFocusSample(
     TelemetryFocusThreadRelation NativeThreadRelation,
     TelemetryFocusThreadRelation ManagedAdmissionRelation,

@@ -381,7 +381,7 @@ internal sealed class JsonlTraceSink
         _ => "unknown"
     };
 
-    /// <summary>Maps the closed native physical focus categories.</summary>
+    /// <summary>Maps the closed owner GUI-queue categories, not global keyboard focus or foreground evidence.</summary>
     private static string PaneName(TelemetryFocusPane pane) => pane switch
     {
         TelemetryFocusPane.None => "none",

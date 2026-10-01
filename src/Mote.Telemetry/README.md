@@ -232,9 +232,14 @@ to a newer session. A winning attempt does not certify persistence.
 Receipt attributes are exactly `native_thread_relation`,
 `managed_admission_relation`, `focus_before`, and `focus_target`. Terminals add
 exactly `focus_after` and `focus_result`. Relationships are `unknown`, `owner`, or
-`non_owner`; physical focus categories are `unavailable`, `none`, `source`,
+`non_owner`; owner GUI-queue focus categories are `unavailable`, `none`, `source`,
 `table`, `row_scroller`, `column_scroller`, `coordinate`, `owned_other`, or
-`outside`; target is `table` or `cell`. `applied` and `no_change` terminals succeed;
+`outside`; target is `table` or `cell`. `focus_before` and `focus_after`
+classify `GetGUIThreadInfo(ownerThread).hwndFocus` in the `owner_gui_queue`
+observation boundary. They do not observe global keyboard focus, foreground
+ownership, or physical input delivery. Native thread relationship and managed
+admission relationship are separate evidence; an unavailable query yields
+unknown/unavailable evidence and is not an adapter action failure. `applied` and `no_change` terminals succeed;
 `unsupported`, `stale`, `not_ready`, `invalid_coordinate`, `unavailable`,
 `composition_blocked`, and `fault` fail. The first eight results are actual adapter
 results before HRESULT conversion; `fault` is exceptional invocation failure,
@@ -247,7 +252,7 @@ consume terminal ownership. The native caller remains responsible for containing
 optional evidence failures and preserving the exact original action/result.
 
 Portable validation: `NativeGridFocusTelemetryTests` covers all closed results,
-all physical categories, exact attribute sets, nonambient parentage, concurrent
+all owner GUI-queue categories, exact attribute sets, nonambient parentage, concurrent
 terminal ownership, disabled zero allocations, closed enum validation, and stale
 session rejection. Release regression command (2026-10-01) passed **58/58**, zero
 failed/skipped; retained TRX is
