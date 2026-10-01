@@ -68,6 +68,28 @@ memoization/interning connection is discussed in Braibant, Jourdan and Monniaux,
 Journal of Automated Reasoning 53(3), 271–304 (2014). Its proof and performance
 results do not transfer directly to this C# editor implementation.
 
+Recent work by Zhu et al., [Efficient Symbolic Computation via Hash Consing](https://arxiv.org/abs/2509.20534v2)
+(2025 preprint), uses a global weak-reference table in JuliaSymbolics. It is a
+relevant example of avoiding expression swell, not evidence of mote performance
+or a reason to introduce a global cache. Mote's document-local strong entries
+have a simpler ownership boundary and are discarded with the projector.
+
+## Separate correctness boundaries
+
+The independent candidate checks exposed an inherited flow-collection span
+coverage gap: the diagnostic/key span for `[猫, 😀]` omits the closing bracket.
+A BMP-only `[猫, 犬]` control also reproduces the omission, so this is **not**
+evidence of broken supplementary-character offset accounting. Baseline and
+candidate both exhibit it; graph equality does not correct source-span
+projection. The failed requirement checks and subsequent characterization are
+recorded in the [independent validation](validation/yaml-key-graph-identity.md).
+
+The small-policy key checker also retains its existing skip after an error
+contained in a key. In particular, undefined-alias recovery should not be
+inferred to have the larger streaming checker's complete key-equality
+certificate. This slice preserves that compatibility boundary; it is not a
+claim that every invalid YAML input receives exhaustive diagnostics.
+
 ## Verification checkpoint
 
 The production implementation built successfully with 0 warnings and 0 errors:
