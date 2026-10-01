@@ -1,7 +1,10 @@
 # Native menu observation: independent source review
 
-Date: 2026-10-01. Verdict: **no substantive defect found in the examined slice;
-macOS runtime validation is still required**. This is not a certificate of
+Date: 2026-10-01. Final verdict: **one narrow BOOL import defect was found by
+root final review and corrected in `0020856`; no remaining substantive defect
+was identified by this closure review. macOS runtime validation is still
+required**. The initial independent review missed that membership-check import.
+This is not a certificate of
 ordinary Command-S routing, complete input coverage, or performance.
 
 ## Scope and identity
@@ -18,12 +21,31 @@ certified by this Native-source review.
 
 Reviewed blob identities for the three main new files, respectively:
 
-* Native observation: `43de830f587dc08f66451d9f6930a99338847fcb`.
+* Native observation, final closure: `6253d14d8e54c3211d43e60491087421d45e268e`
+  (initial review: `43de830f587dc08f66451d9f6930a99338847fcb`).
 * Native ABI probe: `e569f85d59547e4e6e4254e3c67555dab1083dbb`.
 * Telemetry menu API: `a4e717ad6a9434c05dbc229073b6ad174db8053d`.
 
 No production file was modified by this review. No workflow or external input
 was dispatched.
+
+## Resolved final-review finding
+
+Root identified that `Installed` originally used the generic pointer-sized
+`ObjC.Send` return import for `isKindOfClass:`, whose actual return is Objective-C
+BOOL. Upper register bits are not part of the Boolean return contract. Comparing
+the full pointer-sized value could therefore misclassify a false membership
+result and emit a spurious observation-ready checkpoint. This affects evidence
+correctness rather than Save routing. Confidence in the ABI mismatch is high;
+no actual macOS false-ready incident has been demonstrated.
+
+Commit `0020856` supplies `IsKindOfClass(nint receiver, nint selector, nint cls)`
+with byte return and uses it at the membership check. The native arguments and
+business flow are unchanged. Examined the final diff and source blob: the narrow
+correction resolves this mismatch. Documentation-only changes in `5e8873a`
+also describe the production constants, cached class, frame fields, and imports.
+Strict build success with zero warnings/errors was reported by the implementation
+owner; this follow-up did not rerun completed portable tests or execute AppKit.
 
 ## Contract assessment
 
