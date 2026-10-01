@@ -13,7 +13,7 @@ namespace Mote.Native;
 /// Composes the canonical document engine with one bounded native text viewport.
 /// The platform shell never owns persistence state or a second document model.
 /// </summary>
-internal sealed partial class NativeEditorController : IDisposable, IAccessibleViewport
+internal sealed partial class NativeEditorController : IDisposable, IAccessibleViewport, IAccessibleSelection
 {
     internal const int PageSize = 64 * 1024;
     internal const int PageSlack = 8 * 1024;
@@ -1222,6 +1222,33 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             return AccessibleRevealResult.NotVisible;
         ScheduleAnalysis();
         return AccessibleRevealResult.Revealed;
+    }
+
+    /// <summary>
+    /// Selects one current source interval through canonical navigation without
+    /// editing, acquiring focus, or settling native composition. Publication is
+    /// synchronous so an accessibility client observes the selected range on return.
+    /// </summary>
+    public AccessibleSelectionResult TrySelect(AccessibleRange range)
+    {
+        if (Environment.CurrentManagedThreadId != _uiThreadId)
+            return AccessibleSelectionResult.WrongThread;
+        if (_disposed || _canvas is null || _canvasShell is null)
+            return AccessibleSelectionResult.StaleRange;
+        var snapshot = _document.Snapshot;
+        if (range.Generation != _canvasGeneration || range.Version != snapshot.Version ||
+            range.Start < 0 || range.End < range.Start || range.End > snapshot.Length)
+            return AccessibleSelectionResult.StaleRange;
+        if (SafeBoundary(snapshot, range.Start, backwards: true) != range.Start ||
+            SafeBoundary(snapshot, range.End, backwards: true) != range.End)
+            return AccessibleSelectionResult.InvalidBoundary;
+        if (_shell.IsTextComposing || _canvasShell.IsCanvasComposing)
+            return AccessibleSelectionResult.CompositionBlocked;
+
+        InvalidateFind();
+        _navigation.SetSelection(snapshot, range.Start, range.End);
+        RevealSelection();
+        return AccessibleSelectionResult.Selected;
     }
 
     /// <summary>
