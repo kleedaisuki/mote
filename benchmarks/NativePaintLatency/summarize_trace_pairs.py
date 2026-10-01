@@ -172,7 +172,12 @@ def median_interval(values: list[float]) -> dict:
 
 
 def summarize(manifest: dict, entries: list[dict], loader, trace_loader) -> dict:
-    """Stop at the first protocol breach; no partial series is promoted to inference."""
+    """Stop at the first protocol breach; no partial series becomes inference.
+
+    ``attempted_samples`` counts indexed driver-return observations, not launched
+    processes. A hosted timeout can leave an in-flight unindexed sample directory;
+    neither this counter nor a missing index entry certifies launch completeness.
+    """
     result = {"schema_version": 1, "comparison": "incomplete", "reason": "declared_series_incomplete",
               "planned_pairs": manifest.get("planned_pairs") if isinstance(manifest, dict) else None,
               "attempted_samples": len(entries) if isinstance(entries, list) else 0,

@@ -86,6 +86,14 @@ complete telemetry transport, absence nor durability is certified.
 - `pair-<n>-<mode>-driver.log`: driver output, including failures.
 - `summary.json`: updated bounded evidence classification after every attempt.
 
+The wrapper appends an index entry **only after its driver returns**.
+`attempted_samples` therefore means **indexed driver-return samples**, not all
+launched processes or a launch/completeness watermark. A hosted step timeout can
+leave an in-flight launched sample unindexed; its output directory and driver log
+remain retained by the workflow's always-upload step. Do not invent counts from
+directories or normal-exit predicates. Such incomplete evidence is unknown, not
+proof that the target did not launch or execute an unobserved operation.
+
 First failed sample, unavailable required control, binary drift, trace integrity
 failure or environment mismatch stops scheduling immediately. Rejected attempts
 stay retained; no replacement sample is allowed. A half-pair is `incomplete`, not
