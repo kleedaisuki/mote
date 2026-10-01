@@ -153,6 +153,7 @@ function Read-ReleaseText([IntPtr] $Control) {
 
 # Wait for retained success evidence; incomplete live writer suffixes are not complete records.
 function Read-ReleaseSavedSemantics {
+    param([switch] $CompletionOnly)
     $traceRoot = Join-Path $evidence 'home/traces'
     if (-not [IO.Directory]::Exists($traceRoot)) { return $null }
     $rows = @()
@@ -168,9 +169,12 @@ function Read-ReleaseSavedSemantics {
     $save = @($rows | Where-Object { $_.operation -ceq 'document.save' -and $_.status -ceq 'success' })
     if ($save.Count -ne 1 -or -not $save[0].attributes.ContainsKey('version')) { return $null }
     $version = $save[0].attributes.version
-    foreach ($operation in @('analysis.parse','analysis.published','native.source.style_publish')) {
+    $required = @('save.completed', 'command.save')
+    if (-not $CompletionOnly) { $required += @('analysis.parse','analysis.published','native.source.style_publish') }
+    foreach ($operation in $required) {
         if (-not @($rows | Where-Object { $_.operation -ceq $operation -and $_.status -ceq 'success' -and
-            $_.attributes.ContainsKey('version') -and $_.attributes.version -eq $version }).Count) { return $null }
+            $_.session_id -ceq $save[0].session_id -and $_.attributes.ContainsKey('version') -and
+            $_.attributes.version -eq $version }).Count) { return $null }
     }
     return @{ version=$version; session_id=$save[0].session_id }
 }
@@ -257,6 +261,8 @@ $findObserved = $null
 $promptControlPresent = $false
 $promptTextSet = $false
 $promptTextMatches = $false
+$saveCompletionWitness = $null
+$exactReadAfterCompletion = $false
 $report = [ordered]@{ status = 'failed'; stage = $stage; profile = 'native-source'; launch_route = 'bare-default'; screenshot = $false;
     external_native_messages = $true; physical_keyboard = $false; real_ime = $false; screen_reader = $false }
 try {
@@ -310,12 +316,20 @@ try {
     } 'Whole-document Go to Line did not reach the last line.'
     $stage = 'save'
     Invoke-ReleaseMenu 203
-    Wait-ReleaseCondition { [IO.File]::ReadAllText($outputFile) -ceq $expected } 'Canonical Save did not persist exact replacement.'
     Wait-ReleaseCondition {
         $title = [Text.StringBuilder]::new(512)
         [void][MoteReleaseWin32]::GetWindowText($window, $title, $title.Capacity)
         return -not $title.ToString().EndsWith(' *', [StringComparison]::Ordinal)
     } 'Save completion did not clear modified chrome.'
+    # The path already exists before Save and can be guarded while replacement
+    # runs. Do not poll the target: observe the real version-linked UI/command
+    # completion first, then perform exactly one independent saved-text read.
+    Wait-ReleaseCondition {
+        $script:saveCompletionWitness = Read-ReleaseSavedSemantics -CompletionOnly
+        return $null -ne $script:saveCompletionWitness
+    } 'The actual version-linked Save command did not complete.'
+    if ([IO.File]::ReadAllText($outputFile) -cne $expected) { throw 'Canonical Save did not persist exact replacement.' }
+    $exactReadAfterCompletion = $true
     $stage = 'final-semantic-view'
     $kind = switch ([IO.Path]::GetExtension($inputFile).ToLowerInvariant()) {
         '.md' { 'Markdown' }; '.toml' { 'Toml' }; '.json' { 'Json' }; '.yaml' { 'Yaml' }; '.csv' { 'Csv' }; default { 'PlainText' }
@@ -401,6 +415,9 @@ finally {
     $report['prompt_control_present'] = $promptControlPresent
     $report['prompt_text_set'] = $promptTextSet
     $report['prompt_text_matches'] = $promptTextMatches
+    $report['save_completed_version'] = if ($saveCompletionWitness) { $saveCompletionWitness.version } else { $null }
+    $report['save_completion_session_id'] = if ($saveCompletionWitness) { $saveCompletionWitness.session_id } else { $null }
+    $report['exact_saved_read_after_completion'] = $exactReadAfterCompletion
     [IO.File]::WriteAllText((Join-Path $evidence 'windows-product.json'), ([pscustomobject]$report | ConvertTo-Json), $utf8)
     if ($process -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
     if ($process) { $process.Dispose() }

@@ -254,3 +254,65 @@ Windows sidecar distinguishes native status/preview/callback and trace evidence
 from the richer in-process AppKit identity/coverage witness. Neither asserts
 physical pixels, real Pinyin, readers or full format conformance. The final bare
 default and semantic-capture changes still require four-RID hosted validation.
+
+## Save target-read ordering: Windows ARM64 retained failure
+
+Hosted run `36931198293` passed both corrected macOS AOT full task suites and
+Windows x64, but Windows ARM64 CSV failed at the observer's `save` stage. Retained
+evidence is under
+`.cache/release-ci-36931198293/evidence/release-evidence-win-arm64/product/csv`.
+`workflow.stderr.txt` records a sharing violation from the observer's
+`ReadAllText(edited.csv)`, not a failed Save result. The target already exists
+because the task copies its protected original before launching the editor;
+existence cannot certify replacement completion.
+
+The trace shows `save.commit_replace.entered` at `21:52:59.6466635`, successful
+replacement at `21:52:59.6831222` (36,461 microseconds), and successful
+`document.save` version 5 at `21:52:59.6832008`. It has `save.ui_post_returned`,
+but no successful `save.completed` or terminal `command.save`: the observer
+threw and its cleanup terminated the owned process before UI command completion.
+The evidence does not establish a product Save failure. It establishes that
+the prior observation attempted a file read while Save could still hold its
+target guard. Neither the failed run nor its original error is overwritten.
+
+The corrected observer sends Save once, observes clean native modified chrome,
+then requires successful `document.save`, `save.completed` and `command.save`
+with the **same actual version and trace session**. Only after this condition
+does it read the saved target **once** and compare its full text exactly.
+Final semantic observation retains the same version-linked parse, publication,
+style and actual native view requirements. No sharing-exception catch/retry,
+repeated Save/edit, watchdog increase or byte-oracle relaxation was introduced.
+The task report records `save_completed_version`, `save_completion_session_id`
+and `exact_saved_read_after_completion` separately from final view evidence.
+
+`tests/Test-NativeWindowsReleaseSaveObserver.ps1` extracts the production
+observer function through its PowerShell AST and exercises an owned fixture
+with a deterministic `FileShare.None` guard. It reproduces the old sharing
+exception, refuses any read after engine persistence alone, rejects a
+mismatched-version command completion, then admits exactly one exact read after
+the guard is released and matching Save completion is present. Its result is
+retained at
+`.temp/release-save-observer/508c1ae678df47a38d7591cceb8ea5f8/observer-result.json`:
+passed, zero reads before completion, one read afterwards, derived version 7.
+This controlled observer contract is not a GUI or ARM64 runtime test.
+
+The affected ordinary GUI integration command then passed all six formats:
+
+```powershell
+pwsh -NoProfile -File tests/NativeReleaseProductWorkflow.ps1 `
+  -ExecutablePath src/Mote.Native/bin/Release/net10.0/mote.exe `
+  -OutputDirectory .temp/windows-release-completed-save-suite-1 `
+  -RuntimeIdentifier win-x64
+```
+
+The retained `release-acceptance.json` reports six exact-byte outputs, protected
+originals, fresh GUI-process reopens and current final semantic views, plus five
+CLI and three configuration cases. CSV records completed Save version 5,
+`exact_saved_read_after_completion=true`, and nine independently exact native
+cell labels. This was a **managed Windows x64 local integration** run, not a
+new Native AOT or Windows ARM64 qualification. Apphost SHA-256:
+`61B3D65E4BCFAD004176FBBC491839826519366613CAD8221357703D4476A0DA`;
+managed `mote.dll` SHA-256:
+`E78584A8B4B1C0C8384026693C7388F47390DF8E0D3F88A6D9B69E40174B5ED6`.
+The hosted aggregate remains failed pending a new coordinated four-RID run;
+successful local evidence does not retroactively qualify the failed ARM64 task.
