@@ -117,7 +117,7 @@ static NSString *Session(const char *arg) {
         [[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&directory] && directory ? path : nil;
 }
 /// Markers are fixed-size, fixed-token regular files inside the already confined session directory.
-static BOOL Marker(NSString *name,NSString *token) {
+static BOOL PairFinishMarker(NSString *name,NSString *token) {
     NSString *path=[sessionDirectory stringByAppendingPathComponent:name];
     NSData *expected=[token dataUsingEncoding:NSUTF8StringEncoding];
     if (expected.length>32) return NO;
@@ -174,7 +174,7 @@ int main(int argc,const char *argv[]) {
         table.attached=YES; [window orderFront:nil]; // Never activate or change global focus.
         finishTimer=[NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer) {
             (void)timer;
-            if (!finishConsumed && Marker(@"finish",@"mote-grid-pair-finish-v1\n")) {
+            if (!finishConsumed && PairFinishMarker(@"finish",@"mote-grid-pair-finish-v1\n")) {
                 finishConsumed=YES; [table.ownedMenu cancelTracking];
                 [table performSelector:@selector(shutdown) withObject:nil afterDelay:0 inModes:@[NSDefaultRunLoopMode]];
             }
