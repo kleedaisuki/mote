@@ -115,7 +115,7 @@ internal sealed class TomlIncrementalSession : IFormatSession
             candidate = outcome.Cache;
             error = outcome.KnownError;
         }
-        var lexical = AnalyzeVisible(snapshot, request.VisibleRange, ct);
+        var lexical = AnalyzeVisible(snapshot, request.VisibleRange, ct, candidate);
         var result = candidate is not null ? ProjectCache(candidate, request.VisibleRange, lexical, ct)
             : error is not null ? new DocumentAnalysis(lexical.Version, lexical.Coverage, lexical.Completeness,
                 lexical.Root, [error], lexical.Tokens, null) : lexical;
@@ -184,11 +184,16 @@ internal sealed class TomlIncrementalSession : IFormatSession
     }
 
     /// <summary>Classifies bounded source without asserting table context or global validity.</summary>
-    private static DocumentAnalysis AnalyzeVisible(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
+    private static DocumentAnalysis AnalyzeVisible(TextSnapshot snapshot, TextSpan visible, CancellationToken ct,
+        TomlStatementCache? cache = null)
     {
         int start = Math.Max(0, visible.Start - Context);
         int wanted = (int)Math.Min(int.MaxValue, (long)visible.End - start + Context);
         int length = Math.Min(VisibleLimit, Math.Min(wanted, snapshot.Length - start));
+        if (cache is not null)
+            return new DocumentAnalysis(snapshot.Version, new TextSpan(start, length), AnalysisCompleteness.Provisional,
+                new SemanticNode("document", new TextSpan(0, snapshot.Length)), Array.Empty<Diagnostic>(),
+                TomlTokenProjection.Project(snapshot, cache.Statements, new TextSpan(start, length), ct), null);
         var source = snapshot.GetText(start, length);
         var lexer = TomlLexer.Create(source);
         var tokens = new List<SemanticToken>();
@@ -212,7 +217,7 @@ internal sealed class TomlIncrementalSession : IFormatSession
     internal static DocumentAnalysis AnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
     {
         var outcome = TryAnalyzeLarge(snapshot, visible, ct);
-        var lexical = AnalyzeVisible(snapshot, visible, ct);
+        var lexical = AnalyzeVisible(snapshot, visible, ct, outcome.Cache);
         if (!outcome.Complete)
             return outcome.KnownError is { } error
                 ? new DocumentAnalysis(lexical.Version, lexical.Coverage, lexical.Completeness,

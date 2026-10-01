@@ -170,9 +170,19 @@ and non-reentrant. A small-file call retires large cached roots.
 
 The lexer projection now reads the requested viewport plus 4,096 UTF-16 units of context
 on either side (at most 256 KiB), rather than automatically reading 256 KiB for a tiny
-viewport. It is still a bounded lexical projection, not a new context-sensitive highlighting
-proof for windows beginning inside multiline values. Namespace semantics and projected
-value categories are certified; richer cached token context is a separate rendering task.
+viewport. A Complete cache now projects clipped validated key and top-level primitive
+value spans before lexing the remaining gaps. A window inside a multiline scalar string
+is therefore a string, never a guessed comment/table/number; restarting gaps after the
+real scalar end also preserves later roles. Eight retained controls plus the existing
+57 cache controls passed **65/65** in `.cache/toml-uniform/toml-token-projection.trx`.
+This is exact key/scalar projection, **not** token-complete context: a window beginning
+inside a long comment or a nested array/inline-table string can still have lexical-gap
+ambiguity. Complete certifies syntax/ownership checks, not every projected token role.
+
+A concrete next representation is immutable parse-time local token spans (kind + offset
++ length, no contents/tree), which would unify comments, nested strings and keys without
+guessing lexer gaps. Measure added per-statement metadata, dense-container cold allocation
+and local-edit costs before adopting it. This follow-up is not silently declared delivered.
 `LastParsedCharacters` / `LastScannedCharacters` / `LastOwnershipTransitions` count only
 their named work. Source verification, metadata mapping, projection and lexical parsing
 remain real work outside those counters; zero parser input is not zero-cost analysis.
