@@ -748,6 +748,30 @@ jobs:
           path: .cache/windows-ax-external/${{ matrix.rid }}/product-report.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Diagnose ordinary Windows source range selection (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $actual = (Get-FileHash -LiteralPath 'tests/WindowsUiaRangeExternal.ps1' -Algorithm SHA256).Hash
+          $pins = @('933BD36094C7168CA1B43A08021331732B72BD8AB902482D1F76C63C0980D12D', 'B7F6CD28BC77F2A04E15271E3C03F47D2E3F672B45C2FB769A9EADC1EA1DBA00')
+          if ($actual -cnotin $pins) { throw 'Windows source range probe differs from reviewed bytes.' }
+          pwsh -NoProfile -File tests/WindowsUiaRangeExternal.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Ordinary Windows source range diagnostic failed (exit $LASTEXITCODE); inspect the $rid report."
+          }
+      - name: Upload ordinary Windows source range diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-source-range-${{ matrix.rid }}
+          path: .cache/windows-uia-range-external/report.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify macOS Launch Services can open the standalone executable
         if: startsWith(matrix.rid, 'osx-')
         shell: pwsh
