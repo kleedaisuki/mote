@@ -69,3 +69,31 @@ The ARM original probe is not the historical 40/41 normal result: later checks d
 ## Consequential next validation
 
 Revalidate the three reviewed-byte pin repairs and additive legacy failure event in the next hosted run without weakening existing controls. Preserve the new phase graph and causal reader. Ordinary Mac Save remains a separate open runtime problem: instrument the earlier target key/command-routing boundary if pursued, while retaining the rule that missing censored records never certify nonexecution. A fresh infrastructure performance comparison is still needed; the older trace overhead baseline does not measure this newly integrated request graph.
+
+## Follow-up: repaired strict contracts, CI 36824892264
+
+Independently audited [CI 36824892264](https://github.com/kleedaisuki/mote/actions/runs/36824892264), source `da3fcb688c58d9b08d2443968deb86931d4ae2d2`. It completes **success across all 10 jobs**. This follow-up verifies the previously identified repairs rather than rerunning the initial investigation. New raw reports, completed-job logs, and traces are retained under `.cache/ci-36824892264-causal-evidence/`.
+
+### Repaired strict evidence
+
+- Windows and macOS complete-solution logs each show **Mote.Tests 1340/1340**, Themes 14/14, Configuration 9/9, zero failed/skipped.
+- All three disposable clipboard invocations now reach their real production-controller/native-publisher checks and report passed for six cases (quoted CRLF, empty final row, missing refusal/padding, NUL refusal, over-cap refusal). Reports carry the exact new run/source key and matching reviewed source hashes. Both Mac retained numeric exit files contain 0; Windows completed test log records the one designated test passed and successful job invocation, rather than an invented absent exit field. Scope remains hidden HWND/NSTableView and native clipboard, not physical input/context menu/IME/AX/paint.
+- The unchanged Windows Save positive control now observes **both** `save.commit_replace` failure and restored schema-v1 `save.failure.replace`, each `version=1`, `hresult=-2147024864`, in the same original trace/session graph. The editor exits 0 normally, retains dirty state and original bytes; the complete trace has 53 rows. Four subsequent ordinary diagnostic cases each exit 0, save exact new bytes, and retain complete 50-row traces. This validates additive telemetry compatibility restoration without weakening the held-handle safety oracle.
+- Published inventories contain exactly one executable each, zero non-executable payloads, zero bundled native libraries: win-x64 7,158,272 B; win-arm64 7,300,608 B; osx-x64 16,966,000 B; osx-arm64 16,616,760 B. This is build/package evidence, not trusted macOS signed distribution.
+
+### Ordinary Save chains: eight observed passes
+
+| RID | 1 MiB edited rows / bytes | 100 MiB edited rows / bytes | Reopen rows (1 / 100 MiB) |
+| --- | --- | --- | --- |
+| win-x64 | 56 / 18,661 | 61 / 20,507 | 13 / 18 |
+| win-arm64 | 56 / 18,667 | 64 / 21,575 | 13 / 18 |
+| osx-x64 | 63 / 20,955 | 68 / 22,808 | 11 / 16 |
+| osx-arm64 | 64 / 21,294 | 69 / 23,142 | 11 / 16 |
+
+All eight reports pass exact expected saved SHA256, unchanged original-fixture SHA256, normal edited/fresh-reopen exits, and native causal contracts. Independently reparsed all 16 raw ordinary traces: each edited trace has one complete successful request with saved snapshot version exactly 1; reopened traces have normal session terminals and no invented Save requests. Required route-aware Engine phases and local UI completion are complete with no saved identity errors. This is **one eight-case observed capability run**, not a statistical reliability result or proof that intermittent Mac dispatch failure is fixed. The earlier failures remain valid evidence. Numeric editor exit-field retention limitation described above is unchanged.
+
+### Recovery and summary follow-up
+
+All 16 recovery controls pass again after independent raw graph reclassification. Windows killed held/receipt-only children have exit 1, Mac killed children -9; all normal controls exit 0. Retained counts remain held 5, normal 12, receipt Save 1, receipt Save As 1 per RID; killed cases remain censored and all have `absence_certified=false`. No document Save/power-loss claim is added.
+
+The uploaded summaries still expose non-gating failures despite the overall green run: both original Mac Grid probes now report Swift exit 1, 40/41 checks, normal editor exits, unchanged input; both C0/P0 comparisons report AX 0 / -25205 with normal owner/client exits 0. This does **not** retroactively replace the prior run's ARM 25/26 guarded/forced-cleanup evidence. Windows ARM continuous and many-100MiB summaries are **inconclusive**, not pass. Thus all strict repaired gates pass, while release-relevant non-gating uncertainty remains visible.
