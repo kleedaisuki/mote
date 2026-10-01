@@ -30,10 +30,22 @@ jobs:
         run: dotnet restore mote.sln
       - name: Build complete solution, including desktop executable
         run: dotnet build mote.sln --configuration Release --no-restore
-      - name: Test complete solution
-        # The runner log already captures failures; avoid creating unuploaded
-        # project-local TestResults outside the repository .cache/.temp roots.
-        run: dotnet test mote.sln --configuration Release --no-build
+      - name: Test complete solution on macOS
+        if: runner.os == 'macOS'
+        run: dotnet test mote.sln --configuration Release --no-build --results-directory .cache/ci-test-results/macos
+      - name: Test complete solution with crash sequence on Windows
+        if: runner.os == 'Windows'
+        # Blame records test order after a native testhost crash; it does not
+        # promise a native dump. Keep all results inside the workspace.
+        run: dotnet test mote.sln --configuration Release --no-build --blame --results-directory .cache/ci-test-results/windows
+      - name: Upload Windows crash sequence
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-crash-sequence
+          path: .cache/ci-test-results/windows/**/*_Sequence.xml
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build non-gating benchmark harness
         run: dotnet build tests/Mote.Benchmarks/Mote.Benchmarks.csproj --configuration Release
 
