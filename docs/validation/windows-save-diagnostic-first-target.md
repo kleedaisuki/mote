@@ -604,3 +604,90 @@ defect was found. Four ordinary synthetic saves in one hosted run are not a
 reliability estimate, latency benchmark, physical durability/power-loss test,
 restart recovery/export test, or proof about arbitrary user files, filesystems,
 security software or platform variants.
+
+## Current-source follow-up: pre-Save operation failure (2026-10-02)
+
+[Run 36899695843](https://github.com/kleedaisuki/mote/actions/runs/36899695843),
+job `110495482950`, at `6827cd1a19142c9ad766d296c18d0770e600e79c`
+has aggregate run conclusion `success`, but the separate non-gating Windows Save
+replacement diagnostic job failed its positive-control assertion. This is **not
+a product Save failure**: no Save command was posted. Publication succeeded;
+the failed assertion concerns the subsequently launched diagnostic child.
+
+The downloaded log and original eight artifact files are retained under
+`.cache/ci-36899695843-save-diagnostic/`. Independent archive-only audit:
+
+```powershell
+python -B .temp/windows-save-682-audit/audit.py
+```
+
+The script and `evidence.json` reconstruct the synthetic fixture independently,
+compare complete archived bytes, parse both trace copies, check span identities
+and parent resolution, and verify all **802** recorded source-input digests
+against the exact Git commit (permitting LF-to-CRLF checkout conversion only).
+There are no input mismatches. The retained publish log also matches its recorded
+digest. Publish and diagnostic manifests agree on executable SHA-256
+`c6041a5007813211639069b4e34960cee624fa82a0fd3d3c6c083ab96b9692da`,
+**8,134,144 bytes**; the executable itself is not retained, so this remains
+manifest-consistent attribution, not independently recomputed binary identity.
+
+| Observation | Actual retained evidence |
+| --- | --- |
+| Environment | Windows 10.0.26100.0, NTFS, image 20260925.250.1, SDK 10.0.401, win-x64 runtime pack 10.0.12 |
+| Publish completion | Native output logged at 17:30:36 UTC; manifest completion 17:30:37.1122838 UTC |
+| Child | PID 1384, start 17:30:52.2852291 UTC, positive control ordinal 0 |
+| Main operation | `infrastructure-failure`; outer `System.Management.Automation.MethodInvocationException` only |
+| Control holder / Save | `held_ack=false`, `save_posted=false`; neither reached |
+| Teardown | Main close posted; normal exit 0; no forced termination or close error |
+| Elapsed child operation | 1.0750093 seconds, not a Save deadline timeout |
+| Archived target | Exactly original 1,048,576 bytes; SHA-256 `69f4396b7a4d42b022627414f8711cc4b62292f35fbd415b34daa201fac08aea` |
+| Trace | Two byte-identical copies, each 2,990 bytes and 9 valid rows; successful terminal `mote.session`, no dropped record |
+| Later work | No ordinary children, no summary, no recovery sidecar |
+
+Trace SHA-256 is
+`77815af184bacf757dc944b63b643c44abc195e9b6927cadccba8ec43935bd81`.
+It records initial empty-document layout/analysis and startup, successful
+`document.open`, then `document.open_to_editable` cancellation during teardown.
+There are no `document.edit`, `document.save` or `save.failure.*` rows in this
+complete captured session. The explicit driver's `save_posted=false` is the
+stronger evidence that this diagnostic did not attempt Save; trace absence is
+not generalized to other sessions or uninstrumented operations.
+
+### Exact attribution boundary and next safe action
+
+The inner operation catch recorded only the outer exception type. A
+`MethodInvocationException` does **not** identify its wrapped exception or the
+API that threw. The source contains bounded text reads, acknowledged UI sends,
+process identity reads and native lookups before opening the control holder.
+The archived row cannot distinguish these. In particular, a RichEdit readiness
+or WM_GETTEXT timeout is a hypothesis, not an established cause. Normal teardown
+cancelled an in-flight document-open-to-editable operation; that cancellation
+does not establish an independent product opening fault.
+
+The follow-up changes only `tests/Invoke-WindowsSaveDiagnostic.ps1` evidence:
+
+- `operation_stage` is a source-defined literal identifying the currently
+  attempted operation/readiness predicate, distinct from `close_error_stage`.
+  A `*-check` label denotes a compound short-circuit predicate, not proof that
+  every constituent native call executed. `complete` is set only after ordinary
+  outcome classification; failed stages remain present during teardown.
+- `error_exception` stores only the existing bounded deepest exception type and
+  numeric HResult, while `error_type` preserves the outer wrapper. No exception
+  message, stack, invocation text, dialog text or native handle is serialized.
+- The original pre-exit and final rows retain these fields. No publication,
+  polling, acknowledgement, deadline, byte oracle, failure control, telemetry
+  drain or termination behavior is changed; no retries are added.
+
+Local `pwsh -NoProfile -File tests/Invoke-WindowsSaveDiagnostic.ps1 -SelfTest`
+passed, including new actual-helper checks for a known operation stage, an
+independent teardown stage, nested exception extraction, the two-field error
+payload, and exclusion of both outer and inner synthetic private messages.
+Removing only the new helper, self-test statements, stage assignments and
+evidence fields reproduces the exact frozen driver text after line-ending
+normalization. `git diff --check` passed. No GUI/native diagnostic, retained
+binary or new CI run was executed locally.
+
+**Remaining acceptance:** a new exact-source hosted execution must identify the
+failing operation/deepest exception if it recurs, or establish complete positive
+control followed by ordinary Save samples. Do not weaken the control, enlarge
+timeouts, or change production Save based on this pre-Save failure.

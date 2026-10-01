@@ -123,6 +123,12 @@ function Get-ExceptionCodes([Exception] $Exception) {
     return @{ type = $deepest.GetType().FullName; hresult = $deepest.HResult }
 }
 
+# Retain the attempted operation separately from teardown; never serialize error text.
+function Set-OperationFailure([hashtable] $Row, [Exception] $Exception) {
+    $Row.error_type = $Exception.GetType().FullName
+    $Row.error_exception = Get-ExceptionCodes $Exception
+}
+
 # Certify a unique exact-ID Button, never a label or the first arbitrary control.
 function Select-DialogButton($Snapshot, [int] $Id) {
     if ($Snapshot.Overflow) { return @{ handle = [IntPtr]::Zero; mode = 'overflow' } }
@@ -279,6 +285,18 @@ if ($SelfTest) {
     if ($ignorable.title_is_mote -or $ignorable.discard_match) { throw 'Culture-ignorable modal guard accepted.' }
     $wrapped = [Exception]::new('private outer text', [IO.IOException]::new('private inner text'))
     $codes = Get-ExceptionCodes $wrapped
+    $operationRow = @{ operation_stage = 'source-prefix-check'; close_error_stage = 'main-close-post' }
+    Set-OperationFailure $operationRow $wrapped
+    $operationJson = $operationRow | ConvertTo-Json -Depth 5
+    if ($operationRow.operation_stage -cne 'source-prefix-check' -or
+        $operationRow.close_error_stage -cne 'main-close-post' -or
+        $operationRow.error_type -cne $wrapped.GetType().FullName -or
+        $operationRow.error_exception.type -cne $codes.type -or
+        $operationRow.error_exception.hresult -ne $codes.hresult -or
+        $operationRow.error_exception.Count -ne 2 -or $operationJson.Contains($wrapped.Message) -or
+        $operationJson.Contains($wrapped.InnerException.Message)) {
+        throw 'Operation failure evidence changed stage, lost deepest codes, or leaked error text.'
+    }
     if ($codes.type -cne 'System.IO.IOException' -or ($codes | ConvertTo-Json).Contains('private')) { throw 'Exception code evidence failed.' }
     $control = @{ Id = 1; ClassIsButton = $true; Owned = $true; Descendant = $true; Visible = $true; Enabled = $true; Handle = [IntPtr]101 }
     $snapshot = @{ Direct = [IntPtr]101; Overflow = $false; Controls = @($control) }
@@ -499,11 +517,13 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
         dirty = $null; modal_class = $null; responsive = $null; normal_exit = $false; exit_code = $null;
         save_failure_observed = $false;
         close_error_stage = $null; close_reason = $null; close_predicates = $null;
-        error_type = $null; trace_capture = 'incomplete'; disk = $null; held_ack = $false }
+        error_type = $null; error_exception = $null; operation_stage = 'not-started';
+        trace_capture = 'incomplete'; disk = $null; held_ack = $false }
     $process = $null; $holder = $null; $watchdog = $null; $window = [IntPtr]::Zero; $modal = [IntPtr]::Zero
     $childClock = [Diagnostics.Stopwatch]::StartNew()
     try {
     try {
+        $row.operation_stage = 'process-start'
         $start = [Diagnostics.ProcessStartInfo]::new($exe)
         $start.UseShellExecute = $false; $start.CreateNoWindow = $true
         $start.WorkingDirectory = $root
@@ -511,43 +531,65 @@ for ($ordinal = 0; $ordinal -le $OrdinaryRuns; $ordinal++) {
         $start.Environment.Remove('MOTE_TRACE_SUBDIR') | Out-Null
         $start.Environment['MOTE_HOME'] = $TraceHome; $start.Environment['MOTE_TRACE'] = '1'
         $process = [Diagnostics.Process]::Start($start)
+        $row.operation_stage = 'watchdog-start'
         $watchdog = [MoteSaveDiagnosticWatchdog]::new($process, [Math]::Max(1, [int](45000 - $childClock.Elapsed.TotalMilliseconds)))
+        $row.operation_stage = 'process-identity'
         $row.pid = $process.Id; $row.start_utc = $process.StartTime.ToUniversalTime().ToString('O')
+        $row.operation_stage = 'main-window-wait'
         Wait-Diagnostic { $script:window = [MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, 'MoteNativeEditorWindow', [IntPtr]::Zero); $window -ne [IntPtr]::Zero } 12
         Wait-Diagnostic {
+            $row.operation_stage = 'source-canvas-lookup'
             $canvas = [MoteSaveDiagnosticWin32]::FindWindowEx($window, [IntPtr]::Zero, 'MoteInteractiveCanvas', $null)
             if ($canvas -eq [IntPtr]::Zero) { return $false }
+            $row.operation_stage = 'source-editor-lookup'
             $script:editor = [MoteSaveDiagnosticWin32]::FindWindowEx($canvas, [IntPtr]::Zero, 'RICHEDIT50W', $null)
+            $row.operation_stage = 'source-prefix-check'
             $editor -ne [IntPtr]::Zero -and [MoteSaveDiagnosticWin32]::Text($editor, 128).StartsWith('STARTUP-MARKER # note')
         } 18
+        $row.operation_stage = 'source-length-read'
         $length = [MoteSaveDiagnosticWin32]::Send($editor, 14, 0, 0)
+        $row.operation_stage = 'source-length-guard'
         if ($length -le 0 -or $length -gt 16384) { throw 'Invalid source island length.' }
+        $row.operation_stage = 'selection-set'
         [void][MoteSaveDiagnosticWin32]::Send($editor, 0xB1, 1, 1)
+        $row.operation_stage = 'selection-readback'
         if (([MoteSaveDiagnosticWin32]::Send($editor, 0xB0, 0, 0) -band 0xffffffffL) -ne 0x10001) { throw 'Selection acknowledgement mismatch.' }
+        $row.operation_stage = 'insertion-selection-set'
         [void][MoteSaveDiagnosticWin32]::Send($editor, 0xB1, 0, 0)
+        $row.operation_stage = 'edit-send'
         [void][MoteSaveDiagnosticWin32]::Send($editor, 0x102, 88, 0)
+        $row.operation_stage = 'dirty-title-wait'
         Wait-Diagnostic { [MoteSaveDiagnosticWin32]::Text($window).Contains('•') } 22
         # The observer/control holder is separate from mote; ordinary cases hold nothing.
         if ($ordinal -eq 0) {
+            $row.operation_stage = 'control-holder-open'
             $holder = [IO.File]::Open($fixture, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            $row.operation_stage = 'control-holder-ack'
             $row.held_ack = $holder.CanRead
             if (-not $row.held_ack) { throw 'Control did not acknowledge held handle.' }
         }
+        $row.operation_stage = 'save-post'
         if (-not [MoteSaveDiagnosticWin32]::PostMessage($window, 0x111, [UIntPtr]203, [IntPtr]::Zero)) { throw 'Save post failed.' }
         $row.save_posted = $true
         Wait-Diagnostic {
+            $row.operation_stage = 'save-modal-lookup'
             $script:modal = [MoteSaveDiagnosticWin32]::Find([uint32]$process.Id, '#32770', $window)
+            $row.operation_stage = 'save-title-check'
             $modal -ne [IntPtr]::Zero -or -not [MoteSaveDiagnosticWin32]::Text($window).Contains('•')
         } 30
         $row.save_failure_observed = $modal -ne [IntPtr]::Zero
+        $row.operation_stage = 'outcome-title-read'
         $row.dirty = [MoteSaveDiagnosticWin32]::Text($window).Contains('•')
         $row.modal_class = $(if ($modal -ne [IntPtr]::Zero) { '#32770' } else { $null })
+        $row.operation_stage = 'responsiveness-send'
         [void][MoteSaveDiagnosticWin32]::Send($window, 0, 0, 0); $row.responsive = $true
+        $row.operation_stage = 'outcome-byte-classification'
         $row.disk = Get-ByteOutcome $fixture $original $new
         $row.outcome = $(if ($row.disk.state -in @('missing', 'unexpected')) { 'high-severity-unexpected-disk' }
             elseif ($modal -ne [IntPtr]::Zero) { 'save-failure' } elseif ($row.disk.new) { 'save-exact' } else { 'save-outcome-unverified' })
+        $row.operation_stage = 'complete'
     }
-    catch { $row.error_type = $_.Exception.GetType().FullName }
+    catch { Set-OperationFailure $row $_.Exception }
     finally {
         if ($null -ne $holder) { $holder.Dispose(); $holder = $null }
         if ($null -ne $process -and -not $process.HasExited) {
