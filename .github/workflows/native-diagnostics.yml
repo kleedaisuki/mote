@@ -1,0 +1,1949 @@
+# Retained pre-release diagnostic/capacity workflows; not the ordinary release gate.
+name: Native diagnostics (manual)
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore mote.sln
+      - name: Build complete solution, including desktop executable
+        run: dotnet build mote.sln --configuration Release --no-restore
+      - name: Test complete solution on macOS
+        if: runner.os == 'macOS'
+        run: dotnet test mote.sln --configuration Release --no-build --results-directory .cache/ci-test-results/macos
+      - name: Record Windows RichEdit environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $richEdit = Get-Item -LiteralPath "$env:WINDIR\System32\msftedit.dll"
+          Write-Host "Runner image: $env:ImageVersion"
+          Write-Host "OS version: $([Environment]::OSVersion.VersionString)"
+          Write-Host "RichEdit file version: $($richEdit.VersionInfo.FileVersion)"
+          Write-Host "RichEdit SHA-256: $((Get-FileHash -LiteralPath $richEdit.FullName -Algorithm SHA256).Hash)"
+      - name: Test complete solution with crash sequence on Windows
+        if: runner.os == 'Windows'
+        # Blame records test order after a native testhost crash; it does not
+        # promise a native dump. Keep all results inside the workspace.
+        run: dotnet test mote.sln --configuration Release --no-build --blame --results-directory .cache/ci-test-results/windows
+      - name: Upload Windows crash sequence
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-crash-sequence
+          path: .cache/ci-test-results/windows/**/*_Sequence.xml
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build non-gating benchmark harness
+        run: dotnet build tests/Mote.Benchmarks/Mote.Benchmarks.csproj --configuration Release
+
+  native-aot:
+    name: Single-binary Native AOT / ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: windows-11-arm
+            rid: win-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      # Native AOT requires a native linker/toolchain, hence the native-architecture matrix.
+      - name: Publish native OS-shell executable
+        run: dotnet publish src/Mote.Native/Mote.Native.csproj --configuration Release --runtime ${{ matrix.rid }} --self-contained true -p:PublishAot=true -p:ContinuousIntegrationBuild=true -p:DebugType=none -p:GenerateDocumentationFile=false -p:StripSymbols=false
+      - name: Inventory Native AOT publish payload
+        id: inventory
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $publish = "src/Mote.Native/bin/Release/net10.0/$rid/publish"
+          $executableName = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          $files = @(Get-ChildItem -LiteralPath $publish -File -Recurse | ForEach-Object {
+            [pscustomobject]@{
+              path = [IO.Path]::GetRelativePath((Resolve-Path $publish).Path, $_.FullName)
+              bytes = $_.Length
+            }
+          })
+          $other = @($files | Where-Object { $_.path -ne $executableName })
+          $nativeLibraries = @($other | Where-Object { $_.path -match '\.(dll|dylib|so)$' })
+          $inventory = [pscustomobject]@{
+            rid = $rid
+            executable = $executableName
+            payload_files = $files
+            non_executable_payload_count = $other.Count
+            bundled_native_library_count = $nativeLibraries.Count
+          }
+          $directory = ".cache/ci-inventory/$rid"
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          $path = Join-Path $directory 'publish-inventory.json'
+          $inventory | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path -Encoding utf8
+          Get-Content -LiteralPath $path
+      # Native focus tests use owned offscreen HWNDs, with no global input or
+      # clipboard. Run the managed user32 seam on the actual x64/ARM64 runner;
+      # published-executable UIA evidence remains an independent AOT contract.
+      - name: Verify Windows Grid passive publication and pane focus
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $arch = $rid.Substring(4)
+          dotnet --info
+          dotnet test tests/Mote.Tests/Mote.Tests.csproj --configuration Release `
+            --arch $arch -p:PublishAot=false `
+            --filter FullyQualifiedName~WindowsGridPaneFocusTests `
+            --logger 'trx;LogFileName=grid-pane-focus.trx' `
+            --results-directory ".cache/ci-inventory/$rid/grid-pane-focus"
+          if ($LASTEXITCODE -ne 0) { throw "Native HWND Grid focus regression failed on $rid." }
+      - name: Retain Windows Grid native focus results
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-grid-pane-focus-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/grid-pane-focus/**
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      - name: Verify macOS imports use system libraries
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        run: |
+          $publish = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish"
+          $imports = & otool -L (Join-Path $publish 'mote')
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect native executable dependencies.' }
+          $imports | ForEach-Object { Write-Host $_ }
+          foreach ($line in $imports | Select-Object -Skip 1) {
+            $dependency = ($line.Trim() -split '\s+')[0]
+            if ($dependency -notmatch '^(/usr/lib/|/System/Library/)') {
+              throw "Non-system Mach-O import violates the one-binary contract: $dependency"
+            }
+          }
+      - name: Verify Windows imports use reviewed system DLLs
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & .github/scripts/check-windows-imports.ps1 `
+            -Executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -Report ".cache/ci-inventory/$rid/imports.json"
+      - name: Upload native dependency inventory
+        if: always() && steps.inventory.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-inventory-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/
+          if-no-files-found: error
+      - name: Assert strict single-binary delivery contract
+        if: always() && steps.inventory.outcome == 'success'
+        shell: pwsh
+        run: |
+          $inventory = Get-Content ".cache/ci-inventory/${{ matrix.rid }}/publish-inventory.json" -Raw | ConvertFrom-Json
+          if ($inventory.non_executable_payload_count -ne 0) {
+            throw "Native AOT publish is not one executable: $($inventory.non_executable_payload_count) additional payload files, including $($inventory.bundled_native_library_count) bundled native libraries. See uploaded inventory."
+          }
+      # Tiny codec correctness is a blocking published-image contract, with no GUI.
+      - name: Verify embedded native encoding codecs
+        if: always() && steps.inventory.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 2
+        env:
+          PROBE_KIND: codec
+        run: &native_probe_execution |
+          $ErrorActionPreference = 'Stop'
+          $rid = '${{ matrix.rid }}'
+          $kind = $env:PROBE_KIND
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              -not (($IsWindows -and $env:RUNNER_OS -ceq 'Windows') -or ($IsMacOS -and $env:RUNNER_OS -ceq 'macOS'))) {
+            throw 'Disposable hosted Windows/macOS runner required.'
+          }
+          $root = (Get-Location).Path
+          $area = if ($kind -ceq 'codec') { 'encoding-runtime' } else { 'source-capability' }
+          $directory = Join-Path $root ".cache/ci-inventory/$rid/$area"
+          # Refuse existing or redirected evidence; never delete earlier attempts.
+          function Assert-ProbePath([string] $Path) {
+            $full = [IO.Path]::GetFullPath($Path)
+            $cache = Join-Path $root '.cache'
+            if (-not $full.StartsWith($cache + [IO.Path]::DirectorySeparatorChar,
+                $(if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }))) { throw 'Unsafe artifact area.' }
+            for ($cursor = $full; $cursor; $cursor = [IO.Path]::GetDirectoryName($cursor)) {
+              # Native attributes include hidden ancestors and dangling links; provider visibility is not admission.
+              try { $attributes = [IO.File]::GetAttributes($cursor) }
+              catch [IO.FileNotFoundException] { continue }
+              catch [IO.DirectoryNotFoundException] { continue }
+              if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe artifact ancestry.' }
+              if ($cursor -cne $full -and -not ($attributes -band [IO.FileAttributes]::Directory)) { throw 'Non-directory artifact ancestry.' }
+            }
+          }
+          Assert-ProbePath $directory
+          if (Test-Path -LiteralPath $directory) { throw 'Probe output must be fresh.' }
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          $result = [ordered]@{
+            schema_version = 1; rid = $rid; probe = $kind; status = 'unknown'; process_exit_code = $null
+            process_launched = $false; timed_out = $false; cleanup_forced = $false; terminated = $false; process_boundary = 'unobserved'
+            stdout_complete = $false; stderr_complete = $false; descendant_boundary = 'not_certified'
+            binary_sha256_before = $null; binary_sha256_after = $null; error_class = 'preflight'
+            codec_report_complete = $false; capability_report_complete = $false; trace_drain_witness = 'unobserved'
+          }
+          $process = $stdoutFile = $stderrFile = $copies = $null
+          $cancel = [Threading.CancellationTokenSource]::new()
+          try {
+            $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+            $exe = (Resolve-Path "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name").Path
+            $inventory = Get-Content ".cache/ci-inventory/$rid/publish-inventory.json" -Raw | ConvertFrom-Json
+            if ($inventory.rid -cne $rid -or $inventory.executable -cne $name -or
+                $inventory.payload_files.Count -ne 1 -or $inventory.payload_files[0].path -cne $name) { throw 'Strict published image required.' }
+            $result.binary_sha256_before = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+            $stdoutFile = [IO.FileStream]::new((Join-Path $directory 'stdout.txt'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $stderrFile = [IO.FileStream]::new((Join-Path $directory 'stderr.txt'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $start = [Diagnostics.ProcessStartInfo]::new($exe)
+            $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+            $start.WorkingDirectory = $root; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+            $start.Environment['MOTE_HOME'] = Join-Path $directory 'isolated-home'
+            $flag = if ($kind -ceq 'codec') { '--check-native-encoding' } else { '--check-native-source-capability' }
+            $start.ArgumentList.Add($flag); $start.ArgumentList.Add((Join-Path $directory 'probe'))
+            $result.error_class = 'launch'
+            $process = [Diagnostics.Process]::Start($start)
+            $result.process_launched = $null -ne $process
+            # Stream prefixes reach retained files while the child runs; no pipe-capacity deadlock.
+            $copies = [Threading.Tasks.Task[]]@(
+              $process.StandardOutput.BaseStream.CopyToAsync($stdoutFile, $cancel.Token),
+              $process.StandardError.BaseStream.CopyToAsync($stderrFile, $cancel.Token))
+            $limit = if ($kind -ceq 'codec') { 60000 } else { 120000 }
+            $result.error_class = 'execution'
+            $result.timed_out = -not $process.WaitForExit($limit)
+            $result.error_class = if ($result.timed_out) { 'timeout' } else { $null }
+          } catch {
+            # Outward evidence uses fixed categories; raw process streams remain separately retained.
+          } finally {
+            # Both probes create no children. This owns only the exact process, NOT a descendant certificate.
+            $cleanup = [Diagnostics.Stopwatch]::StartNew()
+            if ($null -ne $process) {
+              try {
+                if (-not $process.HasExited) { $result.cleanup_forced = $true; $process.Kill() }
+                $remaining = [Math]::Max(0, 10000 - [int]$cleanup.ElapsedMilliseconds)
+                $result.terminated = $process.WaitForExit($remaining)
+                if ($result.terminated) { $result.process_exit_code = $process.ExitCode }
+                if ($null -ne $copies) {
+                  $remaining = [Math]::Max(0, 10000 - [int]$cleanup.ElapsedMilliseconds)
+                  [void][Threading.Tasks.Task]::WaitAll($copies, $remaining)
+                  $result.stdout_complete = $copies[0].IsCompletedSuccessfully
+                  $result.stderr_complete = $copies[1].IsCompletedSuccessfully
+                }
+              } catch { $result.error_class = 'cleanup' }
+              try { $cancel.Cancel() } catch { $result.error_class = 'cleanup' }
+              # Dispose only owned streams/handle, with no blocking await of an incomplete copy.
+              foreach ($stream in @($process.StandardOutput, $process.StandardError)) {
+                try { $stream.Dispose() } catch { $result.error_class = 'cleanup' }
+              }
+              try { $process.Dispose() } catch { $result.error_class = 'cleanup' }
+            }
+            if ($null -ne $copies) {
+              foreach ($copy in $copies) {
+                # Never execute a PowerShell scriptblock on a task thread without a runspace.
+                if ($copy.IsFaulted) { [void]$copy.Exception }
+              }
+            }
+            foreach ($stream in @($stdoutFile, $stderrFile, $cancel)) {
+              if ($null -ne $stream) { try { $stream.Dispose() } catch { $result.error_class = 'cleanup' } }
+            }
+          }
+          try {
+            if (-not $result.terminated -or $result.timed_out -or $result.cleanup_forced) {
+              $result.process_boundary = if ($result.process_launched) { 'censored' } else { 'unobserved' }
+              if ($result.timed_out) { $result.error_class = 'timeout' }
+              if ($null -eq $result.error_class) { $result.error_class = 'cleanup' }
+              throw 'Process completion unproven.'
+            }
+            $result.process_boundary = if ($result.process_exit_code -eq 0) { 'normal_exit_observed' } else { 'nonzero_exit_observed' }
+            if ($result.process_exit_code -ne 0 -or -not $result.stdout_complete -or -not $result.stderr_complete -or
+              $null -ne $result.error_class) {
+              if ($null -eq $result.error_class) { $result.error_class = 'process_evidence' }
+              throw 'Incomplete process evidence.'
+            }
+            $result.error_class = 'image_identity'
+            $result.binary_sha256_after = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+            if ($result.binary_sha256_before -cne $result.binary_sha256_after) { throw 'Image identity changed.' }
+            $architecture = if ($rid.EndsWith('arm64')) { 'Arm64' } else { 'X64' }
+            $result.error_class = 'report'
+            if ($kind -ceq 'codec') {
+              $reportPath = Join-Path $directory 'probe/report.json'
+              Assert-ProbePath $reportPath
+              if ((Get-Item -LiteralPath $reportPath).Length -gt 65536) { throw 'Codec report exceeds bounds.' }
+              $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+              $keys = @($report.PSObject.Properties.Name | Sort-Object)
+              if (($keys -join '|') -cne 'architecture|checks|error_kind|schema|status' -or
+                  ($report.schema -isnot [int] -and $report.schema -isnot [long]) -or $report.schema -ne 1 -or
+                  $report.status -cne 'success' -or $report.error_kind -cne 'none' -or $report.architecture -cne $architecture) { throw 'Codec report incomplete.' }
+              $expected = @('Gbk_exact_save', 'Gbk_strict_encode_protection', 'Gb18030_exact_save', 'Big5_exact_save',
+                'Big5_strict_encode_protection', 'default_utf8_refusal', 'unicode_bom_conflict_and_exact_save')
+              if (@($report.checks).Count -ne 7) { throw 'Missing codec checks.' }
+              for ($i = 0; $i -lt 7; $i++) { if ($report.checks[$i] -isnot [string] -or $report.checks[$i] -cne $expected[$i]) { throw 'Invalid codec check.' } }
+              if ([IO.File]::ReadAllText((Join-Path $directory 'stdout.txt')).Trim() -cne 'mote-native-encoding-ready') { throw 'Missing codec marker.' }
+              $result.codec_report_complete = $true; $result.status = 'passed'
+            } else {
+              $reportPath = Join-Path $directory 'probe/report.jsonl'
+              Assert-ProbePath $reportPath
+              if ((Get-Item -LiteralPath $reportPath).Length -gt 4194304) { throw 'Capability report exceeds bounds.' }
+              $text = [IO.File]::ReadAllText($reportPath)
+              if (-not $text.EndsWith("`n")) { throw 'Truncated capability report.' }
+              $rows = @($text -split "`n" | Where-Object { $_.Length -ne 0 } | ForEach-Object { $_ | ConvertFrom-Json })
+              if (@($rows | Where-Object { $_.state -cin @('failed', 'failure-evidence') }).Count -ne 0 -or
+                  @($rows | Where-Object { $_.phase -ceq 'probe' -and $_.state -ceq 'complete' }).Count -ne 1 -or
+                  @($rows | Where-Object { $_.phase -ceq 'runtime-architecture' -and $_.state -ceq $architecture.ToLowerInvariant() }).Count -ne 1 -or
+                  @($rows | Where-Object { $_.phase -ceq 'executable' -and $_.state -ceq 'identity' -and $_.sha256 -ceq $result.binary_sha256_before }).Count -ne 1 -or
+                  @($rows | Where-Object { $_.phase -ceq 'telemetry-health' -and $_.state -ceq 'healthy' }).Count -ne 1 -or
+              $rows[-1].phase -cne 'probe' -or $rows[-1].state -cne 'complete') { throw 'Capability completion unobserved.' }
+              foreach ($fixture in @('mixed-text', 'novel-text', 'dense-json')) {
+                if (@($rows | Where-Object { $_.fixture -ceq $fixture -and $_.phase -ceq 'saved-bytes' -and $_.state -ceq 'exact' }).Count -ne 1 -or
+                    @($rows | Where-Object { $_.fixture -ceq $fixture -and $_.phase -ceq 'fresh-document-reopen' -and $_.state -ceq 'completed' }).Count -ne 1) { throw 'Fixture incomplete.' }
+              }
+              $pending = [Collections.Generic.Stack[string]]::new()
+              foreach ($row in $rows) {
+                $key = $row.fixture + '|' + $row.phase
+                if ($row.state -ceq 'entered') { $pending.Push($key) }
+                if ($row.state -ceq 'completed') {
+                  if ($pending.Count -eq 0 -or $pending.Pop() -cne $key) { throw 'Unpaired capability phase.' }
+                }
+              }
+              if ($pending.Count -ne 0) { throw 'Unterminated capability phase.' }
+              $result.capability_report_complete = $true
+              $result.trace_drain_witness = 'unknown'
+              $traceRoot = Join-Path $directory 'probe/mote-home/traces'
+              Assert-ProbePath $traceRoot
+              $paths = @(Get-ChildItem -LiteralPath $traceRoot -Filter '*.jsonl' -File)
+              if ($paths.Count -lt 1 -or $paths.Count -gt 16) { throw 'Trace inventory unavailable.' }
+              $records = foreach ($path in $paths) {
+                Assert-ProbePath $path.FullName
+                if ($path.Length -gt 33554432) { throw 'Trace exceeds bounds.' }
+                $trace = [IO.File]::ReadAllText($path.FullName)
+                if (-not $trace.EndsWith("`n")) { throw 'Truncated normal trace.' }
+                $trace -split "`n" | Where-Object { $_.Length -ne 0 } | ForEach-Object { $_ | ConvertFrom-Json }
+              }
+              if (@($records | Where-Object { $_.operation -ceq 'mote.session' -and $_.status -ceq 'success' }).Count -ne 1 -or
+                  @($records | Where-Object { $_.operation -ceq 'telemetry.dropped' }).Count -ne 0) { throw 'Trace drain witness unavailable.' }
+              $result.trace_drain_witness = 'observed'; $result.status = 'observed'
+            }
+            $result.error_class = $null
+          } catch {
+            # Prefix reports/traces remain untouched; no malformed record is converted to success.
+          } finally {
+            $path = Join-Path $directory 'supervisor.json'
+            Assert-ProbePath $path
+            $output = [IO.FileStream]::new($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+            try {
+              $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($result | ConvertTo-Json -Depth 5))
+              $output.Write($bytes); $output.Flush($true)
+            } finally { $output.Dispose() }
+          }
+          if ($result.status -cin @('passed', 'observed')) {
+            Write-Host "Native $kind bounded evidence: $($result.status); exact process exit $($result.process_exit_code)."
+          } else { throw 'Native probe evidence incomplete or unknown; inspect retained artifacts.' }
+      - name: Diagnose full native source capability (non-gating)
+        if: always() && steps.inventory.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          PROBE_KIND: capability
+        run: *native_probe_execution
+      - name: Retain native codec and source capability evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-codec-source-evidence-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/encoding-runtime/**
+            .cache/ci-inventory/${{ matrix.rid }}/source-capability/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      # This one-case capability probe is deliberately non-gating: the external
+      # source/selection observer is not an input-to-paint latency acceptance.
+      - name: Set up Python for Windows structured-text readiness pilot
+        if: matrix.rid == 'win-x64'
+        continue-on-error: true
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Diagnose fresh Windows AOT JSON source readiness (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PYTHONDONTWRITEBYTECODE = '1'
+          $manifestPath = (python benchmarks/NativeAcceptance/acceptance.py prepare `
+            --sizes 1 --formats json --shapes long).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Readiness corpus preparation failed.' }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.cases.Count -ne 1 -or $manifest.cases[0].case -cne 'json-long-1') {
+            throw 'Unexpected readiness corpus.'
+          }
+          $case = $manifest.cases[0]
+          $pinnedSha = 'bae792983708d005e143e90cfcb3a2110554dd590dd299059fb0d842dc20b5dd'
+          if ($case.sha256 -cne $pinnedSha) { throw 'Readiness corpus SHA differs from independent pin.' }
+          $exe = 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe'
+          & ./benchmarks/NativeStartup/Measure-WindowsOrdinary.ps1 `
+            -ExecutablePath $exe -FixturePath (Join-Path (Get-Location) $case.fixture) `
+            -FixtureSha256 $pinnedSha -SizeMiB 1 -Runs 1 -ReadinessOnly | Out-Host
+          $rows = @(Get-Content -LiteralPath '.cache/native-startup/ordinary-windows.jsonl')
+          if ($rows.Count -ne 1) { throw "Expected one fresh readiness row, found $($rows.Count)." }
+          $row = $rows[0] | ConvertFrom-Json
+          $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $head = (git rev-parse HEAD).Trim()
+          if ($row.status -cne 'passed' -or
+              $row.git_head -cne $head -or $row.executable_sha256 -cne $exeSha -or
+              $row.fixture_kind -cne 'external-pinned-readiness-only' -or
+              $row.fixture_format -cne 'json' -or
+              $row.original_fixture_sha256 -cne $pinnedSha -or
+              $row.copied_fixture_sha256_after_probe -cne $pinnedSha -or
+              $row.input_fixture_sha256_after_probe -cne $pinnedSha -or
+              $row.child_process_id -le 0 -or -not $row.canvas_seen -or -not $row.editor_seen -or
+              $row.source_prefix -cne 'pinned-20-byte-ASCII-prefix-verified' -or
+              $row.selection_ack_ms -eq $null -or $row.diagnostic_trace -or
+              $row.edit_dirty_ack_ms -ne $null -or $row.save_exact_ms -ne $null -or
+              $row.configuration_ms -ne $null -or $row.child_open_to_editable_ms -ne $null -or
+              $row.child_open_to_draw_submission_ms -ne $null) {
+            throw 'Readiness row failed its source, provenance, no-mutation, or endpoint contract.'
+          }
+          Write-Host "Readiness capability passed for fresh $head win-x64 AOT; no latency threshold claimed."
+      - name: Upload Windows structured-text readiness diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-readiness-win-x64
+          path: |
+            .cache/native-startup/ordinary-windows.jsonl
+            .cache/native-acceptance/corpus-*.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Keep parent launch observation and child causal durations separate.
+      # Natural draw callback return is not physical or compositor paint.
+      - name: Diagnose Windows AOT natural-close open trace (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PYTHONDONTWRITEBYTECODE = '1'
+          $manifestPath = (python benchmarks/NativeAcceptance/acceptance.py prepare `
+            --sizes 1 --formats json --shapes long).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Natural-close corpus preparation failed.' }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.cases.Count -ne 1 -or $manifest.cases[0].case -cne 'json-long-1') {
+            throw 'Unexpected natural-close corpus.'
+          }
+          $case = $manifest.cases[0]
+          $pinnedSha = 'bae792983708d005e143e90cfcb3a2110554dd590dd299059fb0d842dc20b5dd'
+          if ($case.sha256 -cne $pinnedSha) { throw 'Natural-close corpus SHA differs from independent pin.' }
+          $exe = 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe'
+          & ./benchmarks/NativeStartup/Measure-WindowsOrdinary.ps1 `
+            -ExecutablePath $exe -FixturePath (Join-Path (Get-Location) $case.fixture) `
+            -FixtureSha256 $pinnedSha -SizeMiB 1 -Runs 1 -ReadinessOnly `
+            -NaturalCloseTrace -TraceObservationMilliseconds 1000 | Out-Host
+          $rows = @(Get-Content -LiteralPath '.cache/native-startup/ordinary-windows.jsonl' |
+            ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.natural_close_trace })
+          if ($rows.Count -ne 1) { throw "Expected one natural-close row, found $($rows.Count)." }
+          $row = $rows[0]
+          $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $head = (git rev-parse HEAD).Trim()
+          if ($row.status -cne 'passed' -or $row.git_head -cne $head -or
+              $row.executable_sha256 -cne $exeSha -or $row.original_fixture_sha256 -cne $pinnedSha -or
+              $row.copied_fixture_sha256_after_probe -cne $pinnedSha -or
+              $row.input_fixture_sha256_after_probe -cne $pinnedSha -or
+              $row.termination -cne 'natural-close' -or $row.child_exit_code -ne 0 -or
+              $row.child_trace_evidence.causal_integrity -cne 'pass' -or
+              $row.child_trace_evidence.terminal_session -cne 'one-successful-root' -or
+              $row.child_trace_evidence.dropped_records -ne 0 -or
+              $row.child_trace_evidence.endpoints.'document.open'.status -cne 'success' -or
+              $row.child_trace_evidence.endpoints.'document.open_to_editable'.status -cne 'success' -or
+              $row.edit_dirty_ack_ms -ne $null -or $row.save_exact_ms -ne $null -or
+              $row.configuration_ms -ne $null) {
+            throw 'Natural-close source, provenance, trace, or no-mutation contract failed.'
+          }
+          Write-Host "Natural-close child open trace collected for $head; inspect draw status separately."
+      - name: Upload Windows natural-close trace diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-natural-close-win-x64
+          path: |
+            .cache/native-startup/ordinary-windows.jsonl
+            .cache/native-startup/traces/**
+            .cache/native-acceptance/corpus-*.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify OS-native offscreen text-canvas probe
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $publish = "src/Mote.Native/bin/Release/net10.0/$rid/publish"
+          $exe = if ($IsWindows) { Join-Path $publish 'mote.exe' } else { Join-Path $publish 'mote' }
+          $flag = if ($IsWindows) { '--check-native-windows-canvas' } else { '--check-native-mac-canvas' }
+          New-Item -ItemType Directory -Force -Path '.temp/ci-smoke' | Out-Null
+          $start = @{
+            FilePath = $exe
+            ArgumentList = $flag
+            PassThru = $true
+            Wait = $true
+            RedirectStandardOutput = '.temp/ci-smoke/canvas-stdout.txt'
+            RedirectStandardError = '.temp/ci-smoke/canvas-stderr.txt'
+          }
+          if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+          $process = Start-Process @start
+          $output = (Get-Content '.temp/ci-smoke/canvas-stdout.txt' -Raw).Trim()
+          if ($process.ExitCode -ne 0) {
+            throw "Native canvas probe exited $($process.ExitCode): $(Get-Content '.temp/ci-smoke/canvas-stderr.txt' -Raw)"
+          }
+          if ($IsWindows) {
+            if ($output -cne 'mote-native-windows-canvas-ready cases=5 ascii=2 clusters=5') {
+              throw "Unexpected Windows canvas marker: $output"
+            }
+          } elseif ($output -cmatch '^mote-native-mac-canvas-ready cases=4 painted=([0-9]+)$') {
+            if ([long]$Matches[1] -le 0) { throw "Mac canvas painted no pixels: $output" }
+          } else {
+            throw "Unexpected macOS canvas marker: $output"
+          }
+          Write-Host "Native offscreen text-canvas probe passed: $output"
+      - name: Smoke-test native executable without a display server
+        shell: pwsh
+        run: |
+          $publish = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish"
+          $executable = if ($IsWindows) { Join-Path $publish 'mote.exe' } else { Join-Path $publish 'mote' }
+          if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Native executable missing: $executable" }
+          New-Item -ItemType Directory -Force -Path '.temp/ci-smoke' | Out-Null
+          $start = @{
+            FilePath = $executable
+            ArgumentList = '--check-runtime'
+            PassThru = $true
+            Wait = $true
+            RedirectStandardOutput = '.temp/ci-smoke/runtime-stdout.txt'
+            RedirectStandardError = '.temp/ci-smoke/runtime-stderr.txt'
+          }
+          if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+          $process = Start-Process @start
+          $output = Get-Content '.temp/ci-smoke/runtime-stdout.txt' -Raw
+          if ($process.ExitCode -ne 0) { throw "Native runtime check exited with code $($process.ExitCode): $(Get-Content '.temp/ci-smoke/runtime-stderr.txt' -Raw)" }
+          if ($output.Trim() -ne 'mote-native-ready') { throw "Unexpected runtime-check output: $output" }
+          Write-Host "Native runtime check passed: $executable"
+      - name: Smoke-test native GUI startup
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $publish = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish"
+          $executable = if ($IsWindows) { Join-Path $publish 'mote.exe' } else { Join-Path $publish 'mote' }
+          $start = @{
+            FilePath = $executable
+            ArgumentList = '--smoke-gui'
+            PassThru = $true
+            Wait = $true
+            RedirectStandardOutput = '.temp/ci-smoke/ui-stdout.txt'
+            RedirectStandardError = '.temp/ci-smoke/ui-stderr.txt'
+          }
+          if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+          $process = Start-Process @start
+          $output = Get-Content '.temp/ci-smoke/ui-stdout.txt' -Raw
+          if ($process.ExitCode -ne 0) { throw "Native GUI smoke exited with code $($process.ExitCode): $(Get-Content '.temp/ci-smoke/ui-stderr.txt' -Raw)" }
+          if ($output.Trim() -ne 'mote-native-gui-ready') { throw "Unexpected native GUI smoke output: $output" }
+          Write-Host "Native GUI initialized and closed cleanly: $executable"
+      # This opt-in read-only canvas is not the default editor. Gate only its
+      # source-backed scroll/selection/contrast contract; retain PNGs on failure.
+      - name: Verify read-only on-screen native canvas
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          & ./tests/NativeCanvasWindowWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name" `
+            -RuntimeIdentifier $rid
+      - name: Upload on-screen canvas diagnostic and PNGs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canvas-window-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/canvas-window.json
+            .cache/canvas-window/${{ matrix.rid }}/**
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify real Win32 open-edit-save-reopen workflow
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote.exe"
+          & ./tests/NativeWindowsWorkflow.ps1 -ExecutablePath $executable
+      # Keep legacy-page compatibility strict; ordinary Continuous first earns
+      # independent HWND/UIA/source-byte evidence without masking a failure.
+      - name: Diagnose ordinary Windows Continuous open-edit-save-reopen (non-gating)
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeWindowsContinuousWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -ReportPath ".cache/ci-inventory/$rid/native-continuous-win.json"
+      - name: Upload ordinary Windows Continuous diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-continuous-win-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-continuous-win.json
+            .temp/gui-continuous-workflow/**/*-stderr.txt
+            .temp/gui-continuous-workflow/**/*-stdout.txt
+            .temp/gui-continuous-workflow/**/stderr.txt
+            .temp/gui-continuous-workflow/**/stdout.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # This 100 MiB ordinary product route uses a streaming byte oracle and
+      # synthetic fixture cleanup; scrollbar movement is not a physical wheel.
+      - name: Diagnose ordinary Windows Continuous 100 MiB source (non-gating)
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeWindowsContinuousWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -ReportPath ".cache/ci-inventory/$rid/native-continuous-many100.json" `
+            -ManyMiB 100
+      - name: Upload ordinary Windows Continuous 100 MiB diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-continuous-many100-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-continuous-many100.json
+            .temp/gui-continuous-workflow/**/*-stderr.txt
+            .temp/gui-continuous-workflow/**/*-stdout.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Mutates only a GitHub-hosted runner's HKCU app preference inside one
+      # try/finally, then restores the exact value kind/data or key absence.
+      # Real HWND colors/selection are diagnostic until first hosted evidence.
+      - name: Diagnose Windows live system-theme transition (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          & ./tests/NativeThemeWorkflow-Windows.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe' `
+            -RuntimeIdentifier win-x64
+      - name: Upload Windows live-theme diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-theme-win-x64
+          path: |
+            .cache/ci-inventory/win-x64/native-theme.json
+            .cache/native-theme/win-x64/**/*.png
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # The ordinary Continuous Canvas has a separate target-owned source and
+      # palette contract. A killable GUI worker keeps HKCU restoration in the
+      # independent owner even if UIA or PrintWindow stalls.
+      - name: Diagnose ordinary Windows Canvas live theme (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/NativeWindowsCanvasThemeWorkflow.ps1'; hashes = @('9A242F8B4045D000AEE657399A566BBF65855B636EE2159DC6BF912285E54CA4', '2AEB54CFF3E8D5B77B6AE27B0260CF1038A8EA66EEC0C45F6C419379FC3BC0A6') },
+            @{ path = 'tests/NativeWindowsCanvasThemeWorker.ps1'; hashes = @('889C5FA1E8B7B6E05531677E13291B70B8546A11FDE9648A94EB2A6265BF09CD', '006B712D8357D87848FC47E85DB01ED4C9AC2DD6D8D8CB613164B7336266142F') }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if ($actual -cnotin $pin.hashes) { throw 'Canvas live-theme probe differs from reviewed bytes.' }
+          }
+          & pwsh -NoProfile -File ./tests/Test-NativeWindowsCanvasThemeContract.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Canvas live-theme restoration contracts failed.' }
+          & pwsh -NoProfile -File ./tests/NativeWindowsCanvasThemeWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -RuntimeIdentifier $rid
+          if ($LASTEXITCODE -ne 0) { throw "Ordinary Canvas theme probe failed on $rid; inspect the retained report." }
+      - name: Upload ordinary Windows Canvas live-theme diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canvas-theme-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-canvas-theme.json
+            .cache/native-canvas-theme/${{ matrix.rid }}/**
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # One-process-per-case screen observation after HKCU has been restored;
+      # no p95 or physical-compositor latency claim from this first hosted pass.
+      - name: Diagnose Windows external paint latency (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 12
+        continue-on-error: true
+        run: |
+          & ./benchmarks/NativePaintLatency/Measure-WindowsScreen.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe' `
+            -Cases @('many-1','many-100') -Repetitions 1
+      - name: Upload Windows external paint-latency observations
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-paint-latency-win-x64
+          path: .cache/benchmarks/native-paint-latency/**/screen-observations.jsonl
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # The large opt-in canvas path is still diagnostic until hosted evidence
+      # confirms both exact large-paste/Undo cases without a release claim.
+      - name: Diagnose Windows canvas large Undo workflow (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote.exe"
+          & ./tests/NativeWindowsCanvasLargeUndoWorkflow.ps1 -ExecutablePath $executable
+      - name: Upload Windows canvas large Undo diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canvas-large-undo-win-x64
+          path: .cache/canvas-large-undo/*.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Real HWND horizontal navigation/selection on a 50 MiB unique-marker
+      # line; still diagnostic until hosted GUI and additional RID evidence.
+      - name: Diagnose Windows horizontal canvas workflow (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          & ./tests/NativeWindowsHorizontalWorkflow.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/win-x64/publish/mote.exe'
+      - name: Upload Windows horizontal canvas diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-horizontal-win-x64
+          path: |
+            .cache/windows-horizontal/latest.json
+            .temp/windows-horizontal/**/result.json
+            .temp/windows-horizontal/**/*.png
+            .temp/windows-horizontal/**/*-stdout.txt
+            .temp/windows-horizontal/**/*-stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Same 50 MiB far-marker/copy/edit/reopen mechanics, but launched through
+      # ordinary Product Continuous rather than the historical diagnostic flag.
+      - name: Diagnose ordinary Windows Continuous 50 MiB horizontal source (non-gating)
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeWindowsHorizontalWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -OrdinaryProduct
+      - name: Upload ordinary Windows Continuous 50 MiB diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-continuous-horizontal-${{ matrix.rid }}
+          path: |
+            .cache/windows-continuous-horizontal/latest.json
+            .temp/windows-continuous-horizontal/**/result.json
+            .temp/windows-continuous-horizontal/**/*-stdout.txt
+            .temp/windows-continuous-horizontal/**/*-stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      - name: Diagnose Windows native config and trace placement (non-gating)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeWindowsConfigWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -RuntimeIdentifier $rid
+      - name: Upload Windows native config diagnostic
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-config-win-x64
+          path: .cache/ci-inventory/win-x64/windows-config-runtime.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Historical opt-in canvas baseline, not the ordinary Continuous source
+      # fragment. Keep its duplicate-Document result as an explicit contrast.
+      - name: Diagnose external Windows UIA canvas provider (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/WindowsAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -Rid $rid `
+            -ReportPath ".cache/windows-ax-external/$rid/report.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Historical canvas UIA baseline did not pass; inspect the uploaded $rid report."
+          }
+      - name: Upload external Windows UIA diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ax-external-${{ matrix.rid }}
+          path: .cache/windows-ax-external/${{ matrix.rid }}/report.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Supplemental observations never replace or relabel the original Grid probe.
+      # Atomic job ownership bounds synchronous UIA calls outside the client process.
+      - name: Diagnose independent Windows Grid focus provenance (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          & ./tests/Invoke-WindowsGridFocusProvenanceWorkflow.ps1 -RuntimeIdentifier '${{ matrix.rid }}'
+      - name: Classify independent Windows Grid focus evidence
+        if: always() && startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          python -B -m unittest discover -s tests -p test_summarize_windows_grid_focus_provenance.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Grid provenance summary fixtures failed.' }
+          python -B tests/summarize_windows_grid_focus_provenance.py `
+            --directory '.cache/ci-inventory/${{ matrix.rid }}/grid-focus-provenance' `
+            --step-summary $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { throw 'Grid focus evidence is incomplete or unknown, not a product pass.' }
+      - name: Retain complete Windows Grid focus provenance artifacts
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: windows-grid-focus-provenance-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/grid-focus-provenance/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      # The separate MTA client uses only a synthetic CSV and target-owned messages.
+      # Its opt-in bounded-window evidence is not reader/IME/focus release acceptance.
+      - name: Diagnose external Windows CSV Grid accessibility (non-gating)
+        if: matrix.rid == 'win-x64' || matrix.rid == 'win-arm64'
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rid = '${{ matrix.rid }}'
+          $exe = (Resolve-Path "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe").Path
+          $directory = Join-Path $PWD ".cache/windows-grid-accessibility-ci/$rid"
+          $scratch = Join-Path $PWD ".temp/windows-grid-accessibility-ci/$rid"
+          New-Item -ItemType Directory -Force -Path $directory, $scratch | Out-Null
+          $report = Join-Path $directory 'report.json'
+          $inventory = [ordered]@{
+            rid = $rid; commit = '${{ github.sha }}'; run_id = '${{ github.run_id }}'
+            binary_sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+            probe_source_sha256 = (Get-FileHash tests/WindowsGridExternalProbe/Program.cs -Algorithm SHA256).Hash
+            probe_project_sha256 = (Get-FileHash tests/WindowsGridExternalProbe/WindowsGridExternalProbe.csproj -Algorithm SHA256).Hash
+            scope = 'synthetic opt-in UIA reads/selection/navigation and target-owned F6; not release acceptance'
+            timeout_seconds = 120; process_exit_code = $null; timed_out = $false
+            clipboard = 'not accessed'; global_keys = 'not sent'; ime = 'not tested'; reader = 'not tested'
+          }
+          $probe = $null
+          try {
+            # Accept only the exact reviewed LF/CRLF source and project encodings, not arbitrary normalization.
+            if ((-not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
+                'A1B87971E4975786D67909209E1B2133432C6894710D623F2CD24ECD948940D4') -and
+                -not [StringComparer]::Ordinal.Equals($inventory.probe_source_sha256,
+                'C6894B4EDCF931BAA322B878AF8965759AC7E44EFC10291200737A18C1AD5509')) -or
+                (-not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
+                '5A442CDB96A250C26556165CABD5C58224378CD4573D6ECC13318DFCFF95F5E2') -and
+                -not [StringComparer]::Ordinal.Equals($inventory.probe_project_sha256,
+                '6A99955812E8EA1631792E3EF0B47798B42A1A9F916FE86AF6D992F2E32FA3D4'))) {
+              throw 'Windows Grid external probe differs from reviewed bytes.'
+            }
+            $artifacts = Join-Path $directory 'build'
+            & dotnet build tests/WindowsGridExternalProbe/WindowsGridExternalProbe.csproj `
+              --configuration Release --artifacts-path $artifacts *> (Join-Path $directory 'build.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Windows Grid external probe build failed.' }
+            $client = Join-Path $artifacts 'bin/WindowsGridExternalProbe/release/WindowsGridExternalProbe.dll'
+            if (-not (Test-Path -LiteralPath $client -PathType Leaf)) { throw 'Built Grid client DLL missing.' }
+            $start = [Diagnostics.ProcessStartInfo]::new((Get-Command dotnet).Source)
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $start.ArgumentList.Add($client)
+            $start.ArgumentList.Add($exe)
+            $start.ArgumentList.Add($scratch)
+            $start.ArgumentList.Add($report)
+            $probe = [Diagnostics.Process]::Start($start)
+            if (-not $probe.WaitForExit(120000)) {
+              $inventory.timed_out = $true
+              $probe.Kill($true)
+              if (-not $probe.WaitForExit(10000)) { throw 'Timed-out Grid probe process tree did not terminate within 10 seconds.' }
+              throw 'Windows Grid external probe exceeded its bounded 120-second timeout.'
+            }
+            $inventory.process_exit_code = $probe.ExitCode
+            if (-not (Test-Path -LiteralPath $report -PathType Leaf)) { throw 'External Grid JSON report missing.' }
+            $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+            if (-not [StringComparer]::Ordinal.Equals($result.BinarySha256, $inventory.binary_sha256)) {
+              throw 'External Grid report does not identify the exact published Native AOT binary.'
+            }
+            if ($probe.ExitCode -ne 0 -or -not [StringComparer]::Ordinal.Equals($result.Classification, 'pass')) {
+              throw 'External Grid subset failed or was inconclusive; inspect uploaded report without treating it as release acceptance.'
+            }
+            Write-Host 'External Windows Grid subset passed; foreign global focus may remain blocked; reader/IME/external-cell-focus/cross-RID-parity/release gates remain untested.'
+          } finally {
+            $inventory | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $directory 'inventory.json') -Encoding utf8
+            if ($null -ne $probe) { $probe.Dispose() }
+          }
+      - name: Upload external Windows CSV Grid accessibility diagnostic
+        if: always() && (matrix.rid == 'win-x64' || matrix.rid == 'win-arm64')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-grid-accessibility-ci-${{ matrix.rid }}
+          path: |
+            .cache/windows-grid-accessibility-ci/${{ matrix.rid }}/report.json
+            .cache/windows-grid-accessibility-ci/${{ matrix.rid }}/inventory.json
+            .cache/windows-grid-accessibility-ci/${{ matrix.rid }}/build.log
+          if-no-files-found: warn
+          retention-days: 14
+      # Paired opt-in fragment tree on the same published EXE; ARM64 and real
+      # screen-reader behavior remain unknown, so this is not a release gate.
+      - name: Diagnose Windows UIA fragment experiment (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/WindowsAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -Rid $rid `
+            -FragmentExperiment `
+            -ReportPath ".cache/windows-ax-external/$rid/fragment-report.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "UIA fragment experiment failed; inspect the uploaded $rid report."
+          }
+      - name: Upload Windows UIA fragment diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ax-fragment-${{ matrix.rid }}
+          path: .cache/windows-ax-external/${{ matrix.rid }}/fragment-report.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Ordinary `mote path` must own one source Document; the legacy canvas
+      # baseline and opt-in fragment above are separate, historically scoped runs.
+      - name: Diagnose ordinary Windows source UIA (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/WindowsAxExternalProbe/Program.cs'; hashes = @('7D4E0AFDD791BC9F54D6DEF3F0E2541DF156C693BC17DE377565893615BA48D8', '9D0EEE385F27F2DC13929F56D242F58EAEE4492B131D46C88F63F32CDFA30005') },
+            @{ path = 'tests/WindowsAxExternalProbe/ProbeLaunchRoute.cs'; hashes = @('6D9C7770FC316965089582D47CF82B1914C22CFDB8BA23D01962AF85B0C5916D', '8E70B2F81EC4B6625C5FAC9D360B2D76B771E5E7A4600718BCBC4E1BD13B96BB') },
+            @{ path = 'tests/WindowsAxExternalProbe/Run.ps1'; hashes = @('AAD02A5340E8D2DB3DEDC444AC32A6C022A4439613E17B51A39E5D622961CDB7', 'D43D9AC78CD4647C2C90A0FF44F3CAD7F8A7393591A9457B680E612C2B592522') }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if ($actual -cnotin $pin.hashes) { throw 'Ordinary Windows UIA probe differs from reviewed bytes.' }
+          }
+          & ./tests/WindowsAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe" `
+            -Rid $rid -ProductContinuous `
+            -ReportPath ".cache/windows-ax-external/$rid/product-report.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Ordinary Windows source UIA diagnostic did not pass; inspect the $rid report."
+          }
+      - name: Upload ordinary Windows source UIA diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ax-product-${{ matrix.rid }}
+          path: .cache/windows-ax-external/${{ matrix.rid }}/product-report.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Diagnose ordinary Windows source range selection (non-gating)
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $actual = (Get-FileHash -LiteralPath 'tests/WindowsUiaRangeExternal.ps1' -Algorithm SHA256).Hash
+          $pins = @('933BD36094C7168CA1B43A08021331732B72BD8AB902482D1F76C63C0980D12D', 'B7F6CD28BC77F2A04E15271E3C03F47D2E3F672B45C2FB769A9EADC1EA1DBA00')
+          if ($actual -cnotin $pins) { throw 'Windows source range probe differs from reviewed bytes.' }
+          pwsh -NoProfile -File tests/WindowsUiaRangeExternal.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Ordinary Windows source range diagnostic failed (exit $LASTEXITCODE); inspect the $rid report."
+          }
+      - name: Upload ordinary Windows source range diagnostic
+        if: always() && startsWith(matrix.rid, 'win-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-source-range-${{ matrix.rid }}
+          path: .cache/windows-uia-range-external/report.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify macOS Launch Services can open the standalone executable
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $executable = (Resolve-Path "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote").Path
+          & open -W -a $executable --args --smoke-gui
+          if ($LASTEXITCODE -ne 0) { throw "Launch Services rejected standalone mote (exit $LASTEXITCODE)." }
+      - name: Verify in-process AppKit open-edit-save-new-reopen workflow
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $executable = "src/Mote.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/mote"
+          & ./tests/NativeMacWorkflow.ps1 -ExecutablePath $executable
+      # These opt-in AppKit input-island checks are required on both Mac RIDs;
+      # they do not claim external keyboard, CJK IME, or VoiceOver coverage.
+      - name: Verify macOS canvas mixed-clipboard workflow
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 8
+        env:
+          MOTE_NATIVE_MAC_STAGE_TRACE: ${{ matrix.rid == 'osx-arm64' && '1' || '0' }}
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacCanvasClipboardWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS canvas clipboard diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-clipboard-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/canvas-clipboard*.txt
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-clipboard-metrics.txt
+            .cache/ci-inventory/${{ matrix.rid }}/canvas-clipboard.json
+            .temp/canvas-clipboard-*.txt
+          if-no-files-found: warn
+          retention-days: 14
+      # Run the smallest real opt-in canvas under LLDB only on ARM64; stage
+      # codes and bounded backtrace are diagnostic, never a substitute for the
+      # blocking clipboard/selection workflow above.
+      - name: Diagnose macOS ARM canvas startup crash (non-gating)
+        if: always() && matrix.rid == 'osx-arm64'
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          & ./tests/NativeMacCanvasCrashProbe.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/osx-arm64/publish/mote' `
+            -RuntimeIdentifier osx-arm64
+      - name: Upload macOS ARM canvas startup crash diagnostic
+        if: always() && matrix.rid == 'osx-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-crash-osx-arm64
+          path: |
+            .cache/ci-inventory/osx-arm64/mac-canvas-crash.json
+            .cache/ci-inventory/osx-arm64/mac-canvas-crash-*-stdout.txt
+            .cache/ci-inventory/osx-arm64/mac-canvas-crash-*-stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      - name: Verify macOS canvas empty-host delete
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacCanvasDeleteWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS canvas delete diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-delete-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-delete*.txt
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-delete.json
+            .temp/canvas-delete-*.txt
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Diagnose in-process macOS canvas AX selector (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacCanvasAxWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload in-process macOS canvas AX diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-canvas-ax-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-ax.json
+            .cache/ci-inventory/${{ matrix.rid }}/mac-canvas-ax*.txt
+            .temp/canvas-ax-in-*.txt
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Diagnose macOS native config and trace placement (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacConfigWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS config and trace diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-config-runtime-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-config-runtime.json
+            .temp/mac-config-runtime/**
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Probe hosted macOS external Accessibility automation
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacAccessibilityProbe.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/mac-accessibility.json"
+      - name: Upload macOS Accessibility environment report
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-accessibility-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-accessibility.json
+          if-no-files-found: error
+      # A separately compiled Swift process traverses the published canvas AX
+      # tree. The first host run is diagnostic; TCC denials have their own JSON.
+      - name: Diagnose external macOS canvas AX provider (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/MacAxExternalProbe/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/mac-ax-external.json"
+      - name: Upload external macOS canvas AX diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-ax-external-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-ax-external.json
+          if-no-files-found: warn
+          retention-days: 14
+      # The opt-in AppKit canvas owns source-row paint; a focused native text
+      # input lives only in its reserved bottom ribbon. This first probe is
+      # synthetic in-process pan/copy, not external trackpad or CJK IME proof.
+      - name: Diagnose macOS horizontal canvas ribbon (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 8
+        continue-on-error: true
+        env:
+          MOTE_NATIVE_MAC_STAGE_TRACE: ${{ matrix.rid == 'osx-arm64' && '1' || '0' }}
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacHorizontalWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS horizontal canvas ribbon diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-horizontal-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/horizontal.json
+            .cache/ci-inventory/${{ matrix.rid }}/horizontal-stdout.txt
+            .cache/ci-inventory/${{ matrix.rid }}/horizontal-stderr.txt
+            .cache/horizontal-*/*.png
+            .cache/horizontal-*/metrics.txt
+            .cache/horizontal-*/last-stage.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Process-local DarkAqua/Aqua/DarkAqua callback and attributed-color
+      # probe in two separate published-Mach-O processes; not global OS theme.
+      - name: Diagnose macOS window-local live theme (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeThemeWorkflow-Mac.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS window-local live-theme diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-theme-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-theme-mac.json
+            .cache/ci-inventory/${{ matrix.rid }}/native-theme-*-stdout.txt
+            .cache/ci-inventory/${{ matrix.rid }}/native-theme-*-stderr.txt
+            .cache/native-theme-${{ matrix.rid }}-*/*.json
+            .cache/native-theme-${{ matrix.rid }}-*/*.png
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Read-only input-source/TCC inventory does not select an input method,
+      # type text, or establish that a real Chinese IME workflow works.
+      - name: Diagnose macOS Chinese input-source availability (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/MacRealImeSourceProbe/Run.ps1 `
+            -ReportPath ".cache/ci-inventory/$rid/mac-real-ime-source.json"
+      - name: Upload macOS Chinese input-source inventory
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-real-ime-source-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-real-ime-source.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Compile only: no binary is linked or run, no TIS source is selected or
+      # enabled. Manual disposable activation remains a separate blocked probe.
+      - name: Diagnose macOS activation helper SDK syntax only (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $report = ".cache/ci-inventory/$rid/mac-real-ime-activation-syntax.json"
+          New-Item -ItemType Directory -Force -Path (Split-Path $report) | Out-Null
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          # -framework is a link-only input and becomes an unused-argument
+          # error under -fsyntax-only -Werror; SDK headers need no link flags.
+          $output = & /usr/bin/clang -fobjc-arc -Wall -Wextra -Werror `
+            -fsyntax-only `
+            tests/MacRealImeActivationProbe/Activate.m 2>&1
+          $code = $LASTEXITCODE
+          [pscustomobject]@{
+            rid = $rid; scope = 'Objective-C SDK syntax only; no helper binary or TIS call'
+            status = if ($code -eq 0) { 'passed' } else { 'failed' }
+            clang_exit_code = $code; elapsed_ms = [math]::Round($clock.Elapsed.TotalMilliseconds, 1)
+          } | ConvertTo-Json | Set-Content -LiteralPath $report -Encoding utf8NoBOM
+          if ($code -ne 0) {
+            $output | ForEach-Object { Write-Host $_ }
+            throw 'Activation helper failed compile-only SDK syntax check.'
+          }
+      - name: Upload macOS activation syntax-only report
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-real-ime-activation-syntax-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-real-ime-activation-syntax.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Synthetic NSTextView marked text is committed and then cancelled under
+      # window-local appearance switches; neither path is a real CJK IME test.
+      - name: Diagnose macOS marked-text theme transition (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeCompositionThemeWorkflow-Mac.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid
+      - name: Upload macOS marked-text theme diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-composition-theme-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-composition-theme-mac.json
+            .cache/ci-inventory/${{ matrix.rid }}/native-composition-theme-*-stdout.txt
+            .cache/ci-inventory/${{ matrix.rid }}/native-composition-theme-*-stderr.txt
+            .cache/native-composition-theme-${{ matrix.rid }}-*/*.json
+            .cache/native-composition-theme-${{ matrix.rid }}-*/*.png
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Initial external keyboard/edit/save capability probe for the opt-in
+      # canvas. AX range movement is not a physical-paint or host-size oracle.
+      - name: Diagnose external macOS ARM canvas GUI workflow (non-gating)
+        if: always() && matrix.rid == 'osx-arm64'
+        shell: pwsh
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          & ./benchmarks/NativeCanvasGui/Measure-MacCanvasGui.ps1 `
+            -ExecutablePath 'src/Mote.Native/bin/Release/net10.0/osx-arm64/publish/mote'
+      - name: Upload external macOS ARM canvas GUI diagnostic
+        if: always() && matrix.rid == 'osx-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-canvas-gui-osx-arm64
+          path: |
+            .cache/benchmarks/native-canvas-gui-osx-arm64.jsonl
+            .temp/benchmarks/native-canvas-gui/**/*.applescript
+            .temp/benchmarks/native-canvas-gui/**/*.stdout.txt
+            .temp/benchmarks/native-canvas-gui/**/*.stderr.txt
+            .temp/benchmarks/native-canvas-gui/**/*-stdout.txt
+            .temp/benchmarks/native-canvas-gui/**/*-stderr.txt
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify external macOS keyboard edit-save-reopen workflow
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacExternalWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/mac-external-workflow.json"
+      # The ordinary product is now Canvas; legacy-page keeps its strict oracle.
+      # This new external source-AX + keyboard/disk check remains diagnostic.
+      - name: Diagnose ordinary macOS Continuous keyboard workflow (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacContinuousWorkflow.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -ReportPath ".cache/ci-inventory/$rid/native-continuous-mac.json"
+      - name: Upload ordinary macOS Continuous diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-continuous-mac-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-continuous-mac.json
+            .temp/mac-continuous-workflow/**/*.stdout.txt
+            .temp/mac-continuous-workflow/**/*.stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Target-host preview gestures are diagnostic until AX/Quartz behavior is
+      # independently observed on both Mach-O architectures. Four cases cover
+      # both editor profiles, pointer activation, Return, and Space.
+      - name: Diagnose macOS preview-to-source navigation (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 12
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $cases = @(
+            @{ name = 'continuous-pointer'; legacy = $false; pointer = $true; space = $false },
+            @{ name = 'continuous-enter'; legacy = $false; pointer = $false; space = $false },
+            @{ name = 'legacy-pointer'; legacy = $true; pointer = $true; space = $false },
+            @{ name = 'legacy-space'; legacy = $true; pointer = $false; space = $true }
+          )
+          $failed = @()
+          foreach ($case in $cases) {
+            try {
+              & ./tests/NativeMacPreviewNavigation.ps1 `
+                -ExecutablePath $exe `
+                -ReportPath ".cache/ci-inventory/$rid/mac-preview-navigation-$($case.name).json" `
+                -LegacyPage:$($case.legacy) -Pointer:$($case.pointer) -Space:$($case.space)
+            } catch {
+              $failed += $case.name
+              Write-Warning "Preview navigation $($case.name) failed: $_"
+            }
+          }
+          if ($failed.Count) { throw "Mac preview navigation cases failed: $($failed -join ', ')" }
+      - name: Upload macOS preview navigation diagnostics
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-preview-navigation-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-preview-navigation-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # Both published Mach-O RIDs pass the isolated Flow, global Block lifetime,
+      # and posted callback fault controls in CI 36836309613. Preserve this native
+      # ABI boundary as a gate; no input, clipboard, configuration or TCC mutation.
+      - name: Verify native macOS Flow and callback ABI
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/NativeMacFlowRendering.ps1 `
+            -Executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+      # In-memory settings only: the probe owns its AppKit window and document.
+      # It does not load user configuration or write files, clipboard, or TCC.
+      - name: Diagnose native macOS theme override reload (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-theme-overrides 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-theme-overrides-ready')) {
+            throw "AppKit theme override diagnostic failed (exit $code)."
+          }
+      # In-memory owner-only AppKit table; no file, clipboard, input-source,
+      # TCC, network, or external event mutation. The window affects only the
+      # disposable hosted runner's foreground state.
+      - name: Diagnose native macOS CSV Grid (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-csv-grid 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-csv-grid-ready')) {
+            throw "AppKit CSV Grid diagnostic failed (exit $code)."
+          }
+      # Opt-in selector/NSRange/retirement checks in an owned in-memory AppKit
+      # table. This is not external AX or VoiceOver acceptance, and it touches
+      # no user file, input source, pasteboard, TCC permission, or configuration.
+      - name: Diagnose native macOS CSV Grid AX selectors (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $source = 'src/Mote.Native/Mac/MacCsvGridAccessibilityProbe.cs'
+          $reviewed = '7F51D0A494BCC96E1831D866D55C8848D16372EAE2AD5B811743A6BCC1345D14'
+          if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -cne $reviewed) {
+            throw 'Mac Grid AX selector probe differs from reviewed bytes.'
+          }
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $env:MOTE_NATIVE_GRID_ACCESSIBILITY = '1'
+          try {
+            $output = & $exe --check-native-mac-csv-grid 2>&1
+            $code = $LASTEXITCODE
+          } finally {
+            Remove-Item Env:MOTE_NATIVE_GRID_ACCESSIBILITY -ErrorAction SilentlyContinue
+          }
+          $output | ForEach-Object { Write-Output $_ }
+          $markers = @('mote-native-mac-csv-grid-ready',
+            'Mac CSV Grid AX selector probe passed; external AX/VoiceOver/geometry gates remain untested.')
+          foreach ($marker in $markers) {
+            $count = @($output | Where-Object { [string]::Equals([string]$_, $marker, [StringComparison]::Ordinal) }).Count
+            if ($count -ne 1) { throw "AppKit Grid AX selector marker missing or duplicated (exit $code)." }
+          }
+          if ($code -ne 0) { throw "AppKit Grid AX selector diagnostic failed (exit $code)." }
+      # Exact-PID separate Swift AX client, not an in-process selector or a
+      # VoiceOver/IME acceptance. It owns only a synthetic file and process;
+      # absent AX trust or inaccessible context-menu navigation is not a pass.
+      - name: Diagnose external macOS CSV Grid AX (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/MacGridAxExternalProbe/Probe.swift'; hash = '18F016D8A6D0E11CC099D7D40BB7FDC72644FC525C5CB63F16F0A0C413149290' },
+            @{ path = 'tests/MacGridAxExternalProbe/Run.ps1'; hash = 'E058F67AF0E38E89DDA248862BBD2FA9DD4F2203CCD7AC0AF9E3669EB3E48777' },
+            @{ path = 'tests/MacGridAxExternalProbe/MenuTraceCapture.cs'; hash = '9715CDA6210599BAE94AB3C283A6A514715374758441AE265F44D5F3E6495265' }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if (-not [StringComparer]::Ordinal.Equals($actual, $pin.hash)) {
+              throw 'External Mac Grid AX probe differs from reviewed bytes.'
+            }
+          }
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $report = ".cache/ci-inventory/$rid/mac-grid-ax-external.json"
+          & ./tests/MacGridAxExternalProbe/Run.ps1 `
+            -ExecutablePath $exe -RuntimeIdentifier $rid -ReportPath $report
+          $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          $binary = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+          if (-not [StringComparer]::Ordinal.Equals($result.status, 'passed') -or
+              -not [StringComparer]::Ordinal.Equals($result.binary_sha256, $binary) -or
+              -not $result.editor_normal_exit -or -not $result.input_sha256_unchanged) {
+            throw 'External Mac Grid AX diagnostic did not pass; inspect the retained report.'
+          }
+          Write-Host 'External Mac CSV Grid AX subset passed; VoiceOver/IME/geometry/release gates remain untested.'
+      - name: Upload external macOS CSV Grid AX diagnostic
+        if: always() && startsWith(matrix.rid, 'osx-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-grid-ax-external-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-grid-ax-external.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Independent AppKit classes discriminate modern/legacy action dispatch;
+      # this never launches mote or interprets menu opening as AX success.
+      - name: Diagnose macOS Grid AX ShowMenu bridge (non-gating)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/MacGridAxActionContractProbe/Contract.m'; hashes = @('60ECD9D078DC997F98D3EB7D265C916C847D9FA15F2A909B0AA1A9C6B2EB046A', 'DD487E9465D70346E6E8D660345B00BB84A97FAD2D3DE09AFED707AA6E19C20F') },
+            @{ path = 'tests/MacGridAxActionContractProbe/Run.ps1'; hashes = @('D7038ABE0E2A9A26ADD39422F0B70168F59FDE7801497235DBF9D11B1B86F306', '2826735F126B5AE6B4DEAAC546532C6852A3E571E1A26EAF24D1796E056D7BCF') },
+            @{ path = 'tests/MacGridAxActionContractProbe/Test-Guards.ps1'; hashes = @('5776BFF7E3D7261762B316B592A28235BCDC0432A7A1EACEAEB247C04FF3843C', '0A5FD1E213259D14D3B0B2C485C056443CD4B2933988D2202801898D97B5378B') }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if ($actual -cnotin $pin.hashes) { throw 'Mac Grid action control differs from reviewed bytes.' }
+          }
+          & ./tests/MacGridAxActionContractProbe/Test-Guards.ps1
+          pwsh -NoProfile -File tests/MacGridAxActionContractProbe/Run.ps1 `
+            -RuntimeIdentifier $rid `
+            -ReportPath ".cache/ci-inventory/mac-grid-action-contract-$rid.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Mac Grid action control incomplete (exit $LASTEXITCODE); inspect the $rid report."
+          }
+      - name: Upload macOS Grid AX ShowMenu control
+        if: always() && startsWith(matrix.rid, 'osx-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-grid-action-contract-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/mac-grid-action-contract-${{ matrix.rid }}.json
+            .cache/mac-grid-action-contract/${{ matrix.rid }}/server.json
+            .cache/mac-grid-action-contract/${{ matrix.rid }}/client.json
+          if-no-files-found: warn
+          retention-days: 14
+      # One frozen external Objective-C client, fresh C0 then P0 targets. Raw
+      # AX replies are retained; experimental completion is never a product pass.
+      - name: Compare lean macOS Grid ShowMenu first pair (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rid = '${{ matrix.rid }}'
+          $pins = @(
+            @{ path = 'tests/MacGridShowMenuDiscriminator/Client.m'; hashes = @('F3A5790F9427C1BCC290633A31741FEA0B08E8F00767EC2AFC5D3C0BD67FC6C0', 'D3F2979058BBF2E2859F699FD6C25602EB478F8DD7779A4275AA76B16B053741') },
+            @{ path = 'tests/MacGridShowMenuDiscriminator/Control.m'; hashes = @('0BCE7C4678221B16140BF424E33761E17471E6C171331CC657D985B053BEE693', '82330DADF9F9978ADD71375846C7511542A6C43F57E1515ADA4F2F7610B75A80') },
+            @{ path = 'tests/MacGridShowMenuDiscriminator/Run.ps1'; hashes = @('EC842CF260BD91034B5D37DF79E4161D4C1A0B24AF204840B131E67F3B22C872', 'C71ABE2BEDCD6CA29840633140B1993DE7F79D0D61B9D086626F4436329F2776') },
+            @{ path = 'tests/MacGridShowMenuDiscriminator/Test-Guards.ps1'; hashes = @('0ACFE063FA1E8938DE9BBB5BA2C059186A8F3E7E78224A607158143AE0529B22', 'EDE02E6F70743390F2FFE0D1636AB8638ECB1F28C46988493453977CA16DA7E2') }
+          )
+          foreach ($pin in $pins) {
+            $actual = (Get-FileHash -LiteralPath $pin.path -Algorithm SHA256).Hash
+            if ($actual -cnotin $pin.hashes) { throw 'Grid ShowMenu pair differs from reviewed bytes.' }
+          }
+          & ./tests/MacGridShowMenuDiscriminator/Test-Guards.ps1
+          pwsh -NoProfile -File tests/MacGridShowMenuDiscriminator/Run.ps1 `
+            -ExecutablePath "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote" `
+            -RuntimeIdentifier $rid `
+            -ReportPath ".cache/ci-inventory/mac-grid-showmenu-pair-$rid.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Grid ShowMenu first pair unresolved; inspect fixed-vocabulary reports.' }
+      - name: Upload lean macOS Grid ShowMenu first pair
+        if: always() && startsWith(matrix.rid, 'osx-')
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-grid-showmenu-pair-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/mac-grid-showmenu-pair-${{ matrix.rid }}.json
+            .cache/mac-grid-showmenu-discriminator/**/${{ matrix.rid }}/compiler.log
+            .cache/mac-grid-showmenu-discriminator/**/${{ matrix.rid }}/C0/server.json
+            .cache/mac-grid-showmenu-discriminator/**/${{ matrix.rid }}/C0/client.json
+            .cache/mac-grid-showmenu-discriminator/**/${{ matrix.rid }}/P0/server.json
+            .cache/mac-grid-showmenu-discriminator/**/${{ matrix.rid }}/P0/client.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Two process-owned hidden NSScroller instances only; probe source bytes
+      # are independently reviewed and no clipboard or desktop input is used.
+      - name: Diagnose native macOS logical Grid scrollers (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $hash = (Get-FileHash src/Mote.Native/Mac/MacGridScrollerProbe.cs -Algorithm SHA256).Hash
+          $reviewed = @('E0E0CCDA60C1AC2DC144CE01CE65B420457F1B9BDDB85899225762AB9F5B2938', '63A3CFF32138CBA344D8A8CA91347B666AF37DB9FC9825ACB3527400EDCF97C5')
+          if ($hash -cnotin $reviewed) { throw 'Mac Grid scroller probe differs from reviewed bytes.' }
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-grid-scroller 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          $marker = 'mote-native-mac-grid-scroller-ready; native-action=synthetic; physical-input=not-tested; controller-stale-token=not-tested'
+          if ($code -ne 0 -or @($output | Where-Object { $_ -ceq $marker }).Count -ne 1) {
+            throw "AppKit logical Grid scroller diagnostic failed (exit $code)."
+          }
+      # Owned AppKit source probe for embedded NUL/literal-marker preservation.
+      # It edits only an unsaved in-memory document and touches no user state.
+      - name: Diagnose native macOS source NUL preservation (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-source-nul 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-source-nul-ready')) {
+            throw "AppKit source NUL diagnostic failed (exit $code)."
+          }
+      # Each mode uses its own disposable AppKit process and repo-local,
+      # content-free JSONL. A draw callback is not physical presentation.
+      - name: Diagnose native macOS legacy draw tracing (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-draw-trace legacy 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-draw-trace-ready mode=legacy; endpoint=source-draw-return; physical-presentation=not-tested')) {
+            throw "AppKit legacy draw trace diagnostic failed (exit $code)."
+          }
+      - name: Diagnose native macOS continuous draw tracing (non-gating)
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: pwsh
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/mote"
+          $output = & $exe --check-native-mac-draw-trace continuous 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($code -ne 0 -or -not ($output -contains 'mote-native-mac-draw-trace-ready mode=continuous; endpoint=source-draw-return; physical-presentation=not-tested')) {
+            throw "AppKit continuous draw trace diagnostic failed (exit $code)."
+          }
+      - name: Upload native macOS draw trace diagnostics
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-mac-draw-trace-${{ matrix.rid }}
+          path: .temp/mac-draw-trace/**/*.jsonl
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload external macOS workflow report
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-external-workflow-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/mac-external-workflow.json
+            .temp/mac-external-workflow/**
+          if-no-files-found: warn
+      - name: Upload failed GUI workflow fixtures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-gui-workflow-${{ matrix.rid }}
+          path: |
+            .temp/mac-native-*.txt
+            .temp/ci-smoke/canvas-*.txt
+            .temp/gui-workflow/**
+          if-no-files-found: ignore
+
+      # Fresh ordinary JSON source-backed processes on every native RID. This
+      # capability/phase pilot is not a tail SLA or compositor-paint observation.
+      # All edits are exact-PID HWND/Quartz transactions; no global input or TCC.
+      - name: Set up native-architecture Python for JSON acceptance pilot
+        id: json_acceptance_python
+        if: always()
+        uses: actions/setup-python@v6
+        continue-on-error: true
+        with:
+          python-version: '3.14'
+          architecture: ${{ contains(matrix.rid, 'arm64') && 'arm64' || 'x64' }}
+      - name: Diagnose ordinary Native AOT JSON 1 and 100 MiB source (non-gating)
+        if: always() && steps.json_acceptance_python.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 20
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          $argvGuard = 'benchmarks/NativeJsonLargeAcceptance/test_invocation.ps1'
+          $argvGuardHashes = @('8F88F1A8228E8B31DB511A694F0D7487E98FB0FE6BF0740A48C1FE2BFA6A5F17',
+            '3FF77AD3C8DA40FE781374138DE56F529D57B6E09549B71539F17408CDF3A64F')
+          if ($argvGuardHashes -cnotcontains (Get-FileHash -LiteralPath $argvGuard -Algorithm SHA256).Hash) {
+            throw 'JSON witness argv guard differs from reviewed LF/CRLF bytes.'
+          }
+          & ./benchmarks/NativeJsonLargeAcceptance/test_invocation.ps1
+          & python -m unittest discover -s benchmarks/NativeJsonLargeAcceptance -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Native JSON acceptance artifact/protocol tests failed.' }
+          # Original Mac child only: positive boundary observations never relax
+          # the one-key-pair, exact-byte/normal-exit/trace/reopen acceptance.
+          $witness = @()
+          if ($IsMacOS) { $witness = @('--mac-save-witness') }
+          & python benchmarks/NativeJsonLargeAcceptance/probe.py `
+            --executable "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name" `
+            --rid $rid --output ".cache/ci-inventory/$rid/native-json-large.json" @witness
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "Native JSON source pilot incomplete (exit $code); inspect fixed report classifications." }
+          $report = Get-Content ".cache/ci-inventory/$rid/native-json-large.json" -Raw | ConvertFrom-Json
+          if ($report.status -cne 'pass' -or $report.samples.Count -ne 2 -or
+              @($report.samples | Where-Object status -CNE 'pass').Count -ne 0) {
+            throw 'Native JSON source pilot did not pass its exact two-case coverage contract.'
+          }
+          if ($IsMacOS) {
+            Write-Host 'Mac JSON diagnostic-on sample passed exact Save acceptance; witness is not a reliability fix or performance sample.'
+          } else {
+            Write-Host 'Ordinary Native AOT JSON source pilot passed; physical paint, real IME and tail latency remain untested.'
+          }
+      - name: Upload ordinary Native AOT JSON pilot report and local traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-json-large-${{ matrix.rid }}
+          path: |
+            .cache/ci-inventory/${{ matrix.rid }}/native-json-large.json
+            .temp/native-json-large/**/traces/*.jsonl
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      # Synthetic positive-prefix recovery is infrastructure evidence only.
+      # Killing the owned child is expected in three cases, never a Save oracle.
+      - name: Diagnose Native AOT causal trace prefix recovery (non-gating)
+        if: always() && steps.json_acceptance_python.outcome == 'success'
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & dotnet publish tests/CausalTraceRecoveryProbe/CausalTraceRecoveryProbe.csproj `
+            --configuration Release --runtime $rid --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true `
+            --output ".cache/causal-recovery-probe/$rid" --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Causal recovery probe publish failed.' }
+          $name = if ($IsWindows) { 'CausalTraceRecoveryProbe.exe' } else { 'CausalTraceRecoveryProbe' }
+          & python -B tests/Invoke-CausalTraceRecovery.py `
+            --binary ".cache/causal-recovery-probe/$rid/$name" `
+            --output ".cache/causal-recovery-$rid"
+          if ($LASTEXITCODE -ne 0) { throw 'Causal recovery diagnostic failed; inspect typed case outcomes.' }
+      - name: Upload causal trace recovery evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: causal-trace-recovery-${{ matrix.rid }}
+          path: .cache/causal-recovery-${{ matrix.rid }}/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+      # This summary exposes nested failures masked by continue-on-error.
+      # It never changes any diagnostic into a release gate or copies payloads.
+      - name: Summarize actual native diagnostic evidence (non-gating)
+        if: always()
+        shell: pwsh
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          & python -B -m unittest discover -s tests -p test_summarize_ci_evidence.py
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic summary contract tests failed.' }
+          & python -B tests/summarize_ci_evidence.py --rid '${{ matrix.rid }}' `
+            --output '.cache/ci-inventory/${{ matrix.rid }}/evidence-summary.json' `
+            --step-summary $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic evidence summary failed.' }
+      - name: Upload actual native diagnostic evidence summary
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-evidence-summary-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/evidence-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Capture replacement-phase evidence on a disposable runner. Its positive
+  # held-share control and ordinary samples touch synthetic files only; a
+  # failure is diagnostic, not permission to weaken the strict release gates.
+  windows-save-diagnostic:
+    name: Windows Save replacement diagnostic / disposable x64
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Validate synthetic Save diagnostic contracts
+        shell: pwsh
+        timeout-minutes: 2
+        run: '& ./tests/Invoke-WindowsSaveDiagnostic.ps1 -SelfTest'
+      - name: Publish exact-source AOT and diagnose ordinary Save
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifestPath = (& ./tests/New-WindowsSaveDiagnosticPublish.ps1 | Select-Object -Last 1)
+          if ([string]::IsNullOrWhiteSpace($manifestPath)) {
+            throw 'Exact-source Save diagnostic publish produced no manifest.'
+          }
+          & ./tests/Invoke-WindowsSaveDiagnostic.ps1 `
+            -PublishManifest $manifestPath.Trim() -OrdinaryRuns 4
+      - name: Upload synthetic Save diagnostic evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-save-diagnostic-x64
+          path: |
+            .cache/windows-save-diagnostic/**
+            .cache/windows-save-diagnostic-publish/*/publish-manifest.json
+            .cache/windows-save-diagnostic-publish/*/publish.log
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7
+
+  # The Windows Grid clipboard check is isolated from the ordinary suite and
+  # runs on a fresh disposable GitHub-hosted runner with its own approval gate.
+  native-grid-clipboard:
+    name: Native CSV Grid clipboard / disposable Windows
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify actual native CSV Grid clipboard roundtrip
+        shell: pwsh
+        run: '& ./tests/Invoke-NativeCsvGridClipboardWorkflow.ps1'
+      - name: Upload native clipboard acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-grid-clipboard-windows
+          path: |
+            .cache/native-grid-clipboard/report.json
+            .cache/native-grid-clipboard/clipboard.trx
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+  # Each Mac Grid clipboard probe owns a fresh disposable runner. Mutation
+  # permission exists only in the reviewed native subprocess, never the job env.
+  native-mac-grid-clipboard:
+    name: Native CSV Grid clipboard / disposable ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify actual native Mac CSV Grid clipboard roundtrip
+        shell: pwsh
+        run: "& ./tests/Invoke-NativeMacCsvGridClipboardWorkflow.ps1 -RuntimeIdentifier '${{ matrix.rid }}'"
+      - name: Upload native Mac clipboard acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-mac-grid-clipboard-${{ matrix.rid }}
+          path: |
+            .cache/native-mac-grid-clipboard/report.json
+            .cache/native-mac-grid-clipboard/stdout.txt
+            .cache/native-mac-grid-clipboard/stderr.txt
+            .cache/native-mac-grid-clipboard/exit-code.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14

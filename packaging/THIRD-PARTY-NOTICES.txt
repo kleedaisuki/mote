@@ -1,0 +1,42 @@
+mote Native AOT release dependency notices
+=========================================
+
+mote itself is licensed under GPL-3.0; the complete license is in LICENSE.
+The release includes a source archive of the exact sourceCommit recorded in
+package-manifest.json. Build and packaging instructions are in that source.
+
+The Mote.Native project references the following production libraries through
+Mote.Formats and Mote.Configuration. The net10.0 dependency groups have no
+additional NuGet runtime dependencies. Analyzer/build-time code is not shipped
+as a runtime plugin. The Desktop/Avalonia prototype is not this release product;
+Avalonia, Skia, HarfBuzz and ANGLE are not bundled by this native release path.
+
+Markdig 1.3.2 — BSD-2-Clause, Alexandre Mutel
+Source: https://github.com/xoofx/markdig
+Pinned source: fc705234fa211d179ee1d5e7656b51ab99f70ca9
+Full original notice/license: packaging/licenses/Markdig.txt
+
+SharpYaml 3.13.1 — MIT, SharpYaml / Alexandre Mutel
+Source: https://github.com/xoofx/SharpYaml
+Pinned source: a620698385200f62fe8d343af90b5b16b0c12311
+Full original notice/license: packaging/licenses/SharpYaml.txt
+
+Tomlyn 2.10.1 — BSD-2-Clause, Alexandre Mutel
+Source: https://github.com/xoofx/Tomlyn
+Pinned source: 6cc82dd23a2c0aefb858f92a51c1b184e2812103
+Full original notice/license: packaging/licenses/Tomlyn.txt
+
+.NET Native AOT runtime — MIT and third-party notices
+Source: https://github.com/dotnet/runtime/tree/v10.0.11
+Release workflow pins SDK 10.0.400 (runtime 10.0.11); the actual SDK version
+is also recorded in every package manifest. A SDK/runtime upgrade requires
+updating these notices from the matching runtime source, not silently using
+the old notice inventory for a new runtime.
+Full original license: packaging/licenses/dotnet-runtime.txt
+Upstream runtime notice inventory: packaging/licenses/dotnet-runtime-notices.txt
+The upstream inventory is intentionally conservative: it does not assert that
+every listed optional .NET component is linked into mote's native executable.
+
+Windows system RichEdit/User32 and macOS system AppKit/CoreText are provided by
+the operating system, not redistributed as application payloads. No operating
+system DLLs, user fonts or input-method data are copied into this release.
