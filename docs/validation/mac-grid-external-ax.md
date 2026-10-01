@@ -336,3 +336,11 @@ interpreting them as acceptance, and preserve invalid-line, phase/result,
 16-row, overlong-line and real dual-pipe checks. This diagnostic extension
 changes neither AX actions nor semantic verdicts. Native permission facts
 remain pending the next target run, not inferred from portable capture tests.
+
+Actual two-RID execution in CI 36799464145 / `d7b2473` captures both appended
+permission fields as true at every recorded phase, including live will-open.
+Both targets expose the owned 12-item menu through the explicit Table relation,
+but the original AXShowMenu action assertion still fails. See
+[exact permissions and external verdict](mac-grid-table-proxy.md#live-selector-permission-discriminator-ci-36799464145).
+This rejects a live selector-permission-refusal explanation without claiming
+external action, navigation or close acceptance.

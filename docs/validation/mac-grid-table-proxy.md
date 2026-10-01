@@ -437,3 +437,58 @@ Artifacts/raw logs are under `.cache/ci-36797859586-mac-menu/`. Binary bytes/SHA
 menu transport are verified independently of the still-failing external action
 reply. A useful next investigation targets that acknowledgment boundary rather
 than a guessed wire-name difference, arbitrary label fallback or budget increase.
+
+## Live selector-permission discriminator: CI 36799464145
+
+[Run 36799464145](https://github.com/kleedaisuki/mote/actions/runs/36799464145)
+at `d7b2473` executes the unchanged native action and external assertion with
+additional fixed selector-permission trace facts. Both actual combined native
+probes print inner selector-success and outer readiness markers without a
+combined-step error (x64 job 110170316578; ARM job 110170316569). Swift typecheck
+passes on both. The external result remains failed / exit 1, 25 passed checks
+then **context-menu-accessible false**, original AX=-25205 attributeUnsupported.
+
+Both traces contain exactly show-enter, schedule-return(result=1), popup-begin
+and will-open. **Every recorded phase, including the live will-open callback,
+reports allowaction=1 and allowshown=1.** At will-open the attachment remains
+active, its window key, native tracking open and shown-menu state true;
+configured=1/items=12/coordinate=1. There are no did-close/popup-return rows.
+These are live main-thread owner facts, not a nil receiver, detached owner,
+off-main default or early initialization result. The physical Table not being
+first responder remains a separate observed fact, not a proven cause.
+
+| Read-only followup fact | x64 | ARM64 |
+| --- | --- | --- |
+| ShowMenu constant equality / advertised action | true / true | true / true |
+| Action names error / count | 0 / 1 | 0 / 1 |
+| Table shown-menu relation | owned AXMenu, error 0 | owned AXMenu, error 0 |
+| Relation children / exact coordinate-title count | 12 / 1 | 12 / 1 |
+| Application relation | -25205 | -25205 |
+| Single app-tree coordinate label/title matches | 0 / 0 | 0 / 0 |
+| Followup admissions | 700 | 849 |
+| Total admissions / client elapsed | 2,335 / 1.265s | 3,267 / 1.131s |
+
+The relation uses AXShownMenuUIElement for both constant/literal source labels,
+not independent wire keys. ARM's now-positive owned menu relation extends the
+previous x64 transport evidence and shows the preceding absent ARM snapshot
+was not an invariant inability to transport this relation. This does not prove
+its timing cause or supply an external action acknowledgment. The Table-pruned
+single general tree still misses the exact command that the explicit relation
+correctly exposes on both targets.
+
+**The live selector-permission refusal hypothesis is not supported:** both
+relevant selectors are allowed while the actual menu opens. A permissive
+selector override would not address a demonstrated refusal in this state and
+is not justified by these data. The external error's framework mechanism
+remains unresolved; neither a timeout nor a wire-key mismatch is established.
+
+The followup is read-only and preserves the original failed assertion; no menu
+press, prompt, logical jump, node retirement or normal close is exercised.
+Both input hashes remain unchanged and owned editor cleanup is forced. Those
+paths and screen-reader/IME/performance acceptance remain unclaimed.
+Artifacts/raw logs: `.cache/ci-36799464145-mac-menu/`. Binary bytes/SHA-256:
+
+- x64: 16,842,440;
+  `EF98590AA12322EF0CA1F8D000FE27308BEB59C77A29174C1C9C60CE6DED9305`.
+- ARM64: 16,505,608;
+  `0AA07F3FEA66377E28582462B11611CD561B47E565A434BFF5D909B364403F96`.
