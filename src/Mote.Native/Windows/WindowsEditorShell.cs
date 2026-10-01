@@ -23,7 +23,7 @@ namespace Mote.Native.Windows;
 /// No native library ships with mote: msftedit.dll and comdlg32.dll are Windows components.
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodingShell
+internal sealed partial class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodingShell, INativeSourceShell
 {
     /// <summary>One opt-in source draw interval; preview and status never complete it.</summary>
     private readonly NativeDrawTrace _sourceDrawTrace = new();
@@ -116,8 +116,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
     private NativeCanvasSemantics? _pendingCanvasSemantics;
 
     /// <summary>Creates the established editor or explicitly opts into the continuous canvas.</summary>
-    internal WindowsEditorShell(bool experimentalCanvas = false, bool uiaFragmentExperimental = false)
+    internal WindowsEditorShell(bool experimentalCanvas = false, bool uiaFragmentExperimental = false, bool nativeSource = false)
     {
+        if (nativeSource && experimentalCanvas) throw new ArgumentException("Native source and Canvas are exclusive.");
+        _nativeSource = nativeSource;
         if (uiaFragmentExperimental && !experimentalCanvas)
             throw new ArgumentException("UIA fragment diagnostics require the canvas shell.",
                 nameof(uiaFragmentExperimental));
@@ -362,7 +364,9 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
     public bool CommitPendingText()
     {
         if (_imeComposing) return false;
+        if (_nativeSource && !RecoverUnadmittedSource()) return false;
         if (_imeSettling && !FinishDefaultComposition()) return false;
+        if (_nativeSource && !ReadSourceCandidate()) return false;
         return _canvasIsland is null || _canvasIsland.FlushPendingText();
     }
 
@@ -445,6 +449,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
     /// <inheritdoc />
     public void SetDocument(NativeDocumentView view)
     {
+        if (_nativeSource) return; // Only the full-source capability may install source text.
         if (!_experimentalCanvas)
         {
             _sourceDrawTrace.ObserveDocument(view.Stamp.Generation, view.Stamp.Version);
@@ -546,7 +551,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
     public void SetAnalysis(NativeAnalysisView view)
     {
         ArgumentNullException.ThrowIfNull(view);
-        var currentStamp = _experimentalCanvas ? _canvasStamp : _document?.Stamp;
+        var currentStamp = _nativeSource ? _sourceInstallation?.Stamp : _experimentalCanvas ? _canvasStamp : _document?.Stamp;
         if (currentStamp is null || currentStamp.Value != view.Stamp) return;
         _analysis = view;
         if (IsTextComposing)
@@ -556,7 +561,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
         }
         _analysisPresentationDeferred = false;
         if (_window == 0) return;
-        if (!_experimentalCanvas) ScheduleStyle();
+        if (!_experimentalCanvas && !_nativeSource) ScheduleStyle();
         if (_showPreview != view.ShowPreview)
         {
             _showPreview = view.ShowPreview;
@@ -631,7 +636,8 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
             }
             _theme = theme;
             ApplyThemeSurfaces(theme, updateFonts, newEditorFont, newUiFont);
-            if (!_experimentalCanvas)
+            if (_nativeSource) ScheduleSourceStyle();
+            else if (!_experimentalCanvas)
             {
                 var analysisMatchesText = !_analysisPresentationDeferred &&
                     _analysis is not null && _document is not null &&
@@ -645,7 +651,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
                 }
                 else SetAllEditorColor(theme.Palette.EditorForeground);
             }
-            var activeStamp = _experimentalCanvas ? _canvasStamp : _document?.Stamp;
+            var activeStamp = _nativeSource ? _sourceInstallation?.Stamp : _experimentalCanvas ? _canvasStamp : _document?.Stamp;
             if (!_analysisPresentationDeferred && _analysis is not null &&
                 activeStamp == _analysis.Stamp)
                 InstallPreview(_analysis);
@@ -921,7 +927,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
     private void PublishDeferredAnalysis()
     {
         if (!_analysisPresentationDeferred || _analysis is not { } view) return;
-        var activeStamp = _experimentalCanvas ? _canvasStamp : _document?.Stamp;
+        var activeStamp = _nativeSource ? _sourceInstallation?.Stamp : _experimentalCanvas ? _canvasStamp : _document?.Stamp;
         if (activeStamp != view.Stamp)
         {
             _analysisPresentationDeferred = false;
@@ -981,6 +987,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
                 return Win32.DefWindowProcW(window, message, wParam, lParam);
             case Win32.WM_SIZE:
                 ResizeControls();
+                if (_nativeSource) PublishSourceView();
                 return 0;
             case Win32.WM_COMMAND:
                 if ((int)(wParam & 0xFFFF) == EditorId && (int)((wParam >> 16) & 0xFFFF) == Win32.EN_CHANGE)
@@ -1011,6 +1018,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
                     }
                 }
                 return 0;
+            case SourceCandidateMessage:
+                _sourceCandidatePostQueued = false;
+                if (!_imeComposing) { ReadSourceCandidate(); QueueSourceView(); }
+                return 0;
             case SelectionMessage:
                 _selectionPostQueued = false;
                 if (!IsTextComposing) FlushSelection();
@@ -1018,6 +1029,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
             case CompositionSettledMessage:
                 if (_imeComposing) return 0;
                 FinishDefaultComposition();
+                return 0;
+            case Win32.WM_TIMER when wParam == SourceStyleTimer:
+                Win32.KillTimer(_window, SourceStyleTimer);
+                ApplySourceStyleTurn();
                 return 0;
             case Win32.WM_TIMER when wParam == StyleTimerId:
                 Win32.KillTimer(_window, StyleTimerId);
@@ -1105,6 +1120,13 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
         }
         // RichEdit's default user-edit limit is much smaller than a viewport page.
         Win32.SendMessageW(_editor, Win32.EM_EXLIMITTEXT, 0, (nint)int.MaxValue);
+        if (_nativeSource)
+        {
+            ConfigureSourceHistory();
+            _sourceMapInstalled = false;
+            _sourceInputReadOnly = true;
+            Win32.SendMessageW(_editor, Win32.EM_SETREADONLY, 1, 0);
+        }
         Win32.SendMessageW(_editor, Win32.EM_SETEVENTMASK, 0,
             (nint)(Win32.ENM_CHANGE | Win32.ENM_SELCHANGE));
         if (!Win32.SetWindowSubclass(_editor, EditorSubclassProcedure, 1, 0))
@@ -1207,6 +1229,10 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
     private void HandleCommand(int id)
     {
         if (id == CopyId && _grid?.HasFocus == true) { _grid.Copy(); return; }
+        // Salvage only the actually focused unadmitted source replica. Grid and
+        // preview copy retain their established routing and identities.
+        if (_nativeSource && _sourceCandidateFailed && id == CopyId && SourceFocusedWindow() == _editor)
+        { Win32.SendMessageW(_editor, (int)Win32.WM_COPY, 0, 0); return; }
         if (id == CutId && _grid?.HasFocus == true)
         { SetStatusNotice("CSV table is read-only. Use Replace cell (F2) or edit source."); return; }
         if (id == CutId && (_sourceInputReadOnly || !_sourceMapInstalled || _canvasIsland?.IsInputReadOnly == true)) return;
@@ -1258,6 +1284,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
 
     private void OnTextChanged()
     {
+        if (_nativeSource) { QueueSourceCandidate(); return; }
         if (_sourceInputReadOnly)
         {
             // Only a previously certified read-only display can be restored.
@@ -1320,11 +1347,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
         if (!_imeSettling) return true;
         try
         {
-            OnTextChanged();
+            if (_nativeSource) { if (!ReadSourceCandidate()) return false; }
+            else OnTextChanged();
+            if (_nativeSource && _sourceCandidateFailed) return false;
             // Selection is still held until the final text callback succeeds.
             // FlushSelection itself must not be blocked by IsTextComposing.
             FlushSelection();
             _imeSettling = false;
+            if (_nativeSource) PublishSourceView();
             NotifyCompositionSettled();
             return true;
         }
@@ -1340,11 +1370,14 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
     {
         var shell = _active ?? _creating;
         if (shell is null) return Win32.DefSubclassProc(window, message, wParam, lParam);
+        if (shell._nativeSource && shell.InterceptSourceHistory(message, wParam)) return 0;
         if ((shell._sourceInputReadOnly || !shell._sourceMapInstalled) &&
             (message is Win32.WM_CHAR or Win32.WM_CUT or Win32.WM_PASTE or Win32.WM_CLEAR or Win32.WM_IME_STARTCOMPOSITION ||
              message == Win32.WM_KEYDOWN && wParam is 0x08 or 0x2E)) return 0;
         if (message == Win32.WM_COPY)
         {
+            if (shell._nativeSource && shell._sourceCandidateFailed)
+                return Win32.DefSubclassProc(window, message, wParam, lParam);
             shell.FlushSelection();
             shell.CopyRequested?.Invoke();
             return 0;
@@ -1381,6 +1414,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
             if (shell._window != 0)
                 Win32.PostMessageW(shell._window, CompositionSettledMessage, 0, 0);
         }
+        if (shell._nativeSource && message is 0x0114 or 0x0115 or 0x020A or 0x020E) shell.PublishSourceView();
         if (message == Win32.WM_NCDESTROY)
             Win32.RemoveWindowSubclass(window, EditorSubclassProcedure, subclassId);
         return result;
@@ -1446,6 +1480,7 @@ internal sealed class WindowsEditorShell : INativeCanvasShell, INativeOpenEncodi
 
     private void FlushSelection()
     {
+        if (_nativeSource) { _pendingSelection = false; PublishSourceView(); return; }
         if (!_sourceMapInstalled) { _pendingSelection = false; return; }
         if (!_pendingSelection) return;
         _pendingSelection = false;

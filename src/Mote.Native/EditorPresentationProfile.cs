@@ -10,7 +10,9 @@ internal enum EditorPresentationProfile
     /// <summary>Source-backed continuous canvas with one source accessibility document.</summary>
     Continuous,
     /// <summary>The established bounded native text page, retained as an explicit rollback.</summary>
-    LegacyPage
+    LegacyPage,
+    /// <summary>Explicit full-native source product candidate; never selected by document size.</summary>
+    NativeSource
 }
 
 /// <summary>
@@ -31,7 +33,7 @@ internal abstract record NativeLaunchRoute(string? Path, bool Smoke)
     internal bool UsesCanvas => this switch
     {
         Product { Profile: EditorPresentationProfile.Continuous } => true,
-        Product { Profile: EditorPresentationProfile.LegacyPage } => false,
+        Product { Profile: EditorPresentationProfile.LegacyPage or EditorPresentationProfile.NativeSource } => false,
         CanvasDiagnostic => true,
         _ => throw new InvalidOperationException("Unknown editor presentation.")
     };
@@ -43,7 +45,7 @@ internal abstract record NativeLaunchRoute(string? Path, bool Smoke)
     internal bool UsesWindowsSourceFragment => this switch
     {
         Product { Profile: EditorPresentationProfile.Continuous } => true,
-        Product { Profile: EditorPresentationProfile.LegacyPage } => false,
+        Product { Profile: EditorPresentationProfile.LegacyPage or EditorPresentationProfile.NativeSource } => false,
         CanvasDiagnostic diagnostic => diagnostic.FragmentRoot,
         _ => throw new InvalidOperationException("Unknown editor presentation.")
     };
@@ -63,8 +65,9 @@ internal static class NativeLaunchParser
         error = null;
         var index = 0;
         var legacy = args.Length > 0 && args[0] == "--legacy-page";
+        var source = args.Length > 0 && args[0] == "--native-source";
         var diagnostic = args.Length > 0 && args[0] == "--canvas-experimental";
-        if (legacy || diagnostic) index++;
+        if (legacy || source || diagnostic) index++;
         var fragment = diagnostic && index < args.Length &&
             args[index] == "--uia-fragment-experimental";
         if (fragment) index++;
@@ -75,7 +78,7 @@ internal static class NativeLaunchParser
             error = "The UIA fragment diagnostic requires Windows canvas mode.";
             return false;
         }
-        if (remaining.Contains("--legacy-page") || remaining.Contains("--canvas-experimental"))
+        if (remaining.Contains("--legacy-page") || remaining.Contains("--native-source") || remaining.Contains("--canvas-experimental"))
         {
             error = "Presentation modes cannot be combined.";
             return false;
@@ -92,7 +95,7 @@ internal static class NativeLaunchParser
             ? new NativeLaunchRoute.CanvasDiagnostic(fragment, path, smoke)
             : new NativeLaunchRoute.Product(legacy
                 ? EditorPresentationProfile.LegacyPage
-                : EditorPresentationProfile.Continuous, path, smoke);
+                : source ? EditorPresentationProfile.NativeSource : EditorPresentationProfile.Continuous, path, smoke);
         return true;
     }
 }
@@ -106,13 +109,15 @@ internal static class NativeShellFactory
         ArgumentNullException.ThrowIfNull(route);
         if (OperatingSystem.IsWindows())
             return new Windows.WindowsEditorShell(route.UsesCanvas,
-                route.UsesWindowsSourceFragment);
+                route.UsesWindowsSourceFragment,
+                route is NativeLaunchRoute.Product { Profile: EditorPresentationProfile.NativeSource });
         if (OperatingSystem.IsMacOS())
         {
             if (route.UsesWindowsSourceFragment && route is NativeLaunchRoute.CanvasDiagnostic)
                 throw new PlatformNotSupportedException(
                     "The UIA fragment diagnostic requires Windows canvas mode.");
-            return new Mac.MacEditorShell(route.UsesCanvas);
+            return new Mac.MacEditorShell(route.UsesCanvas,
+                route is NativeLaunchRoute.Product { Profile: EditorPresentationProfile.NativeSource });
         }
         throw new PlatformNotSupportedException(
             "mote's native desktop shell requires Windows or macOS.");

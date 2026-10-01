@@ -35,7 +35,7 @@ internal sealed partial class NativeEditorController
     /// <summary>Captures UI-owned interest before entering the serialized background session lane.</summary>
     private CsvGridRequest CreateGridRequest(TextSnapshot snapshot, AnalysisRequest request) =>
         new([request.VisibleRange], _gridAnchor ?? (CsvGridAnchor)new CsvGridAnchor.Source(
-            Math.Clamp(_navigation.Active, 0, snapshot.Length)), _gridRowLimit, _gridColumns, request.Scope);
+            Math.Clamp(SourceFollowOffset(), 0, snapshot.Length)), _gridRowLimit, _gridColumns, request.Scope);
 
     /// <summary>Rejects stale document and same-version native geometry before any source/clipboard action.</summary>
     private GridRenderProjection? CurrentGrid(NativePresentationId identity)

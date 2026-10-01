@@ -14,12 +14,12 @@ using Mote.Telemetry;
 namespace Mote.Native.Mac;
 
 /// <summary>
-/// macOS AppKit presentation shell for a single bounded document page.
+/// macOS AppKit shell for an established bounded page or an explicit whole-source product replica.
 /// NSTextView supplies native text input, selection, clipboard, accessibility, and IME;
 /// the controller remains the sole owner of text, undo history, and file operations.
 /// </summary>
 [SupportedOSPlatform("macos")]
-internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEncodingShell
+internal sealed unsafe partial class MacEditorShell : INativeCanvasShell, INativeOpenEncodingShell, INativeSourceShell
 {
     /// <summary>One source-only endpoint; preview and status draws never complete it.</summary>
     private readonly NativeDrawTrace _sourceDrawTrace = new();
@@ -112,6 +112,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
     /// <inheritdoc />
     public bool IsTextComposing => _experimentalCanvas
         ? _canvas?.HasPendingComposition == true
+        : _nativeSource ? _compositionDirty || HasSourceMarkedText
         : _editor != 0 && (_compositionDirty ||
             ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0);
 
@@ -152,8 +153,13 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
     }
 
     /// <summary>Constructs the established editor or an explicit, opt-in canvas editor.</summary>
-    internal MacEditorShell(bool experimentalCanvas = false) =>
+    internal MacEditorShell(bool experimentalCanvas = false, bool nativeSource = false)
+    {
+        if (experimentalCanvas && nativeSource)
+            throw new ArgumentException("Canvas and full native source are distinct window-lifetime profiles.");
         _experimentalCanvas = experimentalCanvas;
+        _nativeSource = nativeSource;
+    }
 
     /// <inheritdoc />
     public bool CanvasEnabled => _experimentalCanvas;
@@ -318,6 +324,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
             {
                 // The AX element retains AppKit view references. Tear it down
                 // on this UI thread before either native view or pool goes away.
+                RemoveSourceScrolling();
                 _inputMonitor?.Dispose();
                 _inputMonitor = null;
                 _accessibility?.Dispose();
@@ -338,6 +345,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
     /// <inheritdoc />
     public void SetDocument(NativeDocumentView view)
     {
+        if (_nativeSource) throw new InvalidOperationException("Use exact source installation, not a bounded page.");
         if (!_experimentalCanvas)
         {
             _sourceDrawTrace.ObserveDocument(view.Stamp.Generation, view.Stamp.Version);
@@ -427,6 +435,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         if (_experimentalCanvas)
             return _pendingCanvasBinding is { } binding && view.Stamp ==
                 new NativeDocumentStamp(binding.DocumentGeneration, binding.BaseVersion);
+        if (_nativeSource) return _sourceInstallation is { } installed && view.Stamp == installed.Stamp;
         return _pendingDocument is { } document && view.Stamp == document.Stamp;
     }
 
@@ -434,7 +443,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
     private void RestyleBaseText()
     {
         if (_editor == 0 || _preview == 0 || _theme is null) return;
-        if (!_experimentalCanvas)
+        if (_nativeSource) PublishSourceForeground();
+        else if (!_experimentalCanvas)
         {
             var length = checked((int)ObjC.Send(ObjC.Send(_editor,
                 ObjC.Sel("string")), ObjC.Sel("length")));
@@ -451,7 +461,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
     private void ApplyAnalysis(NativeAnalysisView view, bool updateFonts)
     {
         if (_editor == 0) return;
-        if (_experimentalCanvas)
+        if (_experimentalCanvas || _nativeSource)
         {
             SetPreview(view, updateFonts);
             if (!ReferenceEquals(_pendingAnalysis, view)) return;
@@ -902,14 +912,14 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         ObjC.ManagedString(ObjC.Send(_editor, ObjC.Sel("string")));
 
     /// <summary>Gets the most recent controller title projected into the native window.</summary>
-    internal string ProbeTitle => _experimentalCanvas ? _canvasTitle :
+    internal string ProbeTitle => _nativeSource ? _sourceTitle : _experimentalCanvas ? _canvasTitle :
         _pendingDocument?.Title ?? string.Empty;
 
     /// <summary>Gets whether the controller still considers the current native page dirty.</summary>
-    internal bool ProbeIsModified => _pendingDocument?.IsModified ?? false;
+    internal bool ProbeIsModified => _nativeSource ? _sourceModified : _pendingDocument?.IsModified ?? false;
 
     /// <summary>Gets the canonical page last sent by the controller, excluding marked preedit.</summary>
-    internal string ProbeProjectedText => _pendingDocument?.Text ?? string.Empty;
+    internal string ProbeProjectedText => _nativeSource ? _sourceInstallation?.Projection.Source ?? string.Empty : _pendingDocument?.Text ?? string.Empty;
 
     /// <summary>Current controller-applied policy for the isolated AppKit theme probe.</summary>
     internal string? ProbeThemeId => _theme?.Id;
@@ -918,7 +928,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
     internal NativeAnalysisView? ProbeAnalysis => _pendingAnalysis;
 
     /// <summary>Stamp of the currently projected source document.</summary>
-    internal NativeDocumentStamp? ProbeDocumentStamp => _pendingDocument?.Stamp;
+    internal NativeDocumentStamp? ProbeDocumentStamp => _nativeSource ? _sourceInstallation?.Stamp : _pendingDocument?.Stamp;
 
     /// <summary>Canvas source identity; canvas bindings do not create a default page view.</summary>
     internal NativeDocumentStamp? ProbeCanvasStamp => _pendingCanvasBinding is { } binding
@@ -1231,6 +1241,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         var previewScroll = CreateScrollView(new ObjC.Rect(730, 0, 390, 730), false, out _preview);
         _split = split;
         _editorScroll = editorScroll;
+        if (_nativeSource) ObserveSourceScrolling();
         _previewScroll = previewScroll;
         // A constant label distinguishes rendered output from the source AX
         // editor without exposing document contents or changing focus/input.
@@ -1248,6 +1259,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         ObjC.Send(_status, ObjC.Sel("setAutoresizingMask:"), (nint)2);
         ObjC.Send(root, ObjC.Sel("addSubview:"), _status);
         ObjC.Send(_editor, ObjC.Sel("setDelegate:"), _delegate);
+        if (_nativeSource) ObjC.Send(_editor, ObjC.Sel("setEditable:"), 0);
         ObjC.Send(_window, ObjC.Sel("makeFirstResponder:"), _editor);
     }
 
@@ -1344,7 +1356,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         // window background, not part of either text scroll view.
         ObjC.Send(_window, ObjC.Sel("setBackgroundColor:"), Color(palette.WindowBackground));
         ObjC.Send(_editor, ObjC.Sel("setBackgroundColor:"), Color(palette.EditorBackground));
-        ObjC.Send(_editor, ObjC.Sel("setTextColor:"), editorForeground);
+        if (!_nativeSource) ObjC.Send(_editor, ObjC.Sel("setTextColor:"), editorForeground);
         ObjC.Send(_editor, ObjC.Sel("setInsertionPointColor:"), Color(palette.Cursor));
         _csvGrid?.SetTheme(_theme!);
         ObjC.Send(_preview, ObjC.Sel("setBackgroundColor:"), Color(palette.PreviewBackground));
@@ -1359,6 +1371,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
             ObjC.Send(_editor, ObjC.Sel("setFont:"), editorFont);
             ObjC.Send(_preview, ObjC.Sel("setFont:"), editorFont);
         }
+        if (_nativeSource) PublishSourceForeground();
         SetStatus(_statusText);
     }
 
@@ -1649,6 +1662,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
 
     private void CommitComposition()
     {
+        if (_nativeSource) { CommitSourceComposition(); return; }
         if (!_compositionDirty || ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) != 0) return;
         _compositionDirty = false;
         _pendingNativeSelection = null;
@@ -1663,6 +1677,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
     /// <summary>Commits visible marked text before any command that can save or discard the document.</summary>
     private bool CommitMarkedTextBeforeCommand()
     {
+        if (_nativeSource && _sourceUnadmittedText) return RecoverUnadmittedSource();
         if (_editor == 0) return true;
         if (ObjC.Send(_editor, ObjC.Sel("hasMarkedText")) == 0 && !_compositionDirty)
             return true;
@@ -1724,6 +1739,9 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         Add(cls, "drawRect:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, ObjC.Rect, void>)&DrawEditorSource,
             "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+        Add(cls, "validateMenuItem:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, byte>)&SourceValidateMenuItem, "c@:@");
+        Add(cls, "undo:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SourceResponderUndo, "v@:@");
+        Add(cls, "redo:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SourceResponderRedo, "v@:@");
         ObjC.RegisterClassPair(cls);
         return EditorAppearanceClass;
     }
@@ -1815,6 +1833,8 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         var existing = ObjC.Class("NSObject");
         var cls = ObjC.AllocateClassPair(existing, className, 0);
         if (cls == 0) return className;
+        Add(cls, "moteSourceBoundsChanged:",
+            (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&SourceBoundsChanged, "v@:@");
         Add(cls, "textDidChange:", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&TextDidChange, "v@:@");
         Add(cls, "textViewDidChangeSelection:",
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&TextViewDidChangeSelection, "v@:@");
@@ -1891,6 +1911,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
             SendSuperDraw(ref superclass, selector, dirty);
             if (ticket != 0 && shell!._sourceDrawStamp == stamp && stamp is { } drawn)
                 shell._sourceDrawTrace.CompleteDraw(ticket, drawn.Generation, drawn.Version);
+            if (shell?._nativeSource == true && self == shell._editor) shell.QueueSourceView();
         }
         catch { /* Tracing and drawing callbacks must never unwind into AppKit. */ }
     }
@@ -1934,6 +1955,11 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
                 MacTextInputIsland.TraceStage("D2-text-did-change-returned");
                 return;
             }
+            if (shell._nativeSource)
+            {
+                shell.SourceTextDidChange();
+                return;
+            }
             // AppKit may announce caret collapse before textDidChange. Do not let
             // that transient page-local selection erase a global selection.
             shell._pendingNativeSelection = null;
@@ -1958,6 +1984,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         catch (Exception error)
         {
             if (shell._experimentalCanvas) shell._canvas?.DisableAfterFailure(error.Message);
+            else if (shell._nativeSource) shell.SetSourceUnavailable(error.Message, NativeSourceFailure.UnadmittedNativeText);
             else shell.ShowError(error.Message);
         }
     }
@@ -1977,6 +2004,12 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
                     ObjC.Send(shell._delegate, ObjC.Sel("performSelector:withObject:afterDelay:"),
                         ObjC.Sel("moteDeliverSelection:"), 0, 0d);
                 }
+                return;
+            }
+            if (shell._nativeSource)
+            {
+                shell._sourceSelectionWitness = null;
+                shell.QueueSourceView();
                 return;
             }
             shell._pendingNativeSelection = ObjC.SendRange(shell._editor, ObjC.Sel("selectedRange"));
@@ -2007,6 +2040,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
                 shell._canvas?.OnSelectionChanged();
                 return;
             }
+            if (shell._nativeSource) { shell.PublishSourceView(); return; }
             if (shell._pendingNativeSelection is not { } range) return;
             shell._pendingNativeSelection = null;
             if (shell._compositionDirty ||
@@ -2076,6 +2110,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         }
         if (command == ObjC.Sel("copy:"))
         {
+            if (shell.TryCopyUnadmittedSource(view, 0)) return 1;
             shell._canvas?.CancelUserSelectionGesture();
             shell.NotifyAfterComposition(shell.CopyRequested);
             return 1;
@@ -2280,6 +2315,7 @@ internal sealed unsafe class MacEditorShell : INativeCanvasShell, INativeOpenEnc
         if (shell?._gridShown == true && shell._csvGrid is { } grid &&
             ObjC.Send(shell._window, ObjC.Sel("firstResponder")) == grid.Table)
             grid.CopySelection();
+        else if (shell is not null && shell.TryCopyUnadmittedSource(shell._editor, sender)) return;
         else shell?.NotifyAfterComposition(shell.CopyRequested);
     }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

@@ -10,6 +10,46 @@ namespace Mote.Tests;
 /// </summary>
 public sealed class NativePresentationProfileTests
 {
+    /// <summary>The explicit full native product stays separate from default and diagnostic routing.</summary>
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData("note.txt", "note.txt", false)]
+    [InlineData("--smoke-gui", null, true)]
+    public void Native_source_flag_selects_only_full_native_product(string? argument, string? path, bool smoke)
+    {
+        var args = argument is null ? new[] { "--native-source" } : new[] { "--native-source", argument };
+        Assert.True(NativeLaunchParser.TryParse(args, out var route, out var error), error);
+        var product = Assert.IsType<NativeLaunchRoute.Product>(route);
+        Assert.Equal(EditorPresentationProfile.NativeSource, product.Profile);
+        Assert.Equal(path, product.Path);
+        Assert.Equal(smoke, product.Smoke);
+        Assert.False(product.UsesCanvas);
+        Assert.False(product.UsesWindowsSourceFragment);
+    }
+
+    /// <summary>All conflicting profile combinations refuse rather than reinterpret a flag as a path.</summary>
+    [Theory]
+    [InlineData("--native-source --legacy-page")]
+    [InlineData("--legacy-page --native-source")]
+    [InlineData("--native-source --canvas-experimental")]
+    [InlineData("--canvas-experimental --native-source")]
+    [InlineData("--native-source --uia-fragment-experimental")]
+    public void Native_source_conflicts_are_rejected(string command)
+    {
+        Assert.False(NativeLaunchParser.TryParse(command.Split(' '), out var route, out var error));
+        Assert.Null(route);
+        Assert.NotNull(error);
+    }
+
+    /// <summary>The explicit source factory creates no canvas and never starts a native event loop in this test.</summary>
+    [Fact]
+    public void Source_factory_selects_optional_source_capability()
+    {
+        var shell = NativeShellFactory.Create(new NativeLaunchRoute.Product(EditorPresentationProfile.NativeSource, null, false));
+        Assert.True(Assert.IsAssignableFrom<INativeSourceShell>(shell).NativeSourceEnabled);
+        Assert.False(Assert.IsAssignableFrom<INativeCanvasShell>(shell).CanvasEnabled);
+    }
+
     /// <summary>Ordinary launch, file launch, and GUI smoke use the continuous product.</summary>
     [Theory]
     [InlineData(null, null, false)]

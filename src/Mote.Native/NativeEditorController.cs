@@ -123,13 +123,17 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         bool? expectedCanvas = productProfile switch
         {
             EditorPresentationProfile.Continuous => true,
-            EditorPresentationProfile.LegacyPage => false,
+            EditorPresentationProfile.LegacyPage or EditorPresentationProfile.NativeSource => false,
             null => null,
             _ => throw new ArgumentOutOfRangeException(nameof(productProfile))
         };
         if (expectedCanvas is { } expected && expected != (_canvasShell is not null))
             throw new ArgumentException("The product profile and native shell disagree.",
                 nameof(productProfile));
+        _sourceShell = shell is INativeSourceShell { NativeSourceEnabled: true } source ? source : null;
+        if ((productProfile == EditorPresentationProfile.NativeSource) != (_sourceShell is not null) ||
+            _sourceShell is not null && _canvasShell is not null)
+            throw new ArgumentException("The product profile and source capability disagree.", nameof(productProfile));
         _productProfile = productProfile;
         _configuration = configuration;
         var startupComposition = ThemeComposer.Compose(theme, configuration.ThemeOverrides);
@@ -149,6 +153,12 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _sessionDriver = CreateSessionDriver(_policy);
         _idleFullAnalysis = CreateIdleFullAnalysis(_sessionDriver, _document, _policy);
         _document.ChangedRange += DocumentChanged;
+        if (_sourceShell is not null)
+        {
+            _sourceShell.SourceCandidate += SourceEdited;
+            _sourceShell.SourceViewChanged += SourceViewChanged;
+            _sourceShell.SourceRecoveryRequested += RecoverSource;
+        }
         shell.TextChanged += Edited;
         shell.SelectionChanged += SelectionChanged;
         shell.PreviewActivated += PreviewActivated;
@@ -209,6 +219,12 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _settingsReload.Dispose();
         if (_shell is INativeOpenEncodingShell encodingShell)
             encodingShell.OpenWithEncodingRequested -= OpenWithEncoding;
+        if (_sourceShell is not null)
+        {
+            _sourceShell.SourceCandidate -= SourceEdited;
+            _sourceShell.SourceViewChanged -= SourceViewChanged;
+            _sourceShell.SourceRecoveryRequested -= RecoverSource;
+        }
         _shell.ReloadSettingsRequested -= RequestSettingsReload;
         _shell.AppearanceChanged -= AppearanceChanged;
         _shell.CompositionSettled -= CompositionSettled;
@@ -675,6 +691,10 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _document = replacement;
         _document.ChangedRange += DocumentChanged;
         _navigation = new NativeNavigationModel();
+        _sourceBinding = null;
+        _sourceUnavailable = false;
+        _sourceFailure = NativeSourceFailure.CanonicalRetained;
+        _sourceViewportSequence = 0;
         ++_canvasGeneration;
         _canvasBoundGeneration = -1;
         _canvasBoundVersion = -1;
@@ -773,7 +793,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void Edited(string editedDisplay)
     {
-        if (_canvasShell is not null) return;
+        if (_canvasShell is not null || _sourceShell is not null) return;
         if (_projection is null) return;
         if (_projection.Difference(editedDisplay) is not { } change) return;
         var mark = MoteTelemetry.Mark();
@@ -936,6 +956,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void PreviousPage()
     {
+        if (_sourceShell is not null) return;
         if (!_shell.CommitPendingText()) return;
         if (_canvas is not null)
         {
@@ -954,6 +975,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void NextPage()
     {
+        if (_sourceShell is not null) return;
         if (!_shell.CommitPendingText()) return;
         if (_canvas is not null)
         {
@@ -973,6 +995,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void SelectionChanged(int displayAnchor, int displayActive)
     {
+        if (_sourceShell is not null) return;
         if (_canvasShell is not null) return;
         if (_projectingSelection || _projection is null) return;
         if ((uint)displayAnchor > (uint)_projection.Display.Length ||
@@ -1411,6 +1434,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void RevealSelection()
     {
+        if (_sourceShell is not null) { ProjectSourceSelection(reveal: true); return; }
         if (_canvas is { } canvas)
         {
             var frame = canvas.Frame();
@@ -1453,6 +1477,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void ProjectSelectionOrMoveToPage()
     {
+        if (_sourceShell is not null) { ProjectSourceSelection(reveal: false); return; }
         if (_canvas is not null) { ShowDocument(); return; }
         if (_projection is null) return;
         if (_navigation.Project(_pageStart, _projection) is null)
@@ -1469,6 +1494,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void ProjectSelection()
     {
+        if (_sourceShell is not null) { ProjectSourceSelection(reveal: false); return; }
         if (_canvas is not null) { ShowDocument(); return; }
         if (_projection is null) return;
         if (_navigation.Project(_pageStart, _projection) is not { } selection) return;
@@ -1487,6 +1513,12 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         var file = _document.FilePath is { } path ? Path.GetFileName(path) : "Untitled";
         var title = $"{file}{(_document.IsModified ? " •" : "")} — mote";
         UpdateStatusNotice(skipInitialEmpty: true);
+        if (_sourceShell is not null)
+        {
+            ShowSourceDocument(snapshot, title);
+            layout?.SetStatus(_sourceUnavailable ? TelemetryStatus.Failure : TelemetryStatus.Success);
+            return;
+        }
         if (_canvasShell is not null)
         {
             ShowCanvasDocument(snapshot, title);
@@ -1604,6 +1636,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
 
     private void ScheduleAnalysis(TelemetryMark editMark = default, bool gridViewport = false)
     {
+        PublishSourceSemantics(_document.Snapshot.Version, AnalysisCompleteness.Provisional,
+            new Mote.Formats.TextSpan(0, 0), [], []);
         var hadPreview = _presentedPreview is not null || _policy.Kind == DocumentKind.Csv && _gridFrame is not null;
         CancelAnalysis();
         _presentationMark = editMark;
@@ -1674,6 +1708,13 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                         full ? $"{policy.DisplayName} semantic analysis · v{snapshot.Version}"
                              : $"{policy.DisplayName} sample · partial",
                         new NativeDocumentStamp(_canvasGeneration, snapshot.Version), preview.Spans));
+                    PublishSourceSemantics(snapshot.Version,
+                        full ? AnalysisCompleteness.Complete : AnalysisCompleteness.Provisional,
+                        new Mote.Formats.TextSpan(full ? 0 : pageStart, full ? snapshot.Length : pageLength),
+                        full ? analysis.Tokens : analysis.Tokens.Select(t => t with
+                        { Span = new Mote.Formats.TextSpan(t.Span.Start + pageStart, t.Span.Length) }).ToArray(),
+                        full ? analysis.Diagnostics : analysis.Diagnostics.Select(d => d with
+                        { Span = new Mote.Formats.TextSpan(d.Span.Start + pageStart, d.Span.Length) }).ToArray());
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
                         dimensions: Dimensions(snapshot));
                     if (serial == _analysisSerial) FinishEditPresentation(TelemetryStatus.Success);
@@ -1782,6 +1823,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
                     PresentAnalysis(frame.View);
                     if (serial != _analysisSerial || cancellation.IsCancellationRequested) return;
                     _canvasShell?.SetCanvasSemantics(frame.Semantics);
+                    PublishSourceSemantics(result.Version, frame.Semantics.Completeness,
+                        result.Coverage, result.Tokens, result.Diagnostics);
                     if (serial != _analysisSerial || cancellation.IsCancellationRequested ||
                         !ReferenceEquals(_visibleSessionAnalysis, frame)) return;
                     MoteTelemetry.Record(TelemetryEvent.AnalysisPublished,
@@ -1914,6 +1957,7 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         _sessionDriver?.Record(change);
         _navigation.ApplyChange(change.Change, change.After);
         _canvas?.ApplyEdit(change.After, change.Change);
+        SourceDocumentChanged(change);
     }
 
     /// <summary>Creates one source-backed viewport sharing the controller's navigation state.</summary>
@@ -2038,6 +2082,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             result.Completeness, result.Coverage,
             VisibleSourceTokens(result.Tokens, pageStart, pageLength),
             VisibleSourceDiagnostics(result.Diagnostics, pageStart, pageLength)));
+        PublishSourceSemantics(result.Version, result.Completeness, result.Coverage,
+            result.Tokens, result.Diagnostics);
         if (!StillCurrent())
         {
             Discard();
@@ -2077,6 +2123,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
         if (!ReferenceEquals(_visibleSessionAnalysis, merged) || _disposed ||
             snapshot.Version != _document.Snapshot.Version) return true;
         _canvasShell?.SetCanvasSemantics(merged.Semantics);
+        PublishSourceSemantics(merged.Semantics.Version, merged.Semantics.Completeness,
+            merged.Semantics.Coverage, merged.Semantics.Tokens, merged.Semantics.Diagnostics);
         MoteTelemetry.Record(TelemetryEvent.AnalysisPublished, dimensions: Dimensions(snapshot));
         return true;
     }
@@ -2150,6 +2198,8 @@ internal sealed partial class NativeEditorController : IDisposable, IAccessibleV
             "", $"{policy.DisplayName} · analyzing", stamp));
         _canvasShell?.SetCanvasSemantics(new NativeCanvasSemantics(stamp.Version,
             AnalysisCompleteness.Provisional, new Mote.Formats.TextSpan(0, 0), [], []));
+        PublishSourceSemantics(stamp.Version, AnalysisCompleteness.Provisional,
+            new Mote.Formats.TextSpan(0, 0), [], []);
     }
 
     private static IReadOnlyList<SemanticToken> ProjectTokens(IReadOnlyList<SemanticToken> tokens,

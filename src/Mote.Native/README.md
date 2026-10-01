@@ -52,6 +52,84 @@ route's existing Windows workflow, not Continuous editing or another RID.
 
 ## Current behavior and explicit limits
 
+### Explicit full-native source product candidate
+
+`mote --native-source [path]` creates an actual product window with the existing
+menus, file/encoding commands and Flow/Block/Grid panes, but replaces the source
+surface with one full-resident RichEdit/NSTextView. It is not the standalone
+`--check-native-source-capability` reference and does not change ordinary launch,
+`--legacy-page`, or historical canvas diagnostics. Its profile is fixed for the
+window lifetime; file size never selects another representation.
+
+The engine owns canonical source, history and I/O. `NativeSourceBinding.Prepare`
+is pure; one accepted settled candidate enters the controller's existing
+`ApplyTraced` path. Generation/version/installation nonce and exact complete
+readback fence stale callbacks. Native history is disabled and native undo/redo
+selectors/messages route to engine commands. Engine Undo/Redo/Format/Grid changes
+publish guarded native **range** replacements; chrome, scroll and semantic
+refresh do not reinstall the complete source. Native layout is the only source
+caret/input/selection authority, with no hidden canvas or separate input ribbon.
+
+Canonical semantic sessions retain global completeness, coverage, diagnostics
+and preview maps. Only native **decoration** is restricted to actual visible
+interest. Windows currently observes a bounded 8,192-character native corner-hit
+interest, not a certificate that every visible character is decorated. macOS
+uses actual TextKit geometry without triggering backend conversion; unavailable
+fine-grained viewport geometry is explicitly pending, not a reason to discard
+otherwise exact canonical text. Attribute work is coalesced and bounded per UI
+turn. Same-version neutral publications revoke old-language/token colors, and
+installed viewport/theme/semantic identities prevent draw-triggered restyling
+loops. Physical screen presentation is not inferred from draw return.
+
+Ordered selection ranges are distinguished from actual active-endpoint witnesses.
+Unknown direction remains explicit; range Copy/Cut are exact, while CSV follow
+source uses the ordered range start rather than inventing an active caret.
+Actual marked text freezes admission and programmatic mutations; the final
+settling barrier admits one canonical edit before Save takes its snapshot.
+
+Embedded NUL and failed exact import/range publication enter a clear non-editable
+native state while retaining complete canonical text and history. A rejected
+uncommitted native candidate is distinct from an already committed engine version:
+it vetoes persistence/replacement until **explicit discard-native-input consent**
+and successful fresh canonical installation. Cancel retains the native view;
+consent never discards canonical dirty changes or history. Already committed
+canonical source remains available for a later explicit Save/recovery command.
+
+Opt-in local tracing adds fixed `native.source.install`, `readback`, `reconcile`,
+`range_publish`, and `style_publish` stages using existing content-free schema
+and real parent identities. Ordinary/LegacyPage paths do not emit these candidate
+stages. Their presence is not proof of input delivery, IME, screen readers,
+physical display or successful persistence.
+
+**Promotion remains unproved.** Full import/readback/projection still retain and
+copy whole source; few-MiB model/reference success does not certify 100-MiB
+capacity or long-line behavior. Real product launch/edit/history/selection/scroll/
+theme/Save/**new-process** reopen, actual composition/readers, native accessibility
+coordinate contracts and performance distributions require hosted qualification.
+See [the one-locus architecture](../../docs/architecture/ordinary-editing-locus.md)
+and the binding/platform validation documents for exact evidence boundaries.
+
+Portable correctness checkpoint (2026-10-02; uncommitted candidate):
+
+| Evidence | Exact scope |
+| --- | --- |
+| Frozen binding run | 34/34, including 1,000 independent deterministic native-display replacement seam checks; no OS calls. |
+| Coordinated build-5 / selected run-2 | 0 warnings/errors; 78/78: controller 20, Windows model 18, Mac model 10, telemetry 3, launch/profile 27. |
+| Build-6 / affected regression | 0 warnings/errors; 258/258: inherited controller 153, Save requests 25, Grid navigation 25, CSV controller 22, encoding controller 13, draw tracing 11, Save completion containment 4, preview navigation 4, new Mac salvage-Copy admission 1 (16 combinations). |
+| Final build-7 | 0 warnings/errors after Windows modal-reentry and source-focused Copy fixes; those native branches have compiler/static-review evidence, not executed native acceptance. |
+| Strict source trace vocabulary | 4/4 Python methods, including five names × four valid statuses, unknown-name/content/native-attribute rejection. |
+
+Do not sum the runs into a fabricated final-suite count or replace their frozen
+source provenance with the latest source hash. Logs/TRX remain under root
+`.temp/native-source-product-*`; scoped binding/controller/platform validation
+documents preserve commands, hashes, and negative boundaries. The independent
+[integration review](../../docs/reviews/native-source-product-integration-review.md)
+records corrected settlement, recovery, selection-consumption, style-cache and
+focus-routing defects. No local GUI, physical input, clipboard or platform setting
+was exercised. Benchmark/task/threshold reasonability is under independent review;
+this checkpoint authorizes no performance claim, tuning, default promotion, or
+new benchmark/CI dispatch.
+
 On this development branch, ordinary `mote [path]` uses the source-backed
 `Continuous` presentation and automatically enables the single-source Windows
 UIA fragment route; `mote --legacy-page [path]` retains the established native

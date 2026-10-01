@@ -337,3 +337,248 @@ one admitted transaction, one layout authority for each visible editing region**
 No additional geometry router, text-service framework, dynamic plugin layer,
 full-file specialization, or native text-store COM implementation is justified
 by the currently observed ordinary editing-locus problem.
+
+## 8. Product integration decision after the resident-reference experiment
+
+Integration assessment: 2026-10-02, inspected source
+`6827cd1a19142c9ad766d296c18d0770e600e79c`. This section advances the next
+**product implementation**, not a new disposable-window experiment and not a
+claim that ordinary launch is already ready to change. The reference in section
+5 actually reopens a **fresh engine Document in the same process**; it does not
+certify fresh-process reopen. Preserve that distinction in acceptance reports.
+
+### 8.1 What the completed hosted run proves, and rejects
+
+CI [36899695843](https://github.com/kleedaisuki/mote/actions/runs/36899695843)
+executed the exact frozen source above. The independently inspected artifacts
+are under `.cache/ci-36899695843-codec-source/`; `audit-result.json` indexes
+the four `native-codec-source-evidence-<rid>` reports. Each source probe exited
+normally with numeric zero, 301 report rows, 120 completed paired timed phases,
+three exact saved-byte comparisons and fresh-Document reopens, and a 121-row
+normally ended trace. Those are controlled-edit/reference correctness facts,
+not physical-input, IME, screen-reader or product-latency qualification.
+
+| Observed phase, milliseconds | win-x64 | win-arm64 | osx-x64 | osx-arm64 |
+| --- | ---: | ---: | ---: | ---: |
+| Dense JSON initial semantic publication | 7587.9403 | 5223.9037 | 480.7010 | 142.4718 |
+| Dense JSON post-edit semantic publication | 10256.3977 | 7796.1089 | 228.6858 | 80.9661 |
+| Novel initial native import | 4898.8882 | 3875.6692 | 5.9238 | 1.9959 |
+| Novel native import after Undo | 4667.2545 | 3818.7237 | 3.8722 | 2.1165 |
+| Novel native import after Redo | 4621.8596 | 3810.1724 | 3.9611 | 1.8053 |
+
+These are single retained phase observations on hosted machines, not comparable
+hardware-normalized platform rankings, distributions, or tail-latency SLAs.
+Detached Windows TOM ranges remove the previous selection-loop cost but leave
+seconds of synchronous dense attribute publication. Full import on each engine
+history transition repeats seconds of ordinary novel work on Windows. Therefore:
+
+1. **Integrate one real native source control into the existing product shell.**
+   Do not keep issuing independent capability probes instead of wiring commands,
+   composition, selection, preview navigation, and recovery to the actual engine.
+2. **Do not transplant the reference's full style pass or repeated full import
+   into the edit loop.** Publish visible attributes only and synchronize engine
+   mutations as ranges. The experiment's complete exact-readback path remains
+   the correctness fallback, with its O(n) cost observable.
+3. **Keep default promotion separate from implementation.** Windows resident
+   import already misses an instant-open experience on a representative file.
+   Range updates solve repeated history imports, not that first-import debt.
+   The remaining initial-import/layout mechanism needs attributed measurements
+   and a real improvement before promoting this representation as the default.
+
+### 8.2 One closed candidate profile, not a second editor application
+
+Add `EditorPresentationProfile.NativeSource` as an explicitly selected,
+window-lifetime product candidate. A proposed `--native-source` launch selects
+it for real interactive journeys through the existing command/controller path.
+This is an additive route pending root approval; do not silently reinterpret
+the existing parser or choose it by source size. Retain ordinary `Continuous`,
+`--legacy-page`, historical Canvas/UIA diagnostics and standalone probes exactly
+until the explicit default-promotion review. Unknown/mixed flags continue to
+receive the existing one-file/error handling; no workspace, project or server.
+
+`NativeShellFactory` passes the closed profile to `WindowsEditorShell` and
+`MacEditorShell`. In the candidate, the existing full-body RichEdit/NSTextView
+is the only source painter and input receiver. Do not construct a Canvas/input
+ribbon behind it or create another top-level probe window. Existing native
+menus, status, file choosers, encoding chooser, Flow/Block/Grid panes and focus
+ownership remain shell responsibilities. Native source scroll and selection use
+native layout; `CanvasFrame` cannot remain their geometry authority.
+
+Keep `NativeDocumentView` explicitly bounded. Its old events and methods retain
+LegacyPage behavior. Add one optional internal `INativeSourceShell` capability
+to `NativeShell.cs` (or a dedicated `NativeSourceContracts.cs`), so existing fake
+shells need not pretend to implement full source. Reject a profile/capability
+mismatch in the controller constructor, just as the Canvas mismatch is rejected
+today. Candidate native callbacks must not also emit bounded `TextChanged` or
+page-local `SelectionChanged` events.
+
+The minimum contract consists of these operations and facts, not a generalized
+view framework:
+
+| Contract seam | Semantics and owner |
+| --- | --- |
+| `NativeSourceInstallation` | Controller-owned immutable snapshot, generation/version, fresh installation nonce, whole-source projection, and global selection. Extent is explicitly `[0, snapshot.Length)`. |
+| `InstallSource` | UI-thread full initial import for New/Open/recovery; returns exact readback/certificate or unavailable. A partial import is never editable. |
+| `NativeSourceCandidate` event | Original stamp/nonce, final native display string and observed native selection. No engine mutation or file I/O inside the shell. Native callbacks emit only after composition is settled. |
+| `AcknowledgeSource` | Controller advances the certified binding after admission without replacing already matching native text. Duplicate/unchanged notification does not reinstall source. |
+| `ApplySourceChange` | Guarded engine-originated replacement described by the exact Before/After snapshots and `TextChangeRange`; suppresses edit echoes and certifies the resulting projection. |
+| Source selection/viewport events | Identity-bound actual native observations mapped to global source; viewport sequence is separate from document mutation version. Scroll never rewrites source or moves selection. |
+| `SetSourceSelection` / `RevealSource` | Explicit engine-command/navigation publication using that exact binding, not page rebinding or Canvas offsets. |
+| `SetSourceSemantics` | Version/policy/theme/viewport-bound absolute source tokens and diagnostics, with completeness and coverage retained; attribute-only visible publication. |
+| `SetSourceChrome` | Title/modified/status changes independently of source string installation. |
+
+The UI controller owns a production `NativeSourceBinding`: one immutable engine
+snapshot, one complete projection/certificate, one installation nonce, and
+canonical selection. Reuse the scalar-safe `NativeTextProjection.Difference`
+and the reference's exact import/map/admission tests. Do not just rename the
+diagnostic host into a product interface: it has no command/IME callbacks and
+its sorted-range contract explicitly does not certify selection direction.
+Nor should its `Reconcile(Document, ...)` bypass the controller's `ApplyTraced`
+and ordinary admission/telemetry path. Factor a pure candidate preparation
+operation and let the controller own the one `Document.Apply`.
+
+### 8.3 Edits, composition, history and persistence
+
+Implement this controller area in `NativeEditorController.Source.cs`, with small
+dispatches in the existing constructor, `ShowDocument`, `DocumentChanged`,
+selection/reveal methods and semantic publication. Do not independently rewrite
+Open, Save, format workers or policy/session machinery.
+
+1. **Native edit:** capture final readback against the installed binding. Validate
+   identity, exact projection and native boundaries; derive one source change;
+   call `ApplyTraced` once. Mark its synchronous `ChangedRange` notification as
+   already reflected natively, so it records policy invalidation/navigation
+   without applying the replacement a second time. Advance/acknowledge the
+   binding, preserve the native caret and viewport, invalidate find as today,
+   then schedule semantic work. An unchanged final string is no history entry.
+2. **Engine edit:** `DocumentChangedRangeEventArgs` already contains Before,
+   After and replacement extents, including Undo/Redo. Read inserted characters
+   only from `After.GetText(Start, InsertLength)`. Map replacement boundaries
+   through the installed projection and RichEdit paragraph map. Newline context
+   at replacement seams may require a minimally expanded boundary-safe native
+   replacement; certifying full readback is still allowed. Never infer display
+   length from source `InsertLength` when CRLF projection changes it.
+3. **Echo/reentrancy:** an explicit controller native-origin admission scope and
+   shell programmatic-mutation guard distinguish the two paths. Original stamp
+   plus nonce is checked again after native callbacks. Native failure after an
+   engine commit disables that source input and retains the committed document;
+   it does not roll history backward or silently discard the native edit.
+4. **Marked text:** UI-thread state is Ready, Composing, Settling, or Unavailable.
+   Freeze installed identity/baseline during native composition. No engine Apply,
+   attribute publication, typography change, range replacement or document swap
+   while marked text remains. Final settlement commits once; cancellation with
+   unchanged text commits zero times. Selection callbacks during provisional
+   input must not publish a committed-source position from the changed replica.
+5. **Commands:** reuse `CommitPendingText` and `CompositionSettled` for Save,
+   Save As, New/Open/Close, Undo/Redo, format, and modal navigation. The Save
+   request continues through `NativeEditorController.Save.cs`, preserving its
+   receipt, busy, picker reentrancy, external-change, encoding and recovery
+   behavior. A settlement veto saves nothing; an admitted settled change is in
+   the engine before Save takes its snapshot. Settings/theme use existing
+   deferred application, not force-commit to make colors update.
+6. **History:** native undo stays disabled. Route keyboard, main/context menu,
+   NSTextView responder `undo:`/`redo:`, RichEdit `EM_UNDO`/`EM_REDO` and supported
+   accessibility actions to engine history, rather than intercepting only the
+   existing toolbar shortcuts. New/Open may install anew; Undo/Redo/Format and
+   Grid replacement must not default to full-control import.
+7. **Selection:** copy/cut/search/Select All remain canonical engine operations
+   over the whole document. Preserve existing native selection if accepted text
+   already matches; do not collapse every edit to `Start + InsertText.Length`.
+   Ordered range alone is not an anchor/active direction certificate. Retain a
+   previously known endpoint only when the observation supports it; expose
+   unknown direction otherwise. A command requiring the active caret needs an
+   actual native endpoint witness, not the old Mac heuristic promoted to proof.
+   Distant Find/Go To/preview Reveal explicitly installs native global selection
+   and scrolls it into view without rewindowing to a page.
+
+Readback/map/diff and successor projection remain O(n) in this initial product
+candidate, particularly Windows `EN_CHANGE`. At most one baseline and one final
+candidate are retained; no asynchronous queue of complete strings. Do not guess
+all input deltas from keyboard/paste events. A later AppKit edited-range fast
+path must separately qualify character-versus-attribute edits and composition.
+
+### 8.4 Semantics and native geometry without full style stalls
+
+The format/session driver still analyzes the canonical snapshot using existing
+full/incremental/session contracts. **Restricting decoration to visible ranges
+does not restrict semantic truth to those ranges.** Keep global diagnostics,
+coverage, completeness, offscreen conflicts and Flow/Block/Grid source maps.
+Use actual source-view interest instead of legacy `_pageStart/_pageLength` as
+an accidental full-resident analysis interval. Do not set `PageSize` to document
+length or lift the existing formatting limit as a UI implementation shortcut.
+
+The shell obtains actual native visible character ranges, maps them to source,
+and requests versioned semantics with a small guard band. Style work intersects
+those ranges, coalesces adjacent equal effective colors, and retains the last
+installed viewport/palette identity. On an edit/theme change, invalidate stale
+visible attributes and apply current neutral/pending presentation until current
+results arrive; do not leave a known wrong token color certified as current.
+Offscreen attribute cache is revocable and never semantic authority. Scrolling
+publishes the new visible styles without reparsing the whole file just to color
+it. Long paragraphs must not silently expand visible styling to the complete
+logical line. Bound work per UI turn and coalesce superseded results, rather
+than issue tens of thousands of synchronous native attribute calls.
+
+Windows uses the already-qualified detached TOM foreground path but applies
+only intersected native ranges, preserving keyboard/selection/undo state. TOM
+[range GetPoint](https://learn.microsoft.com/en-us/windows/win32/api/tom/nf-tom-itextrange-getpoint)
+provides native endpoint geometry; its availability/return status must still be
+checked. On macOS use the observed actual TextKit backend's visible-layout
+range and glyph geometry; do not select TextKit 2 by assumption or trigger a
+legacy-manager conversion just to inspect it. Character ranges and glyph ranges
+are distinct, particularly for combining text/bidi. Existing platform shaping
+and TextKit sources in sections 4 and 7 remain the implementation foundation.
+
+Only the source native layout answers hit testing, caret bounds, visible ranges
+and accessible source geometry. Source AX/UIA must preserve established identity
+and canonical global ranges through the exact source/native map. Do not attach
+the existing Canvas geometry provider to the candidate or expose both a custom
+Document and a duplicate native source Document. Flow/Block/Grid remain distinct
+read-only semantic panes with their current identities and navigation. A native
+control's built-in reader support is useful production machinery, **not** proof
+that its CR-normalized ranges meet mote's source-backed external contract.
+
+### 8.5 Assignable implementation and acceptance sequence
+
+| Single-writer area | Concrete next delivery |
+| --- | --- |
+| Shared source contracts/binding and controller | Add optional capability, source state and candidate admission; implement engine range synchronization, global selection/reveal, chrome-only refresh and semantic-interest dispatch. Portable tests use a fake source shell and actual Document/history. |
+| `EditorPresentationProfile.cs`, launch tests and factory | Add explicit candidate route after API agreement; keep every existing launch valid and old diagnostic parsing unchanged. Profile fixed for window lifetime; no file-size switching. |
+| Windows shell/source helper | Full-body product RichEdit with existing menus/panes; composition and arbitrary native input ingress, exact maps, guarded range replacement, viewport TOM styling, native source draw trace and source identity. Reuse qualified algorithms, not probe-window lifetime. |
+| Mac shell/source helper | Product NSTextView with existing menu/responder/marked-text lifetime; guarded character replacement, attribute-only visible styling, selection observations, source geometry/AX and source draw trace. |
+| Accessibility integration | Source-backed ranges and one native source Document, real focus/Reveal and preserved semantic pane navigation. Coordinate shell geometry seam before attaching providers. |
+| Hosted acceptance | Real candidate launch, controlled and externally delivered edit, history/selection/scroll/theme, Save and **new process** exact reopen. Existing single-binary, capacity and LegacyPage/Continuous regressions remain independent checks. |
+
+First close portable admission invariants and interactive candidate engine
+integration, then actual four-RID commands/geometry/correct bytes, then real
+composition/readers and same-machine latency distributions. Retain the existing
+reference run as the counterfactual for full import and full style cost; do not
+rerun it solely because the new product route exists. Trace install, readback,
+reconciliation, engine admission, range publication, semantic publication and
+source draw through existing bounded local telemetry. Attribute failures to the
+actual phase; draw return is still not physical presentation. Include stale
+callback, dirty Open cancellation, style/Undo during marked text, encoding
+failure, external file modification, and recovery export journeys.
+
+The first product candidate is **not** an accepted 100-MiB representation. It
+preserves whole canonical text and exact Save, but duplicates resident source,
+uses full readback and inherits native layout/import limits. Measure existing
+long-line/capacity regressions before promotion; never truncate source, turn off
+semantics secretly, switch to LegacyPage by size or claim few-MiB success covers
+them. If range/viewport work cannot meet the full capacity contract, continue
+the A2 or genuinely single-layout text-service design from section 3 as a real
+implementation, not an indefinite promise that large files use the old ribbon.
+
+Embedded NUL is an explicit unsupported editable-import boundary of the current
+reference. Candidate Open must retain the existing dirty document if import
+cannot be certified, or retain an already opened canonical document with a clear
+non-editable failure/recovery state; no truncation or falsely editable partial
+text. An explicit user choice may open a separate established profile, never an
+automatic live swap. Default promotion additionally requires a reviewed exact
+representation for established NUL/capacity behavior, or an explicitly agreed
+product contract change; warning text alone does not make compatibility vanish.
+
+The promotion decision changes ordinary launch only after the one-locus product
+journey, input/selection/reader contracts, daily-file performance and inherited
+capacity are actually qualified. A safe explicit rollback profile remains
+available, but is not a substitute for completing the intended source surface.
