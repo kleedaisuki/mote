@@ -303,3 +303,54 @@ visibility). Keep the acceptance predicate unchanged until the metadata
 identifies whether its expectation or actual product contract is wrong; do not
 select the hidden legacy control or weaken the source requirement to make the
 palette check run. No product, harness or CI code was changed by this audit.
+
+## Content-free readiness discriminator (awaiting hosted observation)
+
+The next worker revision adds `readiness_observation` without weakening any
+acceptance criterion or changing the owner/registry implementation. Each polling
+attempt gets a fresh bounded metadata record; the final observed attempt remains
+in the phase JSON even if the compound predicate times out. No retry history or
+source/unknown identity string is accumulated.
+
+| Metadata | Meaning and scope |
+| --- | --- |
+| `attempt_count`, `elapsed_ms` | polling count and time sampled at attempt start, not render latency |
+| `canvas_initial_owner_verified`, `input_initial_owner_verified` | original target-owner guards passed before polling; **not current per-attempt ownership claims** |
+| `canvas_visible`, `input_visible` | native visibility read in this attempt; does not prove foreground, occlusion or physical presentation |
+| `provider_process_matches_target` | exact expected-process match; no foreign process identifier is serialized |
+| `automation_id_class` | only `not-read`, `expected-source`, `empty`, `other`; never an arbitrary ID |
+| `control_type`, `control_type_is_document` | standard UIA ControlType name/classification and the existing Document match |
+| `text_pattern_available` | true when the existing GetCurrentPattern call succeeds, false on its exception, null if not read |
+| `bounded_text_utf16_units` | length of one existing `GetText(256)` result, not the text |
+| `exact_synthetic_lf`, `exact_synthetic_crlf`, `exact_synthetic_cr` | exact fixture representation comparisons, not a relaxed acceptance rule |
+| `error_stage`, `error_hresult` | enumerated API-read stage and base exception HRESULT; provider exception messages are not serialized |
+
+Provider identity, pattern and document-value reads remain gated by matching the
+expected process. A wrong automation ID or non-Document type still prevents
+pattern/text reads. **Only the exact LF fixture is accepted**, with the original
+source identity, Document type and visible input/Canvas requirements. CRLF/CR
+booleans discriminate representation; they do not make those variants pass.
+
+Native visibility reads add facts before the short-circuited identity/text gates,
+without input or mutation. Initial-owner naming was chosen after independent
+review: the original owner checks run before polling, so assigning an unqualified
+`owned_by_target=true` on every attempt would overstate current HWND ownership.
+The new metadata does not imply a recheck, preserve an obsolete source value, or
+promote a prior observation to a new attempt.
+
+API exceptions still fail immediately rather than being retried. The error
+record retains only safe stage/HRESULT; the worker's outer report suppresses the
+potentially arbitrary provider exception message. Existing 15-second polling,
+50-ms interval, independent 30-second GUI-worker deadline, hosted-only guards,
+exact registry restoration, and absence of selection/theme notification before
+source readiness remain unchanged. No product or CI code is modified.
+
+The fresh portable command exits **0** with all previous readonly-HOME and
+`13 + 7` contracts plus **11** readiness cases: exact success, foreign PID,
+unknown/empty ID, wrong control type, CRLF, CR, wrong source text, invisible Canvas,
+invisible input, and unavailable TextPattern. Tests serialize each observation
+and reject raw synthetic/private source, foreign/unknown ID and exception-message
+sentinels; they verify correct length/newline booleans, no early pattern reads,
+structured error provenance, initial-only ownership names, fresh-attempt unknown
+fields, unchanged polling deadline and readiness-before-input/theme ordering.
+These are synthetic observer contracts, not newly observed native product results.

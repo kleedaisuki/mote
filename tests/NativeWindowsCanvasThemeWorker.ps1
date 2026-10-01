@@ -253,8 +253,67 @@ function Assert-SourceState($Pattern, $ExpectedRange, [string] $ExpectedText) {
     }
 }
 
+# Content-free metadata only; unknown automation IDs and source bytes never escape.
+# Initial-owner facts refer to the existing guards before polling, not a per-attempt recheck.
+function New-CanvasReadinessObservation([int] $Attempt, [long] $ElapsedMs) {
+    return [ordered]@{
+        attempt_count=$Attempt; elapsed_ms=$ElapsedMs
+        canvas_initial_owner_verified=$true; input_initial_owner_verified=$true
+        canvas_visible=$null; input_visible=$null
+        provider_process_matches_target=$null
+        automation_id_class='not-read'; control_type='not-read'; control_type_is_document=$null
+        text_pattern_available=$null; bounded_text_utf16_units=$null
+        exact_synthetic_lf=$null; exact_synthetic_crlf=$null; exact_synthetic_cr=$null
+        error_stage=$null; error_hresult=$null
+    }
+}
+
+# Reuses the original identity/exact-LF/visible-host predicate without input or retries.
+# Getter callbacks permit portable tests without invoking UIA or Win32.
+function Read-CanvasReadinessAttempt($Observation, [scriptblock] $ReadElement,
+    [scriptblock] $ReadVisibility, [int] $ExpectedPid, $DocumentType, $PatternId) {
+    try {
+        $Observation.error_stage='hwnd-visibility'
+        $visibility=& $ReadVisibility
+        $Observation.canvas_visible=[bool]$visibility.Canvas
+        $Observation.input_visible=[bool]$visibility.Input
+        $Observation.error_stage='provider-from-handle'
+        $script:sourceElement=& $ReadElement
+        $Observation.error_stage='provider-process'
+        $current=$script:sourceElement.Current
+        $Observation.provider_process_matches_target=$current.ProcessId -eq $ExpectedPid
+        if (-not $Observation.provider_process_matches_target) { $Observation.error_stage=$null; return $false }
+        # Never read foreign-provider identity, document value or pattern.
+        $Observation.error_stage='provider-identity'
+        $id=$current.AutomationId
+        $Observation.automation_id_class=if ($id -ceq 'mote.source.document') { 'expected-source' } elseif ([string]::IsNullOrEmpty($id)) { 'empty' } else { 'other' }
+        $type=$current.ControlType
+        $standardName=$type.ProgrammaticName
+        $Observation.control_type=if ($standardName -cmatch '^ControlType\.[A-Za-z]{1,32}$') { $standardName } else { 'other' }
+        $Observation.control_type_is_document=$type -eq $DocumentType
+        if ($id -cne 'mote.source.document' -or -not $Observation.control_type_is_document) { $Observation.error_stage=$null; return $false }
+        $Observation.error_stage='text-pattern'
+        $script:textPattern=$script:sourceElement.GetCurrentPattern($PatternId)
+        $Observation.text_pattern_available=$true
+        $Observation.error_stage='bounded-source-text'
+        $text=$script:textPattern.DocumentRange.GetText(256)
+        $Observation.bounded_text_utf16_units=$text.Length
+        $Observation.exact_synthetic_lf=$text -ceq "alpha`nbeta`n"
+        $Observation.exact_synthetic_crlf=$text -ceq "alpha`r`nbeta`r`n"
+        $Observation.exact_synthetic_cr=$text -ceq "alpha`rbeta`r"
+        $Observation.error_stage=$null
+        return $Observation.exact_synthetic_lf -and $Observation.input_visible -and $Observation.canvas_visible
+    }
+    catch {
+        if ($Observation.error_stage -ceq 'text-pattern') { $Observation.text_pattern_available=$false }
+        $Observation.error_hresult=('{0:X8}' -f [int]$_.Exception.GetBaseException().HResult)
+        throw # Preserve original immediate API failure behavior; do not retry.
+    }
+}
+
 $report = [ordered]@{
     status='failed'; stage=$Phase; cases=@(); launch_observation=$null; error=$null
+    readiness_observation=$null
     source_version_status='unverified-no-public-external-version-contract'
     draw_callback_status='not-observed'; physical_presentation_status='not-tested'
 }
@@ -276,15 +335,16 @@ try {
     $status = [MoteCanvasThemeProbeNative]::GetDlgItem($window, 103)
     [MoteCanvasThemeProbeNative]::AssertOwner($editor, [uint32]$TargetProcessId)
     [MoteCanvasThemeProbeNative]::AssertOwner($status, [uint32]$TargetProcessId)
+    $readinessTimer=[Diagnostics.Stopwatch]::StartNew()
+    $script:readinessAttempt=0
     Wait-Until {
-        $script:sourceElement = [System.Windows.Automation.AutomationElement]::FromHandle($canvas)
-        if ($script:sourceElement.Current.ProcessId -ne $TargetProcessId -or
-            $script:sourceElement.Current.AutomationId -cne 'mote.source.document' -or
-            $script:sourceElement.Current.ControlType -ne [System.Windows.Automation.ControlType]::Document) { return $false }
-        $script:textPattern = $script:sourceElement.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
-        return $script:textPattern.DocumentRange.GetText(256) -ceq "alpha`nbeta`n" -and
-            [MoteCanvasThemeProbeNative]::IsWindowVisible($editor) -and
-            [MoteCanvasThemeProbeNative]::IsWindowVisible($canvas)
+        $script:readinessAttempt++
+        $report.readiness_observation=New-CanvasReadinessObservation $script:readinessAttempt $readinessTimer.ElapsedMilliseconds
+        return Read-CanvasReadinessAttempt $report.readiness_observation {
+            [System.Windows.Automation.AutomationElement]::FromHandle($canvas)
+        } {
+            @{Canvas=[MoteCanvasThemeProbeNative]::IsWindowVisible($canvas); Input=[MoteCanvasThemeProbeNative]::IsWindowVisible($editor)}
+        } $TargetProcessId ([System.Windows.Automation.ControlType]::Document) ([System.Windows.Automation.TextPattern]::Pattern)
     } 'Ordinary Canvas did not expose target-owned source Document and visible input island.'
     $sourceText = $textPattern.DocumentRange.GetText(256)
     $sourceRange = $textPattern.DocumentRange.Clone()
@@ -358,7 +418,12 @@ try {
 
     $report.status = 'passed'
 }
-catch { $report.error = $_.Exception.GetType().Name + ': ' + $_.Exception.Message }
+catch {
+    if ($null -ne $report.readiness_observation -and $null -ne $report.readiness_observation.error_hresult) {
+        # A provider exception message may contain arbitrary data; serialize only safe provenance.
+        $report.error='Source readiness API failed at ' + $report.readiness_observation.error_stage + '; HRESULT=' + $report.readiness_observation.error_hresult
+    } else { $report.error = $_.Exception.GetType().Name + ': ' + $_.Exception.Message }
+}
 finally {
     $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding utf8NoBOM
     $process.Dispose()

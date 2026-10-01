@@ -47,12 +47,17 @@ $ownerText=$owner.Extent.Text; $guiText=$gui.Extent.Text
 foreach ($needle in @('Restore-ThemeRegistry','Invoke-RestoredThemeSession',"RUNNER_ENVIRONMENT -cne 'github-hosted'",'TimeoutMs = 30000', '$Worker.Kill($true)', 'OrdinalIgnoreCase', 'Assert-NoReparseAncestors', 'registry_restored=$true')) {
     if (-not $ownerText.Contains($needle)) { throw "Owner contract absent: $needle" }
 }
-foreach ($needle in @("::GetDlgItem(`$canvas, 301)","Current.AutomationId -cne 'mote.source.document'", "source_version_status='unverified-no-public-external-version-contract'", "draw_callback_status='not-observed'", "physical_presentation_status='not-tested'", 'uint color = GetPixel(dc, rect.Width - 16, 64);')) {
+foreach ($needle in @("::GetDlgItem(`$canvas, 301)",'$id -cne ''mote.source.document''', "source_version_status='unverified-no-public-external-version-contract'", "draw_callback_status='not-observed'", "physical_presentation_status='not-tested'", 'uint color = GetPixel(dc, rect.Width - 16, 64);')) {
     if (-not $guiText.Contains($needle)) { throw "Worker contract absent: $needle" }
 }
 if ($guiText -match 'Registry\]|RegistryValue|SetValue\(|CreateSubKey|Kill\(|Start-Process|0xFFFF(?![0-9A-Fa-f])' -or
     $ownerText.Contains('--legacy-page') -or $ownerText.Contains('--canvas-experimental') -or
     $ownerText.Contains('PrintWindow(') -or $ownerText.Contains('UIAutomationClient')) { throw 'Role separation failed.' }
+if (-not $guiText.Contains('[int] $TimeoutMs = 15000') -or
+    $guiText.IndexOf('return Read-CanvasReadinessAttempt') -gt $guiText.IndexOf('$sourceRange.Select()') -or
+    $guiText.IndexOf('return Read-CanvasReadinessAttempt') -gt $guiText.IndexOf('::NotifyAppearance($window)')) {
+ throw 'Readiness deadline or pre-input/pre-theme ordering changed.'
+}
 if ([regex]::Matches($guiText,'\$sourceRange\.Select\(\)').Count -ne 1 -or
     -not $guiText.Contains("if (`$Phase -ceq 'dark-before')")) { throw 'Exactly one source selection per session required.' }
 # Duck-typed registry stand-ins contain no operating-system calls.
@@ -172,4 +177,54 @@ foreach ($case in @(
     try { Assert-SourceState $pattern $expected "alpha`nbeta`n" } catch { $accepted=$false }
     if ($accepted -ne $case.Accept) { throw 'Source range case misclassified.' }
 }
-"PASS: owner/GUI AST and C# compile; role separation and readonly-HOME red/green setup; old finally red reproduction; $count restoration/cleanup/fidelity contracts; 7 source-range cases. No GUI/registry API executed."
+# Source-readiness metadata must reveal failed conjuncts, never source values/IDs/messages.
+foreach ($name in @('New-CanvasReadinessObservation','Read-CanvasReadinessAttempt')) {
+ $f=@($gui.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true))
+ if ($f.Count -ne 1) { throw 'Missing readiness metadata helper.' }
+ . ([scriptblock]::Create($f[0].Extent.Text))
+}
+$documentType=[pscustomobject]@{ProgrammaticName='ControlType.Document'}
+$editType=[pscustomobject]@{ProgrammaticName='ControlType.Edit'}
+$readinessCases=0
+foreach ($case in @(
+ @{Pid=77;Id='mote.source.document';Type=$documentType;Text="alpha`nbeta`n";Canvas=$true;Input=$true;Pattern=$true;Accept=$true;Class='expected-source';ReadText=$true},
+ @{Pid=78;Id='PRIVATE_FOREIGN_ID';Type=$documentType;Text='PRIVATE_FOREIGN_TEXT';Canvas=$true;Input=$true;Pattern=$true;Accept=$false;Class='not-read';ReadText=$false},
+ @{Pid=77;Id='PRIVATE_UNKNOWN_ID';Type=$documentType;Text='PRIVATE_UNKNOWN_TEXT';Canvas=$true;Input=$true;Pattern=$true;Accept=$false;Class='other';ReadText=$false},
+ @{Pid=77;Id='';Type=$documentType;Text='PRIVATE_EMPTYID_TEXT';Canvas=$true;Input=$true;Pattern=$true;Accept=$false;Class='empty';ReadText=$false},
+ @{Pid=77;Id='mote.source.document';Type=$editType;Text='PRIVATE_EDIT_TEXT';Canvas=$true;Input=$true;Pattern=$true;Accept=$false;Class='expected-source';ReadText=$false},
+ @{Pid=77;Id='mote.source.document';Type=$documentType;Text="alpha`r`nbeta`r`n";Canvas=$true;Input=$true;Pattern=$true;Accept=$false;Class='expected-source';ReadText=$true},
+ @{Pid=77;Id='mote.source.document';Type=$documentType;Text="alpha`rbeta`r";Canvas=$true;Input=$true;Pattern=$true;Accept=$false;Class='expected-source';ReadText=$true},
+ @{Pid=77;Id='mote.source.document';Type=$documentType;Text='PRIVATE_WRONG_TEXT';Canvas=$true;Input=$true;Pattern=$true;Accept=$false;Class='expected-source';ReadText=$true},
+ @{Pid=77;Id='mote.source.document';Type=$documentType;Text="alpha`nbeta`n";Canvas=$false;Input=$true;Pattern=$true;Accept=$false;Class='expected-source';ReadText=$true},
+ @{Pid=77;Id='mote.source.document';Type=$documentType;Text="alpha`nbeta`n";Canvas=$true;Input=$false;Pattern=$true;Accept=$false;Class='expected-source';ReadText=$true},
+ @{Pid=77;Id='mote.source.document';Type=$documentType;Text='PRIVATE_PATTERN_TEXT';Canvas=$true;Input=$true;Pattern=$false;Accept=$false;Class='expected-source';ReadText=$false}
+)) {
+ $range=[CanvasThemeSyntheticRange]::new();$range.Text=$case.Text
+ $pattern=[CanvasThemeSyntheticPattern]::new();$pattern.DocumentRange=$range
+ $element=[pscustomobject]@{Current=[pscustomobject]@{ProcessId=$case.Pid;AutomationId=$case.Id;ControlType=$case.Type};SyntheticPattern=$pattern;PatternAvailable=$case.Pattern;PatternCalls=0}
+ $element | Add-Member ScriptMethod GetCurrentPattern {
+  param($id)
+  $this.PatternCalls++
+  if (-not $this.PatternAvailable) { throw [InvalidOperationException]::new('PRIVATE_EXCEPTION_SOURCE') }
+  return $this.SyntheticPattern
+ }
+ $o=New-CanvasReadinessObservation 3 125
+ $accepted=$false;$threw=$false
+ try { $accepted=Read-CanvasReadinessAttempt $o { $element } { @{Canvas=$case.Canvas;Input=$case.Input} } 77 $documentType 'portable-pattern' }
+ catch { $threw=$true }
+ if ($accepted -ne $case.Accept -or $o.automation_id_class -cne $case.Class -or $o.attempt_count -ne 3 -or $o.elapsed_ms -ne 125) { throw 'Readiness acceptance/classification changed.' }
+ if (($null -ne $o.bounded_text_utf16_units) -ne $case.ReadText) { throw 'Readiness text gate changed.' }
+ if ($case.ReadText -and ($o.bounded_text_utf16_units -ne $case.Text.Length -or $o.exact_synthetic_lf -ne ($case.Text -ceq "alpha`nbeta`n") -or $o.exact_synthetic_crlf -ne ($case.Text -ceq "alpha`r`nbeta`r`n") -or $o.exact_synthetic_cr -ne ($case.Text -ceq "alpha`rbeta`r"))) { throw 'Readiness text metadata wrong.' }
+ if ($threw -ne (-not $case.Pattern) -or ($threw -and ($o.error_stage -cne 'text-pattern' -or $null -eq $o.error_hresult -or $o.text_pattern_available -ne $false))) { throw 'Readiness API error provenance wrong.' }
+ if ($o.canvas_initial_owner_verified -ne $true -or $o.input_initial_owner_verified -ne $true -or $o.Contains('canvas_owned_by_target') -or $o.canvas_visible -ne $case.Canvas -or $o.input_visible -ne $case.Input) { throw 'Visibility facts missing.' }
+ $json=$o | ConvertTo-Json -Compress
+ foreach ($secret in @('PRIVATE_',"alpha`nbeta`n","alpha`r`nbeta`r`n",'PRIVATE_EXCEPTION_SOURCE')) {
+  if ($json.Contains($secret) -or $json.Contains(($secret | ConvertTo-Json -Compress).Trim('"'))) { throw 'Source/foreign identity/exception data leaked.' }
+ }
+ if (-not $case.ReadText -and $case.Pattern -and $element.PatternCalls -ne 0) { throw 'Pattern read before accepted identity.' }
+ $readinessCases++
+}
+# Every attempt starts fresh: unknown facts must not survive the previous provider.
+$fresh=New-CanvasReadinessObservation 4 175
+if ($null -ne $fresh.exact_synthetic_lf -or $fresh.automation_id_class -cne 'not-read' -or $null -ne $fresh.text_pattern_available) { throw 'Attempt metadata retained stale facts.' }
+"PASS: owner/GUI AST and C# compile; role separation and readonly-HOME red/green setup; old finally red reproduction; $count restoration/cleanup/fidelity contracts; 7 source-range cases; $readinessCases content-free readiness cases. No GUI/registry API executed."
