@@ -196,3 +196,61 @@ readiness or every semantic feature. The release coordinator must inspect actual
 hosted current-version publications/captures rather than promote these byte
 checks into universal semantic/UX proof. Original failures and the screenshot
 boundary are retained; no production code was changed for either observer fix.
+
+## Ordinary default and final current semantic view
+
+After source `f2b2de7` passed all four explicit NativeSource AOT release-package
+jobs in run `36925090282`, the coordinator authorized a separately qualified
+ordinary default. Both Windows edit and fresh reopen now launch only the path;
+`--native-source` remains an explicit equivalent, and `--continuous` retains the
+old product for historical probes. Initial Find acknowledgment is stored as
+`find_expected`/`find_observed`; `last_observed_selection` separately describes
+later Go to Line, avoiding an apparent mismatch between unrelated stages.
+
+The final-view condition derives the version from the **actual successful
+`document.save` trace**, not a hardcoded command-count prediction. It requires
+same-version successful `analysis.parse`, `analysis.published` and
+`native.source.style_publish`, plus the actual native status naming the current
+policy and saved version. Markdown/TOML/JSON/YAML also require the actual rendered
+preview to contain the independently expected edited value. Plain text retains
+its source-only convention. This is an observation condition, not repeated
+editing or a larger watchdog.
+
+CSV adds exact native owner-data cell labels. `LVM_GETITEMW` is correctly
+custom-marshaled: only the started child PID and its descendant table are
+admitted; naturally aligned 64-bit `LVITEMW` and 512-byte UTF-16 text buffers are
+allocated in that process with VM-only access; structures are written and read
+with exact byte counts, and local/remote allocations and the process handle are
+released in `finally`. No client-local pointer is sent across processes. The
+observer bounds rows, columns and text rather than claiming arbitrary capacity.
+An independent .NET `TextFieldParser` parses the expected output; all nine
+actual callback labels must equal the three-record/three-field fixture.
+
+The complete integrated local command was:
+
+```powershell
+pwsh -NoProfile -File tests/NativeReleaseProductWorkflow.ps1 `
+  -ExecutablePath src/Mote.Native/bin/Release/net10.0/mote.exe `
+  -OutputDirectory .temp/windows-release-default-semantic-suite-1 `
+  -RuntimeIdentifier win-x64
+```
+
+Result: **all six bare-default tasks passed**, with independent exact bytes,
+protected originals, fresh GUI reopens, version-linked final-view sidecars,
+current native PNGs, five CLI cases and three configuration cases. The CSV
+current image has three actual resolved rows, replacing the former persistent
+pending placeholders; its native callback labels all match the independent
+expected values. The product correction is documented separately in
+[CSV readiness](release-product-csv-readiness.md), including its failed actual
+terminal-state reproduction and serialized-driver cancellation safety.
+
+This was a **managed** local integration run. Apphost SHA-256:
+`C9D2981190D22AE435ADB00FAD70991C188D085BA33432D7923FEAFE30AEE0F9`;
+managed `mote.dll` SHA-256:
+`8138E011E099642D38A778440D0FB2A33DB723D1B1492910B430B3B9BD8A5DE5`.
+Retained `release-acceptance.json` and per-format `native-product-semantics.json`
+identify its results; this is not a new AOT binary qualification. The ten-field
+Windows sidecar distinguishes native status/preview/callback and trace evidence
+from the richer in-process AppKit identity/coverage witness. Neither asserts
+physical pixels, real Pinyin, readers or full format conformance. The final bare
+default and semantic-capture changes still require four-RID hosted validation.

@@ -1,4 +1,5 @@
 using Mote.Native.Mac.Canvas;
+using Mote.Formats;
 
 namespace Mote.Native.Mac;
 
@@ -71,5 +72,17 @@ internal sealed unsafe partial class MacEditorShell
         var bytes = File.ReadAllBytes(path);
         if (bytes.Length < 8 || !bytes.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
             throw new IOException("AppKit product capture is not PNG.");
+    }
+
+    /// <summary>Observes final installed semantic/style/Grid identities without scheduling or changing native state.</summary>
+    internal MacReleaseSemanticEvidence? ProbeReleaseSemantics(DocumentKind kind)
+    {
+        var styleReady = _sourceInstalledStyle is { } style && _sourceInstallation is { } installed &&
+            style.Stamp == installed.Stamp && style.Nonce == installed.Nonce &&
+            style.Semantics == _sourceSemanticRevision && ReferenceEquals(style.Theme, _theme);
+        return !_sourceUnavailable && !IsTextComposing
+            ? MacReleaseSemanticModel.Observe(_sourceInstallation, _sourceSemantics, _pendingAnalysis,
+                styleReady, !_sourceGeometryUnknown, _csvGrid?.AccessibilityFrame, kind)
+            : null;
     }
 }

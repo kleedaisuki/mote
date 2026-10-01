@@ -56,16 +56,28 @@ Actual stage witnesses:
 5. Invoke product Go To Line with one injected line-1 answer. Verify `(0,0)`.
 6. Invoke Reload Settings. An in-memory diagnostic loader switches the existing
    theme policy from `mote-dark` to `mote-light`; source text must remain exact.
-   Cache the actual owned window content view into sibling `native-product.png`
-   using AppKit bitmap display caching. This contains the native source/chrome/
-   preview content (not the OS titlebar), requires no global screen capture or
-   Screen Recording permission, and certifies a view raster rather than physical
-   presentation. PNG signature and bounded view dimensions are checked.
 7. Stage `中` through `setMarkedText:selectedRange:replacementRange:`. Native
    text must contain the candidate while canonical text excludes it.
 8. Invoke actual Save As. Its command barrier must unmark/admit that candidate;
    saved canonical source equals the independent replacement, with no remaining
    marked input or dirty state.
+   Before any subsequent edit, wait under the unchanged watchdog for final
+   complete source semantics: exact installation stamp/nonce, complete `[0,
+   source-length)` coverage and the same current analysis presentation sequence.
+   Require the installed source palette's actual stamp/nonce/semantic revision/
+   theme and qualified geometry. For CSV, require the actual visible native Grid
+   accessibility frame's ready identity to match that analysis; navigation must
+   not be pending and every enumerated visible cell must be nonpending.
+   Then cache the actual owned window content view into sibling
+   `native-product.png` using AppKit bitmap display caching. The image now depicts
+   the final committed `中`, not the precommit prefix. It contains native source/
+   chrome/preview content (not the OS titlebar), requires no global screen capture
+   or Screen Recording permission, and certifies a view raster rather than
+   physical presentation. PNG signature and bounded view dimensions are checked.
+   Emit fixed-field `native-product-semantics.json` with generation, version,
+   installation nonce, presentation sequence, closed format kind, completeness,
+   UTF-16 coverage/length, token/diagnostic counts and actual visible Grid counts.
+   No source contents, values, filenames or exception messages enter this file.
 9. Stage a second marked candidate `弃` and invoke real window `performClose:`.
    A one-shot diagnostic Cancel answer must be consumed by actual controller
    discard confirmation. The window remains visible, and the committed candidate
@@ -133,6 +145,33 @@ portable guards only; hosted AOT workflow now exercises registered single-file
 callbacks for both rejected dirty replacement and admitted clean replacement.
 Actual Finder/Launch Services delivery and plural reply execution remain distinct
 from that controlled callback evidence.
+
+### Final edited semantic capture
+
+The probe now preserves the root's ordinary bare-path parser/factory composition,
+asserting the promoted NativeSource route rather than hardcoding a shell. Capture
+moved from the precommit theme stage to the post-Save final-semantic stage. It
+waits on actual state rather than adding an arbitrary delay, repeating edits or
+increasing the 40-second watchdog.
+
+Portable final-semantic guard tests reject stale version/nonce/analysis identity,
+wrong presentation sequence, provisional/incomplete coverage, unfinished style,
+unknown geometry, absent/stale CSV frames and pending cells. The combined suite
+passes **29/29, zero skipped or failed**, with rebuilt native/test projects and
+no compiler/analyzer warnings:
+`.temp/mac-release-guards/mac-release-semantic-guards-complete.trx`. Earlier
+iterations exposed invalid test projection fixtures (completeness/diagnostic-total
+pairing and invented pending-cell syntax origins); those were corrected to valid
+bounded fixtures without weakening the production evidence guards. Retained
+failed TRX files are not counted as native product failures.
+
+The sidecar uses a reflection-free fixed JSON writer for Native AOT. It does not
+claim CSV display values are all complete merely because they are nonpending:
+Complete/Clipped/Oversized/Missing remain distinguishable in the actual frame.
+The supplied small rectangular CSV task independently checks its expected
+three-row, three-column window and zero pending cells. Header is an ordinary
+record in this model. Actual hosted success is still required for the new
+post-edit capture/witness path; prior precommit screenshots do not establish it.
 
 No local AppKit runtime execution occurred. The new workflow must run on the
 actual hosted macOS AOT artifacts before it can supply release evidence. Even a

@@ -158,3 +158,110 @@ Source SHA-256 at this correction checkpoint:
 This source review does not relabel the failed hosted workflow as success.
 Local managed six-format success is not hosted Native AOT or release-default
 qualification. No tests/builds/GUI/full audit were rerun by this reviewer.
+
+## Ordinary default, CSV terminal readiness and final Mac capture review
+
+Checkpoint HEAD: `d77f53dfe6029a3c4544e57c0b2cc42834b44efb` (CSV correction
+committed during review); default/Mac/task-oracle changes reviewed in the
+working tree. Reused the earlier Grid driver/controller contracts,
+`release-product-csv-readiness.md`, release acceptance record and Mac validation.
+**No substantive defect established in this bounded correction scope.**
+
+### Default and compatibility
+
+Bare launch, a path and `--smoke-gui` now choose NativeSource; `--native-source`
+remains its explicit equivalent. `--continuous` preserves the earlier immutable
+window-lifetime product, and explicit LegacyPage/canvas/UIA diagnostics retain
+routing. Existing Continuous-specific external clients now pass that explicit
+flag instead of silently testing the new default with their old Canvas oracle.
+Windows release edit/reopen and configuration smoke remove the candidate flag.
+Mac tasks parse the ordinary path and use the production shell factory, rejecting
+an unexpected profile. Opt-in config smoke additionally requires successful
+native source install/readback trace evidence. The launch models test default
+and preserved routes; no file-size fallback or in-window presentation swap was
+introduced. Actual new-default hosted qualification remains necessary.
+
+### CSV delivery and lifetime
+
+The original small-file defect is retained with a failing native test: same-version
+Complete source analysis plus a ready three-row navigation map did not hydrate
+the first two native rows. The correction is not a screenshot delay or a false
+readiness label. Controller captures visible-row geometry on its UI turn; the
+immutable dispatcher Work transports it without background UI reads. Under the
+existing driver semaphore, only a Source-anchored request beyond the certified
+exact last viewport makes a second bounded Row query. That query uses the same
+snapshot/interests/scope/column and row limits, with an empty edit chain because
+the first query already applied the edits. Final baseline commits once.
+
+If the second query fails/cancels, the session and committed baseline are retired;
+next analysis rebuilds from the authoritative snapshot. No source text/Engine
+history changes occur. Existing geometry changes cancel the analysis serial and
+schedule the new interest, while UI delivery checks cancellation, serial,
+document/driver identity and version; a captured old page cannot publish as the
+new geometry. Source-follow mode is retained in the controller, not converted
+into a persistent detached Row anchor or UI retry loop.
+
+Independently read retained `csv-final-native-labels.trx`: **37 executed, 37
+passed, zero failures/not-executed**. Inspected the tests' actual HWND slot
+identities, all nine owner-data labels, item count, late-mailbox stability,
+subsequent source-follow return and deterministic second-query cancellation.
+This is local managed Windows evidence, not a new hosted AOT verdict.
+
+### Mac final current-version witness
+
+Post-Save capture now waits for actual current semantic/style/Grid facts rather
+than the earlier precommit theme stage. The model requires exact installation
+stamp/nonce, current analysis sequence, globally Complete full-source coverage,
+installed semantic/style identity and known geometry. CSV additionally requires
+current ready projection/frame and zero pending visible cells. Missing/Clipped/
+Oversized cells are not renamed Complete merely because they are nonpending.
+
+The reflection-free sidecar uses fixed content-free fields. Its separate Python
+oracle verifies expected format and independently computed source units, valid
+counts (including the supplied CSV task's three rows/three columns/nine cells),
+and links its version to a complete Save request plus successful current-version
+parse/publication/style operations. Nonce/sequence authority remains an admission
+model witness, not separately encoded trace attestation; comments state this.
+Capture is owned AppKit content, not physical screen/presentation certification.
+Independently read retained `mac-release-semantic-guards-complete.trx`: **29
+executed/passed, zero failures/not-executed**. Portable guards do not prove this
+new AppKit/AOT capture path has run successfully.
+
+Current docs say publication remains pending, do not promote earlier four-RID
+candidate passes to new-default/CSV qualification, and retain actual Pinyin,
+reader, pixel/performance and unsigned download limits. No 100-MB requirement
+or new latency SLO was added. No code/tests/build/native GUI/CI reruns were
+performed by this reviewer.
+
+Selected source hashes for this checkpoint:
+
+| File | SHA-256 |
+| --- | --- |
+| `src/Mote.Native/NativeFormatSessionDriver.cs` | `cc9b281b147c73ea4d8e34ca9ad917156c805194cd7fe2c38279eb16c20e254c` |
+| `src/Mote.Native/NativeAnalysisDispatcher.cs` | `f8ffc948fe34cb85ce11d03a4500993d3a1ecff8d95d2a48d6ad331079974d1d` |
+| `src/Mote.Native/EditorPresentationProfile.cs` | `a7fe7df37f8d40b876ea511a99f31a1d7d6accf2510d108396c1f6772c413fed` |
+| `src/Mote.Native/Mac/MacReleaseSemanticModel.cs` | `59e71472b13580d99f318d462aa6adc655a3ded4982dd7813d9945fc92cbf245` |
+
+### Windows final semantic/Grid observer addendum
+
+Reviewed the additional working Windows observer after the product owner froze
+Mac source. **No substantive defect found.** It now waits for the version from
+the successful instrumented Save, then observes successful parse/publication/
+style at that version and current native status/preview. CSV values are decoded
+independently with TextFieldParser and compared to all real owner-data labels;
+this is stronger than treating Complete status alone as table hydration proof.
+
+The cross-process LVITEMW observer checks target HWND PID ownership and 64-bit
+caller/coordinate bounds. It requests only VM_OPERATION/VM_READ/VM_WRITE, places
+both naturally aligned structure and text storage in the owned child, checks
+exact transfer lengths and a bounded NUL-terminated result, and frees local and
+remote allocation plus process handle in `finally`. The inspected product
+`WindowsCsvGrid.FillDisplay` copies into that provided buffer rather than changing
+its address. [Microsoft LVM_GETITEM](https://learn.microsoft.com/en-us/windows/win32/controls/lvm-getitem)
+and [LVITEMW](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/ns-commctrl-lvitemw)
+were checked independently. No thread/code injection or desktop-global input
+was introduced. Polling repeats observations, not edits or Save commands.
+
+Successful new-default local managed tasks and portable guard tests are not
+relabeled as hosted AOT. The final hosted source/package/visual evidence still
+belongs to the release coordinator. Review ready for the next freeze.

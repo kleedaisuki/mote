@@ -40,9 +40,14 @@ Cancel; its PNG caches the real AppKit content view, not the physical display.
 See `docs/validation/release-product-*.md` for scope and retained evidence.
 
 `mote --version` reports the product assembly version. Unknown options fail before
-opening a GUI; use `mote -- <path>` for an option-looking filename. `--native-source`
-selects the full native product candidate during qualification; promotion to the
-ordinary launch default requires all supported architecture release gates.
+opening a GUI; use `mote -- <path>` for an option-looking filename. Ordinary
+`mote [path]` selects the full native source; `--native-source` is an explicit
+equivalent. `--continuous` retains the previous Continuous canvas product and
+`--legacy-page` the bounded page. A profile remains fixed for the window lifetime.
+The explicit source candidate passed all four architecture package gates in
+[run 36925090282](https://github.com/kleedaisuki/mote/actions/runs/36925090282),
+source `f2b2de7`. The changed bare-default entry and later corrections require
+their own hosted qualification before release; this is not a publication notice.
 
 ```
 dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r win-x64 --self-contained true -o .cache/native-publish/win-x64
@@ -78,13 +83,13 @@ route's existing Windows workflow, not Continuous editing or another RID.
 
 ## Current behavior and explicit limits
 
-### Explicit full-native source product candidate
+### Full-native ordinary source product
 
-`mote --native-source [path]` creates an actual product window with the existing
+`mote [path]` (or explicit `--native-source`) creates an actual product window with the existing
 menus, file/encoding commands and Flow/Block/Grid panes, but replaces the source
 surface with one full-resident RichEdit/NSTextView. It is not the standalone
-`--check-native-source-capability` reference and does not change ordinary launch,
-`--legacy-page`, or historical canvas diagnostics. Its profile is fixed for the
+`--check-native-source-capability` reference. `--continuous`, `--legacy-page`,
+and historical canvas diagnostics retain their separate profiles. Its profile is fixed for the
 window lifetime; file size never selects another representation.
 
 The engine owns canonical source, history and I/O. `NativeSourceBinding.Prepare`
@@ -123,19 +128,20 @@ canonical source remains available for a later explicit Save/recovery command.
 
 Opt-in local tracing adds fixed `native.source.install`, `readback`, `reconcile`,
 `range_publish`, and `style_publish` stages using existing content-free schema
-and real parent identities. Ordinary/LegacyPage paths do not emit these candidate
+and real parent identities. Continuous/LegacyPage paths do not emit these source
 stages. Their presence is not proof of input delivery, IME, screen readers,
 physical display or successful persistence.
 
-**Promotion remains unproved.** Full import/readback/projection still retain and
+**Evidence is scoped to ordinary release tasks.** Full import/readback/projection still retain and
 copy whole source; few-MiB model/reference success does not certify 100-MiB
-capacity or long-line behavior. Real product launch/edit/history/selection/scroll/
-theme/Save/**new-process** reopen, actual composition/readers, native accessibility
-coordinate contracts and performance distributions require hosted qualification.
+capacity or long-line behavior. The explicit source route's six-format
+edit/history/Save/**new-process** reopen has four-RID hosted evidence. The changed
+bare default must be qualified again; actual Pinyin/readers, native accessibility
+coordinate contracts and performance distributions remain separate limitations.
 See [the one-locus architecture](../../docs/architecture/ordinary-editing-locus.md)
 and the binding/platform validation documents for exact evidence boundaries.
 
-Portable correctness checkpoint (2026-10-02; uncommitted candidate):
+Historical portable correctness checkpoint (2026-10-02; before release qualification):
 
 | Evidence | Exact scope |
 | --- | --- |
@@ -152,18 +158,18 @@ documents preserve commands, hashes, and negative boundaries. The independent
 [integration review](../../docs/reviews/native-source-product-integration-review.md)
 records corrected settlement, recovery, selection-consumption, style-cache and
 focus-routing defects. No local GUI, physical input, clipboard or platform setting
-was exercised. Benchmark/task/threshold reasonability is under independent review;
-this checkpoint authorizes no performance claim, tuning, default promotion, or
-new benchmark/CI dispatch.
+was exercised in that historical checkpoint. The independent standards audit
+and later release validation are separate records; the old results must not be
+relabeled as proof of the release default or a performance claim.
 
-On this development branch, ordinary `mote [path]` uses the source-backed
+The retained `mote --continuous [path]` uses the source-backed
 `Continuous` presentation and automatically enables the single-source Windows
 UIA fragment route; `mote --legacy-page [path]` retains the established native
 text-page workflow as an explicit rollback. Presentation is fixed for the
 window lifetime. The historical `--canvas-experimental` and optional
 `--uia-fragment-experimental` invocations remain diagnostic A/B routes, not
-alternative product configuration. **This wiring is under validation, not a
-release-readiness claim:** real IME, reader, four-RID editing and measured
+alternative product configuration. **This retained wiring is under validation,
+not qualification of the full-native release:** real IME, reader and measured
 input-to-screen gates in [the migration design](../../docs/virtual-editor-design.md)
 remain conjunctive. If the source accessibility provider cannot attach or
 later detaches, editing keeps the canonical document; the persistent status
@@ -212,7 +218,7 @@ Preview labeling, reader speech and focus behavior remain separate gates.
   background CPU cost remain release gates.
 - A separate `Viewport/` model represents continuous source-backed scrolling
   and bounded visible slices without a per-line object graph. The development
-  branch's ordinary route now composes this with a visible, bounded OS input
+  `--continuous` route composes this with a visible, bounded OS input
   ribbon and one source-backed accessibility document. The older
   `--canvas-experimental [path]` route remains an evolving A/B diagnostic, not
   a parity claim. Read-only DirectWrite and
@@ -244,7 +250,7 @@ Preview labeling, reader speech and focus behavior remain separate gates.
   This opt-in does not change the source editor provider or establish reader,
   real IME or cross-platform release acceptance. See the
   [implementation/evidence ledger](../../docs/csv-grid-accessibility-implementation.md).
-- Ordinary Continuous plain text defaults to full-width source by the format
+- Ordinary native-source and explicit Continuous plain text default to full-width source by the format
   presentation convention; `[editor] preview = "split"` explicitly retains its
   bounded preview, while `"source"` hides it for any format. `"auto"` is the
   default and preserves historical split behavior under `--legacy-page`.
@@ -275,8 +281,8 @@ The legacy contiguous analysis/preview bridge is separately capped to 64 Ki,
 even if two visible slices lie across a huge source gap. Thus a later visible
 slice may lack semantic overlay until a multi-range analysis path exists.
 
-The ordinary-path profile wiring is a product experiment, not a default-switch
-release gate pass.
+The earlier ordinary-path Continuous profile wiring was a product experiment,
+not evidence for the full-native release default. Use `--continuous` to retain it.
 The experimental Windows and macOS adapters are designed to route exact
 plain-text clipboard payloads larger than the input host directly to the
 controller as one global transaction; rich clipboard formatting is never

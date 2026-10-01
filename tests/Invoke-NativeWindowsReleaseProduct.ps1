@@ -47,7 +47,15 @@ public static class MoteReleaseWin32 {
     public delegate bool EnumProc(IntPtr window, IntPtr data);
     [StructLayout(LayoutKind.Sequential)] public struct Range { public int Start, End; }
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+    // LVITEMW uses the platform's natural pointer alignment (x64/ARM64 are both
+    // 64-bit here). Text points into memory allocated in the owned child.
+    [StructLayout(LayoutKind.Sequential)] private struct Item {
+        public uint Mask; public int Row, Column; public uint State, StateMask;
+        public IntPtr Text; public int TextCapacity, Image; public IntPtr Parameter;
+        public int Indent, Group, ColumnCount; public IntPtr Columns, ColumnFormats; public int GroupIndex;
+    }
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback, IntPtr data);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc callback, IntPtr data);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint id);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr window, StringBuilder text, int size);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr window, StringBuilder text, int size);
@@ -58,6 +66,12 @@ public static class MoteReleaseWin32 {
     [DllImport("user32.dll", EntryPoint="PostMessageW")] public static extern bool Post(IntPtr window, uint message, IntPtr first, IntPtr second);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern IntPtr VirtualAllocEx(IntPtr process, IntPtr address, UIntPtr size, uint allocation, uint protect);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern bool VirtualFreeEx(IntPtr process, IntPtr address, UIntPtr size, uint free);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr count, out UIntPtr written);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr count, out UIntPtr read);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
     /// <summary>Finds only the child's top-level window of the requested registered class.</summary>
     public static IntPtr Find(uint pid, string name) {
         IntPtr found = IntPtr.Zero;
@@ -69,6 +83,53 @@ public static class MoteReleaseWin32 {
             return true;
         }, IntPtr.Zero);
         return found;
+    }
+    /// <summary>Finds a descendant of this owned window, never a desktop-global table.</summary>
+    public static IntPtr FindChild(IntPtr parent, uint pid, string name) {
+        IntPtr found = IntPtr.Zero;
+        EnumChildWindows(parent, (window, data) => {
+            GetWindowThreadProcessId(window, out uint owner);
+            var buffer = new StringBuilder(256);
+            GetClassName(window, buffer, buffer.Capacity);
+            if (owner == pid && buffer.ToString() == name) { found = window; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+    /// <summary>Reads one actual owner-data cell through a bounded, correctly marshaled owned-process LVITEMW.</summary>
+    public static string CellLabel(IntPtr table, uint pid, int row, int column) {
+        GetWindowThreadProcessId(table, out uint owner);
+        if (owner != pid || pid == 0 || IntPtr.Size != 8 || row < 0 || row >= 256 || column < 0 || column > 64)
+            throw new InvalidOperationException("Native Grid observation ownership or bounds failed.");
+        IntPtr process = OpenProcess(0x38, false, pid); // VM_OPERATION | VM_READ | VM_WRITE; no input/code execution.
+        if (process == IntPtr.Zero) throw new InvalidOperationException("Owned Grid process observation failed.");
+        IntPtr remote = IntPtr.Zero, local = IntPtr.Zero;
+        try {
+            int size = Marshal.SizeOf<Item>();
+            remote = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)(size + 512), 0x3000, 4);
+            if (remote == IntPtr.Zero) throw new InvalidOperationException("Owned Grid observation allocation failed.");
+            var item = new Item { Mask=1, Row=row, Column=column, Text=IntPtr.Add(remote,size), TextCapacity=256 };
+            local = Marshal.AllocHGlobal(size);
+            Marshal.StructureToPtr(item, local, false);
+            var payload = new byte[size + 512];
+            Marshal.Copy(local, payload, 0, size);
+            if (!WriteProcessMemory(process,remote,payload,(UIntPtr)payload.Length,out UIntPtr written) || written.ToUInt64() != (ulong)payload.Length)
+                throw new InvalidOperationException("Owned Grid observation write failed.");
+            if (Send(table,0x104B,IntPtr.Zero,remote) == IntPtr.Zero) // LVM_GETITEMW invokes the real owner-data callback.
+                throw new InvalidOperationException("Native Grid cell observation was refused.");
+            var result = new byte[512];
+            if (!ReadProcessMemory(process,item.Text,result,(UIntPtr)result.Length,out UIntPtr read) || read.ToUInt64() != (ulong)result.Length)
+                throw new InvalidOperationException("Owned Grid observation read failed.");
+            string text = Encoding.Unicode.GetString(result);
+            int end = text.IndexOf('\0');
+            if (end < 0) throw new InvalidOperationException("Native Grid observation exceeded its bounded text buffer.");
+            return text.Substring(0,end);
+        }
+        finally {
+            if (local != IntPtr.Zero) Marshal.FreeHGlobal(local);
+            if (remote != IntPtr.Zero) VirtualFreeEx(process,remote,UIntPtr.Zero,0x8000);
+            CloseHandle(process);
+        }
     }
 }
 '@
@@ -88,6 +149,30 @@ function Read-ReleaseText([IntPtr] $Control) {
     $text = [Text.StringBuilder]::new(1048576)
     [void][MoteReleaseWin32]::ReadText($Control, 0x000D, [IntPtr]$text.Capacity, $text)
     return $text.ToString().Replace("`r`n", "`n").Replace("`r", "`n")
+}
+
+# Wait for retained success evidence; incomplete live writer suffixes are not complete records.
+function Read-ReleaseSavedSemantics {
+    $traceRoot = Join-Path $evidence 'home/traces'
+    if (-not [IO.Directory]::Exists($traceRoot)) { return $null }
+    $rows = @()
+    foreach ($file in [IO.Directory]::EnumerateFiles($traceRoot, '*.jsonl')) {
+        $stream = [IO.FileStream]::new($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8)
+        try { $lines = $reader.ReadToEnd().Split("`n") }
+        finally { $reader.Dispose() }
+        for ($index = 0; $index -lt $lines.Length - 1; $index++) {
+            if ($lines[$index].Length) { $rows += ($lines[$index] | ConvertFrom-Json -AsHashtable) }
+        }
+    }
+    $save = @($rows | Where-Object { $_.operation -ceq 'document.save' -and $_.status -ceq 'success' })
+    if ($save.Count -ne 1 -or -not $save[0].attributes.ContainsKey('version')) { return $null }
+    $version = $save[0].attributes.version
+    foreach ($operation in @('analysis.parse','analysis.published','native.source.style_publish')) {
+        if (-not @($rows | Where-Object { $_.operation -ceq $operation -and $_.status -ceq 'success' -and
+            $_.attributes.ContainsKey('version') -and $_.attributes.version -eq $version }).Count) { return $null }
+    }
+    return @{ version=$version; session_id=$save[0].session_id }
 }
 function Read-ReleaseSelection([IntPtr] $Control) {
     # EM_EXGETSEL is >= WM_USER and cannot marshal a client-local CHARRANGE
@@ -138,7 +223,8 @@ function Start-ReleaseEditor([string] $Label) {
     $start.RedirectStandardError = $true
     $start.Environment['MOTE_HOME'] = Join-Path $evidence 'home'
     $start.Environment['MOTE_TRACE'] = '1'
-    [void]$start.ArgumentList.Add('--native-source')
+    # Both edit and fresh reopen use the delivered ordinary launch, not an
+    # explicitly selected candidate that could hide an incorrect default.
     [void]$start.ArgumentList.Add($outputFile)
     $script:process = [Diagnostics.Process]::Start($start)
     $script:window = [IntPtr]::Zero
@@ -167,10 +253,11 @@ $stage = 'open'
 $capture = $false
 $observedSelection = $null
 $expectedSelection = $null
+$findObserved = $null
 $promptControlPresent = $false
 $promptTextSet = $false
 $promptTextMatches = $false
-$report = [ordered]@{ status = 'failed'; stage = $stage; profile = 'native-source'; screenshot = $false;
+$report = [ordered]@{ status = 'failed'; stage = $stage; profile = 'native-source'; launch_route = 'bare-default'; screenshot = $false;
     external_native_messages = $true; physical_keyboard = $false; real_ime = $false; screen_reader = $false }
 try {
     $normalized = $original.Replace("`r`n", "`n").Replace("`r", "`n")
@@ -183,7 +270,9 @@ try {
     Invoke-ReleasePrompt 213 $marker
     Wait-ReleaseCondition {
         $selection = Read-ReleaseSelection $editor
-        return $selection.Start -eq $offset -and $selection.End -eq $offset + $marker.Length
+        $matched = $selection.Start -eq $offset -and $selection.End -eq $offset + $marker.Length
+        if ($matched) { $script:findObserved = @{ start=$selection.Start; end=$selection.End } }
+        return $matched
     } 'Whole-document Find did not select the exact marker.'
     $stage = 'replace'
     [void][MoteReleaseWin32]::SendText($editor, 0x00C2, [IntPtr]::Zero, $replacement) # EM_REPLACESEL: no OS clipboard.
@@ -227,6 +316,57 @@ try {
         [void][MoteReleaseWin32]::GetWindowText($window, $title, $title.Capacity)
         return -not $title.ToString().EndsWith(' *', [StringComparison]::Ordinal)
     } 'Save completion did not clear modified chrome.'
+    $stage = 'final-semantic-view'
+    $kind = switch ([IO.Path]::GetExtension($inputFile).ToLowerInvariant()) {
+        '.md' { 'Markdown' }; '.toml' { 'Toml' }; '.json' { 'Json' }; '.yaml' { 'Yaml' }; '.csv' { 'Csv' }; default { 'PlainText' }
+    }
+    $expectedCsvRows = @()
+    if ($kind -ceq 'Csv') {
+        $reader = [Microsoft.VisualBasic.FileIO.TextFieldParser]::new([IO.StringReader]::new($expected))
+        try {
+            $reader.SetDelimiters(','); $reader.HasFieldsEnclosedInQuotes = $true; $reader.TrimWhiteSpace = $false
+            while (-not $reader.EndOfData) { $expectedCsvRows += ,$reader.ReadFields() }
+        }
+        finally { $reader.Dispose() }
+        if ($expectedCsvRows.Count -gt 256 -or @($expectedCsvRows | Where-Object { $_.Length -gt 64 }).Count -or
+            @($expectedCsvRows | ForEach-Object { $_ } | Where-Object { $_.Length -ge 256 }).Count) {
+            throw 'CSV task exceeds this bounded native-label observer; this is not an editor capacity limit.'
+        }
+    }
+    $script:semanticView = $null
+    Wait-ReleaseCondition {
+        $traceWitness = Read-ReleaseSavedSemantics
+        if ($null -eq $traceWitness) { return $false }
+        $statusControl = [MoteReleaseWin32]::GetDlgItem($window, 103)
+        $status = [Text.StringBuilder]::new(4096)
+        [void][MoteReleaseWin32]::GetWindowText($statusControl, $status, $status.Capacity)
+        $text = $status.ToString()
+        $policyName = if ($kind -ceq 'PlainText') { 'Plain text' } else { $kind }
+        if ($text -notmatch ([regex]::Escape($policyName) + '.*(Complete|semantic analysis).*v' + $traceWitness.version + '\b')) { return $false }
+        $gridCells = 0
+        if ($kind -ceq 'Csv') {
+            $table = [MoteReleaseWin32]::FindChild($window, [uint32]$process.Id, 'SysListView32')
+            if ($table -eq [IntPtr]::Zero) { return $false }
+            $count = [MoteReleaseWin32]::Send($table, 0x1004, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+            if ($count -ne $expectedCsvRows.Count) { return $false }
+            for ($row = 0; $row -lt $expectedCsvRows.Count; $row++) {
+                for ($column = 0; $column -lt $expectedCsvRows[$row].Length; $column++) {
+                    if ([MoteReleaseWin32]::CellLabel($table, [uint32]$process.Id, $row, $column + 1) -cne $expectedCsvRows[$row][$column]) { return $false }
+                    $gridCells++
+                }
+            }
+        }
+        elseif ($kind -cne 'PlainText') {
+            $preview = [MoteReleaseWin32]::GetDlgItem($window, 102)
+            if (-not (Read-ReleaseText $preview).Contains($replacement, [StringComparison]::Ordinal)) { return $false }
+        }
+        $script:semanticView = @{ schema_version=1; document_kind=$kind; version=$traceWitness.version;
+            trace_session_id=$traceWitness.session_id; source_units=$expected.Length; analysis_status_current=$true;
+            parse_publish_style_witness=$true; grid_cells=$gridCells; grid_labels_exact=($kind -ceq 'Csv');
+            endpoint='native status/preview or actual owner-data callbacks plus version-linked trace; not physical pixels' }
+        return $true
+    } 'The saved document did not reach a current semantic native view.'
+    [IO.File]::WriteAllText((Join-Path $evidence 'native-product-semantics.json'), ($script:semanticView | ConvertTo-Json), $utf8)
     $stage = 'capture'
     Add-Type -AssemblyName System.Drawing.Common
     $rect = [MoteReleaseWin32+Rect]::new()
@@ -255,8 +395,9 @@ try {
 }
 finally {
     if ($report.status -ne 'passed') { $report.stage = $stage }
-    $report['expected_selection'] = $expectedSelection
-    $report['observed_selection'] = $observedSelection
+    $report['find_expected'] = $expectedSelection
+    $report['find_observed'] = $findObserved
+    $report['last_observed_selection'] = $observedSelection
     $report['prompt_control_present'] = $promptControlPresent
     $report['prompt_text_set'] = $promptTextSet
     $report['prompt_text_matches'] = $promptTextMatches

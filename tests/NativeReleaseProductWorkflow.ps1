@@ -116,7 +116,10 @@ function Invoke-Child {
 
 # Reuse the closed privacy schema and graph oracle instead of weakening telemetry gates.
 function Assert-Traces {
-    param([string] $moteHome, [string] $Directory, [string[]] $Private, [string] $Prefix, [switch] $RequireSave)
+    param([string] $moteHome, [string] $Directory, [string[]] $Private, [string] $Prefix,
+          [switch] $RequireSave, [switch] $RequireNativeSource,
+          [string] $SemanticsPath, [string] $ExpectedKind, [int] $ExpectedSourceUnits,
+          [ValidateSet('macos','windows')][string] $SemanticPlatform='macos')
     $traceDir = Join-Path $moteHome $Directory
     $traces = @(Get-ChildItem -LiteralPath $traceDir -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)
     if ($traces.Count -eq 0) { throw 'Opt-in tracing did not retain a trace.' }
@@ -124,6 +127,12 @@ function Assert-Traces {
     foreach ($trace in $traces) { $arguments += @('--trace', $trace.FullName) }
     foreach ($value in $Private) { $arguments += @('--private', $value) }
     if ($RequireSave) { $arguments += '--require-save' }
+    if ($RequireNativeSource) { $arguments += '--require-native-source' }
+    if ($SemanticsPath) {
+        $arguments += @('--semantics', $SemanticsPath, '--expected-kind', $ExpectedKind,
+            '--expected-source-units', $ExpectedSourceUnits.ToString([Globalization.CultureInfo]::InvariantCulture),
+            '--semantic-platform', $SemanticPlatform)
+    }
     return Invoke-Child 'python' $arguments $moteHome '0' $Prefix
 }
 
@@ -281,14 +290,15 @@ $record=@{schema_version=1;utc_time='2026-10-02T00:00:00Z';session_id=('1'*32);t
                 New-Item -ItemType Directory -Force -Path $moteHome | Out-Null
                 [IO.File]::WriteAllText((Join-Path $moteHome 'config.toml'), $case.config, $utf8)
             }
-            $child = Invoke-Child $exe @('--native-source','--smoke-gui') $moteHome $case.trace (Join-Path $output $case.name)
+            $child = Invoke-Child $exe @('--smoke-gui') $moteHome $case.trace (Join-Path $output $case.name)
             if ($child.stdout.Trim() -cne 'mote-native-gui-ready') { throw 'Configured product GUI smoke omitted readiness marker.' }
             if ($case.traceDirectory) {
-                [void](Assert-Traces $moteHome $case.traceDirectory @($moteHome) (Join-Path $output "$($case.name)-trace"))
+                [void](Assert-Traces $moteHome $case.traceDirectory @($moteHome) (Join-Path $output "$($case.name)-trace") -RequireNativeSource)
             }
             elseif ([IO.Directory]::Exists($moteHome)) { throw 'Default-off product smoke created mutable state.' }
             if ($case.config) { Assert-ExactBytes (Join-Path $moteHome 'config.toml') $utf8.GetBytes($case.config) }
-            $result.configuration += @{name=$case.name; exit_code=$child.exit_code; trace_directory=$case.traceDirectory; theme_rendering_verified=$false}
+            $result.configuration += @{name=$case.name; exit_code=$child.exit_code; trace_directory=$case.traceDirectory;
+                launch_route='bare-default'; native_source_surface_witness=[bool]$case.traceDirectory; theme_rendering_verified=$false}
         }
         foreach ($fixture in $fixtures) {
             $area = Join-Path $output $fixture.name
@@ -314,11 +324,18 @@ $record=@{schema_version=1;utc_time='2026-10-02T00:00:00Z';session_id=('1'*32);t
             Assert-ExactBytes $inputPath $original
             Assert-ExactBytes $outputPath $expected
             $capture = Assert-NativeCapture (Join-Path $area 'native-product.png')
-            [void](Assert-Traces $moteHome 'traces' @($originalMarker,$editedMarker,$inputPath,$outputPath,$moteHome) (Join-Path $area 'trace-oracle') -RequireSave)
+            $kind=@{markdown='Markdown';toml='Toml';json='Json';yaml='Yaml';csv='Csv';text='PlainText'}[$fixture.name]
+            $units=$fixture.text.Replace($originalMarker,$editedMarker).Length
+            $traceEvidence=Assert-Traces $moteHome 'traces' @($originalMarker,$editedMarker,$inputPath,$outputPath,$moteHome) `
+                (Join-Path $area 'trace-oracle') -RequireSave -SemanticsPath (Join-Path $area 'native-product-semantics.json') `
+                -ExpectedKind $kind -ExpectedSourceUnits $units -SemanticPlatform $(if ($IsWindows) {'windows'} else {'macos'})
+            $semanticReport=($traceEvidence.stdout|ConvertFrom-Json -AsHashtable).semantics
+            if (-not $semanticReport -or $semanticReport.status -cne 'passed') { throw 'Trace oracle omitted checked final-view evidence.' }
             $result.fixtures += @{name=$fixture.name; original_bytes=$original.Length; saved_bytes=$expected.Length;
                 original_sha256=(Get-FileHash -LiteralPath $inputPath).Hash; saved_sha256=(Get-FileHash -LiteralPath $outputPath).Hash;
                 exact_bytes=$true; original_protected=$true; fresh_gui_process_reopen=$true; fixture_origin='self-created representative task, not market evidence'}
             $result.fixtures[-1]['native_capture'] = $capture
+            $result.fixtures[-1]['final_semantics'] = $semanticReport
         }
         if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -cne $result.executable_sha256) { throw 'Release executable changed during acceptance.' }
         $result.status='passed'

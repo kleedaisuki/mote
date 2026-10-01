@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Mote.Configuration;
 using Mote.Engine;
 using Mote.Themes;
+using Mote.Formats;
 
 namespace Mote.Native.Mac;
 
@@ -37,10 +38,14 @@ internal static class MacReleaseWorkflowProbe
             var original = originalDocument.Snapshot.GetText();
             if (destination is not null) ValidateMarker(original);
             var config = MoteConfigLoader.Load() with { ThemeId = ThemePolicies.DarkId };
-            var shell = new MacEditorShell(nativeSource: true);
+            if (!NativeLaunchParser.TryParse([path], out var launch, out _) ||
+                launch is not NativeLaunchRoute.Product { Profile: EditorPresentationProfile.NativeSource } product ||
+                product.UsesCanvas || product.Smoke)
+                throw new InvalidOperationException("Ordinary launch did not select the release source product.");
+            var shell = (MacEditorShell)NativeShellFactory.Create(product);
             using var controller = new NativeEditorController(shell, config,
-                ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark), path,
-                EditorPresentationProfile.NativeSource,
+                ThemePolicies.Resolve(config.ThemeId, shell.PrefersDark), product.Path,
+                product.Profile,
                 () => config with { ThemeId = ThemePolicies.LightId });
             var workflow = new Workflow(shell, path, destination, original);
             shell.Shown += workflow.Start;
@@ -153,7 +158,6 @@ internal static class MacReleaseWorkflowProbe
                         _stage = 6;
                         break;
                     case 6 when shell.ProbeThemeId == ThemePolicies.LightId && shell.ProbeNativeText == plain:
-                        shell.ProbeReleaseCapture(Path.Combine(Path.GetDirectoryName(output!)!, "native-product.png"));
                         shell.ProbeReleaseMarked(markerStart + prefix.Length, "中");
                         _stage = 7;
                         break;
@@ -165,6 +169,10 @@ internal static class MacReleaseWorkflowProbe
                         break;
                     case 8 when File.Exists(output) && !shell.ProbeIsModified && !shell.ProbeHasMarkedText &&
                         shell.ProbeProjectedText == expected:
+                        var evidence = shell.ProbeReleaseSemantics(DocumentPolicies.ForPath(input).Kind);
+                        if (evidence is null) break;
+                        shell.ProbeReleaseCapture(Path.Combine(Path.GetDirectoryName(output!)!, "native-product.png"));
+                        evidence.Write(Path.Combine(Path.GetDirectoryName(output!)!, "native-product-semantics.json"));
                         shell.ProbeSetMarkedAtEnd("弃");
                         shell.ProbeReleaseCancelClose();
                         _stage = 9;

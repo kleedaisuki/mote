@@ -270,3 +270,220 @@ Supported verdict: **both macOS native-source six-task suites pass the stated
 text/history/Save/reopen/trace contracts for this frozen candidate**. The complete
 release workflow remains failed/unqualified; Windows acceptance and unresolved
 physical input/readers/full semantic view/performance boundaries are not hidden.
+
+## Four-target actual candidate audit: run 36925090282
+
+Frozen source: **`f2b2de77912b7bb57baa6c72947d392c9b1f9668`**. The authoritative
+run completed successfully with all eight jobs, including all four package
+product gates, embedded codec checks, post-run inventory checks and release-asset
+collection. Unlike the preceding run, no post-success PowerShell status mistake
+invalidated the job conclusion. This audit still checks actual evidence rather
+than accepting the aggregate green status as an experience certificate.
+
+```powershell
+python -B .cache/release-ci-36925090282/product-audit/audit.py
+```
+
+The audit reuses the previous full-literal byte oracle and existing strict trace
+readers, extending them to Windows edit/reopen process reports and the actual
+collected package payloads. No product/GUI/test rerun or original artifact
+rewrite was performed. Package executable bytes are read directly from ZIP/tar
+archives and matched to source/RID manifest identity and suite executable hash.
+
+| Target | Exact original/output task pairs | Fresh GUI process reopens | Task processes with traces | Trace rows | Save version |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| win-x64 | 6/6 | 6/6 | 12 | 734 | 5 |
+| win-arm64 | 6/6 | 6/6 | 12 | 711 | 5 |
+| osx-x64 | 6/6 | 6/6 | 6 | 951 | 4 |
+| osx-arm64 | 6/6 | 6/6 | 6 | 996 | 4 |
+
+All **24 task pairs** preserve original bytes and save exactly the independently
+specified ranged Unicode edit, including CSV CRLF/quoted values. All 24 fresh
+GUI processes reopen the exact saved source. Windows drivers additionally retain
+their passed/complete native-message reports and normal edit/reopen stdout/stderr;
+Mac workflow/reopen markers and stderr remain exact. Normal exit is required by
+the frozen helpers before reporting pass. These callbacks/messages are still not
+physical keyboard, real Pinyin or screen-reader evidence.
+
+The **36 task process traces / 3,392 rows** independently pass schema, complete
+records, causal graph, successful terminal, no-observed-drop and sentinel privacy
+checks. Privacy is additionally checked against decoded JSON string values, so
+escaped Windows paths cannot evade that artifact-side sentinel inspection. Each
+task has exactly one complete request-linked Save chain with the captured version
+matching all required engine/commit/UI completion versions. Reopen-only process
+traces are checked separately and are not incorrectly required to perform Save.
+
+All task sets actually invoke source install/readback/reconcile/range/style
+publication and analysis parse/publication. In this run both Windows targets
+publish analysis at every task's saved version 5. Neither Mac target publishes
+analysis at its saved version 4 before the deliberately rapid subsequent marked
+input/history/New/Open stages. Thus the successful Save/text task does **not**
+establish the final saved-version semantic presentation, on-screen token colors,
+preview completeness or complete format conformance.
+
+CLI/configuration checks match on all four targets: expected exits for all five
+CLI cases; three GUI config markers and empty stderr; no home creation when off;
+strict independent graph checks for both opt-in traces; and independently
+specified unchanged light-theme/custom-path or dark-theme/disabled config bytes.
+The frozen suite explicitly launches NativeSource here, so this candidate audit
+does **not** certify an eventual bare/default profile change.
+
+Suite/package executable SHA-256 identities:
+
+- win-x64: `7099F31ABDC0198612FDD9FCC36403DC89FCE93906AF0796344F1AB64AECD533`.
+- win-arm64: `B05823B66EFD1AC4AA5555AE544E11B7C42BDADA4E666DE66C72EDB4BABD809F`.
+- osx-x64: `FBD29914F265142875D12DF08D8278B54F4724DE2671E1BF625939AC56AD4783`.
+- osx-arm64: `E10F3E635BF4C88BBCC74F23CB04BD0D05298BF7D87DD42DC061456CA5A53CDD`.
+
+Artifacts and reproducibility:
+
+- `.cache/release-ci-36925090282/evidence/release-evidence-<rid>/product/`
+- `.cache/release-ci-36925090282/assets/` (actual archives and manifests)
+- `.cache/release-ci-36925090282/product-audit/audit.py`
+- `.cache/release-ci-36925090282/product-audit/result-win-x64-win-arm64-osx-x64-osx-arm64.json`
+- `.cache/release-ci-36925090282/product-audit/frozen-suite.ps1`
+- `.cache/release-ci-36925090282/product-audit/frozen-windows-task.ps1`
+- `.cache/release-ci-36925090282/product-audit/frozen-mac-probe.cs`
+
+Supported verdict: all four frozen **NativeSource candidate source-text task
+contracts** pass. The separately investigated **visible CSV preview pending**
+issue is neither checked nor excused by exact CSV source bytes; it remains an
+independent product/rendering issue and must not be masked by this green gate.
+Default promotion and final release remain separate decisions/qualification.
+
+### Default-profile qualification witness prepared after this candidate
+
+After authorizing NativeSource as the normal default, the suite's configuration
+GUI cases now launch **bare `--smoke-gui`**, without `--native-source`. Both opt-in
+normal-entry traces must contain successful `native.source.install` and
+`native.source.readback`; these fixed operations are emitted by the actual
+NativeSource product surface. Merely showing a window or ending a session cannot
+pass this witness. Each config report records `launch_route: bare-default` and
+whether the traced source-surface witness was required and obtained. The
+untraced default-off case does not fabricate a telemetry witness.
+
+The Windows individual driver is owned by the product leader and now opens the
+bare file path for both edit and fresh-process reopen. The Mac diagnostic is
+also owned by that leader: it now obtains the normal parsed product route and
+uses the production shell factory/controller profile, rather than constructing
+a hard-coded NativeSource shell. These are **new qualification changes**, not
+retroactive assertions about source `f2b2de7`; the next frozen hosted run must
+exercise them.
+
+The trace helper adds an opt-in `--require-native-source` contract. Its regression
+test rejects a normal-session-only trace and an install-without-readback trace,
+then accepts the complete successful surface witness. After this contract change
+the narrow Python oracle suite passed **8/8**, zero failures/skips, in 0.037
+seconds; PowerShell parsing passed. No GUI or full product suite was rerun locally.
+
+### Post-Save macOS final-ready contract prepared for the next frozen run
+
+The Mac product writer now waits after marked input is committed and Save
+completes, then obtains `native-product-semantics.json` from the actual installed
+source/analysis/style/Grid identity guard and captures the owned view. This
+replaces the earlier prefix-only, pre-commit capture. The suite **requires** that
+sidecar for every Mac task, not merely its existence or a `ready: true` flag.
+No hosted success for this new contract is claimed here before execution.
+
+The sidecar has exactly these 20 fields, with no source content or free-form path:
+
+```text
+schema_version generation version installation_nonce presentation_sequence
+document_kind completeness coverage_start coverage_length source_units
+token_count diagnostic_count style_ready geometry_known grid_required grid_ready
+grid_rows grid_columns grid_cells grid_pending_cells
+```
+
+The independent artifact reader enforces:
+
+- File size ≤16 KiB; exact field set; integer fields reject booleans, negatives
+  and values outside signed 64-bit range; readiness fields must be actual booleans.
+- Schema version 1, positive generation/installation nonce, nonnegative sequence,
+  expected closed document-kind name, `Complete`, and full coverage beginning at 0.
+- `source_units` and `coverage_length` equal the independently computed complete
+  expected edited UTF-16 length, including CSV CRLF and the plain-text emoji.
+- The version matches a complete successful Save chain, **in the same process**
+  as successful parse, analysis publication and native style publication at that
+  version. Counts without this linkage cannot certify readiness.
+- These valid small fixtures have zero diagnostics. Plain text has zero format
+  tokens; each structured sample has positive tokens. A bounded sanity check
+  limits token counts to eight times this small sample's source units; this is
+  an artifact count check, not an application performance or large-file budget.
+- The known CSV task includes its ordinary header row: all **3 rows ×3 columns =9
+  visible cells** must be admitted and non-pending. A partial viewport, inconsistent
+  product count, pending cell or wrong Grid-required flag fails. Non-CSV samples
+  must have false Grid flags and zero Grid counts.
+
+The producer's tested identity guard checks source installation stamp/nonce,
+current analysis stamp/presentation sequence, installed semantic revision/theme,
+geometry-known state and the actual CSV ready-frame/analysis/projection identity.
+The artifact reader does not pretend the existing privacy-preserving trace
+independently transmits or attests every nonce/generation/sequence field. Neither
+the guard nor exact numeric checks alone certify pixel quality, OS input methods,
+accessibility reading, universal semantic conformance or experience latency.
+
+Suite reports retain the checked sidecar hash/fields and Save/current-phase
+linkage verdict as `final_semantics`. The Windows producer now supplies its own
+distinct observable schema; no Mac identity/geometry fields are fabricated there.
+
+After this bounded contract change, the portable artifact-oracle suite passed
+**12/12**, zero failures/skips, in 0.137 seconds; raw output is retained at
+`.temp/release-semantic-oracle-tests.log`. New negative controls exercise partial
+coverage/wrong source length, wrong kind/version, unknown path field, invalid
+integer/boolean types, zero nonce, incomplete analysis, excessive counts, stale
+parse/publication/style versions, partial/pending CSV frames and invented plain
+text tokens. Existing independent bytes/default-source/Save controls remain.
+PowerShell parsing passed. No GUI, full product tests, commit or dispatch were
+performed by this validator.
+
+### Distinct Windows final-view contract and actual helper verification
+
+The Windows driver also writes `native-product-semantics.json`, using **10**
+closed fields (not the Mac 20-field schema):
+
+```text
+schema_version document_kind version trace_session_id source_units
+analysis_status_current parse_publish_style_witness grid_cells grid_labels_exact endpoint
+```
+
+The required endpoint literal is:
+`native status/preview or actual owner-data callbacks plus version-linked trace; not physical pixels`.
+Free-form endpoint strings, paths, extra Mac identity fields and omitted fields
+are rejected. The schema/kind/UTF-16 length and integer/boolean types are checked
+independently. The session ID must be a valid 32-character causal identifier and
+match **the same process** as the complete Save request/version and matching
+parse/publication/style phases. A matching version in a different process does
+not pass. CSV requires nine actual label-checked cells; non-CSV requires zero
+cells and a false Grid-label flag.
+
+The producing driver waits for current complete-analysis native status, actual
+edited preview values for Markdown/TOML/JSON/YAML, and source text for plain text.
+For CSV it reads all nine actual owner-data ListView cells from the owned process
+and compares them against independently decoded expected records. The artifact
+reader checks the fixed evidence and trace linkage; it does not claim to repeat
+those native calls, prove pixel colors or certify Mac-style geometry identities.
+Both platform schemas are now required by the suite, selected explicitly by
+`--semantic-platform windows|macos`.
+
+After adding the Windows schema/session-linkage controls, the narrow Python
+oracle suite passed **13/13**, zero failures/skips, in 0.171 seconds. The separate
+negative cases include a wrong process ID, wrong saved version/length, invalid
+boolean/integer, false current status, unknown endpoint, extra field, and a
+partial CSV cell count. PowerShell parsing passed.
+
+Independent **artifact-only** validation also applied the new reader to all six
+already-produced local managed Windows task artifacts in
+`.temp/windows-release-default-semantic-suite-1/`: full original/output bytes,
+saved session/version/current analysis/style and CSV label-count evidence passed.
+This did not rerun the editor or upgrade managed evidence into Native AOT/hosted
+evidence. Reproducer/results:
+`.temp/release-semantic-artifact-audit/audit.py` and `result.json`.
+
+Finally, a repository-local harness extracted the actual current `Invoke-Child`
+and `Assert-Traces` functions, adjusting only the oracle entry-file location for
+the relocated harness, and called the **real PowerShell→Python CLI** semantic
+path against the existing CSV evidence. Expected UTF-16 length 89, platform
+Windows, complete Save and nine cells all passed. This exercises the newly added
+argument construction/binding, not only a Python function call. Retained:
+`.temp/release-semantic-artifact-audit/helper.ps1`, `helper-result.log` and
+`helper.stdout.txt`. No GUI/global setting/full-suite rerun or dispatch occurred.
