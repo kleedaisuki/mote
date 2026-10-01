@@ -45,7 +45,7 @@ emitting them only after successful checks.
 
 | Area | Source-level assessment |
 | --- | --- |
-| Admission | Hosted environment and matching OS are checked before config, files, telemetry or native objects. Fresh output is a descendant of root `.cache`/`.temp`; existing linked ancestors and existing targets are rejected. This is a controlled runner boundary, not adversarial concurrent filesystem security. |
+| Admission (initial checkpoint; follow-up below) | Declared runner environment and matching OS are checked before config, files, telemetry or native objects. Fresh output is a descendant of root `.cache`/`.temp`. The original Exists-based ancestor check was subsequently corrected below; neither checkpoint is secure hosted-machine attestation or an atomic filesystem sandbox. |
 | Configuration and evidence | Explicit isolated MoteHome bypasses inherited user home. Generated identities, fixed codes, numeric HRESULT, counts and hashes are serialized; no exception messages, user source or raw native identities are emitted. |
 | Binding | Exact complete import certificate, snapshot identity, version/generation/nonce and retirement gate reconciliation. Full strings and projection maps are intentionally O(n). UI-owner exclusivity is the concurrency assumption; this is not a concurrent engine transaction API. |
 | Engine ownership | Native insertion does not mutate Engine. Reconciliation uses shared scalar-corrected Difference and exactly one Apply. No-op consumes a binding without text history; Undo/Redo are Engine operations followed by explicit new native installations. Cancellation is checked before work and immediately before Apply, never used to disguise an already committed edit. |
@@ -83,7 +83,7 @@ Their `hashes.json` identifies the unchanged binding, fixtures and shared
 projection. Tests were not repeated for the runner-only evidence correction.
 See `docs/validation/native-source-binding.md` for their scope and limitations.
 
-Final raw-file SHA-256 identities (including line endings) are retained in
+Historical initial-checkpoint raw-file SHA-256 identities (including line endings) are retained in
 `.cache/validation/native-source-capability/final-source-hashes.json`:
 
 | File under `src/Mote.Native/` | SHA-256 |
@@ -105,3 +105,69 @@ not success. External workflow timeout and artifact retention are required for
 native hangs, not supplied by this diagnostic. No physical reader speech, IME,
 interactive typing, arbitrary selection direction, high-DPI visual quality or
 product-profile readiness is inferred from this review.
+
+## Scoped admission follow-up: current guard
+
+The original review above qualified the controlled experiment but overstated the
+host guard and ancestor rejection. Follow-up review is restricted to the later
+admission corrections `58d8eb7` and `7b32321`; other model/native behaviors and the
+33-case validation are not rerun or recertified by this follow-up.
+
+### Guard truth and correction
+
+- The old comment claiming environment variables could not enable the diagnostic
+  on an ordinary machine was false: runner identifiers are mutable. The current
+  check additionally requires `RUNNER_ENVIRONMENT=github-hosted`, and the comment
+  accurately calls these **declared identifiers, not security attestation**.
+  The diagnostic still returns before artifact/config/native work when its
+  declared-runner check fails; this is operational admission, not a trust boundary.
+- The former `DirectoryInfo.Exists`/`File.Exists` checks could conflate inaccessible
+  or dangling entries with absence. That is a real gap in the stated rejection
+  contract. An actual write escape through the old code was **not reproduced**;
+  no demonstrated arbitrary-write exploit is claimed.
+- Current admission queries `File.GetAttributes` on the requested output and
+  every ancestor. Only FileNotFoundException/DirectoryNotFoundException mean
+  absence; other errors propagate to Run's refusal. Reparse entries, existing
+  output and non-directory ancestors are refused explicitly. The loop still
+  examines an ancestor after a missing descendant, so a dangling linked parent
+  cannot be skipped solely because its child is missing.
+- The private two-argument seam normalizes repositoryRoot and resolves relative
+  output using that same root. Production Run passes its actual current directory,
+  preserving command invocation semantics; tests do not mutate global cwd or
+  expose a new CLI override. Lexical containment includes the area separator.
+- No new atomic or adversarial concurrent-rename guarantee is introduced. The
+  controlled runner owns scratch; checking ancestors then creating output remains
+  subject to the already documented check/create race.
+
+**Verdict: no remaining substantive defect found in this bounded current guard
+review.** The truthfulness problem and entry-observation gap are corrected; actual
+Mac filesystem behavior and hosted native operation are not established by the
+Windows portable cases.
+
+### Retained current evidence and identities
+
+Inspected the actual private-helper tests, qualified run log/TRX and build log:
+
+- `.cache/validation/native-source-admission/qualified/admission.trx`: **12/12
+  passed, zero failures/skips**; `run.log`: 84 ms. The three actual unprivileged
+  link cases (live-target ancestor, dangling-target ancestor, dangling output)
+  executed rather than skipping. All targets/artifacts are owned repo scratch.
+- `.cache/validation/native-source-capability/admission-seam-build.log`: **zero
+  warnings/errors**, 12.00 s. No tests/builds were repeated by this reviewer.
+- The earlier 12 failed cases remain separately retained. They failed at the
+  harness cwd prerequisite before invoking admission, so are excluded as guard
+  evidence, not hidden or mislabeled product failures.
+- `05edb5e` removes EOF blank lines only from tests/documentation. The following
+  tested test-source hash remains historical pre-style identity, not a claim that
+  whitespace-only current test bytes were recompiled. Runner source is unchanged.
+
+| Qualified current admission artifact | SHA-256 |
+| --- | --- |
+| NativeSourceCapabilityProbe.cs (current raw source) | `7097EF0924FC5F792EB1E9A118EF4613FE8824EAD8B7B2EEB4CA65CCAF3971E0` |
+| NativeSourceDiagnosticAdmissionTests.cs (tested pre-style source) | `FAF7BEF905BCD9379C74058F5B2FC93A98272E8C6C33965EB93B396A2C4C1AE3` |
+| Mote.Tests.dll (qualified loaded assembly) | `E6CF68DEB8380DA23400B95F43D15E8188811E488BC4403A322974A863C20E13` |
+| mote.dll (qualified loaded assembly) | `A9DC93829CCE6115C76FEB63463E4216DCE8C97A06D92D86113E4D3D65EE6DFF` |
+
+Detailed execution and limits are retained in
+`docs/validation/native-source-admission.md`. No CLI dispatch, GUI, native host,
+global environment/cwd mutation or subprocess was executed for this follow-up.
