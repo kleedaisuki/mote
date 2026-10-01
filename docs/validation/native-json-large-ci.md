@@ -923,3 +923,87 @@ Raw per-job logs were retrieved directly from the completed job-log API to
 `.cache/ci-36816778414-mac-arm64-job.log`; attempted JSON artifact downloads found
 no matching Mac artifact. Only this ledger was changed; no product/probe/workflow
 was modified or native workload rerun for the audit.
+
+## Follow-up: viable original-only witness; failed small case stays censored
+
+2026-10-01: independently audited the two completed Mac JSON jobs of
+[run 36818175897](https://github.com/kleedaisuki/mote/actions/runs/36818175897),
+source **`1171d0f9b3c02c14c0d6e57b6a7f6d8d2fd3246d`**. The scalar-splat defect
+is no longer blocking the pilot. This is the first retained viable hosted
+original-only Save-witness execution, explicitly labeled
+**`diagnostic-on-not-performance-sample`**. Workload acceptance and witness
+transport health are checked separately:
+
+| Mac case | Exact workflow | Received witness stages | Original normal exit / EOF | Witness classification |
+| --- | --- | --- | --- | --- |
+| x64 / 1 MiB | failed / save-exact-bytes / TimeoutError | ready only | false / true | censored, not healthy |
+| x64 / 100 MiB | complete pass | ready → selector_entered → controller_admitted → completed | true / true | healthy-full-session-transport |
+| ARM64 / 1 MiB | complete pass | same four-stage order | true / true | healthy-full-session-transport |
+| ARM64 / 100 MiB | complete pass | same four-stage order | true / true | healthy-full-session-transport |
+
+Both portable suites pass **41/41**. X64 raw logs nevertheless emit
+`status=incomplete,samples=2` and the actual pilot exit-1 error. ARM emits
+`status=pass,samples=2` and the actual **diagnostic-on** exact-Save acceptance
+marker. Overall/job green is not whole-Mac acceptance: **3/4 workloads pass**.
+
+### Independent positive and lifecycle evidence
+
+Run/commit-bound assertions independently reconstruct the 1/100 MiB original
+and one-byte edited SHA-256 oracles; verify current Git driver/auditor/Swift/
+collector hashes, reported before/after binary identity and downloaded single-file
+inventories; hash retained raw traces; and check the three passes' Complete v0/v1,
+one edit, unchanged disk before Save, exact saved/final bytes, immutable original,
+normal initial exit and fresh GUI reopen with exact bytes and normal exit.
+Six distinct successful GUI sessions satisfy terminal/action/version/causal-parent
+and no-edit/no-Save reopen contracts with zero dropped records. Main/reopen
+trace counts: x64 100 MiB **37/16**, ARM1 MiB **36/11**, ARM100 MiB **37/16**.
+No trace false-positive acceptance was found.
+
+All three healthy original-child witness reports contain exactly one of each
+of the four ordered positive stages, **overflow=0**, no rejected/overlong/partial
+frames, loss/retention/counter censoring, read/attach errors or join timeout.
+Recorded receipt durations are ordered and nonnegative. `original_normal_exit=true`
+is separately consistent with the original workload exit, and `eof=true` plus
+the coherent completed watermark establishes healthy **transport**, not Save
+success. Positive selector/admission records establish those callback boundaries,
+not which physical/posted event caused them or Save worker execution. The
+exact-byte/terminal/reopen acceptance witnesses remain independent.
+
+Collector source SHA-256 is independently matched to the run's Git blob:
+**`25a3f4b74a36abf5136e4af58b620ae5361b4ff7119607617b6c2f169719a957`**.
+Source inspection confirms the environment builder removes inherited opt-in
+state, runtime control/reopen use that cleared environment, the original child
+alone gets the explicit flag, and its collector is finalized before replacing
+that subprocess with the reopen child. The `session=original-gui-child-only`
+report is therefore not populated by a successful reopen to disguise failed
+original transport. Product instrumentation remains disabled by default.
+
+### Failed x64 1 MiB: absence remains unproven
+
+The failed case reaches Complete v0/v1, one witnessed edit, and unchanged disk
+before Save. Save remains **one** `CGEvent.postToPid` attempt, two attempted
+events, `execution_acknowledged=false`; no write retry or delivery acknowledgement
+is added by the witness. The working/original hashes remain original
+`9004bc81…`, not the expected edited `7fb64708…`. The clean/byte outcome never
+arrives. Owned close fails with RuntimeError and forced cleanup follows; no
+normal initial exit or GUI reopen is reached. The only raw trace is **0 bytes**.
+
+The collector retains one valid `ready` frame and eventually sees EOF after
+termination, with coherent order, no observed overflow/local loss or read error,
+but **no original normal exit and no completed watermark**. Its
+`healthy_completed_stream=false` / `stream_completion=censored` classification
+is correct. **Zero observed selector/admission frames does not prove those
+callbacks did not execute**: forced termination can lose queued/unwritten facts,
+and ready/EOF alone is not full-session completeness. Only readiness is a
+positive boundary observation here. Product Save cause, delivery and missing
+stage causality remain unresolved; this diagnostic is not a Save reliability fix.
+
+Artifacts/inventories and raw per-job `job.log` files are retained under
+`.cache/ci-36818175897-json-osx-x64/` and
+`.cache/ci-36818175897-json-osx-arm64/`. Independent four-Mac-case assertions and
+output: `.cache/ci-36818175897-json-audit.py` and
+`.cache/ci-36818175897-json-independent-summary.json`. Only the general CI ledger
+was edited; implementation details remain owned in
+`mac-json-save-witness-implementation.md`. No product/probe/workflow was modified
+or rerun. Do not pool diagnostic-on receipt/phase durations with ordinary
+performance samples or interpret them as target execution time or tail SLA.
