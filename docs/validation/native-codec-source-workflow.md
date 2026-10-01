@@ -317,3 +317,136 @@ local GUI, changed timeout, repeated model tests or default-profile promotion.
 The complete logs also retain separate inherited non-gating macOS draw-trace
 errors (`exact_terminal_and_session_record_count`); those are not certified by
 the successful source-capability trace and are outside this scoped audit.
+
+## Detached Windows ranges and Mac foreground delta: CI `36899695843`
+
+[CI 36899695843](https://github.com/kleedaisuki/mote/actions/runs/36899695843)
+completed at exact source
+`6827cd1a19142c9ad766d296c18d0770e600e79c` with aggregate conclusion **success**:
+nine jobs succeeded, while `Windows Save replacement diagnostic / disposable x64`
+failed (job `110495482950`, publish/ordinary-Save diagnostic step). The four
+Native AOT jobs and two managed jobs succeeded. The independent
+Save diagnostic failure is outside this scoped audit and must not be obscured
+by successful source experiments. This section independently checks the
+non-gating experiment artifacts rather than using green job conclusions as
+native correctness or performance certificates.
+
+Windows and macOS main assemblies each report **3508/3508**, with zero failed
+or skipped tests. Themes remain **14/14** and Configuration **9/9** on each
+platform. Four publish inventories retain exactly one executable, no other
+payload files and no bundled native libraries. Each published codec actually
+exits **0**, emits exactly the expected marker, and retains the closed schema-1
+success/none report with the correct architecture and all seven ordered labels.
+
+| RID | Executable bytes | SHA-256, identical before/after both probes |
+| --- | ---: | --- |
+| `win-x64` | 8,134,144 | `478CF5FD891100D92CA5900A520A6ECD299BBE391B4BD9BA62C4F1D1F08F835D` |
+| `win-arm64` | 8,284,672 | `BA8B0EAB41E492E6EF93D22B60EAA0D48D3AA9DE4291701B0652171813D4A26E` |
+| `osx-x64` | 18,394,616 | `50EFDC1F3E8C71260C8681CFC722DB434174FDC88C8E43B7832D36B3E69CFE71` |
+| `osx-arm64` | 18,034,408 | `7E52723AE9F318A319388EC854B33AE647C9F66C5A4A95B47DD3FEA30635C468` |
+
+### Four complete source journeys, with native readback checks intact
+
+All four source supervisors now retain actual **exit 0**, no timeout or forced
+cleanup, a normal observed process boundary, complete streams, matching report
+executable/architecture identities and unchanged binary before/after hashes.
+Each source report contains **301 complete rows / 120 matched timed pairs**,
+three exact saves and fresh-document reopens, healthy telemetry and the final
+global completion row. Every saved-file hash and source fixture hash matches
+its downloaded bytes. Fixture inputs and finished-file hashes remain identical
+to the `065585ca` run. This is still a diagnostic adapter journey and fresh
+document reopening, not the default interface or a fresh native process reopen.
+
+Inspecting the exact frozen adapter source establishes the readback boundary:
+Windows applies foreground through detached Text Object Model (TOM) ranges and
+checks planned native foreground witnesses; Mac resets uncovered ranges rather
+than all text and verifies sampled foreground against the ordered overlay.
+Both methods still check native text/selection/viewport and the common runner
+checks engine version/history preservation. Completed publication phases show
+these checked witnesses actually executed without throwing. They are bounded
+color witnesses, **not exhaustive every-character color checks**, screenshot
+appearance validation or physical frame presentation. Neither adapter becomes
+the default product surface merely because its experiment now completes.
+
+### Dense JSON publication: meaningful improvement, remaining product debt
+
+Durations below are **milliseconds**, one observation per phase and architecture.
+The workload is unchanged 524,288-byte JSON, 484,573 initial UTF-16 units,
+79,433 semantic tokens and zero diagnostics. Publication includes native
+attribute mutation and preservation/readback checks, not a separately isolated
+native API duration. The phases are initial, post-edit, post-Undo and post-Redo.
+
+| RID / source | Initial | Post-edit | Post-Undo | Post-Redo |
+| --- | ---: | ---: | ---: | ---: |
+| Windows x64 / `23f1c1a` | 78,852.2383 | Censored | Not reached | Not reached |
+| Windows x64 / `065585ca` | 81,871.6982 | Censored | Not reached | Not reached |
+| Windows x64 / `6827cd1a` | **7,587.9403** | **10,256.3977** | 7,610.0333 | 7,776.7348 |
+| Windows ARM64 / `23f1c1a` | 73,852.4120 | Censored | Not reached | Not reached |
+| Windows ARM64 / `065585ca` | 72,626.0614 | Censored | Not reached | Not reached |
+| Windows ARM64 / `6827cd1a` | **5,223.9037** | **7,796.1089** | 5,166.1181 | 5,380.0477 |
+| macOS x64 / `065585ca` | 432.8346 | 4,961.0908 | 529.7896 | 871.3132 |
+| macOS x64 / `6827cd1a` | 480.7010 | **228.6858** | 485.7956 | 576.1201 |
+| macOS ARM64 / `065585ca` | 96.3230 | 2,731.7920 | 88.9028 | 98.1715 |
+| macOS ARM64 / `6827cd1a` | 142.4718 | **80.9661** | 157.1731 | 170.1695 |
+
+There is no macOS `23f1c1a` timing baseline: admission rejected the process before
+launch. Earlier Windows post-edit timings are right-censored, **not zero**, and
+cannot supply an exact speedup. These are successive hosted attempts, not paired
+same-machine trials or distributions; no statistical regression/speedup claim
+follows from the decimal precision. Windows initial publication is markedly
+lower in these observed samples, but **5–10-second style phases remain an
+unacceptable fluent-editing outcome**. Mac no longer shows the previous 2.7–5
+second post-edit stall, but 81–229 ms publication plus analysis and other work
+does not certify input-to-pixel responsiveness. The next Windows investigation
+must separate residual application cost from verification/readback and layout
+without weakening correctness checks; current green completion is insufficient.
+
+### Novel whole-import history remains a separate Windows problem
+
+The 3,711,959-byte generated novel has unchanged content across all runs.
+Initial/Undo/Redo native-import phase durations in this run are:
+
+| RID | Initial import ms | Undo reimport ms | Redo reimport ms |
+| --- | ---: | ---: | ---: |
+| `win-x64` | **4,898.8882** | **4,667.2545** | **4,621.8596** |
+| `win-arm64` | **3,875.6692** | **3,818.7237** | **3,810.1724** |
+| `osx-x64` | 5.9238 | 3.8722 | 3.9611 |
+| `osx-arm64` | 1.9959 | 2.1165 | 1.8053 |
+
+Windows `065585ca` measured 4,702.6971 / 4,661.2363 / 4,637.9125 ms (x64)
+and 3,904.0313 / 3,778.2458 / 3,781.1905 ms (ARM64). `23f1c1a` measured
+4,786.7398 / 4,678.1756 / 4,682.4698 ms (x64) and
+3,989.0690 / 3,770.8675 / 3,772.9407 ms (ARM64). This experiment still imports
+the whole native text for history; the detached foreground work does not solve
+that cost. Actual history synchronization needs its own architectural remedy,
+not an assertion that all ordinary files are already fluent.
+
+### Normal traces and immutable evidence
+
+All four source traces now contain **121 complete rows**, exactly one successful
+session terminal and no observed dropped row. This replaces earlier Windows
+censored 98-row prefixes with normal shutdown evidence; it does not retroactively
+qualify those prefixes or establish full trace transport/causal coverage.
+
+| RID | Trace bytes | Trace SHA-256 |
+| --- | ---: | --- |
+| `win-x64` | 37,349 | `58173432458b99f1c5ada8eb5c9e6e53aa967b0fe30a727fefdaaf91aa42230e` |
+| `win-arm64` | 37,387 | `597459dce4c860e037d55399c861ea3bd72ba801a4fe89ecde5e00d366446da8` |
+| `osx-x64` | 37,256 | `00dcde70addbd7d2b553fdca0fa4aaa3911d07e361b144bb858f1856d40853ea` |
+| `osx-arm64` | 37,214 | `001549739c2ed4295ec37249339012ef3725a69128880c2f37cc6fc87ced2fb2` |
+
+Evidence is retained at `.cache/ci-36899695843-codec-source/`, including run and
+artifact metadata, complete run log, eight original artifact trees, the adapted
+artifact-only `audit.py`, `audit-result.json`, `audit-result.txt` and
+`comparison.txt`. New report SHA-256 values are:
+
+- Windows x64: `cc1632e02ad7c23efd819533d766aa0d8dfd65d6a66eae75ea302f46c880a9d4`.
+- Windows ARM64: `b9fdd61b40caa2c15885be0862bed4c8f88be1e243e78f869b19742d929707f0`.
+- macOS x64: `86c87ba03f65c4aa2dcd1330934e47cf4b81b6d384b7a9fddd2905e2ddca6bc0`.
+- macOS ARM64: `c68aa69c182e606d45ba220990eae737e04dd747eb9b718c861f073ce7998771`.
+
+Run-log SHA-256:
+`EEBBD39DB3E7026CFC7B165A61F6FC1A70F91A0E869307463F1DA30CE4F24C42`.
+The audit only retrieved completed GitHub evidence and read frozen source and
+artifacts; no native process, GUI, workflow replay, timeout change or unrelated
+Grid/Save graph audit was performed.
