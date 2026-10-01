@@ -18,6 +18,10 @@ private struct Report: Codable {
     var selection_length: Int?
     var tree_bounded = true
     var dispatched_events = 0
+    var guard_stage = "observe"
+    var ax_error: Int32?
+    var window_count: Int?
+    var modified: Bool?
 }
 
 /// Retrieve only one bounded metadata attribute with an element-local timeout.
@@ -49,16 +53,22 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
     var report = Report(requested_pid: pid)
     report.trusted = AXIsProcessTrusted()
     report.post_event_access = CGPreflightPostEventAccess()
-    guard report.trusted else { report.status = "blocked"; return (report, nil, nil) }
-    guard owned(app, pid) else { report.status = "failed"; return (report, nil, nil) }
+    guard report.trusted else { report.status = "blocked"; report.guard_stage = "ax-trust"; return (report, nil, nil) }
+    guard owned(app, pid) else { report.status = "failed"; report.guard_stage = "app-ownership"; return (report, nil, nil) }
     _ = AXUIElementSetMessagingTimeout(app, 0.15)
     var windowCount = 0
-    guard AXUIElementGetAttributeValueCount(app, "AXWindows" as CFString, &windowCount) == .success,
-          windowCount <= 1 else { report.status = "failed"; return (report, nil, nil) }
+    let countError = AXUIElementGetAttributeValueCount(app, "AXWindows" as CFString, &windowCount)
+    report.ax_error = countError.rawValue
+    report.window_count = windowCount
+    guard countError == .success, windowCount <= 1 else {
+        report.status = "failed"; report.guard_stage = "window-count"; return (report, nil, nil)
+    }
     if windowCount == 0 { return (report, nil, nil) }
     var rawWindows: CFArray?
     guard AXUIElementCopyAttributeValues(app, "AXWindows" as CFString, 0, 1, &rawWindows) == .success,
-          let windows = rawWindows as? [AXUIElement], windows.count == 1 else { return (report, nil, nil) }
+          let windows = rawWindows as? [AXUIElement], windows.count == 1 else {
+        report.guard_stage = "window-read"; return (report, nil, nil)
+    }
     var queue: [(AXUIElement, Int)] = [(windows[0], 0)]
     var cursor = 0
     var sources: [AXUIElement] = []
@@ -66,12 +76,15 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
     while cursor < queue.count && cursor < 64 {
         let (element, depth) = queue[cursor]
         cursor += 1
-        guard owned(element, pid) else { report.status = "failed"; return (report, nil, nil) }
+        guard owned(element, pid) else { report.status = "failed"; report.guard_stage = "tree-ownership"; return (report, nil, nil) }
         let role = attribute(element, "AXRole") as? String
         if role == "AXWindow" {
-            if window != nil { report.status = "failed"; return (report, nil, nil) }
+            if window != nil { report.status = "failed"; report.guard_stage = "window-count"; return (report, nil, nil) }
             guard let title = attribute(element, "AXTitle") as? String,
-                  title.utf16.count <= 512, title.contains("working.json") else { return (report, nil, nil) }
+                  title.utf16.count <= 512, title.contains("working.json") else {
+                report.guard_stage = "window-title"; return (report, nil, nil)
+            }
+            report.modified = title.contains(" •")
             window = element
         }
         if role == "AXTextArea", attribute(element, "AXDescription") as? String == "Mote editor" {
@@ -88,6 +101,7 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
                 if count > 32 || queue.count + count > 64 {
                     report.tree_bounded = false
                     report.status = "failed"
+                    report.guard_stage = "tree-bound"
                     return (report, nil, nil)
                 }
                 var children: CFArray?
@@ -99,13 +113,16 @@ private func observe(_ app: AXUIElement, _ pid: pid_t, _ size: Int, _ version: I
         }
     }
     report.source_candidates = sources.count
-    guard sources.count == 1, let source = sources.first else { return (report, nil, window) }
+    guard sources.count == 1, let source = sources.first else {
+        report.guard_stage = "source-candidates"; return (report, nil, window)
+    }
     report.source_units = (attribute(source, "AXNumberOfCharacters") as? NSNumber)?.intValue
     report.focused = (attribute(source, "AXFocused") as? NSNumber)?.boolValue
     let selected = range(attribute(source, "AXSelectedTextRange"))
     report.selection_start = selected?.location
     report.selection_length = selected?.length
     report.ready = report.source_units == size && window != nil
+    report.guard_stage = report.ready ? "ready" : "source-length"
     return (report, source, window)
 }
 
@@ -156,41 +173,52 @@ private func main() throws {
     if operation == "edit" || operation == "save" {
         guard report.trusted && report.post_event_access else {
             report.status = "blocked"
+            report.guard_stage = "post-access"
             emit(report)
             return
         }
         guard report.ready, let source, report.focused == true else {
             report.status = "blocked"
+            report.guard_stage = "source-focus"
             emit(report)
             return
         }
         if operation == "edit" {
             // The source proxy currently has a range getter but no range setter.
             // Navigate exactly once from the certified fresh-open caret instead.
+            report.guard_stage = "initial-selection"
             guard selection(source, pid, 0, 0) else { report.status = "failed"; emit(report); return }
+            report.guard_stage = "navigate"
             for _ in 0..<9 {
                 guard owned(source, pid), key(pid, 124) else { report.status = "failed"; emit(report); return }
                 report.dispatched_events += 2
                 Thread.sleep(forTimeInterval: 0.01)
             }
+            report.guard_stage = "selection-ack"
             guard acknowledge(source, pid, 9, 0), key(pid, 124, .maskShift),
                   acknowledge(source, pid, 9, 1) else { report.status = "failed"; emit(report); return }
             report.dispatched_events += 2
+            report.guard_stage = "edit-dispatch"
             guard owned(source, pid), key(pid, 0, [], [88]) else { report.status = "failed"; emit(report); return }
             report.dispatched_events += 2
+            report.guard_stage = "edit-ack"
             guard acknowledge(source, pid, 10, 0) else { report.status = "failed"; emit(report); return }
         } else {
+            report.guard_stage = "save-selection"
             guard selection(source, pid, 10, 0), key(pid, 1, .maskCommand) else {
                 report.status = "failed"; emit(report); return
             }
             report.dispatched_events = 2
+            report.guard_stage = "save-dispatch"
         }
     } else if operation == "close" {
+        report.guard_stage = "close-window"
         guard report.ready, let window, owned(window, pid),
               let raw = attribute(window, "AXCloseButton"), CFGetTypeID(raw) == AXUIElementGetTypeID() else {
             report.status = "failed"; emit(report); return
         }
         let button = unsafeBitCast(raw, to: AXUIElement.self)
+        report.guard_stage = "close-button"
         guard owned(button, pid), AXUIElementPerformAction(button, "AXPress" as CFString) == .success else {
             report.status = "failed"; emit(report); return
         }

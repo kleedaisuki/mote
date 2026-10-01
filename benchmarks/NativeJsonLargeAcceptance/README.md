@@ -16,9 +16,12 @@ python benchmarks/NativeJsonLargeAcceptance/probe.py `
 The four hosted native-RID matrix entries run this same contract. Python 3.14 is
 selected with native `x64`/`arm64` architecture; a host/RID mismatch is refused,
 not executed under emulation. macOS compiles the isolated Swift client before
-fixtures/process timing. Neither Mac architecture has yet compiled/executed this
-client; actual hosted outcome is pending. Windows ARM64 is equally pending and
-must not inherit the local Windows x64 result.
+fixtures/process timing. The [first four-RID hosted run](../../docs/validation/native-json-large-first-hosted.md)
+compiled the initial Swift client on both Mac architectures, but both failed
+before source acknowledgement. Windows ARM64 and x64 passed the complete 1 MiB
+workflow; both 100 MiB Save oracles timed out under an observer that could obstruct
+atomic replacement. Updated observer/failure metadata target evidence is pending;
+none of these failures is disguised as four-RID acceptance.
 
 ## Workload and independent oracles
 
@@ -51,8 +54,10 @@ The observable sequence is:
    original and working bytes must still match the pinned input SHA.
 4. Exactly one attempted native replacement, source acknowledgement, current
    `Complete · v1` zero-diagnostic status; working disk still unchanged.
-5. Ordinary Save dispatch. A full streamed saved SHA and exact byte count must
-   match the independently computed one-byte replacement oracle.
+5. Ordinary Save dispatch, with the owned native dirty→clean title acknowledgement
+   polled **without target file handles**. Only afterwards a full streamed saved
+   SHA and exact byte count must match the independent one-byte replacement oracle;
+   clean chrome alone never certifies Save.
 6. Normal close, successful exit, one successful terminal session, no drops,
    causal parent/version/count audit, successful v0 open and v1 edit **source
    draw callback return** intervals.
@@ -97,8 +102,10 @@ Individual Windows calls are at most 2 s; a Mac client invocation has a 6 s oute
 subprocess watchdog, 0.15 s per AX message, at most 64 tree nodes/depth 8 and
 32 children per node. A final call can overrun an observation deadline by its
 own bound. The hosted step has a 20-minute hard watchdog. Runtime control has
-15 s and Swift compilation 120 s. On failure only the owned editor process is
-killed/reaped (10 s); no modifying action is retried. Forced cleanup is retained
+15 s and Swift compilation 120 s. On failure bounded owned-dialog/fixed-enum
+metadata is retained, then at most one owned normal-close request is attempted
+(5 s); unknown dialogs are not dismissed. If necessary only the owned editor
+process is killed/reaped (10 s); no modifying action is retried. Forced cleanup is retained
 and **cannot certify a normal terminal session**. CI cancellation/hard watchdog
 may prevent a report and is an incomplete diagnostic, never success.
 
@@ -124,7 +131,7 @@ green job or masked step conclusion does not certify this pilot.
 
 ## Completed local evidence (2026-10-01)
 
-- Portable artifact/protocol tests: **9/9** passed, Python 3.14.6, Windows x64.
+- Portable artifact/protocol tests: **12/12** passed, Python 3.14.6, Windows x64.
   Tests do not execute OS input/native processes. They cover exact valid corpus
   and one-byte oracle, wrong edit witness, causal count/version endpoint audit,
   mismatched/cancelled draw rejection, reopen mutation refusal, one-attempt
@@ -154,8 +161,21 @@ green job or masked step conclusion does not certify this pilot.
   The retained original trace was re-audited without another GUI launch after
   predicate tightening; `.cache/native-json-large/local-stale-small-trace-reaudit.json`
   passes the stricter successful-action/version progression contract.
-- Four-RID exact-current-source hosted runs, Mac Swift compile/capability,
-  Windows ARM64 ctypes execution, and 100 MiB outcomes remain **pending**.
+- First-hosted execution: both Windows 1 MiB full workflows passed, including
+  actual ARM64 ctypes ABI and independent raw trace audits. Both Windows 100 MiB
+  pre-Save source/semantics/edit stages passed, but Save oracle timed out; both
+  Mac clients compiled but failed before source acknowledgement. All actual
+  pilot steps exited1 despite masked green job conclusions. See the linked
+  validation document for exact identities, raw outcomes and timing limits.
+- OS-level `ReplaceFileW` discriminator proved an ordinary Python reader can
+  deny DELETE sharing and obstruct Save (error32). UI-only dirty→clean polling
+  eliminates that observer handle instead of adding a special reader. One
+  authorized stale-binary 100 MiB local workflow with the corrected observer
+  passed exact Save/normal exit/GUI reopen/terminal trace; artifact
+  `.cache/native-json-large/local-stale-large-title-only-pilot.json`. It is not
+  current-source/page-performance evidence. Three new tests enforce no target
+  read until clean acknowledgement, exact bytes after acknowledgement, and
+  sanitized Mac failure metadata retention. Updated hosted outcomes remain pending.
 
 ## Grounding and why the boundaries matter
 

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 import uuid
 
 import probe
@@ -169,6 +170,62 @@ class ProbeTests(unittest.TestCase):
         self.assertNotIn("do not disclose", json.dumps(result))
         self.assertTrue(result["forced_cleanup"])
         self.assertEqual(result["input_sha256_after"], case["input_sha256"])
+
+    def test_save_observer_does_not_open_target_before_clean_ack(self):
+        """UI-only polling cannot deny DELETE sharing during atomic replacement."""
+        calls = []
+        class Driver:
+            """Deterministic dirty-to-clean native chrome oracle."""
+            modified = True
+            saved = False
+            observations = 0
+            def observe(self, version):
+                """Acknowledge clean only after one Save and two polls."""
+                self.observations += 1
+                if self.saved and self.observations >= 3:
+                    self.modified = False
+                calls.append("dirty" if self.modified else "clean")
+                return {"modified": self.modified}
+            def save(self):
+                """Record one modifying dispatch."""
+                self.saved = True
+                calls.append("save")
+        driver = Driver()
+        child = SimpleNamespace(poll=lambda: None)
+        working = SimpleNamespace(stat=lambda: SimpleNamespace(st_size=100))
+        def hash_once(path):
+            """Assert every target handle occurs strictly after clean acknowledgement."""
+            self.assertFalse(driver.modified)
+            calls.append("hash")
+            return "expected"
+        with patch.object(probe, "digest", side_effect=hash_once):
+            probe.save_exact(child, driver, working, 100, "expected")
+        self.assertEqual(calls, ["dirty", "save", "dirty", "clean", "hash"])
+
+    def test_clean_title_alone_cannot_certify_save(self):
+        """A clean UI with wrong exact bytes is failure, not Save acceptance."""
+        driver = SimpleNamespace(observe=lambda version: {"modified": True}, save=lambda: None)
+        working = SimpleNamespace(stat=lambda: SimpleNamespace(st_size=100))
+        with patch.object(probe, "wait", return_value=True), patch.object(probe, "digest", return_value="wrong"):
+            with self.assertRaises(ValueError):
+                probe.save_exact(None, driver, working, 100, "expected")
+
+    def test_mac_failure_report_retained_without_ax_strings(self):
+        """Guard/error metadata survives a failed client while arbitrary strings do not."""
+        raw = {"status": "failed", "requested_pid": 42, "guard_stage": "window-count",
+               "ax_error": -25204, "window_count": 0, "trusted": True,
+               "private_ax_title": "must never enter report"}
+        driver = probe.MacDriver(42, 1048576, Path("unused"))
+        with patch.object(probe, "bounded_command", return_value=SimpleNamespace(stdout=json.dumps(raw).encode())):
+            with self.assertRaises(RuntimeError):
+                driver.observe(0)
+        result = driver.failure_observation()
+        self.assertEqual(result["guard_stage"], "window-count")
+        self.assertEqual(result["ax_error"], -25204)
+        self.assertNotIn("private_ax_title", result)
+        self.assertNotIn("must never", json.dumps(result))
+        with self.assertRaises(ValueError):
+            probe.mac_report({**raw, "guard_stage": "arbitrary AX text"})
 
 
 if __name__ == "__main__":

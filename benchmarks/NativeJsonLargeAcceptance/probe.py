@@ -121,6 +121,8 @@ class WindowsDriver:
             "SendMessageTimeoutW": ([w.HWND, w.UINT, ctypes.c_size_t, ctypes.c_ssize_t,
                                       w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)], ctypes.c_ssize_t),
             "PostMessageW": ([w.HWND, w.UINT, ctypes.c_size_t, ctypes.c_ssize_t], w.BOOL),
+            "GetWindow": ([w.HWND, w.UINT], w.HWND),
+            "IsWindowEnabled": ([w.HWND], w.BOOL),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self.api, name)
@@ -176,7 +178,26 @@ class WindowsDriver:
         return {"ready": 0 < length <= 16384 and prefix.startswith(expected_prefix),
                 "complete": f"JSON · Complete · v{version}" in status_text and "No diagnostics." in status_text,
                 "bounded_input_units": length, "source_proxy_scope": "bounded-native-host-not-full-source-UIA",
-                "focused": None}
+                "focused": None, "modified": " •" in self.text(self.main, 512)}
+
+    def failure_observation(self):
+        """Read only owned dialog count/enabled/dirty metadata; never dialog bodies."""
+        count = 0
+        @self.callback
+        def visit(handle, _):
+            nonlocal count
+            process_id = ctypes.c_ulong()
+            self.api.GetWindowThreadProcessId(handle, ctypes.byref(process_id))
+            if process_id.value == self.pid and self.api.GetWindow(handle, 4) == self.main:
+                name = ctypes.create_unicode_buffer(64)
+                self.api.GetClassNameW(handle, name, len(name))
+                if name.value == "#32770":
+                    count += 1
+            return True
+        self.api.EnumWindows(visit, 0)
+        self.owned(self.main)
+        return {"owned_direct_dialog_count": count, "main_enabled": bool(self.api.IsWindowEnabled(self.main)),
+                "main_modified": " •" in self.text(self.main, 512)}
 
     def edit(self):
         """Replace exactly one witnessed string byte through the native input host once."""
@@ -204,6 +225,7 @@ class MacDriver:
     def __init__(self, pid, size, client):
         """Retain only process identity, ASCII character count and compiled client."""
         self.pid, self.size, self.client = pid, size, client
+        self.last_report = None
 
     def command(self, operation, version):
         """A 6-second outer watchdog bounds each client's 0.15-second AX calls."""
@@ -213,6 +235,8 @@ class MacDriver:
         data = json.loads(result.stdout)
         if data.get("requested_pid") != self.pid:
             raise ValueError("Mac client process identity differs")
+        self.last_report = mac_report(data)
+        data = self.last_report
         if data.get("status") == "blocked":
             raise PermissionError("Mac capability blocked")
         if data.get("status") != "observed":
@@ -235,6 +259,31 @@ class MacDriver:
         """Press the exact owned window's AX close button, without keyboard/global focus."""
         self.command("close", 1)
 
+    def failure_observation(self):
+        """Retain the last validated content-free report without extra modifying actions."""
+        return self.last_report
+
+
+def mac_report(data):
+    """Whitelist Mac failure metadata and guard enums, excluding arbitrary AX values."""
+    stages = {"observe", "ax-trust", "app-ownership", "window-count", "window-read", "window-title",
+              "tree-ownership", "tree-bound", "source-candidates", "source-length", "ready", "post-access",
+              "source-focus", "initial-selection", "navigate", "navigate-ack", "selection-ack", "edit-dispatch",
+              "edit-ack", "save-selection", "save-dispatch", "close-window", "close-button", "complete"}
+    if data.get("status") not in ("observed", "blocked", "failed") or data.get("guard_stage") not in stages:
+        raise ValueError("unknown Mac report classification")
+    boolean = ("trusted", "post_event_access", "ready", "complete", "focused", "tree_bounded", "modified")
+    numeric = ("requested_pid", "source_candidates", "source_units", "selection_start", "selection_length",
+               "dispatched_events", "window_count", "ax_error")
+    result = {"status": data["status"], "guard_stage": data["guard_stage"]}
+    for name in boolean + numeric:
+        value = data.get(name)
+        wanted = bool if name in boolean else int
+        if value is not None and type(value) is not wanted:
+            raise ValueError("invalid Mac metadata type")
+        result[name] = value
+    return result
+
 
 def wait(child, condition, seconds):
     """Bound endpoint polling and retain failed outcomes instead of fabricated timings."""
@@ -247,6 +296,21 @@ def wait(child, condition, seconds):
             return observed
         time.sleep(POLL_SECONDS)
     raise TimeoutError("endpoint observation timed out")
+
+
+def save_exact(child, driver, working, size, expected_sha256):
+    """Observe Save without opening its target until native chrome acknowledges clean.
+
+    Ordinary Python readers on Windows deny DELETE sharing and can obstruct
+    atomic replacement. This read-only UI acknowledgement is necessary but not
+    sufficient: one subsequent full-file digest must match the independent oracle.
+    """
+    if driver.observe(1).get("modified") is not True:
+        raise ValueError("Save requires observed dirty source")
+    driver.save()
+    wait(child, lambda: driver.observe(1).get("modified") is False, 60)
+    if working.stat().st_size != size or digest(working) != expected_sha256:
+        raise ValueError("native clean acknowledgement failed exact Save bytes")
 
 
 def trace_evidence(home, editing):
@@ -306,6 +370,7 @@ def sample(executable, case, directory, client):
                    "trace_enabled": True, "route": "ordinary-product-no-launch-flags", "edit_attempts": 0,
                    "normal_exit": False, "reopen_normal_exit": False, "poll_interval_ms": 50})
     child = None
+    driver = None
     driver_type = WindowsDriver if sys.platform == "win32" else MacDriver
     try:
         started = time.perf_counter_ns()
@@ -340,13 +405,12 @@ def sample(executable, case, directory, client):
             raise ValueError("edit wrote disk before Save")
         result["disk_unchanged_before_save"] = True
         result["phase"] = "save-exact-bytes"
-        driver.save()
+        save_exact(child, driver, working, case["size_bytes"], case["expected_saved_sha256"])
         def saved():
             try:
                 return working.stat().st_size == case["size_bytes"] and digest(working) == case["expected_saved_sha256"]
             except OSError:
                 return False
-        wait(child, saved, 60)
         result["saved_sha256"] = digest(working)
         result["phase"] = "normal-close"
         driver.close()
@@ -382,6 +446,21 @@ def sample(executable, case, directory, client):
     except Exception as error:
         result["status"] = "blocked" if isinstance(error, PermissionError) else "failed"
         result["error_class"] = type(error).__name__
+        if driver is not None:
+            try:
+                result["failure_observation"] = driver.failure_observation()
+            except Exception as failure:
+                result["failure_observation_error_class"] = type(failure).__name__
+        if child is not None and child.poll() is None and driver is not None:
+            # One owned normal-close request may drain the existing trace. A
+            # dirty/error modal may prevent it; never dismiss an unknown dialog,
+            # retry Save, or label this cleanup as successful workload acceptance.
+            try:
+                result["failure_close_attempted"] = True
+                driver.close()
+                result["failure_cleanup_normal_exit"] = child.wait(timeout=5) == 0
+            except Exception as failure:
+                result["failure_close_error_class"] = type(failure).__name__
     finally:
         if child is not None and child.poll() is None:
             child.kill()
