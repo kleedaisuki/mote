@@ -203,6 +203,20 @@ are no active owned experiment processes.
 
 ## Methodological basis
 
+### Retained next-step harness (not new runtime measurements)
+
+The next hosted experiment is now represented by
+[`Measure-WindowsTracePairs.ps1`](../../benchmarks/NativePaintLatency/TracePairs.md):
+same published binary SHA, fresh default homes, fixed 1 MiB source, alternating
+off/on order and unchanged exact-source/screen oracles. Both sampled exact
+foreground controls are mandatory; unlike the interrupted no-activation local
+series above, it uses the original driver's existing target activation attempts.
+It stops at the first failure/equivalence mismatch and retains rejected evidence.
+Whole-series qualification precedes any paired estimate. Retained on traces
+require three native captured-version 1/2/3 complete Save chains; off requires
+zero traces. CPU stays null when unavailable. Portable fixtures/parser checks
+are not native measurements; **current AppKit monitor cost remains unmeasured**.
+
 Microsoft defines
 [`Process.TotalProcessorTime`](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.totalprocessortime?view=net-10.0)
 as user plus privileged target CPU and permits post-exit retrieval on Windows

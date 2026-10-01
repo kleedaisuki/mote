@@ -1,5 +1,10 @@
 # Native editing: input, drawing, and captured-screen latency
 
+The retained [same-binary trace off/on paired guard](TracePairs.md) reuses the
+exact-source GDI fixture on a disposable hosted Windows desktop, stops at the
+first qualification failure and produces no estimate for a rejected series.
+It does not certify macOS instrumentation cost or physical input/presentation.
+
 The newer exact-HWND Windows Graphics Capture edit probe and independent
 synthetic-clock calibration are documented in
 [`PresentMeasurementDesign.md`](PresentMeasurementDesign.md). Its local

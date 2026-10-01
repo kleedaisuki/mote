@@ -7,7 +7,9 @@ param(
     [string[]] $Cases = @('many-1', 'many-10', 'many-100', 'long-50'),
     [ValidateRange(1, 30)][int] $Repetitions = 3,
     [switch] $AllowLocal,
-    [switch] $LocalTopmost
+    [switch] $LocalTopmost,
+    [ValidateSet('off', 'on')][string] $TraceMode = 'off',
+    [string] $ArtifactDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -46,7 +48,15 @@ $scratchRoot = [IO.Path]::GetFullPath((Join-Path $root '.temp/benchmarks/native-
 $outputRoot = [IO.Path]::GetFullPath((Join-Path $root '.cache/benchmarks/native-paint-latency'))
 $runId = [guid]::NewGuid().ToString('N')
 $scratch = [IO.Path]::GetFullPath((Join-Path $scratchRoot $runId))
-$output = [IO.Path]::GetFullPath((Join-Path $outputRoot $runId))
+$output = if ($ArtifactDirectory) { [IO.Path]::GetFullPath($ArtifactDirectory) } `
+    else { [IO.Path]::GetFullPath((Join-Path $outputRoot $runId)) }
+if ($ArtifactDirectory) {
+    $cacheRoot = [IO.Path]::GetFullPath((Join-Path $root '.cache'))
+    if (-not $output.StartsWith($cacheRoot + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase)) { throw 'ArtifactDirectory must be inside repository .cache.' }
+    if (Test-Path -LiteralPath $output) { throw 'Refusing to overwrite an existing artifact directory.' }
+    $outputRoot = [IO.Path]::GetDirectoryName($output)
+}
 foreach ($pair in @(@($scratchRoot, $scratch), @($outputRoot, $output))) {
     if (-not $pair[1].StartsWith($pair[0] + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase)) {
@@ -143,17 +153,24 @@ function Invoke-Case {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.Environment['MOTE_HOME'] = Join-Path $caseDir 'mote-home'
-    $start.Environment['MOTE_TRACE'] = '0'
+    $start.Environment['MOTE_TRACE'] = if ($TraceMode -eq 'on') { '1' } else { '0' }
     [void]$start.ArgumentList.Add('--canvas-experimental')
     [void]$start.ArgumentList.Add($file)
 
     $script:stage = 'launch'
+    $launchClock = [Diagnostics.Stopwatch]::StartNew()
     $script:child = [Diagnostics.Process]::Start($start)
     if ($null -eq $script:child) { throw 'Could not start mote.' }
     }
     catch { Remove-GeneratedCase $caseDir; throw }
     $result = [ordered]@{
         schema_version = 1; run_id = $runId; status = 'failed'; stage = $script:stage
+        trace_mode = $TraceMode; activation_attempts_enabled = $true; local_topmost = [bool]$LocalTopmost
+        profile = 'fresh-default-home-canvas-experimental-crlf-sentinel'
+        hosted_desktop = $hosted; launch_to_source_ready_ms = $null
+        normal_exit_observed = $false; exit_code = $null; forced_cleanup = $false
+        process_cpu_ms = $null; process_cpu_status = 'unavailable'; process_lifetime_ms = $null
+        trace_file_count = 0; trace_bytes = 0; trace_files = @()
         case = $Case; repetition = $Repetition; source_bytes = $bytes
         original_sha256 = $sourceHash; synthetic_source_removed = $false
         executable_sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
@@ -206,6 +223,7 @@ function Invoke-Case {
                 [MoteCanvasGuiProbe]::IsWindowVisible($script:input) -and
                 [MoteWindowsScreenObserver]::InputLengthBounded($script:input) -gt 0
         } 'The bounded input island was not ready.'
+        $result.launch_to_source_ready_ms = $launchClock.Elapsed.TotalMilliseconds
         if ($LocalTopmost) {
             [MoteWindowsScreenObserver]::MakeSyntheticTopmost($script:main)
         }
@@ -351,6 +369,7 @@ function Invoke-Case {
         if (-not $script:child.WaitForExit(15000) -or $script:child.ExitCode -ne 0) {
             throw 'mote did not exit cleanly.'
         }
+        $result.normal_exit_observed = $true
         $result.status = if ($result.foreground_at_focus -and $result.foreground_before_edit) {
             'passed-foreground'
         } else { 'passed-visible-background' }
@@ -373,9 +392,38 @@ function Invoke-Case {
         $cleanupError = $null
         try {
             if (-not $script:child.HasExited) {
+                $result.forced_cleanup = $true
                 $script:child.Kill()
                 if (-not $script:child.WaitForExit(5000)) {
                     throw 'Exact launched child could not be reaped within five seconds.'
+                }
+            }
+            # Read actual process state, not a boolean translated into an exit code.
+            $result.exit_code = $script:child.ExitCode
+            $result.process_lifetime_ms = $launchClock.Elapsed.TotalMilliseconds
+            try {
+                $result.process_cpu_ms = $script:child.TotalProcessorTime.TotalMilliseconds
+                $result.process_cpu_status = 'available'
+            } catch { } # Unsupported/unavailable timing remains null, never zero.
+            # Retain trace evidence only after the exact owned process is reaped.
+            # Recovery prefixes remain censored; the paired reader owns integrity.
+            $traceDir = Join-Path $caseDir 'mote-home/traces'
+            if (Test-Path -LiteralPath $traceDir) {
+                Assert-NoReparseAncestors $traceDir
+                $files = @(Get-ChildItem -LiteralPath $traceDir -Force | Sort-Object Name)
+                if ($files.Count -gt 8) { throw 'Unexpected trace rotation inventory.' }
+                $savedTrace = Join-Path $output $name
+                New-Item -ItemType Directory -Path $savedTrace | Out-Null
+                foreach ($traceFile in $files) {
+                    if ($traceFile.PSIsContainer -or
+                        ($traceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                        $traceFile.Name -cnotmatch '^mote-trace-[a-f0-9]{32}-[0-9]{6}\.jsonl$' -or
+                        $traceFile.Length -gt 32MB) { throw 'Invalid trace retention inventory.' }
+                    $destination = Join-Path $savedTrace $traceFile.Name
+                    Copy-Item -LiteralPath $traceFile.FullName -Destination $destination
+                    $result.trace_file_count++
+                    $result.trace_bytes += $traceFile.Length
+                    $result.trace_files += [IO.Path]::GetRelativePath($root, $destination).Replace('\', '/')
                 }
             }
             Remove-GeneratedCase $caseDir
