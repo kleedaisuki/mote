@@ -81,11 +81,11 @@ The supervision is process isolation for liveness, **not** reduced OS privileges
 worker and parent share the runner account. A hard kill of the supervisor/runner
 cannot promise execution of its finally; configure the outer CI timeout with
 ample cushion beyond three 30 s workers plus bounded cleanup (5 min recommended).
-Retain phase JSON, PNGs and stdout/stderr as well as the owner report. Final CI
-integration and hosted execution are still pending; this review authorizes the
-scoped diagnostic design, not live theme/ARM acceptance.
+Retain phase JSON, PNGs and stdout/stderr as well as the owner report. Hosted
+execution is still pending; this review authorizes the scoped diagnostic design,
+not live theme/ARM acceptance.
 
-Final reviewed file hashes:
+Initially reviewed file hashes (before semantic-neutral whitespace cleanup):
 
 | File | SHA-256 |
 | --- | --- |
@@ -93,10 +93,36 @@ Final reviewed file hashes:
 | `tests/NativeWindowsCanvasThemeWorker.ps1` | `8B90381054FE458D4E290197482E1D109AB7EEB524714BB8F83DF68F7252C364` |
 
 No substantive unresolved issue was found in those revised files within the
-reviewed scope. CI YAML invocation/artifact integration is not yet part of that
-approval; require the timeout cushion and both architecture targets described
-above. Neither live HKCU restoration nor actual target pixel capture was run by
-this reviewer.
+reviewed scope. Neither live HKCU restoration nor actual target pixel capture
+was run by this reviewer.
+
+## CI integration follow-up
+
+Reviewed only the new region inserted after legacy theme upload in
+`.github/workflows/ci.yml`; the diff does not alter existing steps. The existing
+matrix has `win-x64` and `win-arm64`, and both new diagnostic/upload steps cover
+those RIDs. Its five-minute outer timeout gives cushion beyond three 30 s workers
+and cleanup. Upload runs on failure and retains the owner report plus the whole
+RID-specific `.cache/native-canvas-theme` subtree (phase JSON, PNGs, raw worker
+stdout/stderr). Non-gating conclusions remain insufficient evidence.
+
+Found and resolved one concrete integration defect before commit: same-session
+script invocation left `$LASTEXITCODE` unset while the portable script's strict
+mode persisted into its caller. A fresh PowerShell strict-mode reproduction
+confirmed unset-variable failure. Both scripts now run as external
+`pwsh -NoProfile -File` processes, establishing exit codes and preventing fake
+test types/strict-mode state from leaking into the driver.
+
+Recomputed SHA-256 directly from Git LF bytes and their CRLF transform; all four
+configured pins match the final whitespace-normalized scripts:
+
+| File | LF SHA-256 | CRLF SHA-256 |
+| --- | --- | --- |
+| Owner | `EF59B864E76869096FB5254AB0961911CEF2E22C57DEC4147A77A7F7C34F0291` | `846534FD67513C5A3A3270AAFED749E03A458026C69FD8C55BA60A162EE3AE64` |
+| GUI worker | `CE29B4A2985AEAC906DE05A7AD2A217C8F4F7D818A227A33477629C5B5702683` | `54CF0E489DA42884A3AD17C2B8DA0B0D836F815233F7988F21F628AE7F77ED99` |
+
+No unresolved substantive issue in the reviewed CI insertion. Actual hosted
+runtime behavior remains unverified.
 
 ## Positive contracts and interpretation limits
 
