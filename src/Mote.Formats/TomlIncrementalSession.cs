@@ -141,7 +141,7 @@ internal sealed class TomlIncrementalSession : IFormatSession
     /// <summary>
     /// Certifies line-delimited TOML with independently valid logical statements and a bounded
     /// ownership trie. Unsupported, malformed, or oversized statements fall back to Provisional.
-    /// A 64-line cap bounds repeated continuation scans even for many tiny physical lines.
+    /// Each physical segment is scanned once; the line cap remains an explicit resource policy.
     /// </summary>
     private static LargeAnalysisResult TryAnalyzeLarge(TextSnapshot snapshot, TextSpan visible, CancellationToken ct)
     {
@@ -151,6 +151,8 @@ internal sealed class TomlIncrementalSession : IFormatSession
         var ownership = new TomlOwnershipIndex();
         var nodes = new List<SemanticNode>();
         int offset = 0, statementStart = 0, count = 0, statementLines = 0;
+        var boundary = new TomlStatementBoundary();
+        int scanned = 0;
         try
         {
             int read;
@@ -165,20 +167,24 @@ internal sealed class TomlIncrementalSession : IFormatSession
                     if (statement.Length > MaxStatement) return default;
                     if (ch != '\n') continue;
                     if (++statementLines > MaxStatementLines) return default;
-                    string source = statement.ToString();
-                    if (Continues(source)) continue;
+                    bool continues = boundary.Continues(statement, scanned);
+                    scanned = statement.Length;
+                    if (continues) continue;
                     if (++count > MaxStatements) return default;
+                    string source = statement.ToString();
                     var outcome = ProcessStatement(source, statementStart, visible, ownership, nodes);
                     if (!outcome.Accepted) return new(false, null, outcome.KnownError);
                     statement.Clear();
                     statementStart = offset;
                     statementLines = 0;
+                    boundary = default;
+                    scanned = 0;
                 }
             }
             if (statement.Length > 0)
             {
                 var source = statement.ToString();
-                if (++count > MaxStatements || Continues(source)) return default;
+                if (++count > MaxStatements || boundary.Continues(statement, scanned)) return default;
                 var outcome = ProcessStatement(source, statementStart, visible, ownership, nodes);
                 if (!outcome.Accepted) return new(false, null, outcome.KnownError);
             }
