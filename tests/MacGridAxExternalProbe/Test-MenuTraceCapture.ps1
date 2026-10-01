@@ -44,4 +44,4 @@ try {
     if (-not $child.HasExited) { $child.Kill(); [void]$child.WaitForExit(5000) }
     $child.Dispose()
 }
-Write-Output 'mac-grid-menu-bounded-whitelist-passed' 
+Write-Output 'mac-grid-menu-bounded-whitelist-passed'

@@ -153,8 +153,3 @@ adding speculative parser machinery. Preserve the hard final/nonfinal seams and
 single cancellation-gated state replacement. Promote only the claims supported
 by measured artifact results; retain truthful provisional display/global-count
 separation and legacy Full fallback in user-facing documentation.
-
-
-
-
-
