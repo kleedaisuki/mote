@@ -45,6 +45,13 @@ native.menu.save_family.entered native.menu.save_family.returned_true
 native.menu.save_family.returned_false""".split())
 OPERATIONS |= MENU_OPERATIONS
 OPERATIONS |= {"native.posted.callback.failed", "native.posted.callback.report_failed"}
+# Session-only monitor observations never identify an event or Save request.
+INPUT_SUCCESS_OPERATIONS = frozenset("""native.input.monitor.ready
+native.input.save_family_candidate native.input.monitor.removed""".split())
+INPUT_FAILURE_OPERATIONS = frozenset("""native.input.monitor.unavailable
+native.input.monitor.callback_failed native.input.monitor.removal_failed""".split())
+INPUT_OPERATIONS = INPUT_SUCCESS_OPERATIONS | INPUT_FAILURE_OPERATIONS
+OPERATIONS |= INPUT_OPERATIONS
 STATUSES = ("success", "cancelled", "failure", "skipped")
 ATTRIBUTES = {"format", "size_bucket", "version", "count", "hresult", "reason"}
 
@@ -190,6 +197,11 @@ def load_records(paths, *, discard_partial=False):
                         row["duration_us"] != 0 or row["status"] != "success"
                         or attrs or parent is None):
                     raise ValueError("invalid independent menu checkpoint")
+                if row["operation"] in INPUT_OPERATIONS and (
+                        row["duration_us"] != 0 or attrs or parent is None
+                        or row["status"] != ("success" if row["operation"] in
+                                              INPUT_SUCCESS_OPERATIONS else "failure")):
+                    raise ValueError("invalid independent input checkpoint")
                 for key in ("version", "count"):
                     if key in attrs and (type(attrs[key]) is not int or attrs[key] < 0):
                         raise ValueError("invalid numeric attribute")

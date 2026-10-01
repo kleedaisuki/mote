@@ -324,6 +324,12 @@ public static partial class MoteTelemetry
         TelemetryEvent.NativeMenuSaveFamilyReturnedFalse => "native.menu.save_family.returned_false",
         TelemetryEvent.NativePostedCallbackFailed => "native.posted.callback.failed",
         TelemetryEvent.NativePostedCallbackReportFailed => "native.posted.callback.report_failed",
+        TelemetryEvent.NativeInputMonitorReady => "native.input.monitor.ready",
+        TelemetryEvent.NativeInputMonitorUnavailable => "native.input.monitor.unavailable",
+        TelemetryEvent.NativeInputSaveFamilyCandidate => "native.input.save_family_candidate",
+        TelemetryEvent.NativeInputMonitorCallbackFailed => "native.input.monitor.callback_failed",
+        TelemetryEvent.NativeInputMonitorRemoved => "native.input.monitor.removed",
+        TelemetryEvent.NativeInputMonitorRemovalFailed => "native.input.monitor.removal_failed",
 
         _ => "unknown"
     };

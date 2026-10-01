@@ -108,6 +108,18 @@ public enum TelemetryEvent
     NativePostedCallbackFailed,
     /// <summary>Optional reporting of a queued callback failure also threw.</summary>
     NativePostedCallbackReportFailed,
+    /// <summary>Optional local key-down monitor installed; not global input coverage.</summary>
+    NativeInputMonitorReady,
+    /// <summary>Optional local monitor setup failed; not command failure.</summary>
+    NativeInputMonitorUnavailable,
+    /// <summary>Local monitor saw a Save-family candidate, not a Save request or routing result.</summary>
+    NativeInputSaveFamilyCandidate,
+    /// <summary>Local monitor callback observation failed; no event or exception content is recorded.</summary>
+    NativeInputMonitorCallbackFailed,
+    /// <summary>Owned local monitor removal returned; not proof of prior input delivery.</summary>
+    NativeInputMonitorRemoved,
+    /// <summary>Owned local monitor removal failed; no native token is recorded.</summary>
+    NativeInputMonitorRemovalFailed,
 }
 
 /// <summary>Normalized document format; filenames and extensions are never accepted.</summary>
