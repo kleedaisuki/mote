@@ -110,3 +110,35 @@ input/clipboard/settings mutation, altered oracle or unrelated gate relaxation
 is added. A later blocking hosted run remains pending at this review checkpoint.
 Ordinary external shortcut delivery and enabled performance remain distinct
 contracts, not certified by this gate.
+
+## Addendum: shared reader dimension-value correction
+
+Independently reviewed `192b531` and the shared-loader dependency in the final
+paired performance harness `af79c4c`, without reopening native source review or
+repeating completed tests. **No substantive issue found in this correction.**
+The earlier shared parser restricted attribute names but did not restrict
+`format`/`size_bucket` values or enforce native HResult types/range. Thus content
+disguised as an allowed dimension could be accepted; the initial review above
+did not identify that gap. This correction is material privacy/evidence hardening,
+not a producer schema change.
+
+Compared the new allowlists directly with `JsonlTraceSink.FormatName` and
+`SizeBucket`: all six emitted named formats, the unknown enum fallback, and all
+twelve size buckets remain accepted. Omitting optional dimensions remains valid.
+Producer HResult is nullable C# `int`, matching the reader's signed 32-bit range
+and exact Python integer check, which rejects Boolean, float and string values.
+The integer-only schema-v1 check also prevents Python's `True == 1` alias.
+Consequently existing valid native dimensions remain backward compatible;
+previously accepted malformed/privacy-violating artifacts are intentionally
+rejected. Native input checkpoints still require empty attributes.
+
+The performance summarizer now passes retained files through this same strict
+`load_records(..., discard_partial=False)` before causal integrity auditing and
+native Save classification. It checks bounded inventory/bytes and final newline
+for normal-exit files, while the shared loader enforces row/file/record limits.
+This addendum assesses that dependency, not the complete performance experiment
+or any runtime overhead result. Inspected retained
+`.cache/validation/closed-trace-dimensions/reader-tests.log`: **9 tests, OK**;
+fixtures include every producer vocabulary value, signed HResult boundaries,
+disguised content, incompatible types and Boolean schema version. No GUI or
+product experiment was run for this follow-up.
