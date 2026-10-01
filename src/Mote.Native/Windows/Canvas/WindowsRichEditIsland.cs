@@ -1122,6 +1122,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
         finally { ImmReleaseContext(input, context); }
     }
 
+    /// <summary>Updates only native appearance; source binding, text ownership and input HWND survive.</summary>
     private void SetInputAppearance(IThemePolicy theme, bool updateFont)
     {
         if (_input == 0) return;
@@ -1131,7 +1132,7 @@ internal sealed class WindowsRichEditIsland : IDisposable
         {
             var family = theme.Typography.EditorFontFamilies.Split(',', 2)[0].Trim();
             var font = Win32.CreateFontW(
-                -(int)Math.Round(theme.Typography.EditorFontSize * 96 / 72),
+                CanvasDipToInputCharacterHeight(theme.Typography.EditorFontSize),
                 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
                 family.Length == 0 ? "Consolas" : family);
             if (font == 0)
@@ -1152,6 +1153,21 @@ internal sealed class WindowsRichEditIsland : IDisposable
             }
             finally { _settingText = false; }
         }
+    }
+
+    /// <summary>
+    /// Converts the source em request in DIPs to GDI negative character height.
+    /// Canvas renders at 96 DPI and the input DC uses MM_TEXT, so one source DIP
+    /// equals one client logical unit. Do not apply a point-size 96/72 conversion
+    /// or monitor scaling independently of the source renderer and hit geometry.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The request cannot round to a positive GDI em height.</exception>
+    internal static int CanvasDipToInputCharacterHeight(double emDip)
+    {
+        var height = Math.Round(emDip);
+        if (!double.IsFinite(emDip) || emDip <= 0 || height < 1 || height > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(emDip));
+        return -(int)height;
     }
 
     private void ApplyInputTextColor()
