@@ -37,7 +37,9 @@ internal sealed partial class WindowsCsvGrid
         var group = _groupHandle;
         var installation = _installation;
         var thread = FocusWindowThread(table, out var process);
-        if (thread == 0 || !FocusMainMatches(_parent, thread, process) ||
+        // Relative HWND-owner agreement is not editor ownership after handle reuse.
+        // Reject a foreign process before reading any of its native class metadata.
+        if (thread == 0 || process != (uint)Environment.ProcessId || !FocusMainMatches(_parent, thread, process) ||
             !FocusRoleMatches(group, _parent, _controlId + 1100, "STATIC", thread, process) ||
             !FocusRoleMatches(table, group, _controlId, "SysListView32", thread, process))
             return new(TelemetryFocusThreadRelation.Unknown, managed, TelemetryFocusPane.Unavailable);

@@ -447,3 +447,22 @@ checks do not cancel a hung call. Hosted process timeout and exact owned-tree
 cleanup must retain this limitation. Supplemental client promotion, workflow
 integration and both-RID published-AOT runtime evidence remain pending; prior
 green CI and managed-HWND controls do not certify this new boundary.
+
+Root's post-freeze review identified another concrete ownership gap: native
+identity agreement against the table's returned PID alone did not prove that it
+was **this editor process**. Destroyed/reused handles belonging to another mote
+process could share fixed classes and child IDs. Enabled evidence capture now
+requires the table owner PID to equal `Environment.ProcessId` before querying
+other role/class metadata. Mismatch yields native unknown/pane unavailable;
+managed admission and the original adapter action are unchanged. Disposal still
+advances installation and clears source before native teardown, and capture
+rechecks installation/main/Table lifetime before publishing a category.
+
+The corrected native evidence file SHA256 is
+`2E1D3940F64743126A40540F66D46D2ADDAC516D7A207B3BA19885532FEBB366`.
+One affected Native Release build completed with zero warnings/errors; retained
+log is `.cache/validation/windows-grid-focus/focus-provenance-process-guard-build.log`.
+No completed telemetry/reader/graph suite was repeated for this native-only
+guard, and no GUI or HWND experiment was executed. The preceding independent
+review does not falsely certify this later delta; root supplied this ownership
+finding and owns its final integration inspection.
