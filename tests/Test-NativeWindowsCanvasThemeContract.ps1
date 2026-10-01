@@ -178,7 +178,7 @@ foreach ($case in @(
     if ($accepted -ne $case.Accept) { throw 'Source range case misclassified.' }
 }
 # Source-readiness metadata must reveal failed conjuncts, never source values/IDs/messages.
-foreach ($name in @('New-CanvasReadinessObservation','Read-CanvasReadinessAttempt')) {
+foreach ($name in @('New-CanvasReadinessObservation','Resolve-DirectCanvasSource','Read-CanvasReadinessAttempt')) {
  $f=@($gui.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true))
  if ($f.Count -ne 1) { throw 'Missing readiness metadata helper.' }
  . ([scriptblock]::Create($f[0].Extent.Text))
@@ -201,18 +201,20 @@ foreach ($case in @(
 )) {
  $range=[CanvasThemeSyntheticRange]::new();$range.Text=$case.Text
  $pattern=[CanvasThemeSyntheticPattern]::new();$pattern.DocumentRange=$range
- $element=[pscustomobject]@{Current=[pscustomobject]@{ProcessId=$case.Pid;AutomationId=$case.Id;ControlType=$case.Type};SyntheticPattern=$pattern;PatternAvailable=$case.Pattern;PatternCalls=0}
+ $element=[pscustomobject]@{NextSibling=$null;Current=[pscustomobject]@{ProcessId=$case.Pid;AutomationId=$case.Id;ControlType=$case.Type};SyntheticPattern=$pattern;PatternAvailable=$case.Pattern;PatternCalls=0}
  $element | Add-Member ScriptMethod GetCurrentPattern {
   param($id)
   $this.PatternCalls++
   if (-not $this.PatternAvailable) { throw [InvalidOperationException]::new('PRIVATE_EXCEPTION_SOURCE') }
   return $this.SyntheticPattern
  }
+ $canvasRoot=[pscustomobject]@{Current=[pscustomobject]@{ProcessId=77;AutomationId='';ControlType=[pscustomobject]@{ProgrammaticName='ControlType.Pane'}};FirstChild=$element}
  $o=New-CanvasReadinessObservation 3 125
  $accepted=$false;$threw=$false
- try { $accepted=Read-CanvasReadinessAttempt $o { $element } { @{Canvas=$case.Canvas;Input=$case.Input} } 77 $documentType 'portable-pattern' }
+ try { $accepted=Read-CanvasReadinessAttempt $o { $canvasRoot } { @{Canvas=$case.Canvas;Input=$case.Input} } 77 $documentType 'portable-pattern' {param($rootElement) $rootElement.FirstChild} {param($childElement) $childElement.NextSibling} }
  catch { $threw=$true }
- if ($accepted -ne $case.Accept -or $o.automation_id_class -cne $case.Class -or $o.attempt_count -ne 3 -or $o.elapsed_ms -ne 125) { throw 'Readiness acceptance/classification changed.' }
+ if ($accepted -ne $case.Accept -or $o.automation_id_class -cne $(if ($case.Pid -eq 77 -and $case.Id -ceq 'mote.source.document' -and $case.Type -eq $documentType) { 'expected-source' } else { 'not-read' }) -or $o.attempt_count -ne 3 -or $o.elapsed_ms -ne 125) { throw 'Readiness acceptance/classification changed.' }
+ if ($o.root_control_type -cne 'ControlType.Pane' -or $o.root_automation_id_class -cne 'empty' -or $o.source_candidate_count -ne $(if ($case.Pid -eq 77 -and $case.Id -ceq 'mote.source.document' -and $case.Type -eq $documentType) { 1 } else { 0 })) { throw 'Root/source metadata mixed or wrong candidate count.' }
  if (($null -ne $o.bounded_text_utf16_units) -ne $case.ReadText) { throw 'Readiness text gate changed.' }
  if ($case.ReadText -and ($o.bounded_text_utf16_units -ne $case.Text.Length -or $o.exact_synthetic_lf -ne ($case.Text -ceq "alpha`nbeta`n") -or $o.exact_synthetic_crlf -ne ($case.Text -ceq "alpha`r`nbeta`r`n") -or $o.exact_synthetic_cr -ne ($case.Text -ceq "alpha`rbeta`r"))) { throw 'Readiness text metadata wrong.' }
  if ($threw -ne (-not $case.Pattern) -or ($threw -and ($o.error_stage -cne 'text-pattern' -or $null -eq $o.error_hresult -or $o.text_pattern_available -ne $false))) { throw 'Readiness API error provenance wrong.' }
@@ -224,7 +226,50 @@ foreach ($case in @(
  if (-not $case.ReadText -and $case.Pattern -and $element.PatternCalls -ne 0) { throw 'Pattern read before accepted identity.' }
  $readinessCases++
 }
+# Direct-child topology contract: missing/duplicate/foreign/deep/root fallback are rejected.
+$topologyCases=0
+foreach ($shape in @('none','duplicate','foreign','foreign-root','grandchild','root-document','overflow')) {
+ $rootCurrent=[pscustomobject]@{ProcessId=77;AutomationId='';ControlType=[pscustomobject]@{ProgrammaticName='ControlType.Pane'}}
+ $root=[pscustomobject]@{Current=$rootCurrent;FirstChild=$null}
+ $first=[pscustomobject]@{Current=[pscustomobject]@{ProcessId=77;AutomationId='mote.source.document';ControlType=$documentType};NextSibling=$null}
+ switch ($shape) {
+  'duplicate' { $root.FirstChild=$first;$first.NextSibling=[pscustomobject]@{Current=$first.Current;NextSibling=$null} }
+  'foreign' {
+   $foreignCurrent=[pscustomobject]@{ProcessId=78}
+   $foreignCurrent | Add-Member ScriptProperty AutomationId { throw 'PRIVATE_FOREIGN_ID_MUST_NOT_BE_READ' }
+   $foreignCurrent | Add-Member ScriptProperty ControlType { throw 'PRIVATE_FOREIGN_TYPE_MUST_NOT_BE_READ' }
+   $first.Current=$foreignCurrent;$root.FirstChild=$first
+  }
+  'foreign-root' {
+   $root.Current=[pscustomobject]@{ProcessId=78}
+   $root.Current | Add-Member ScriptProperty AutomationId { throw 'PRIVATE_FOREIGN_ROOT_ID' }
+   $root.Current | Add-Member ScriptProperty ControlType { throw 'PRIVATE_FOREIGN_ROOT_TYPE' }
+   $root.FirstChild=$first
+  }
+  'grandchild' { $root.FirstChild=[pscustomobject]@{Current=$rootCurrent;NextSibling=$null;FirstChild=$first} }
+  'root-document' { $root.Current=$first.Current }
+  'overflow' {
+   $previous=$null
+   for ($i=0;$i -lt 33;$i++) {
+    $node=[pscustomobject]@{Current=$rootCurrent;NextSibling=$null}
+    if ($null -eq $previous) { $root.FirstChild=$node } else { $previous.NextSibling=$node }
+    $previous=$node
+   }
+  }
+ }
+ $o=New-CanvasReadinessObservation 1 0;$accepted=$false;$threw=$false
+ try { $accepted=Read-CanvasReadinessAttempt $o { $root } { @{Canvas=$true;Input=$true} } 77 $documentType 'portable-pattern' {param($r) $r.FirstChild} {param($c) $c.NextSibling} }
+ catch { $threw=$true }
+ if ($accepted -or ($threw -ne ($shape -ceq 'overflow'))) { throw "Direct-child shape misclassified: $shape" }
+ if ($shape -ceq 'duplicate' -and $o.source_candidate_count -ne 2) { throw 'Duplicate candidates not counted.' }
+ if ($shape -ceq 'foreign' -and (-not $o.foreign_child_seen -or $o.source_candidate_count -ne 0 -or $null -ne $o.error_hresult)) { throw 'Foreign identity was read or accepted.' }
+ if ($shape -ceq 'foreign-root' -and ($o.root_provider_process_matches_target -ne $false -or $o.direct_children_visited -ne 0 -or $null -ne $o.error_hresult)) { throw 'Foreign root identity/subtree was inspected.' }
+ if ($shape -ceq 'overflow' -and (-not $o.child_budget_exceeded -or $o.direct_children_visited -ne 32 -or $null -eq $o.error_hresult)) { throw 'Direct child budget was not enforced.' }
+ $json=$o | ConvertTo-Json -Compress
+ if ($json.Contains('PRIVATE_')) { throw 'Foreign child content leaked.' }
+ $topologyCases++
+}
 # Every attempt starts fresh: unknown facts must not survive the previous provider.
 $fresh=New-CanvasReadinessObservation 4 175
 if ($null -ne $fresh.exact_synthetic_lf -or $fresh.automation_id_class -cne 'not-read' -or $null -ne $fresh.text_pattern_available) { throw 'Attempt metadata retained stale facts.' }
-"PASS: owner/GUI AST and C# compile; role separation and readonly-HOME red/green setup; old finally red reproduction; $count restoration/cleanup/fidelity contracts; 7 source-range cases; $readinessCases content-free readiness cases. No GUI/registry API executed."
+"PASS: owner/GUI AST and C# compile; role separation and readonly-HOME red/green setup; old finally red reproduction; $count restoration/cleanup/fidelity contracts; 7 source-range cases; $readinessCases content-free readiness cases; $topologyCases direct-child topology cases. No GUI/registry API executed."

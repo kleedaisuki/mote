@@ -468,3 +468,48 @@ Use paginated artifact inventory; keep nested raw exits and report status as the
 verdict inputs. Immutable version, source selection/history, palette transitions,
 render callbacks, physical presentation, screen readers and IME remain unverified
 by this theme diagnostic.
+
+## Direct-source-child correction (portable validation; hosted result pending)
+
+The approved correction changes only the theme observer's source-node lookup.
+`FromHandle(canvas)` remains the target-owned container root; it is no longer
+mistaken for the semantic source. `Resolve-DirectCanvasSource` uses only
+`RawViewWalker.GetFirstChild` and `GetNextSibling` to inspect **direct children**,
+not arbitrary descendants, with a fixed **32-child** budget. It returns a source
+only when exactly one child has the expected process, exact automation ID
+`mote.source.document`, and Document control type. Zero or duplicate matching
+children reject readiness; a 33rd child fails with structured budget provenance.
+There is no root, legacy-control or native-input fallback.
+
+Root observation fields (`root_provider_process_matches_target`,
+`root_automation_id_class`, `root_control_type`) are separate from the semantic
+source's original provider/ID/type fields. The query adds only counts/booleans:
+`direct_children_visited`, `source_candidate_count`, `foreign_child_seen`,
+`child_budget_exceeded`. A foreign root prevents traversal; a foreign child does
+not expose its ID/type/text and cannot become a candidate. Unknown IDs remain
+classified, not serialized. Existing initial-only owner provenance is unchanged.
+
+After lookup, the observer still validates the exact semantic source PID/ID/type,
+TextPattern, **exact LF fixture**, and visible Canvas/input. The original 15-second
+polling, 50-ms interval, 30-second independent owner deadline, API-exception
+fail-fast behavior, hosted-only registry owner, exact restoration, and absence of
+selection/theme notification before readiness are preserved. No production
+accessibility topology or CI implementation is changed by this correction.
+
+Portable validation exits **0**, retaining `13` owner/restoration/fidelity,
+`7` source-range, readonly-HOME setup and `11` readiness/representation/privacy
+contracts. The readiness success case now explicitly models the observed Pane
+container with one source Document child; the old root-only predicate would reject
+that shape. An additional **7** direct-child topology cases reject absent source,
+duplicate expected source, foreign child, foreign root, only a deeper grandchild,
+a Document root without the required child, and traversal beyond the budget.
+Foreign identity getters deliberately throw private sentinels if read, verifying
+that rejection is based on PID before identity disclosure. JSON privacy and no
+pre-readiness input/theme ordering checks remain active.
+
+These portable results close the specific observer topology mismatch in the
+synthetic contract. They do **not** constitute a native theme pass. The next hosted
+run must produce a unique source child, exact source selection/text preservation,
+all three palette phases and rasters, normal exit, unchanged disk hash, and
+verified registry restoration. Editing history, immutable engine-version,
+physical presentation and real IME remain outside this diagnostic.

@@ -260,6 +260,8 @@ function New-CanvasReadinessObservation([int] $Attempt, [long] $ElapsedMs) {
         attempt_count=$Attempt; elapsed_ms=$ElapsedMs
         canvas_initial_owner_verified=$true; input_initial_owner_verified=$true
         canvas_visible=$null; input_visible=$null
+        root_provider_process_matches_target=$null; root_automation_id_class='not-read'; root_control_type='not-read'
+        direct_children_visited=0; source_candidate_count=0; foreign_child_seen=$false; child_budget_exceeded=$false
         provider_process_matches_target=$null
         automation_id_class='not-read'; control_type='not-read'; control_type_is_document=$null
         text_pattern_available=$null; bounded_text_utf16_units=$null
@@ -268,17 +270,62 @@ function New-CanvasReadinessObservation([int] $Attempt, [long] $ElapsedMs) {
     }
 }
 
-# Reuses the original identity/exact-LF/visible-host predicate without input or retries.
+# Search only direct RawView children, with a fixed budget and no fallback/root selection.
+# Foreign children reveal no identity. Multiple matching source children fail closed.
+function Resolve-DirectCanvasSource($Root, $Observation, [int] $ExpectedPid,
+    $DocumentType, [scriptblock] $ReadFirstChild, [scriptblock] $ReadNextSibling) {
+    $candidate=$null
+    $Observation.error_stage='direct-child-first'
+    $child=& $ReadFirstChild $Root
+    while ($null -ne $child) {
+        if ($Observation.direct_children_visited -ge 32) {
+            $Observation.child_budget_exceeded=$true
+            $Observation.error_stage='direct-child-budget'
+            throw 'Direct Canvas child query exceeded the fixed 32-node budget.'
+        }
+        $Observation.direct_children_visited++
+        $Observation.error_stage='direct-child-process'
+        $current=$child.Current
+        if ($current.ProcessId -ne $ExpectedPid) {
+            $Observation.foreign_child_seen=$true
+        } else {
+            $Observation.error_stage='direct-child-identity'
+            if ($current.AutomationId -ceq 'mote.source.document' -and $current.ControlType -eq $DocumentType) {
+                $Observation.source_candidate_count++
+                $candidate=$child
+            }
+        }
+        $Observation.error_stage='direct-child-next'
+        $child=& $ReadNextSibling $child
+    }
+    $Observation.error_stage=$null
+    if ($Observation.source_candidate_count -ne 1) { return $null }
+    return $candidate
+}
+
+# Reuses the original semantic-source/exact-LF/visible-host predicate without input/retries.
 # Getter callbacks permit portable tests without invoking UIA or Win32.
 function Read-CanvasReadinessAttempt($Observation, [scriptblock] $ReadElement,
-    [scriptblock] $ReadVisibility, [int] $ExpectedPid, $DocumentType, $PatternId) {
+    [scriptblock] $ReadVisibility, [int] $ExpectedPid, $DocumentType, $PatternId,
+    [scriptblock] $ReadFirstChild, [scriptblock] $ReadNextSibling) {
     try {
         $Observation.error_stage='hwnd-visibility'
         $visibility=& $ReadVisibility
         $Observation.canvas_visible=[bool]$visibility.Canvas
         $Observation.input_visible=[bool]$visibility.Input
         $Observation.error_stage='provider-from-handle'
-        $script:sourceElement=& $ReadElement
+        $root=& $ReadElement
+        $Observation.error_stage='root-provider-process'
+        $rootCurrent=$root.Current
+        $Observation.root_provider_process_matches_target=$rootCurrent.ProcessId -eq $ExpectedPid
+        if (-not $Observation.root_provider_process_matches_target) { $Observation.error_stage=$null; return $false }
+        $Observation.error_stage='root-provider-identity'
+        $rootId=$rootCurrent.AutomationId
+        $Observation.root_automation_id_class=if ($rootId -ceq 'mote.source.document') { 'expected-source' } elseif ([string]::IsNullOrEmpty($rootId)) { 'empty' } else { 'other' }
+        $rootType=$rootCurrent.ControlType.ProgrammaticName
+        $Observation.root_control_type=if ($rootType -cmatch '^ControlType\.[A-Za-z]{1,32}$') { $rootType } else { 'other' }
+        $script:sourceElement=Resolve-DirectCanvasSource $root $Observation $ExpectedPid $DocumentType $ReadFirstChild $ReadNextSibling
+        if ($null -eq $script:sourceElement) { return $false }
         $Observation.error_stage='provider-process'
         $current=$script:sourceElement.Current
         $Observation.provider_process_matches_target=$current.ProcessId -eq $ExpectedPid
@@ -344,7 +391,13 @@ try {
             [System.Windows.Automation.AutomationElement]::FromHandle($canvas)
         } {
             @{Canvas=[MoteCanvasThemeProbeNative]::IsWindowVisible($canvas); Input=[MoteCanvasThemeProbeNative]::IsWindowVisible($editor)}
-        } $TargetProcessId ([System.Windows.Automation.ControlType]::Document) ([System.Windows.Automation.TextPattern]::Pattern)
+        } $TargetProcessId ([System.Windows.Automation.ControlType]::Document) ([System.Windows.Automation.TextPattern]::Pattern) {
+            param($rootElement)
+            [System.Windows.Automation.TreeWalker]::RawViewWalker.GetFirstChild($rootElement)
+        } {
+            param($childElement)
+            [System.Windows.Automation.TreeWalker]::RawViewWalker.GetNextSibling($childElement)
+        }
     } 'Ordinary Canvas did not expose target-owned source Document and visible input island.'
     $sourceText = $textPattern.DocumentRange.GetText(256)
     $sourceRange = $textPattern.DocumentRange.Clone()
