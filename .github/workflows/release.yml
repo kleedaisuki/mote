@@ -1,0 +1,361 @@
+# Build qualified download assets; publication is a separate reviewed operation.
+name: Release qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Immutable full Git commit SHA to build
+        required: true
+        type: string
+      version:
+        description: Stable major.minor.patch version
+        required: true
+        default: '0.1.0'
+        type: string
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-qualification-${{ inputs.source_sha }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_SOURCE: ${{ inputs.source_sha }}
+  RELEASE_VERSION: ${{ inputs.version }}
+  # Notices in packaging/licenses match this SDK's Native AOT runtime 10.0.11.
+  DOTNET_VERSION: '10.0.400'
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate immutable input identity
+        shell: bash
+        run: |
+          [[ "$RELEASE_SOURCE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Verify checkout identity and release documentation
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE"
+          test -f "docs/releases/v$RELEASE_VERSION.md"
+          test -f docs/user/manual.md
+          test -f packaging/THIRD-PARTY-NOTICES.txt
+          python - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          root = ET.parse('src/Mote.Native/Mote.Native.csproj').getroot()
+          versions = [item.text for item in root.findall('./PropertyGroup/Version')]
+          if versions != [os.environ['RELEASE_VERSION']]:
+              raise SystemExit('Source project version does not match release identity')
+          PY
+
+  test:
+    needs: identity
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify selected SDK before restore or build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force '.cache/release-evidence/tests' | Out-Null
+          $selected = & dotnet --version
+          if ($LASTEXITCODE -ne 0 -or "$selected".Trim() -cne $env:DOTNET_VERSION) {
+            throw 'Selected SDK does not match the pinned release toolchain.'
+          }
+          "$selected".Trim() | Out-File '.cache/release-evidence/tests/selected-sdk.txt'
+      - name: Restore complete solution
+        shell: pwsh
+        run: |
+          dotnet restore mote.sln
+          if ($LASTEXITCODE -ne 0) { throw 'Complete solution restore failed.' }
+      - name: Build complete solution including Desktop prototype
+        shell: pwsh
+        run: |
+          dotnet build mote.sln -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'Complete solution build failed.' }
+      - name: Complete solution tests with bounded hang evidence
+        shell: pwsh
+        run: |
+          # Let each test host select its own timestamped TRX name. A fixed
+          # LogFileName makes the three project runs overwrite one another.
+          # Five minutes is a per-test liveness watchdog, not an editor UX SLA.
+          # Keep the blame sequence without collecting memory/content dumps.
+          dotnet test mote.sln -c Release --no-build --logger trx `
+            --blame-hang-timeout 5m --blame-hang-dump-type none `
+            --results-directory '.cache/release-evidence/tests'
+          if ($LASTEXITCODE -ne 0) { throw 'Complete solution tests failed.' }
+      - name: Release package integrity tests
+        run: python -B -m unittest discover -s tests -p test_release_packaging.py -v
+      - name: Release trace oracle negative controls
+        run: python -B -m unittest discover -s tests -p test_release_trace_oracle.py -v
+      - name: Release workflow independent byte fixture controls
+        shell: pwsh
+        run: ./tests/NativeReleaseProductWorkflow.ps1 -SelfTest
+      - name: Windows Save observer guarded-file regression
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Owned-file sharing guard only; no GUI or application changes.
+          & pwsh -NoProfile -File ./tests/Test-NativeWindowsReleaseSaveObserver.ps1 `
+            2>&1 | Tee-Object '.cache/release-evidence/tests/windows-save-observer.stdout.txt'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Save-completion observer regression failed.' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-tests-${{ matrix.os }}
+          path: .cache/release-evidence/tests/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  package:
+    # Native product evidence and managed suites are independent branches.
+    # Only release-assets may join them into a complete download set.
+    needs: identity
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: windows-11-arm
+            rid: win-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify selected SDK before Native AOT publish
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force '.cache/release-evidence/${{ matrix.rid }}' | Out-Null
+          $selected = & dotnet --version
+          if ($LASTEXITCODE -ne 0 -or "$selected".Trim() -cne $env:DOTNET_VERSION) {
+            throw 'Selected SDK does not match the pinned release toolchain.'
+          }
+          "$selected".Trim() | Out-File '.cache/release-evidence/${{ matrix.rid }}/selected-sdk.txt'
+      - name: Publish Native AOT product
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force '.cache/release-evidence/${{ matrix.rid }}' | Out-Null
+          dotnet --info | Out-File '.cache/release-evidence/${{ matrix.rid }}/dotnet-info.txt'
+          [Environment]::OSVersion.VersionString | Out-File '.cache/release-evidence/${{ matrix.rid }}/runner-os.txt'
+          if ($IsMacOS) { & sw_vers | Out-File '.cache/release-evidence/${{ matrix.rid }}/sw-vers.txt' }
+          dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r '${{ matrix.rid }}' --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true -p:Version=$env:RELEASE_VERSION `
+            -p:SourceRevisionId=$env:RELEASE_SOURCE -o '.cache/release-publish/${{ matrix.rid }}' `
+            2>&1 | Tee-Object '.cache/release-evidence/${{ matrix.rid }}/publish.log'
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT publish failed.' }
+      - name: Package, extract and verify immutable bytes
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $sdk = (dotnet --version).Trim()
+          python -B packaging/release_package.py build --rid $rid --version $env:RELEASE_VERSION --source $env:RELEASE_SOURCE `
+            --publish ".cache/release-publish/$rid" --output ".cache/release-packages/$rid" --run-url $run --sdk $sdk
+          if ($LASTEXITCODE -ne 0) { throw 'Release packaging failed.' }
+          $extension = if ($IsWindows) { '.zip' } else { '.tar.gz' }
+          $archive = ".cache/release-packages/$rid/mote-$env:RELEASE_VERSION-$rid$extension"
+          python -B packaging/release_package.py unpack --archive $archive --output ".cache/release-extracted/$rid"
+          if ($LASTEXITCODE -ne 0) { throw 'Release extraction failed.' }
+          $root = if ($IsWindows) { ".cache/release-extracted/$rid/mote-$env:RELEASE_VERSION-$rid" } else { ".cache/release-extracted/$rid/mote.app" }
+          python -B packaging/release_package.py verify --package $root --rid $rid --version $env:RELEASE_VERSION --source $env:RELEASE_SOURCE
+          if ($LASTEXITCODE -ne 0) { throw 'Release inventory validation failed.' }
+          $exe = if ($IsWindows) { "$root/mote.exe" } else { "$root/Contents/MacOS/mote" }
+          "RELEASE_EXECUTABLE=$([IO.Path]::GetFullPath($exe))" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($IsMacOS) {
+            & plutil -lint "$root/Contents/Info.plist"
+            if ($LASTEXITCODE -ne 0) { throw 'Bundle plist validation failed.' }
+            $imports = @(& otool -L $exe)
+            $imports | Out-File ".cache/release-evidence/$rid/native-imports.txt"
+            if ($LASTEXITCODE -ne 0) { throw 'Mach-O import inspection failed.' }
+            $dependencies = @($imports | Select-Object -Skip 1 | ForEach-Object { ($_ -split ' \(')[0].Trim() } | Where-Object { $_ })
+            if ($dependencies.Count -eq 0) { throw 'No Mach-O dependencies found; refusing an empty import observation.' }
+            foreach ($dependency in $dependencies) {
+              if ($dependency -notmatch '^(/usr/lib/|/System/Library/)') {
+                throw 'Unreviewed non-system Mach-O import. New companions require an explicit dependency review.'
+              }
+            }
+            & otool -l $exe | Out-File ".cache/release-evidence/$rid/macho-load-commands.txt"
+            if ($LASTEXITCODE -ne 0) { throw 'Mach-O deployment target inspection failed.' }
+          } else {
+            # The current release has no linked private native companions. This
+            # reviewed allowlist is not an eternal ban on multi-file delivery.
+            & ./.github/scripts/check-windows-imports.ps1 -Executable $exe -Report ".cache/release-evidence/$rid/imports.json"
+          }
+      - name: Packaged runtime and actual GUI initialization
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          foreach ($probe in @(@('--version', "mote $env:RELEASE_VERSION"), @('--check-runtime', 'mote-native-ready'), @('--smoke-gui', 'mote-native-gui-ready'))) {
+            $stem = $probe[0].TrimStart('-')
+            $directory = '.cache/release-evidence/${{ matrix.rid }}'
+            $start = @{ FilePath=$env:RELEASE_EXECUTABLE; ArgumentList=$probe[0]; PassThru=$true;
+              RedirectStandardOutput="$directory/$stem.stdout.txt"; RedirectStandardError="$directory/$stem.stderr.txt" }
+            if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+            $process = Start-Process @start
+            if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Packaged probe exceeded watchdog.' }
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { throw 'Packaged probe failed.' }
+            if ((Get-Content "$directory/$stem.stdout.txt" -Raw).Trim() -cne $probe[1]) { throw 'Packaged probe marker mismatch.' }
+          }
+      - name: Packaged six-format product workflow and fresh process reopen
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          # A script invocation in this shell does not supply a native exit
+          # status. Run an external pwsh so LASTEXITCODE belongs to this suite.
+          & pwsh -NoProfile -File ./tests/NativeReleaseProductWorkflow.ps1 -ExecutablePath $env:RELEASE_EXECUTABLE `
+            -OutputDirectory '.cache/release-evidence/${{ matrix.rid }}/product' -RuntimeIdentifier '${{ matrix.rid }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged product workflow failed.' }
+          $report = Get-Content '.cache/release-evidence/${{ matrix.rid }}/product/release-acceptance.json' -Raw | ConvertFrom-Json
+          $fixtures = @('markdown', 'toml', 'json', 'yaml', 'csv', 'text')
+          $binaryHash = (Get-FileHash -LiteralPath $env:RELEASE_EXECUTABLE -Algorithm SHA256).Hash
+          if ($report.status -cne 'passed' -or $report.runtime_identifier -cne '${{ matrix.rid }}' -or
+              $report.executable_sha256 -cne $binaryHash -or @($report.fixtures).Count -ne 6 -or
+              ($report.fixtures.name -join '|') -cne ($fixtures -join '|')) {
+            throw 'Packaged product workflow report is incomplete or mismatched.'
+          }
+          foreach ($fixture in $report.fixtures) {
+            if ($fixture.exact_bytes -ne $true -or $fixture.original_protected -ne $true -or
+                $fixture.fresh_gui_process_reopen -ne $true) {
+              throw 'Packaged product workflow did not establish all required byte/reopen contracts.'
+            }
+          }
+      - name: Verify seven embedded AOT codec contracts
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $directory = '.cache/release-evidence/${{ matrix.rid }}'
+          $scratch = [IO.Path]::GetFullPath("$directory/codecs")
+          $start = @{ FilePath=$env:RELEASE_EXECUTABLE; ArgumentList=@('--check-native-encoding', "`"$scratch`""); PassThru=$true;
+            RedirectStandardOutput="$directory/codecs.stdout.txt"; RedirectStandardError="$directory/codecs.stderr.txt" }
+          if ($IsWindows) { $start.WindowStyle = 'Hidden' }
+          $process = Start-Process @start
+          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Codec check exceeded watchdog.' }
+          $process.WaitForExit()
+          if ($process.ExitCode -ne 0) { throw 'Published AOT codec check failed.' }
+          if ((Get-Content "$directory/codecs.stdout.txt" -Raw).Trim() -cne 'mote-native-encoding-ready') { throw 'Codec marker mismatch.' }
+          $report = Get-Content "$scratch/report.json" -Raw | ConvertFrom-Json
+          $architecture = if ('${{ matrix.rid }}'.EndsWith('x64')) { 'X64' } else { 'Arm64' }
+          $checks = @('Gbk_exact_save', 'Gbk_strict_encode_protection', 'Gb18030_exact_save',
+            'Big5_exact_save', 'Big5_strict_encode_protection', 'default_utf8_refusal', 'unicode_bom_conflict_and_exact_save')
+          if ($report.schema -ne 1 -or $report.status -cne 'success' -or $report.architecture -cne $architecture -or
+              $report.error_kind -cne 'none' -or ($report.checks -join '|') -cne ($checks -join '|')) {
+            throw 'Published codec contract report mismatch.'
+          }
+      - name: Verify inventory after actual product probes
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $root = if ($IsWindows) { ".cache/release-extracted/$rid/mote-$env:RELEASE_VERSION-$rid" } else { ".cache/release-extracted/$rid/mote.app" }
+          python -B packaging/release_package.py verify --package $root --rid $rid --version $env:RELEASE_VERSION --source $env:RELEASE_SOURCE
+          if ($LASTEXITCODE -ne 0) { throw 'Product probes modified packaged payload.' }
+      - name: Retain runtime evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ matrix.rid }}
+          path: .cache/release-evidence/${{ matrix.rid }}/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Retain failed qualification payload for private reproduction
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          # Never matches release-package-* and never enters release-assets.
+          name: release-diagnostic-payload-${{ matrix.rid }}
+          path: |
+            .cache/release-publish/${{ matrix.rid }}/**
+            .cache/release-packages/${{ matrix.rid }}/*.zip
+            .cache/release-packages/${{ matrix.rid }}/*.tar.gz
+            .cache/release-packages/${{ matrix.rid }}/*.manifest.json
+            .cache/release-packages/${{ matrix.rid }}/*.sha256
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Retain qualified download candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package-${{ matrix.rid }}
+          path: |
+            .cache/release-packages/${{ matrix.rid }}/*.zip
+            .cache/release-packages/${{ matrix.rid }}/*.tar.gz
+            .cache/release-packages/${{ matrix.rid }}/*.manifest.json
+            .cache/release-packages/${{ matrix.rid }}/*.sha256
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  release-assets:
+    needs: [test, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-package-*
+          path: .cache/release-downloads
+      - name: Revalidate all four packages and archive matching GPL source
+        shell: bash
+        run: |
+          python -B packaging/release_index.py --input .cache/release-downloads --output .cache/release-assets \
+            --version "$RELEASE_VERSION" --source "$RELEASE_SOURCE" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: .cache/release-assets/*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

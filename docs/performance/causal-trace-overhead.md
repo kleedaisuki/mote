@@ -1,0 +1,351 @@
+# Current causal tracing: a bounded Windows x64 overhead guard
+
+Date: 2026-10-01. Owner: performance experiment only; no production or CI changes.
+
+## Question and frozen artifact
+
+The permanent Save provenance chain and periodic prefix flush materially change
+opt-in tracing. The older [frozen-baseline experiment](native-trace-overhead.md)
+cannot establish the cost of the new implementation. This experiment compares
+tracing **off/on in the same current Native AOT executable**, preserving exact
+source and sampled screen-state oracles. It does not compare before/after product
+versions or measure production foreground typing.
+
+The measured source is `5ebbdaf726f6bd531282661b95d2e697e18caed8`, including
+`b2f4661` causal Save integration and the nonfatal Save-completion containment fix.
+Warning-strict publish completed with exit 0:
+
+```powershell
+dotnet publish src/Mote.Native/Mote.Native.csproj -c Release -r win-x64 `
+  -o .cache/causal-overhead-current/publish -warnaserror `
+  -p:TreatWarningsAsErrors=true
+```
+
+The published directory contains only `mote.exe`, **7,155,712 bytes**, SHA-256
+`b4e07156c7caca1d16820b61cbe5fc060b4db13e87fc072011bc8d145466c7c9`,
+last write 2026-10-01 06:09:41.6165373 UTC. An earlier preliminary publish was
+never exercised and is not part of the evidence. Build logs, SDK/environment,
+source/harness hashes and binary identity are in repository-local
+`.cache/causal-overhead-current/manifest.json` and `publish-final.log`.
+
+## Workload, controls and evidence boundaries
+
+The experiment reuses the exact-source
+[screen-observer driver](../../benchmarks/NativePaintLatency/Measure-WindowsScreen.ps1)
+and its unchanged `WindowsScreenObserver.cs`, `CanvasFixture.cs`, and
+`Win32Probe.cs`. Only an ignored `.temp/causal-overhead-current/` copy was adapted:
+trace mode, isolated home/trace retention, whole-process CPU/lifetime, explicit
+normal-exit/forced-cleanup fields, and removing both explicit foreground-activation
+attempts. No document body or screenshot is persisted.
+
+The workload uses one fresh process/home and deterministic 1 MiB CRLF plain text
+per sample. Original source SHA-256 is
+`5a900aeab7463e7b2fcf7481453882043dee41ca15f8a9bb8fa367e5c8c43e1f`.
+After a quiet synthetic `WM_NULL` control, one leading `X` is sent by bounded
+cross-process `WM_CHAR`. Disk bytes must remain unchanged until explicit Save.
+The exact disk/screen chain is X Save -> original Undo Save -> X Redo Save,
+then owned normal close. Three actual native Save requests are therefore
+available for provenance validation in every enabled process, with captured
+versions 1, 2 and 3.
+
+The host is Windows 10.0.26200, Intel i9-12900H, 20 logical processors,
+34,087,665,664 bytes physical RAM, 2560x1440 primary display, target 96 DPI,
+1057x988 Canvas client. OS file cache is not evicted; this is a warmed-file-cache
+experiment. No affinity, priority, power-profile, input-source, registry, global
+input injection, or external-window manipulation was introduced.
+
+| Observation | Interpretation |
+| --- | --- |
+| `input_ack_ms` | External monotonic synthetic `WM_CHAR` dispatch to synchronous reply; not physical keyboard latency |
+| `launch_to_source_ready_ms` | Process creation to bounded nonempty input-island availability, with 20 ms polling; not first complete editable frame |
+| `first_changed_capture_ms` | First sampled source-specific changed screen ROI; not compositor presentation or physical photons |
+| `process_cpu_ms` | Target user+privileged CPU for the complete open/edit/three-Save/Undo/Redo/draw/writer/close workload; excludes observer CPU |
+| `process_lifetime_ms` | Whole process including deliberate settle/control waits, not interactive latency |
+| Save-chain evidence | Native callback receipt -> admission -> worker -> exact captured persistence phases -> UI callback/completion, not external key delivery |
+| Allocation/peak memory | Not measured; disabled-path allocation tests are not enabled-overhead evidence |
+
+The original five-point ROI ownership guard remains: it cannot prove every
+interior pixel belongs to the target. Native draw return and sampled screen
+change remain distinct software endpoints, not input-to-light latency.
+
+## Qualification failures and protocol correction (retained, not filtered)
+
+1. The first non-topmost OFF qualification failed **before the timed edit**:
+   `negative-control` reported the synthetic Canvas ROI obscured. The exact
+   launched child was forcibly reaped and generated source removed. No ON
+   counterpart or timing estimate exists. This is a local display-qualification
+   failure, not a tracing or product performance result. Raw report:
+   `.cache/causal-overhead-current/screen/74799642749a40f180acc90877d3a639/`;
+   index `occluded-qualification-index.jsonl`.
+2. The parent authorized the existing local-only synthetic topmost operation,
+   with no foreground stealing. The reused driver initially still contained
+   **two `SetForegroundWindow` attempts**. This violated the no-activation
+   bound despite sampled foreground=false. A topmost smoke pair and six indexed
+   paired processes ran before the parent identified it; one additional OFF
+   process had started and subsequently completed normally without an index row
+   after its scheduler was stopped (nine successful attempted-activation reports
+   in total); scheduling was then
+   stopped by verified owned scheduler identity, allowing the active child to
+   close normally. All their reports and the original driver are retained
+   under `activation-attempt-*` and `screen/` (the unindexed OFF report is
+   `2931816f4bf246ffa2bcdc678cdadf04`), **excluded from inference**.
+   A sampled false foreground flag does not prove the earlier calls never
+   transiently activated the target. No favorable timing from this interrupted
+   protocol is used below.
+3. Both explicit activation calls were removed before a new series. The only
+   driver window-state adjustment is owned synthetic `MakeSyntheticTopmost`,
+   `SetWindowPos(HWND_TOPMOST,...,0x0013)`: `SWP_NOSIZE | SWP_NOMOVE |
+   SWP_NOACTIVATE`. Closing the owned process removes its topmost window. No
+   external window is activated/minimized/restored. A fresh OFF/ON smoke pair
+   passed all oracles and normal exit 0 in the same visible, nonforeground,
+   topmost state; it is **preexcluded** from paired inference.
+
+This final state differs from the old non-topmost background experiment. Results
+are not pooled with it, nor used as a numerical before/after regression estimate.
+
+## Predeclared paired procedure
+
+The final comparison planned 20 adjacent off/on pairs (40 fresh processes):
+odd pairs off->on, even pairs on->off, ABBA across adjacent pairs. The driver
+stops scheduling on any failure or foreground-state drift; no adaptive filtering
+or focus repair is allowed. All final samples must be visible-background,
+no explicit activation calls, owned synthetic topmost, exact-source correct,
+normal exit 0, no forced cleanup, and the identical frozen executable.
+
+The temporary driver and repetition script are
+`.temp/causal-overhead-current/{Measure-WindowsScreen.ps1,Run-Pairs.ps1}`;
+analysis is `summarize.py`. Raw reports/retained traces are
+`.cache/causal-overhead-current/screen/<run-id>/`, with `paired-index.jsonl`,
+`samples.json`, `summary.json`. Generated fixtures/homes remain under repository
+`.temp` and are safely removed after reaping each owned child.
+
+```powershell
+# The temporary adapted driver has both SetForegroundWindow calls removed.
+pwsh -NoProfile -File .temp/causal-overhead-current/Run-Pairs.ps1 -Smoke
+# Inspect qualification before starting a NEW, nonexisting pair index.
+pwsh -NoProfile -File .temp/causal-overhead-current/Run-Pairs.ps1 -Pairs 20
+python -B .temp/causal-overhead-current/summarize.py
+```
+
+The native [causal reader](../../tests/causal_save_trace_reader.py) uses
+`MOTE_SAVE_CONTRACT`, **not the weaker recovery-harness contract**. It checks
+retained newline-complete JSONL, receipt/terminal kind and ancestry, successful
+Engine phases, route-aware move/replace commit coverage, saved-stamp/bookkeeping,
+UI start/completion, and consistency with the authoritative captured version.
+A terminal success alone cannot certify complete instrumentation.
+
+All paired deltas are on minus adjacent off. Conditional distribution-free
+median intervals use sorted paired ranks 6 and 15 at n=20, coverage
+`1 - 2*sum(C(20,j)/2^20,j=0..5) = 95.8606%` under independent identical paired
+sampling. This single-host conditional interval does not model correlated load
+or machine-to-machine variance. Nearest-rank p95 at n=20 is exploratory only;
+no distribution-free 95% finite upper p95 bound is available at that sample size.
+
+## Completed observations
+
+**Performance comparison did not qualify.** The fresh no-activation series
+stopped after its first pair: OFF was visible-background, but ON was foreground
+at both sampled focus/pre-edit observations. Both were behaviorally correct
+and exited normally. The observer did not deliberately activate either window;
+this state change arose despite removal of its two activation calls. Its cause
+was not investigated and is not attributed to tracing. No further pairs were
+scheduled; no unequal samples were filtered or repaired.
+
+There are **zero equivalent inferential pairs**. The planned median/CPU delta
+and confidence interval are **unavailable**, not zero. The preexcluded smoke
+pair is not promoted to a performance result after the series failed.
+
+For inspectability, these are the four no-activation raw observations; the
+numbers must **not** be used to calculate an off/on effect:
+
+| Series / mode | Sampled state | Input ack ms | Source-ready ms | Screen observation ms | Whole-workload CPU ms | Process lifetime ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Qualification / off | Background | 3.827 | 339.546 | 33.095 | 390.625 | 2733.551 |
+| Qualification / on | Background | 4.399 | 340.655 | 23.766 | 296.875 | 2713.681 |
+| Attempted pair 1 / off | Background | 4.098 | 374.446 | 20.781 | 406.250 | 2768.150 |
+| Attempted pair 1 / on | Foreground | 4.804 | 336.244 | 28.653 | 406.250 | 2732.459 |
+
+All four passed quiet negative controls, unchanged source before Save, exact
+X/original/X disk hashes and Undo/Redo screen shapes, owned normal exit 0, and
+safe generated-source cleanup. Both disabled processes produced no trace files.
+Both enabled processes retained **135 complete valid JSONL rows** (44,622 and
+44,616 bytes), normal successful session terminals, and no emitted drop record.
+
+The native contract independently validates **six of six real Save request
+chains**, three per enabled process: received Save -> composition settled ->
+controller/admission -> worker -> serialized persistence -> local UI completion.
+Every chain includes the required Engine phase successes and route-aware commit
+coverage, exact captured versions **1/2/3**, correctly linked receipt ancestry,
+no conflicting saved version, and no orphan Save-stage records. Reader coverage
+is `instrumented_chain_only`, not an absence/durability certificate. There were
+no forced exits in these four processes. This is positive current-binary
+native provenance/semantic evidence, **not a tracing-overhead result**.
+
+## Decision and next discriminating experiment
+
+The run found no measured tracing bottleneck because it obtained no valid
+comparable performance series. It therefore supports neither "tracing is free"
+nor "tracing regressed" and justifies no instrumentation optimization or loss of
+failure checkpoints. The permanent trace chain was active and source-correct;
+its enabled latency/CPU cost remains unresolved. Managed allocations, peak
+memory, sustained typing, foreground key/IME behavior, large semantic files,
+macOS, and ARM remain outside this guard.
+
+The useful next experiment is the same frozen-source/byte-oracle paired workload
+on a **disposable consistently foreground hosted Windows desktop**, with actual
+foreground state a declared prerequisite and failures retained. Do not repeatedly
+retry this live desktop until favorable pairs appear, forcibly activate another
+user window, or infer physical paint from screen-copy observations. A finer Save
+latency analysis can use the now-complete captured persistence chain, but needs
+a common external off/on endpoint and controlled state; tracing-only spans have
+no uninstrumented counterpart. The local display has been released and there
+are no active owned experiment processes.
+
+## Methodological basis
+
+### Retained next-step harness (not new runtime measurements)
+
+The next hosted experiment is now represented by
+[`Measure-WindowsTracePairs.ps1`](../../benchmarks/NativePaintLatency/TracePairs.md):
+same published binary SHA, fresh default homes, fixed 1 MiB source, alternating
+off/on order and unchanged exact-source/screen oracles. Both sampled exact
+foreground controls are mandatory; unlike the interrupted no-activation local
+series above, it uses the original driver's existing target activation attempts.
+It stops at the first failure/equivalence mismatch and retains rejected evidence.
+Whole-series qualification precedes any paired estimate. Retained on traces
+require three native captured-version 1/2/3 complete Save chains; off requires
+zero traces. CPU stays null when unavailable. Portable fixtures/parser checks
+are not native measurements; **current AppKit monitor cost remains unmeasured**.
+
+Microsoft defines
+[`Process.TotalProcessorTime`](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.totalprocessortime?view=net-10.0)
+as user plus privileged target CPU and permits post-exit retrieval on Windows
+with an available process handle. Google's production
+[Dapper report](https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/)
+motivates shared causal instrumentation and empirical overhead control; its
+service-scale sampling is not a desktop latency budget. Kalibera and Jones's
+peer-reviewed [ISMM study](https://kar.kent.ac.uk/33611/) motivates repeated
+independent executions and effect-size uncertainty. The peer-reviewed
+[2023 input-to-light study](https://epub.uni-regensburg.de/55003/), linked in our
+[screen-observer notes](../../benchmarks/NativePaintLatency/README.md), uses
+hardware input/photodiode evidence and reinforces why these software endpoints
+cannot be called physical paint. These sources constrain interpretation; none
+supplies measurements for mote.
+
+## First hosted foreground paired study — CI/Benchmarks c19f4c6
+
+Date: 2026-10-01. Exact source `c19f4c6ab3b530df954be97a27fa7b58eca5fdb5`, [Benchmarks 36841148501](https://github.com/kleedaisuki/mote/actions/runs/36841148501). This is a different, permanent hosted harness study, not a rerun or promotion of the background-only study above. Actual selection runs only the trace-pairs job; old engine, 100 MiB Markdown and GUI-startup suites are **skipped**. Paired-series and strict-reader fixtures actually pass **22+9**. One warning-strict AOT publish and single-payload inventory produce only `mote.exe`, **7,161,856 bytes**, frozen SHA256 `9a6b1e4228b71e68bb2cd659434ee4a02f04baca20be96b83eb4dffb5ceb5026`.
+
+The one predeclared series `ce5daa5e78634d51aaa8d49bb38cf210` plans **20 adjacent off/on pairs**, odd off→on / even on→off, and returns **40 indexed driver observations / 20 equivalent pairs**; actual measurement and qualification steps succeed, with `comparison=qualified`. `attempted_samples` is specifically the indexed driver-return count, **not** a launch watermark or certification that no unindexed/in-flight process ever existed. No retry, favorable subset or earlier-series averaging is used.
+
+Raw evidence and independent reclassification are retained in `.cache/ci-36841148501-trace-pairs/`: selector/measurement logs, step metadata, publish inventory, immutable manifest/index, 40 single-report JSONL files, 20 enabled trace files (**892,286 bytes**), and `audit.py` / `independent-qualified-audit.json`. The artifact-only audit remaps hosted paths without modifying raw reports, checks actual retained file inventory, then independently requalifies **all 40 reports and all 20 enabled traces / 60 native Save chains** through the existing strict schema/privacy/integrity reader and route-aware native contract. Each enabled trace has one successful normal session and exactly three complete Save requests with captured versions **1/2/3**; off samples have actually empty trace inventory. Every original target and driver exits numerically **0**, normal termination is observed, no forced cleanup, frozen binary and within-pair environment identities match, and every foreground/source/exact disk/Undo/Redo/screen-state oracle qualifies. These are inspected runtime artifacts, not a green-job substitute.
+
+Hosted environment: Windows 10.0.26100, runner image `20260922.246.2`, PowerShell 7.6.6, AMD EPYC 7763, four logical processors, 17,174,360,064 memory bytes; display **1024×768 / 96 DPI**, canvas client **668×659**, ROI **256×32**. The fresh one-MiB CRLF fixture hash remains `5a900aeab7463e7b2fcf7481453882043dee41ca15f8a9bb8fa367e5c8c43e1f`; profile is opt-in experimental canvas, not every default renderer. Explicit activation attempts are enabled and successful foreground facts are required before editing. Synthetic bounded `WM_CHAR`, exact disk Save/Undo/Redo and screen-DC sampling remain the workload, not physical typing or compositor presentation.
+
+Independent subtraction of each adjacent on-minus-off pair, median and sorted ranks **6/15** exactly reproduce the hosted summary for all five endpoints:
+
+| Endpoint (ms) | Paired median on − off | Conditional median interval |
+| --- | ---: | --- |
+| Input acknowledgement | +0.0029 | [-0.0310, +0.0379] |
+| Launch to source ready | -3.07515 | [-7.0854, +3.0897] |
+| First changed screen-DC capture | +0.1114 | [-15.4086, +15.4076] |
+| Whole-process CPU | 0.000 | [-15.625, +31.250] |
+| Whole-process lifetime | +16.7807 | [-23.1079, +68.5850] |
+
+For n=20 the order-statistic interval's conditional coverage is **95.8610534668%**, independently recomputed from `1-2*sum(C(20,j),j=0..5)/2^20`. All 40 CPU samples are available, not null-imputed, but the **15.625 ms quantization** makes CPU sensitivity coarse. All five intervals include zero; this study does not establish a directional median effect at these endpoints. That is **not** proof of zero overhead, negligible tail latency, a user-facing SLA or generalized machine/platform performance. Independence/stationarity of paired sampling is an explicit assumption, not established by hosted desktop metadata; scope is this binary/workload/runner. Screen-DC cost and remote-display sampling dominate the visual endpoint's resolution. Mac AppKit per-key monitor cost, physical IME/keys/pixels and cross-RID effects remain unmeasured. No additional GUI experiment or production change was made during this audit.
+
+Companion [CI 36841148496](https://github.com/kleedaisuki/mote/actions/runs/36841148496) at the same source completes with all ten jobs success; inspected strict logs show Windows/macOS **1369/1369 + Themes14 + Configuration9**, zero failed/skipped. Both blocking Mac Flow steps actually succeed and print the posted-fault/local-monitor ABI/ready markers (ARM64 09:16:44 UTC, x64 09:19:15 UTC). The four uploaded ordinary inventories independently report **8/8 pass**, explicit original editor/reopen exits **0/0**; these separate regression observations are not part of the paired estimate. Existing Mac Grid nested failures and ARM inconclusive surfaces remain separate product gaps. Unchanged earlier full native-chain/recovery audits were not repeated. CI metadata, selected strict/gate logs and all four inventories are retained alongside benchmark evidence.
+
+### Changed-product checkpoint — Benchmarks 36858899230
+
+Exact source `c85681628552ea73f84d3fa8b42a0baf5710627d`, [automatic Benchmarks 36858899230](https://github.com/kleedaisuki/mote/actions/runs/36858899230). This is one new current-binary series triggered by the coherent product/workflow checkpoint, **not a retry or redispatch of the earlier successful series**. The old engine/Markdown/startup jobs skip; trace job succeeds. One warning-strict publish yields exactly one **7,211,008-byte** executable; manifest frozen SHA **4d12c30354771ea6220bac31ba7fc6f4feda17867c5adc5f43a252ed538a51a8**, series **9f06575c947f4bdca28e977ceb04e111**, image **20260925.250.1**. Reported qualification is **20/20 pairs, 40 indexed driver-return observations**, `qualified`; all 40 retained sample reports independently show this same binary SHA and original normal numeric exit 0, no forced cleanup. The strict classifier/reader source hashes are unchanged from the audited c19f4c6 study; no contradiction requires a redundant raw-60-chain replay. Retained manifest/index/summary/reports/logs live in `.cache/ci-36858899063-grid-final/benchmark-artifacts/`.
+
+| Endpoint (ms), on − off | New median | New conditional rank-6/15 interval |
+| --- | ---: | --- |
+| Input acknowledgement | -0.00095 | [-0.0340, +0.0381] |
+| Launch to source ready | +2.05325 | [-1.6802, +8.0237] |
+| First changed screen capture | +0.21225 | [-0.1207, +15.3088] |
+| Whole-process CPU | 0 | [-15.625, +31.250] |
+| Whole-process lifetime | +7.8837 | [-40.9935, +45.7780] |
+
+These are the new summary's conditional sample-specific estimates, not an aggregation with earlier pairs or a before/after performance regression test. All intervals include zero; coarse CPU and synthetic screen-capture endpoint limitations persist. Foreground hosted workload does not measure physical/user-tail or AppKit monitor cost. Companion CI 36858899063 reports strict suites **3132/3132** on Windows/macOS, four single-binary payloads and ordinary JSON summaries **8/8 / exits0/0**; new owned-HWND Grid focus tests pass on both RIDs, while original external Grid probes still fail. Thus a qualified tracing-cost study does not certify accessibility acceptance.
+
+### Changed-product/schema checkpoint — Benchmarks 36874262133
+
+Exact pushed source `3a0552a691e46470ac88ef65ce3c621276ec852c`,
+[automatic Benchmarks 36874262133](https://github.com/kleedaisuki/mote/actions/runs/36874262133).
+The existing changed-path selector runs only trace pairs; engine, 100 MiB Markdown
+and GUI-startup jobs **skip**. This audit consumes that already-running workflow's
+artifacts; no dispatch, restart, local GUI or additional workload was initiated.
+The actual 22 paired-series and nine strict-reader fixtures pass. Warning-strict
+AOT publication and enforced payload inventory yield only `mote.exe`,
+**7,232,000 bytes**, SHA-256
+`731f76ef92984f40befa89acee706cbeccd05492d649edfed2b2c81d2fb362b1`.
+
+Series `58534e8ef1284c55a43c8c262206b4d8` is **qualified**, with all declared
+**20 pairs / 40 indexed driver-return samples**. The measure, qualification and
+artifact-upload steps actually succeed; job success alone is not the evidence.
+Every original target and driver has actual numeric exit **0**, normal termination
+observed and no forced cleanup. All 40 reports retain the same frozen executable,
+exact-foreground observations, profile/environment, quiet control, unchanged-
+before-Save source and exact X/Undo/Redo disk/screen oracles. The index remains a
+driver-return count, not proof that no unindexed launch/in-flight process existed.
+
+Evidence lives in `.cache/benchmarks-36874262133-focus-provenance/`: run/job metadata
+and log, artifact inventory, original downloaded manifest/index/summary/reports/
+traces, `audit.py`, `audit.log` and `independent-qualified-audit.json`. The strict
+schema reader hash changed to
+`a16e0822922a2ce00ac64aa1da370c72c75935ce15ee8698e793c060e5349260`, so this
+**new artifact's** 40 reports and 20 traces were independently reclassified with
+the established classifier plus current strict schema/privacy/integrity reader.
+No previous series' raw 60-chain audit was replayed. All eight manifest harness/
+reader hashes exactly match the frozen source's hosted **CRLF** checkout; current
+local LF-normalized contents match those Git blobs. Line-ending differences are
+recorded, not mistaken for different classifier semantics.
+
+The 20 enabled traces total **892,341 bytes**, each **135 complete valid records**
+and one successful normal session. Exactly **60 current native Save chains**
+qualify, three per enabled process, with captured versions **1/2/3**, required
+persistence phases, route-aware commit coverage and UI completion; no emitted
+drop/orphan stage degrades their instrumented-chain evidence. Actual disabled
+inventories are empty in all 20 samples. These positive checks do not certify
+complete transport, absence, physical delivery or durability.
+
+Host: Windows 10.0.26100, image `20260925.250.1`, PowerShell 7.6.6,
+**Intel Xeon Platinum 8573C**, four logical processors, 17,174,360,064 RAM bytes,
+1024×768 display / 96 DPI, 668×659 canvas and 256×32 ROI. The fixed 1 MiB fixture/
+profile and existing activation/foreground protocol remain unchanged. This CPU
+differs from the earlier AMD EPYC runner: **do not pool series or interpret the
+following as an inter-version performance regression comparison**.
+
+Independent on-minus-adjacent-off subtraction, medians and rank-6/15 intervals
+exactly reproduce this series' hosted estimates:
+
+| Endpoint (ms), on − off | Current paired median | Conditional median interval |
+| --- | ---: | --- |
+| Input acknowledgement | -0.0148 | [-0.0877, +0.0672] |
+| Launch to source ready | +1.68345 | [-9.5907, +6.2112] |
+| First changed screen capture | -0.33275 | [-15.8855, +0.1935] |
+| Whole-process CPU | **+15.625** | **[+15.625, +46.875]** |
+| Whole-process lifetime | +48.1488 | [-28.0985, +84.9328] |
+
+Conditional coverage remains **95.8610534668%**, assuming independent stationary
+paired sampling; hosted metadata does not prove those assumptions. Unlike the
+earlier checkpoints, the **CPU interval excludes zero**: this sample resolves a
+positive enabled whole-workload CPU cost under that model. All 40 CPU observations
+are available; their coarse 15.625 ms accounting must remain visible. Fifteen pair
+deltas are positive and five negative; mode CPU medians are OFF **218.75 ms** and
+ON **234.375 ms**. The +15.625 ms paired median is about 7.1% of the OFF mode median
+as context, not a confidence interval for a percentage or a per-key CPU attribution.
+Outlying pair deltas, including +140.625 ms, remain in the retained observations.
+
+The other endpoint intervals include zero and do not resolve a directional median
+effect; they do **not** prove zero latency overhead or tail safety. This result
+must not be summarized as "tracing is free". Whole-process CPU includes startup,
+edit, three Saves, Undo/Redo, drawing and writer/shutdown work; no component profile
+separates producer identities, serialization or flushing. It supports retaining an
+explicit opt-in CPU cost, not speculative checkpoint removal or an unmeasured
+optimization. The bounded foundation audit is complete; real ordinary-file focus,
+IME, default rendering and sustained-user workflows remain separate priorities.
+No p95/p99, physical display, AppKit-monitor cost or accessibility acceptance is
+certified by this synthetic Windows Canvas checkpoint.

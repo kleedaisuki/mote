@@ -1,0 +1,15 @@
+# CSV comma-run fast path: independent source review
+
+Review date: 2026-09-29. Scope: the uncommitted `SkipCommas`/`ParseRow` change in `src/Mote.Formats/CsvIncrementalSession.cs`, its new `CsvCommaRunTests`, the legacy `CsvPolicy.Analyze` contract, and `docs/csv-cold-analysis.md`. I did not edit production code or rerun .NET tests/benchmarks because the integration test slot was owned elsewhere. This is a source-level review, not an independent performance measurement.
+
+## Verdict
+
+**No substantive correctness or performance regression found in the reviewed fast path.** `SkipCommas` is entered only when the cursor is at an unquoted delimiter. Each consumed comma corresponds to exactly one finished empty cell, so `width += consumed` preserves the first-row width and `CSV004` count. It cannot consume a quote, payload character, CR, or LF; the ordinary parser still handles those and their diagnostic spans. The trailing empty field is retained because parsing resumes at the first non-comma position, including end-of-record or end-of-file. The capture path does not batch a zero-width cell at or inside the inclusive viewport edge, preserving source offsets; once the projection cell budget is exhausted, it skips only cells that cannot be emitted. The small complete legacy projection has no capture range and therefore retains its prior per-cell behavior.
+
+The skip loop stops at the visible-prefix `maxPosition`; if that cuts a record, `ParseRow` throws the existing budget exception and the caller commits no partial row. Cancellation is polled once per at most 4,096 consumed characters and also in the captured-cell loop. `Project` reparses against the cached row's `End`, `After`, `Width`, and `ErrorCount`, so a mismatch fails rather than silently publishing stale semantic facts. The change does not add a persistent cache or change edit-convergence rules.
+
+## Evidence boundary and useful test additions
+
+The new tests compare a long delimiter run and a post-edit state with `CsvPolicy.Analyze`, cover short leading/trailing cells with CRLF/quotes, and assert 17 exact zero-width cell offsets at a distant million-comma viewport. After the initial review, the root integration pass also added a `Visible` regression whose 64 KiB boundary cuts a comma run: it remains `Provisional` with no partial record, and its focused suite passed 6/6. The reported timing/cancellation results in `docs/csv-cold-analysis.md` are owner evidence, not independently rerun here. A focused regression could additionally assert cancellation during a projected giant row leaves the session reusable for a same-version retry. This is a coverage improvement, not a demonstrated defect: the current control flow supports it, and the repository note already records a one-off cancellation probe.
+
+This review does not certify Native AOT GUI input latency, host scheduling, or worst-case parser behavior for nonempty/quoted giant fields. Those are separate gates; no such claim follows from the comma-run optimization.

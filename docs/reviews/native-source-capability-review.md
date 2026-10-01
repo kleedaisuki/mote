@@ -1,0 +1,173 @@
+# Full-native source capability diagnostic review
+
+## Objective and review boundary
+
+Review the first, explicitly hosted-only full-native source capability diagnostic,
+not a new default editing profile. Scope is three generated fixtures, one
+controlled insertion per fixture, full engine-owned text/history, native
+attribute publication, exact saved bytes and fresh-document reopen. There is no
+universal arbitrary-edit, reader, IME, physical-input or paint certificate.
+
+Inspected `NativeSourceDiagnosticHost`, `NativeSourceDiagnosticBinding`,
+`NativeSourceDiagnosticFixtures`, `NativeSourceCapabilityProbe`, both platform
+factories, the additive entry-point routes, shared projection and relevant
+interop declarations. Existing explicit encoding diagnostics have their own
+review; this review checks route placement, not that feature again. No production
+or test files were modified by this reviewer. No local GUI/native calls or broad
+test replay were performed.
+
+## Finding and disposition
+
+### P2: failed-phase measurements included report serialization
+
+At the initially reviewed `PhaseReport.Measure` catch, `Failure(phase, ex)`
+serialized a JSON record and durably flushed it before sampling elapsed time and
+allocated bytes for the failed terminal. Any action exception therefore charged
+diagnostic serialization and disk flush to the failed operation, unlike the
+successful path and contrary to the documented serialization-outside-interval
+contract. This can mislead diagnosis precisely on failed operations, especially
+when durable flush latency dominates. Confidence: high, executable call order.
+
+**Resolved in the final reviewed source.** The catch now captures elapsed time
+and allocation immediately on entry, before status/evidence serialization and
+durable flush. Failure evidence and rethrow remain. The original runner SHA-256
+was `DB2458E2666086A9CD82FD2B82BD3ED208CBCFF08AE02CE173BCA95F6E6F19F1`;
+the corrected source is identified below. No native fault timing experiment was
+run; resolution is established by the explicit corrected call order.
+
+No remaining substantive defect was found within the stated source-review scope.
+This does not establish native runtime acceptance. A separate owner refinement
+also records actual saved-byte hash/count and semantic token/diagnostic counts
+before their assertions, preserving those observations on mismatch rather than
+emitting them only after successful checks.
+
+## Checked contracts
+
+| Area | Source-level assessment |
+| --- | --- |
+| Admission (initial checkpoint; follow-up below) | Declared runner environment and matching OS are checked before config, files, telemetry or native objects. Fresh output is a descendant of root `.cache`/`.temp`. The original Exists-based ancestor check was subsequently corrected below; neither checkpoint is secure hosted-machine attestation or an atomic filesystem sandbox. |
+| Configuration and evidence | Explicit isolated MoteHome bypasses inherited user home. Generated identities, fixed codes, numeric HRESULT, counts and hashes are serialized; no exception messages, user source or raw native identities are emitted. |
+| Binding | Exact complete import certificate, snapshot identity, version/generation/nonce and retirement gate reconciliation. Full strings and projection maps are intentionally O(n). UI-owner exclusivity is the concurrency assumption; this is not a concurrent engine transaction API. |
+| Engine ownership | Native insertion does not mutate Engine. Reconciliation uses shared scalar-corrected Difference and exactly one Apply. No-op consumes a binding without text history; Undo/Redo are Engine operations followed by explicit new native installations. Cancellation is checked before work and immediately before Apply, never used to disguise an already committed edit. |
+| Windows lifetime | STA and managed owner guards precede native operations. RichEdit module is retained until owned parent/child destruction. Partial construction releases owned objects. Nonactivating show and SCF_NOKBUPDATE do not request global activation or keyboard-layout switching. |
+| Windows offsets/state | CRLF projection is separate from RichEdit native paragraph offsets. Every import is exactly read back. Publication validates spans before mutation and restores/checks text, sorted selection, scroll tuple and disabled native history. FirstVisibleLine supplements documented 16-bit pixel coordinates; no distant pixel-perfect conclusion follows. |
+| macOS lifetime/ABI | Main native thread is checked before AppKit messaging. Retained views and window are released before the autorelease pool. NSRange is pointer-sized; CGPoint/CGSize use doubles; CGRect result uses x64 stret and arm64 ordinary return. BOOL setters/results use the explicit byte bridge. |
+| macOS backend | textLayoutManager is inspected before the legacy accessor. Calling layoutManager can trigger compatibility mode; the label is the observed diagnostic backend, not a promise to use TextKit 2 or a nonperturbing universal introspection API. |
+| Style/paint | Complete foreground spans are published as native attributes, with text/selection/scroll and Engine history preservation checked. API acknowledgment is not physical foreground ink, compositor presentation or attribute-value readback. |
+| Persistence/cost | Saved bytes are compared independently; reopen uses a fresh Document in the same process. Process-wide approximate GC allocation deltas are not exclusive UI-thread or native memory allocation; sampled working set is not peak memory. Native AOT hosted executable identity is still required. |
+
+## External checks
+
+- [Microsoft EM_GETSCROLLPOS](https://learn.microsoft.com/en-us/windows/win32/controls/em-getscrollpos)
+  documents 16-bit coordinate values even in 32-bit POINT fields. The independent
+  native line observation and explicit restoration limit are appropriate.
+- [Microsoft EM_SETCHARFORMAT](https://learn.microsoft.com/en-us/windows/win32/controls/em-setcharformat)
+  documents mask-scoped mutations, nonzero success and SCF_NOKBUPDATE's prevention
+  of keyboard switching. The adapter checks return values and uses the existing
+  character structure rather than introducing a private formatting ABI.
+- [Apple NSTextView](https://developer.apple.com/documentation/appkit/nstextview)
+  documents the legacy layoutManager compatibility transition. The diagnostic
+  checks the modern manager first and does not equate the OS version with backend.
+
+## Evidence and limits
+
+The retained integration build log
+`.cache/validation/native-source-capability/integration-build.log` reports a
+Release tests-project build with zero warnings and zero errors (7.01 seconds).
+The final runner-only correction build is retained in
+`.cache/validation/native-source-capability/final-native-build.log`: zero warnings,
+zero errors, 5.11 seconds. These are compilation evidence only. Independently
+retained `.cache/validation/native-source-binding/binding.trx` counters and
+`run.log` report **33/33 passed**, zero failures and zero skipped, 385 ms.
+Their `hashes.json` identifies the unchanged binding, fixtures and shared
+projection. Tests were not repeated for the runner-only evidence correction.
+See `docs/validation/native-source-binding.md` for their scope and limitations.
+
+Historical initial-checkpoint raw-file SHA-256 identities (including line endings) are retained in
+`.cache/validation/native-source-capability/final-source-hashes.json`:
+
+| File under `src/Mote.Native/` | SHA-256 |
+| --- | --- |
+| NativeSourceDiagnosticHost.cs | `57EEB76FCCE4D962ADF09B5B07CE7B5BC569C0037097129E094821C6CE218E15` |
+| NativeSourceDiagnosticBinding.cs | `4C6C870C7C9F5DAF9475947E42B2052C57E6E36D1D60FC55CAF496648B73D680` |
+| NativeSourceDiagnosticFixtures.cs | `E57F160A654BB58A146E8BDF2E1FAD983C09F6C3B3EC04E7FC66B556F01C480C` |
+| NativeSourceCapabilityProbe.cs | `E7872B18EEEF5682EC0E8D7F2B9D865DE80060AC727EEE75331A47F0E77573A3` |
+| Windows/WindowsNativeSourceCapabilityProbe.cs | `B656B5D4B2CE677507301D31DDDAB988DE19DAC4B35627799A9DF7702FD435EE` |
+| Mac/MacNativeSourceCapabilityProbe.cs | `735BE81D281F2178043200AF1411966D9374EFE74EA06391D26C64DC97B21ED8` |
+| NativeTextProjection.cs (existing shared dependency) | `1187E829D2D06E1026CF5E2CEB634055EEDA6A8966388E8464EDF126F4098FFF` |
+| Program.cs (additive routes only) | `0B2F90566E0DAFCB04AAB45F301CEE8CD353D718E952179B5D226520E0E0C4B7` |
+
+Native behavior remains unverified until bounded hosted runs on Windows/macOS
+x64/arm64 retain report, numeric process exit and final telemetry drain evidence.
+`probe/complete` occurs before telemetry shutdown; it alone must not certify
+successful final sink shutdown. A phase entered without a terminal is incomplete,
+not success. External workflow timeout and artifact retention are required for
+native hangs, not supplied by this diagnostic. No physical reader speech, IME,
+interactive typing, arbitrary selection direction, high-DPI visual quality or
+product-profile readiness is inferred from this review.
+
+## Scoped admission follow-up: current guard
+
+The original review above qualified the controlled experiment but overstated the
+host guard and ancestor rejection. Follow-up review is restricted to the later
+admission corrections `58d8eb7` and `7b32321`; other model/native behaviors and the
+33-case validation are not rerun or recertified by this follow-up.
+
+### Guard truth and correction
+
+- The old comment claiming environment variables could not enable the diagnostic
+  on an ordinary machine was false: runner identifiers are mutable. The current
+  check additionally requires `RUNNER_ENVIRONMENT=github-hosted`, and the comment
+  accurately calls these **declared identifiers, not security attestation**.
+  The diagnostic still returns before artifact/config/native work when its
+  declared-runner check fails; this is operational admission, not a trust boundary.
+- The former `DirectoryInfo.Exists`/`File.Exists` checks could conflate inaccessible
+  or dangling entries with absence. That is a real gap in the stated rejection
+  contract. An actual write escape through the old code was **not reproduced**;
+  no demonstrated arbitrary-write exploit is claimed.
+- Current admission queries `File.GetAttributes` on the requested output and
+  every ancestor. Only FileNotFoundException/DirectoryNotFoundException mean
+  absence; other errors propagate to Run's refusal. Reparse entries, existing
+  output and non-directory ancestors are refused explicitly. The loop still
+  examines an ancestor after a missing descendant, so a dangling linked parent
+  cannot be skipped solely because its child is missing.
+- The private two-argument seam normalizes repositoryRoot and resolves relative
+  output using that same root. Production Run passes its actual current directory,
+  preserving command invocation semantics; tests do not mutate global cwd or
+  expose a new CLI override. Lexical containment includes the area separator.
+- No new atomic or adversarial concurrent-rename guarantee is introduced. The
+  controlled runner owns scratch; checking ancestors then creating output remains
+  subject to the already documented check/create race.
+
+**Verdict: no remaining substantive defect found in this bounded current guard
+review.** The truthfulness problem and entry-observation gap are corrected; actual
+Mac filesystem behavior and hosted native operation are not established by the
+Windows portable cases.
+
+### Retained current evidence and identities
+
+Inspected the actual private-helper tests, qualified run log/TRX and build log:
+
+- `.cache/validation/native-source-admission/qualified/admission.trx`: **12/12
+  passed, zero failures/skips**; `run.log`: 84 ms. The three actual unprivileged
+  link cases (live-target ancestor, dangling-target ancestor, dangling output)
+  executed rather than skipping. All targets/artifacts are owned repo scratch.
+- `.cache/validation/native-source-capability/admission-seam-build.log`: **zero
+  warnings/errors**, 12.00 s. No tests/builds were repeated by this reviewer.
+- The earlier 12 failed cases remain separately retained. They failed at the
+  harness cwd prerequisite before invoking admission, so are excluded as guard
+  evidence, not hidden or mislabeled product failures.
+- `05edb5e` removes EOF blank lines only from tests/documentation. The following
+  tested test-source hash remains historical pre-style identity, not a claim that
+  whitespace-only current test bytes were recompiled. Runner source is unchanged.
+
+| Qualified current admission artifact | SHA-256 |
+| --- | --- |
+| NativeSourceCapabilityProbe.cs (current raw source) | `7097EF0924FC5F792EB1E9A118EF4613FE8824EAD8B7B2EEB4CA65CCAF3971E0` |
+| NativeSourceDiagnosticAdmissionTests.cs (tested pre-style source) | `FAF7BEF905BCD9379C74058F5B2FC93A98272E8C6C33965EB93B396A2C4C1AE3` |
+| Mote.Tests.dll (qualified loaded assembly) | `E6CF68DEB8380DA23400B95F43D15E8188811E488BC4403A322974A863C20E13` |
+| mote.dll (qualified loaded assembly) | `A9DC93829CCE6115C76FEB63463E4216DCE8C97A06D92D86113E4D3D65EE6DFF` |
+
+Detailed execution and limits are retained in
+`docs/validation/native-source-admission.md`. No CLI dispatch, GUI, native host,
+global environment/cwd mutation or subprocess was executed for this follow-up.

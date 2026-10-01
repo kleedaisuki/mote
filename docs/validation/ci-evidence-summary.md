@@ -1,0 +1,181 @@
+# Selected Native CI diagnostic evidence summary
+
+Date: 2026-10-01. Owner: causal observability delivery / CI evidence summary.
+
+## Contract
+
+`tests/summarize_ci_evidence.py` reads a fixed per-RID manifest without GitHub
+network calls or third-party runtime dependencies. It writes schema
+`mote-ci-evidence-summary-v1` JSON and appends an Actions Step Summary. The scope
+is selected non-gating diagnostics, not complete release acceptance. Existing
+strict checks and diagnostic oracles are unchanged.
+
+The manifest covers the native JSON two-size pilot, causal trace recovery,
+ordinary Continuous editing, Windows 100 MiB Continuous editing, Windows Canvas
+live theme workers, Windows external source ranges, macOS Grid action
+contract control, the original macOS external Grid AX report, and the same-client
+C0/P0 ShowMenu pair. Platform-inapplicable entries are not expected. Additional
+inventory report files are counted but their names and contents are not emitted.
+This is not an exhaustive native diagnostic inventory: historical Windows canvas
+UIA, separate Windows Grid, macOS external-workflow and other diagnostic reports
+remain outside this fixed manifest. Their absence from this table is not a pass.
+
+A report may be `missing`, `malformed`, `oversized`, `unrecognized`, or `present`.
+This is separate from its normalized claimed result. Nested JSON pilot samples,
+Canvas theme worker exits, and recovery cases remain visible even when the
+parent reports pass. Missing numeric exit evidence stays unknown: zero is never
+inferred from a pass claim or a green GitHub job. `control-completed` becomes
+`experiment-completed`, never AX/product pass. Forced termination of JSON pilot
+samples marks evidence censored without asserting that any event was absent.
+Expected killed recovery cases can legitimately pass their synthetic test while
+retaining censored request evidence and `absence_certified=false`.
+Missing/empty request lists and pending or unfamiliar request classifications
+remain `unverified`. Recovery `observed` requires explicit normal-session
+termination and a nonempty list of typed terminal request classifications. It
+does not independently rerun the causal reader or certify a successful Save.
+For JSON samples, no forced-cleanup flag alone proves nothing: `observed`
+requires a recognized pass/failure outcome and explicit normal exit; a pass
+also requires explicit normal reopen exit. Incomplete or unknown outcomes remain
+unverified even if the cleanup flag is false.
+
+The original external Grid report exposes its recorded Swift numeric exit and
+aggregate typed check counts without copying check names or details. The pair
+exposes only fixed C0/P0 sessions, recorded numeric owner/client exits and the
+original numeric AX reply. `completed-success-observed` and
+`completed-failure-observed` normalize to corresponding **experiment** outcomes,
+not a product pass. A zero owner/client exit can coexist with a failing AX reply.
+No numeric editor exit is invented when a report contains only a normal-exit
+Boolean. This summary reads retained report fields, not GitHub step conclusions.
+Ordinary JSON samples can now retain `editor_exit_code` and `reopen_exit_code`
+from each owned subprocess's actual `poll()` result after cleanup. Only strict
+integers are copied and rendered in the Actions Step Summary. An unlaunched
+reopen, missing value, null result, Boolean, or string remains unknown; neither
+`normal_exit=true` nor a pass claim synthesizes zero. A forced-cleanup numeric
+exit is termination evidence, not normal completion or absence certification.
+
+Trace health is separate: an explicitly valid causal-integrity report with zero
+observed drops is `no-observed-drops`, not proof of zero producer loss. Missing
+or unrecognized trace evidence cannot be converted into certified absence.
+Native JSON samples additionally retain the native Save reader's fixed
+`native-save-causal-v1` claim (`complete`, `incomplete`, `censored`, `unobserved`,
+or `invalid`), request-list count, and typed absence/normal-exit/terminated
+Booleans. These are separate from the document's result and ordinary trace
+health. Unknown contracts remain unverified. Request payloads, trace SHA values,
+and discarded-file paths are not copied. The summary reports the reader's
+claim; it does not replace its route/version completeness checks.
+The Actions Step Summary also renders the fixed Save-chain status, recorded
+request count, and normal-exit Boolean. Missing fields remain `unknown`, and
+non-JSON diagnostics without this evidence display `not-recorded`.
+
+The nested `native_menu_inventory` is an **independent checkpoint inventory**,
+not a Save routing certificate. JSON preserves only the five fixed
+`native.menu.observation.ready`, `native.menu.observation.unavailable`,
+`native.menu.save_family.entered`, `native.menu.save_family.returned_true`, and
+`native.menu.save_family.returned_false` operations. Each operation admits only
+nonnegative integer `success`/`failure`/`cancelled`/`skipped` counts; Boolean,
+negative, null, missing, string, and arbitrary-key counters are not converted
+to zero. Partial valid counters can survive while the inventory remains
+unverified. A recognized observed/unobserved claim is retained only with the
+complete fixed count matrix, a known boundary, explicit false absence
+certification, and `request_correlation=none`.
+
+The boundary is separately allowlisted as `normal-exit-observed`, `censored`,
+or `open`; unknown/missing boundaries remain unverified. Step Summary renders
+the fixed setup-ready/setup-unavailable/entry/true/false labels in
+`[success/failure/cancelled/skipped]` order (`?` means unknown). Setup ready
+alone can make this inventory observed while the Save-chain stays unobserved.
+No event pairing, temporal join, command delivery, or request ancestry is
+inferred; zero retained entry/return counters do not certify callback absence.
+
+The nested `native_input_inventory` independently preserves a six-operation by
+four-outcome matrix from each size's Save-session evidence. The fixed operations
+are `native.input.monitor.ready`, `native.input.monitor.unavailable`,
+`native.input.monitor.callback_failed`, `native.input.monitor.removed`,
+`native.input.monitor.removal_failed`, and `native.input.save_family_candidate`.
+Only nonnegative strict integer `success`/`failure`/`cancelled`/`skipped` counters
+survive; Boolean, negative, null, float, string, missing, and arbitrary counters
+remain unknown rather than being replaced with zero. The shared closed checkpoint
+filter is also used for menu inventories without changing their contract.
+
+The input inventory's observed/unobserved claim requires the complete six-by-four
+matrix, a recognized independent boundary, `absence_certified=false`,
+`request_correlation=none`, and both `candidate_to_menu_edge=unknown` and
+`menu_to_request_edge=unknown`. Missing or unfamiliar edge claims keep it
+unverified. No arbitrary endpoint, reason, raw source, or operation name is
+copied. Valid partial counts remain visible even when the inventory is unverified.
+The Step Summary renders all six rows in the same four-outcome order, the
+boundary, absence flag, correlation, and both unknown edges. The two size samples
+retain their own counts; neither count summation nor event pairing is performed.
+
+Input candidates mean a local filter matched, **not** physical input, menu
+delivery, or Save request receipt. Setup, callback failure, removal, and candidate
+counts do not change Save-chain, menu, document-result, or recorded-exit status.
+An observed setup-only inventory can coexist with an unobserved Save chain.
+Zero retained candidates do not certify callback absence, including after normal
+exit; censored and open boundaries remain explicit. This followup does not
+create new native or hosted experiment evidence.
+
+## Privacy boundary
+
+Outputs contain only fixed diagnostic IDs, fixed normalized statuses, RID,
+typed numeric exits/counts, case size/mode allowlists, and typed Booleans.
+Raw statuses outside the enum, source contents, filenames, paths, PIDs,
+exception messages, screenshots, free-form stages, and raw traces are never
+copied. Reports larger than 8 MiB are rejected before reading. Nested summaries
+are bounded to 16 entries. The summary does not copy arbitrary metadata fields.
+
+The recovery artifact remains the original synthetic evidence, not a privacy
+filtered export of user documents. It is uploaded separately from the summary.
+
+## CI integration
+
+At the end of each of the four Native AOT RID jobs, an independently published
+Native AOT recovery executable runs the existing four-case driver: normal,
+nested-held termination, receipt-only Save, and receipt-only Save As. Publish
+payload is under `.cache/causal-recovery-probe/<RID>`; evidence is under
+`.cache/causal-recovery-<RID>`. The experiment is non-gating until hosted evidence
+is independently audited. The final always-run summary and its artifact expose
+actual nested evidence without promoting diagnostics into release gates.
+If the whole job is forcibly cancelled, even `always()` steps may not finish;
+a missing summary artifact is not a pass.
+
+## Reproduction and validation
+
+```powershell
+python -B -m unittest discover -s tests -p test_summarize_ci_evidence.py -v
+python -B tests/summarize_ci_evidence.py --rid win-x64 --output .cache/ci-inventory/win-x64/evidence-summary.json
+```
+
+Local validation: 39 deterministic fixtures passed. They cover all four RID
+manifests; missing/malformed reports; unknown report privacy; fake typed exits;
+control completion vs product pass; censored expected kills; forced cleanup;
+JSON exact two-case coverage; observed trace drops; hidden worker exits; and
+repeat-run self-summary exclusion. Added fixtures verify missing/empty/pending
+request evidence, explicit normal outcomes, negative drop-count rejection,
+Grid nested failures, C0/P0 reply retention, fake Boolean/string exit rejection,
+native Save claim contract/typed-field/privacy boundaries, and visible Markdown
+Save-chain evidence with missing-field and privacy checks. Actual editor/reopen
+exit fields additionally have numeric retention/rendering and null/fake-type
+non-promotion fixtures. These fixtures do not claim new hosted exit observations.
+Menu fixtures additionally cover missing inventory, setup-only observations
+with an unobserved Save chain, fixed boundaries, false absence/none correlation,
+partial/fake counter types, unknown statuses, and raw-payload privacy.
+Seven input fixtures additionally verify independent 1/100 MiB six-by-four
+matrices and visible candidate counts, missing/malformed inventories, invalid
+types for every outcome, negative/unknown counters, all fixed boundaries,
+uncertified zero inventories, rejected correlation/edge claims, and missing
+unknown edges. Existing malformed-report, censored-sample, Save-chain, menu, and
+numeric-exit fixtures remain passing. Validation command above completed locally
+with 39/39 cases; `git diff --check` passed. No workflow was changed.
+A cached real hosted osx-arm64 JSON pilot
+report was summarized: both 1/100 MiB claims and no-observed-drops retained,
+other unavailable reports explicitly missing, no inferred numeric exits.
+A cached real hosted x64 original Grid report from CI 36818175897 summarized
+as failed with Swift exit 1 and 40/41 checks passing. Its same-client pair
+summarized as experiment-completed-failure-observed: C0 and P0 each recorded
+owner/client exit 0, while their original AX replies remained 0 and -25205.
+The local reproduction output is `.cache/summary-tests/cached-grid-summary.json`.
+PyYAML locally parsed the modified workflow (five jobs) and `git diff --check`
+passed. No hosted execution was claimed at the initial integration. The menu
+inventory summary followup is local-only validation; it does not claim outcomes
+for the currently running hosted menu experiment.

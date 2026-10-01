@@ -1,0 +1,76 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+if (args.Length != 2 || args[0] is not ("baseline" or "copy-control" or "phases" or "line-prototype" or "line-check" or "line-hybrid" or "line-direct" or "identity")) throw new ArgumentException("Expected mode and fixture");
+var fixture = Path.GetFullPath(args[1]);
+if (!fixture.StartsWith(Path.GetFullPath(".temp") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Fixture outside repo scratch");
+if (args[0] == "identity") { Console.WriteLine(PreparedIdentity.Hash); return; }
+if (args[0] == "line-check") { LineCheck.Run(); return; }
+Probe.Engine.PhaseProbe.Enabled = args[0] is "phases" or "line-prototype" or "line-hybrid" or "line-direct";
+Probe.Engine.PhaseProbe.FastBreaks = args[0] is "line-prototype" or "line-hybrid";
+Probe.Engine.PhaseProbe.HybridBreaks = args[0] == "line-hybrid";
+Probe.Engine.PhaseProbe.DirectBreaks = args[0] == "line-direct";
+var process = Process.GetCurrentProcess();
+var cpu = process.TotalProcessorTime;
+var collections = Enumerable.Range(0,3).Select(GC.CollectionCount).ToArray();
+var allocated = GC.GetTotalAllocatedBytes(true);
+var started = Stopwatch.GetTimestamp();
+IDisposable opened;
+int length, lines;
+if (args[0] == "baseline")
+{
+    var document = await Mote.Engine.Document.OpenAsync(fixture);
+    opened = document; length = document.Snapshot.Length; lines = document.Snapshot.LineCount;
+}
+else
+{
+    var document = await Probe.Engine.Document.OpenAsync(fixture);
+    opened = document; length = document.Snapshot.Length; lines = document.Snapshot.LineCount;
+}
+var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+var bytes = GC.GetTotalAllocatedBytes(true) - allocated;
+var gc = Enumerable.Range(0,3).Select(i => GC.CollectionCount(i)-collections[i]).ToArray();
+// Let async producers unwind before inspecting retained bytes; forced GC is outside measured Open.
+await Task.Yield();
+process.Refresh();
+var cpuMs = (process.TotalProcessorTime-cpu).TotalMilliseconds;
+var working = process.WorkingSet64;
+var peak = process.PeakWorkingSet64;
+var live = GC.GetTotalMemory(true);
+var result = new Result(args[0], PreparedIdentity.Hash, elapsed, bytes, cpuMs, gc, live, working, peak,
+    length, lines, Probe.Engine.PhaseProbe.Ticks.Select(t => t*1000d/Stopwatch.Frequency).ToArray(), Probe.Engine.PhaseProbe.Counts,
+    RuntimeInformation.FrameworkDescription, RuntimeInformation.OSDescription, RuntimeInformation.ProcessArchitecture.ToString(), Environment.ProcessorCount);
+Console.WriteLine(JsonSerializer.Serialize(result, ProbeJson.Default.Result));
+GC.KeepAlive(opened); opened.Dispose();
+
+/// <summary>Content-free whole-open/process observations; memory counters are not allocations by phase.</summary>
+internal sealed record Result(string Mode, string PreparationSha256, double OpenMs, long AllocatedBytes, double CpuMs, int[] Collections,
+    long PostYieldLiveBytes, long WorkingSetBytes, long PeakWorkingSetBytes, int LengthUtf16, int LineCount,
+    double[] PhaseMs, long[] PhaseCalls, string Runtime, string OS, string Architecture, int LogicalProcessors);
+
+/// <summary>Native AOT JSON serialization contract for the fixed result schema.</summary>
+[JsonSerializable(typeof(Result))]
+internal partial class ProbeJson : JsonSerializerContext;
+
+namespace Probe.Engine
+{
+    /// <summary>Opt-in sequential phase timers; stopwatch/branch overhead is measured by copy-control.</summary>
+    internal static class PhaseProbe
+    {
+        internal static bool Enabled;
+        internal static bool FastBreaks;
+        internal static bool HybridBreaks;
+        internal static bool DirectBreaks;
+        internal static long[] Ticks = new long[5];
+        internal static long[] Counts = new long[5];
+        internal static long Start() => Enabled ? Stopwatch.GetTimestamp() : 0;
+        internal static void End(int phase, long start)
+        {
+            if (!Enabled) return;
+            Ticks[phase] += Stopwatch.GetTimestamp()-start;
+            Counts[phase]++;
+        }
+    }
+}

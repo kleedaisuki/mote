@@ -1,0 +1,19 @@
+# Local build outputs and generated files.
+**/bin/
+**/obj/
+.vs/
+.idea/
+.vscode/
+
+# Experiments and temporary test artifacts stay in the repository root.
+.cache/
+.temp/
+
+# Native AOT and platform debugging outputs.
+*.pdb
+*.dSYM/
+*.dbg
+
+# OS metadata.
+.DS_Store
+Thumbs.db

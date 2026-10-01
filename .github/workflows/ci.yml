@@ -1,0 +1,26 @@
+# Ordinary delivery CI calls the same fail-closed pipeline used for release builds.
+# Historical Canvas/capacity investigations remain available in native-diagnostics.yml.
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-candidate:
+    name: Test and package Native AOT
+    # Draft PRs reuse their branch push evidence instead of duplicating native builds.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ github.sha }}
+      version: '0.1.0'

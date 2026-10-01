@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <OutputType Condition="$([MSBuild]::IsOSPlatform('Windows'))">WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <StripSymbols>false</StripSymbols>
+    <PublishDocumentationFile>false</PublishDocumentationFile>
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
+    <PublishReferencesSymbols>false</PublishReferencesSymbols>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <AllowedReferenceRelatedFileExtensions>.none</AllowedReferenceRelatedFileExtensions>
+    <AssemblyName>mote</AssemblyName>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Mote.Engine/Mote.Engine.csproj" />
+    <ProjectReference Include="../Mote.Formats/Mote.Formats.csproj" />
+    <ProjectReference Include="../Mote.Configuration/Mote.Configuration.csproj" />
+    <ProjectReference Include="../Mote.Themes/Mote.Themes.csproj" />
+    <ProjectReference Include="../Mote.Telemetry/Mote.Telemetry.csproj" />
+  </ItemGroup>
+  <!-- Launch Services reads this section from the Mach-O itself: no .app sidecar. -->
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('osx'))">
+    <LinkerArg Include="-Wl,-sectcreate,__TEXT,__info_plist,$(MSBuildProjectDirectory)/Info.plist" />
+  </ItemGroup>
+</Project>

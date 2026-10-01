@@ -1,0 +1,55 @@
+# Manual, disposable hosted-runner TIS feasibility experiment only.
+# Last observed x64/ARM64 run 36688502809 FAILED to restore ITABC enabled=false
+# despite OSStatus 0; do not dispatch again before recovery behavior is reviewed.
+name: Manual macOS Pinyin activation feasibility
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type disposable-runner-only after reviewing the failed ITABC restoration evidence'
+        required: true
+        type: string
+
+concurrency:
+  group: mac-ime-activation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  activation:
+    if: github.event.inputs.confirmation == 'disposable-runner-only'
+    name: Disposable hosted Mac / ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      # This is the last substantive step: a killed helper cannot execute its
+      # Objective-C restoration finally block. The runner is discarded after.
+      - name: Probe reversible Apple Pinyin source activation
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $rid = '${{ matrix.rid }}'
+          & ./tests/MacRealImeActivationProbe/Run.ps1 `
+            -RuntimeIdentifier $rid `
+            -ReportPath ".cache/ci-inventory/$rid/mac-real-ime-activation.json"
+      - name: Upload scoped activation report, including failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-real-ime-activation-${{ matrix.rid }}
+          path: .cache/ci-inventory/${{ matrix.rid }}/mac-real-ime-activation.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14

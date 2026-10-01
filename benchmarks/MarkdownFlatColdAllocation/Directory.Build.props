@@ -1,0 +1,8 @@
+<Project>
+  <!-- Keep this standalone experiment's generated build files in the repository artifact area. -->
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../.cache/markdown-flat-cold-allocation/benchmark-bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../.cache/markdown-flat-cold-allocation/benchmark-obj/</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

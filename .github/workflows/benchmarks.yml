@@ -1,0 +1,364 @@
+# Explicit manual capacity/mechanism measurements; not an automatic ordinary-release requirement.
+name: Benchmarks
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Run all workloads or one focused Native AOT suite'
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - engine
+          - markdown
+          - startup
+          - trace
+
+jobs:
+  suites:
+    name: Select changed benchmark suites
+    runs-on: ubuntu-latest
+    outputs:
+      engine: ${{ steps.select.outputs.engine }}
+      markdown: ${{ steps.select.outputs.markdown }}
+      startup: ${{ steps.select.outputs.startup }}
+      trace: ${{ steps.select.outputs.trace }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths, preserving full scheduled/manual coverage
+        id: select
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != push ]]; then
+            printf 'engine=true\nmarkdown=true\nstartup=true\ntrace=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE^{commit}"; then
+            printf 'engine=true\nmarkdown=true\nstartup=true\ntrace=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          engine=false
+          markdown=false
+          startup=false
+          trace=false
+          workflow=false
+          while IFS= read -r path; do
+            case "$path" in
+              tests/Mote.Benchmarks/*) engine=true ;;
+              benchmarks/Mote.MarkdownBenchmarks/*) markdown=true ;;
+              tests/Measure-NativeStartup.ps1) startup=true ;;
+              benchmarks/NativePaintLatency/*|benchmarks/NativeAcceptance/*) trace=true ;;
+              .github/workflows/benchmarks.yml) workflow=true ;;
+            esac
+          done < <(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          # A workflow-only change may affect any suite; a new Markdown project
+          # plus workflow change remains focused; a trace harness change is trace-only.
+          if [[ "$workflow" == true && "$engine" == false && "$markdown" == false && "$startup" == false && "$trace" == false ]]; then
+            engine=true
+            markdown=true
+            startup=true
+            trace=true
+          fi
+          printf 'engine=%s\nmarkdown=%s\nstartup=%s\ntrace=%s\n' "$engine" "$markdown" "$startup" "$trace" >> "$GITHUB_OUTPUT"
+
+  engine:
+    name: Native AOT engine open/edit / ${{ matrix.rid }}
+    needs: suites
+    if: needs.suites.outputs.engine == 'true' && (github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'engine')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            rid: win-x64
+          - os: macos-26
+            rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish process-isolated engine benchmark as Native AOT
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          dotnet publish tests/Mote.Benchmarks/Mote.Benchmarks.csproj `
+            --configuration Release --runtime $rid --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true `
+            -p:DebugType=none -p:StripSymbols=false `
+            -o ".temp/benchmarks/engine-$rid"
+          if ($LASTEXITCODE -ne 0) { throw "Native AOT benchmark publish failed ($LASTEXITCODE)." }
+      - name: Measure 1/10/100 MiB line-oriented and long-line open/edit
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'Mote.Benchmarks.exe' } else { 'Mote.Benchmarks' }
+          $exe = (Resolve-Path ".temp/benchmarks/engine-$rid/$name").Path
+          foreach ($size in 1, 10, 100) {
+            foreach ($mode in '--open-edit', '--long-line') {
+              for ($rep = 1; $rep -le 3; $rep++) {
+                & $exe $size $mode
+                if ($LASTEXITCODE -ne 0) { throw "Benchmark failed: $size MiB $mode repetition $rep" }
+              }
+            }
+          }
+          for ($rep = 1; $rep -le 3; $rep++) {
+            & $exe 1
+            if ($LASTEXITCODE -ne 0) { throw "Markdown analysis benchmark failed: repetition $rep" }
+          }
+          $rows = @(Get-Content '.cache/benchmarks/results.jsonl')
+          if ($rows.Count -ne 21) { throw "Expected 21 isolated benchmark rows, got $($rows.Count)." }
+      # Allocation is measured only around the synchronous semantic session, after the
+      # synthetic 100 MiB corpus has been generated and opened. Wall time/RSS are recorded,
+      # never thresholded on shared runners. This still uses a separate benchmark process.
+      - name: Guard 100 MiB JSON unique-key semantic allocation
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'Mote.Benchmarks.exe' } else { 'Mote.Benchmarks' }
+          $exe = (Resolve-Path ".temp/benchmarks/engine-$rid/$name").Path
+          & $exe 100 --json-key-index
+          if ($LASTEXITCODE -ne 0) { throw "JSON unique-key allocation guard failed ($LASTEXITCODE)." }
+      - name: Upload raw engine timing and peak-working-set samples
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-aot-engine-${{ matrix.rid }}
+          path: |
+            .cache/benchmarks/results.jsonl
+            .cache/benchmarks/json-key-index.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  native-startup:
+    name: Native AOT GUI smoke process / ${{ matrix.rid }}
+    needs: suites
+    if: needs.suites.outputs.startup == 'true' && (github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'startup')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            rid: win-x64
+          - os: macos-26
+            rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish single native editor executable
+        shell: pwsh
+        run: |
+          dotnet publish src/Mote.Native/Mote.Native.csproj `
+            --configuration Release --runtime '${{ matrix.rid }}' --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true `
+            -p:DebugType=none -p:GenerateDocumentationFile=false -p:StripSymbols=false
+          if ($LASTEXITCODE -ne 0) { throw "Native editor AOT publish failed ($LASTEXITCODE)." }
+      - name: Measure first run and paired telemetry-off/on warm GUI smoke
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'mote.exe' } else { 'mote' }
+          $exe = "src/Mote.Native/bin/Release/net10.0/$rid/publish/$name"
+          & ./tests/Measure-NativeStartup.ps1 `
+            -ExecutablePath $exe -RuntimeIdentifier $rid -WarmRuns 10 -CompareTelemetry
+      - name: Upload process-level timing and sampled RSS
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-startup-${{ matrix.rid }}
+          path: |
+            .cache/benchmarks/native-startup.jsonl
+            .cache/benchmarks/native-startup-samples.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  markdown-large:
+    name: Native AOT 100 MiB Markdown semantics / ${{ matrix.rid }}
+    needs: suites
+    if: needs.suites.outputs.markdown == 'true' && (github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'markdown')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            rid: win-x64
+          - os: macos-26
+            rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish standalone Markdown benchmark as Native AOT
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          dotnet publish benchmarks/Mote.MarkdownBenchmarks/Mote.MarkdownBenchmarks.csproj `
+            --configuration Release --runtime $rid --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true `
+            -p:DebugType=none -p:StripSymbols=false `
+            -o ".temp/benchmarks/markdown-$rid"
+          if ($LASTEXITCODE -ne 0) { throw "Markdown Native AOT publish failed ($LASTEXITCODE)." }
+      # Rotate mode order: each case is process-isolated but all share this VM/binary.
+      - name: Measure sparse Complete, dense/complex Provisional, edit, and cancellation
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $name = if ($IsWindows) { 'Mote.MarkdownBenchmarks.exe' } else { 'Mote.MarkdownBenchmarks' }
+          $exe = (Resolve-Path ".temp/benchmarks/markdown-$rid/$name").Path
+          $modes = @('markdown-flat', 'markdown-dense', 'markdown-complex', 'markdown-cancel')
+          for ($rep = 0; $rep -lt 3; $rep++) {
+            for ($i = 0; $i -lt $modes.Count; $i++) {
+              $mode = $modes[($i + $rep) % $modes.Count]
+              & $exe $mode
+              if ($LASTEXITCODE -ne 0) { throw "Markdown benchmark failed: $mode repetition $($rep + 1)" }
+            }
+          }
+          $rows = @(Get-Content '.cache/benchmarks/markdown-large.jsonl' | ConvertFrom-Json)
+          if ($rows.Count -ne 12 -or @($rows | Where-Object { -not $_.ContractPassed }).Count -ne 0) {
+            throw "Expected 12 contract-passing large Markdown rows, got $($rows.Count)."
+          }
+      - name: Upload large Markdown semantic-session samples
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-aot-markdown-${{ matrix.rid }}
+          path: .cache/benchmarks/markdown-large.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  native-trace-pairs:
+    name: Native AOT paired trace overhead / win-x64
+    needs: suites
+    if: needs.suites.outputs.trace == 'true' && (github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'trace')
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate paired-series and strict trace-reader fixtures
+        shell: pwsh
+        run: |
+          python -B benchmarks/NativePaintLatency/test_trace_pairs.py
+          if ($LASTEXITCODE -ne 0) { throw 'Paired-series fixtures failed.' }
+          python -B benchmarks/NativeAcceptance/test_acceptance.py
+          if ($LASTEXITCODE -ne 0) { throw 'Strict trace-reader fixtures failed.' }
+      - name: Publish current editor once with strict AOT warnings
+        shell: pwsh
+        run: |
+          dotnet publish src/Mote.Native/Mote.Native.csproj `
+            --configuration Release --runtime win-x64 --self-contained true `
+            -p:PublishAot=true -p:ContinuousIntegrationBuild=true `
+            -p:TreatWarningsAsErrors=true -p:ILLinkTreatWarningsAsErrors=true `
+            -p:DebugType=none -p:GenerateDocumentationFile=false -p:StripSymbols=false `
+            -o .cache/benchmarks/trace-publish-win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Current editor Native AOT publish failed.' }
+      - name: Retain and enforce exactly one executable payload
+        shell: pwsh
+        run: |
+          $publish = (Resolve-Path '.cache/benchmarks/trace-publish-win-x64').Path
+          $files = @(Get-ChildItem -LiteralPath $publish -File -Recurse -Force | ForEach-Object {
+            [pscustomobject]@{
+              path = [IO.Path]::GetRelativePath($publish, $_.FullName)
+              bytes = $_.Length
+            }
+          })
+          $directory = '.cache/benchmarks/native-trace-pairs'
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          [pscustomobject]@{ rid = 'win-x64'; executable = 'mote.exe'; payload_files = $files } |
+            ConvertTo-Json -Depth 6 | Set-Content -LiteralPath "$directory/publish-inventory.json" -Encoding utf8
+          if ($files.Count -ne 1 -or $files[0].path -cne 'mote.exe') {
+            throw 'Single-binary contract failed: expected only root mote.exe.'
+          }
+      # A rejected desktop/series is retained evidence, not a performance regression.
+      # No rescue, activation repair, second publish, or replacement sample is scheduled.
+      - name: Measure one predeclared 20-pair hosted series
+        id: measurement
+        continue-on-error: true
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          & ./benchmarks/NativePaintLatency/Measure-WindowsTracePairs.ps1 `
+            -ExecutablePath .cache/benchmarks/trace-publish-win-x64/mote.exe -Pairs 20
+      - name: Surface qualification independently of job success
+        if: always()
+        shell: pwsh
+        env:
+          MEASUREMENT_OUTCOME: ${{ steps.measurement.outcome }}
+        run: |
+          # Read only the one owned series, never arbitrary paths/text from evidence.
+          $comparison = 'unknown'
+          $planned = $attempted = $completed = 'unknown'
+          try {
+            $root = '.cache/benchmarks/native-trace-pairs'
+            foreach ($ancestor in @('.cache', '.cache/benchmarks', $root)) {
+              if ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe root.' }
+            }
+            $series = @(Get-ChildItem -LiteralPath $root -Directory -Force)
+            if ($series.Count -ne 1 -or $series[0].Name -cnotmatch '^[0-9a-f]{32}$' -or
+                ($series[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe series.' }
+            $path = Join-Path $series[0].FullName 'summary.json'
+            $file = Get-Item -LiteralPath $path
+            if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                $file.Length -gt 4194304) { throw 'Unsafe summary.' }
+            $summary = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            if (($summary.schema_version -isnot [int] -and $summary.schema_version -isnot [long]) -or
+                $summary.schema_version -ne 1 -or $summary.comparison -cnotin @('qualified', 'not_qualified', 'incomplete')) { throw 'Invalid summary.' }
+            foreach ($key in @('planned_pairs', 'attempted_samples', 'completed_equivalent_pairs')) {
+              $value = $summary.$key
+              if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 60) { throw 'Invalid counter.' }
+            }
+            if ($summary.planned_pairs -ne 20 -or $summary.attempted_samples -gt 40 -or
+                $summary.completed_equivalent_pairs -gt 20 -or
+                2 * $summary.completed_equivalent_pairs -gt $summary.attempted_samples) { throw 'Inconsistent counters.' }
+            if ($summary.comparison -ceq 'qualified' -and
+                ($env:MEASUREMENT_OUTCOME -cne 'success' -or $summary.attempted_samples -ne 40 -or
+                 $summary.completed_equivalent_pairs -ne 20 -or $null -eq $summary.paired_estimate)) { throw 'Incomplete qualification.' }
+            $comparison = $summary.comparison
+            $planned = $summary.planned_pairs
+            $attempted = $summary.attempted_samples
+            $completed = $summary.completed_equivalent_pairs
+          } catch {
+            # Missing/unsafe/censored evidence is unknown, never a qualified green job.
+          }
+          $outcome = if ($env:MEASUREMENT_OUTCOME -cin @('success', 'failure', 'cancelled', 'skipped')) { $env:MEASUREMENT_OUTCOME } else { 'unknown' }
+          @(
+            '## Hosted paired trace qualification'
+            "Measurement step outcome: **$outcome** (non-gating)."
+            "Comparison: **$comparison**; declared pairs: $planned; indexed driver-return samples: $attempted; completed equivalent pairs: $completed."
+            'Job success does not certify qualification, absence of regression, AppKit cost, physical input, or presentation.'
+            'Inspect the retained manifest, index, summary, driver logs, and traces before making a performance claim.'
+          ) | Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Retain complete series evidence even after rejection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-trace-pairs-win-x64
+          path: .cache/benchmarks/native-trace-pairs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
