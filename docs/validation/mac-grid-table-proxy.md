@@ -242,7 +242,7 @@ Both relation queries occur immediately after the successful AXShowMenu action,
 before the polling search. Neither candidate relation produced an AX element,
 so no returned-menu PID/role/child fields were available. Error -25204 on x64 is
 a transport completion failure: it must **not** be reported as proof that the
-product getter returned nil. ARM -25205 reports no value, but does not establish
+product getter returned nil. ARM -25205 is attribute unsupported, but does not establish
 whether the native menu never opened, closed before the query, or lacked the
 shown-menu relationship. Label-versus-title diagnostics both finding zero gives
 no evidence for simply relaxing the established label oracle.
@@ -330,7 +330,10 @@ RIDs (ARM job 110161759808; x64 job 110161759910), without a combined-step error
 The unchanged separate Swift client typechecks and is trusted on both hosts.
 
 Both external reports still fail / exit 1 at **context-menu-accessible**,
-`AX=-25205; no key-injection fallback`: 25 prior checks pass, the action assertion
+`AX=-25205; no key-injection fallback`: Apple's
+[AXError definition](https://developer.apple.com/documentation/applicationservices/axerror/attributeunsupported)
+classifies -25205 as **attributeUnsupported**, not actionUnsupported (-25206)
+or cannotComplete (-25204). This is not evidence of a timeout. 25 prior checks pass, the action assertion
 is the 26th and false. x64 has 1,640 admissions / 1.017s; ARM 2,437 / 1.540s.
 Logical-navigation has one admission (the action), no polling/traversal and no
 shown-menu observations. The later coordinate item/prompt, jump, retired-cell
