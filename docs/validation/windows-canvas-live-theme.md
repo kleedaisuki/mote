@@ -11,8 +11,9 @@ is not evidence for the ordinary Continuous Canvas route.
 The new diagnostic launches the published executable with only its disposable
 fixture filename. It does not select a legacy, experimental Canvas or test-only
 product route. Its current status is **portable contracts passed; the corrected
-owner reached both native targets, but the first dark-phase source-readiness
-predicate failed on both RIDs; restoration and unchanged-file cleanup passed**.
+owner reached both native targets, but the source-readiness observer addresses
+the Canvas Pane root rather than the ordinary source Document child; restoration
+and unchanged-file cleanup passed on both RIDs**.
 No live palette or source-selection acceptance has yet been established. No
 registry setting was changed on the local developer machine, and no product
 implementation was modified to satisfy the checks.
@@ -354,3 +355,116 @@ sentinels; they verify correct length/newline booleans, no early pattern reads,
 structured error provenance, initial-only ownership names, fresh-attempt unknown
 fields, unchanged polling deadline and readiness-before-input/theme ordering.
 These are synthetic observer contracts, not newly observed native product results.
+
+## Readiness-discriminator hosted audit: run 36804628122
+
+Run [36804628122](https://github.com/kleedaisuki/mote/actions/runs/36804628122),
+head `42462d7`, ran the content-free discriminator on both Windows Native AOT
+RIDs. Both reviewed harness byte pins and the portable `13 + 7 + 11` contracts
+passed. Both actual native commands and first phase workers returned **exit 1**,
+notwithstanding green Native AOT/non-gating step conclusions.
+
+| RID | Job ID | Theme artifact ID | Final attempt | Elapsed at attempt start | Actual exit-1 time (UTC) |
+| --- | --- | --- | --- | --- | --- |
+| win-x64 | 110186128377 | 11136932971 | 235 | 14954 ms | 2026-10-01 02:14:33.1788827 |
+| win-arm64 | 110186128270 | 11137032497 | 235 | 14995 ms | 2026-10-01 02:14:11.2625250 |
+
+The two `dark-before` phase observations identify the same precise failed gates:
+
+| Fact | Both RIDs | Interpretation |
+| --- | --- | --- |
+| initial Canvas/input owner guards | true | initial provenance only |
+| Canvas/input visibility | true | native visible style, not foreground/occlusion |
+| provider process match | true | observer reached the target's element |
+| automation ID class | `empty` | not expected `mote.source.document` |
+| control type | `ControlType.Pane` | not the required source Document |
+| Document match | false | source identity/type predicate fails |
+| TextPattern / bounded length / newline comparisons | null | deliberately not read after identity/type gate failure |
+| API error stage/HRESULT | null | ordinary rejected observation, not an API exception |
+
+This is **not** a demonstrated missing TextPattern or LF/CRLF mismatch: those
+reads never occurred. It is not a color defect or foreground blockage. The worker
+returned its own 15-second source-readiness failure before the independent
+30-second owner deadline, source selection, target theme notification, or any
+raster measurement. Phase `launch_observation=null`, `cases=[]`, and no PNG/light/
+dark-after outputs remain consistent with this control flow.
+
+Owner cleanup reports on both RIDs again verify `registry_restored=true`,
+`source_sha256_unchanged=true`, and `normal_exit=true`, with original registry key
+and value present/kind DWord. This establishes that the real registry mutation
+and launched-editor failure path returned safely for these observations, not
+unexecuted palette, source-selection, edit/history or physical-display behavior.
+
+Published executable SHA-256:
+
+- win-x64: `88BDC4C03DE323BCAF91FBF2B37E107CBABA5646E6ACCF27B0E4CFEA4DD5AF89`.
+- win-arm64: `5ED3FB378A992D0E6C755E13828D0A37AA7146CCF98FE7A294C19CA928ED9E5C`.
+
+### Discriminating companion evidence: root versus source fragment
+
+The existing ordinary-product external UIA probe from **this same run** uses the
+same per-RID executable SHA, no presentation flags (`Mode=product-continuous`,
+`PresentationArguments=[]`), and a separate synthetic fixture. Its artifacts
+`windows-ax-product-win-x64` (11137765557) and
+`windows-ax-product-win-arm64` (11137775345) record the intended topology on both
+architectures:
+
+- Canvas root: `ControlType.Pane`, empty automation ID, no TextPattern.
+- Source **child**: `ControlType.Document`, exact ID `mote.source.document`,
+  TextPattern present; the same single source node appears in Raw, Control and
+  Content Document lists.
+- The input HWND routes to that source Document rather than an independent
+  duplicate document.
+
+This supports a concrete **harness node-selection mismatch**, not an absent
+product source Document. The companion probe is a different fixture/workflow;
+its tree observations must not be promoted to passing this theme fixture or the
+entire external UIA probe. In particular, its ARM focus evidence has a separate
+inconclusive-foreground boundary, unrelated to the theme observer's identity gate.
+
+Repository contracts agree with these artifacts:
+`tests/WindowsAxExternalProbe/ProbeLaunchRoute.cs` selects
+`UsesSourceFragment=true` for the ordinary route;
+`Program.cs::WaitForSourceElement` searches the Canvas descendants for the source
+ID in this mode. `WindowsUiaFragmentExperiment.cs` defines a Canvas Pane root and
+one source-backed Document child, and `WindowsUiaBridgePrototype.cs` returns that
+fragment root when active. The new theme observer instead calls
+`AutomationElement.FromHandle(canvas)` and demands that **root** have the child
+Document's ID/type. The failing facts match this mistaken expectation exactly.
+
+### Minimal proposed correction, not yet implemented
+
+Resolve the **unique target-owned source Document inside a bounded Canvas
+subtree**, then apply the existing expected-PID/source-ID/Document/TextPattern/
+exact-LF/visible-host predicate to that semantic source element. Preserve root
+Pane metadata separately so container identity is not confused with source
+identity. Prefer explicit bounded traversal/candidate counting (for example a
+256-node/depth budget inside the existing 30-second killable worker), reject
+missing/duplicate candidates, and never fall back to hidden legacy text, arbitrary
+native RichEdit text, an unverified process, or desktop-global tree search.
+
+Portable red/green tests should encode the actual Pane-root/Document-child shape,
+no source child, duplicate expected source children, a foreign candidate, traversal
+budget overflow, and the unchanged text/palette preconditions. This is a test
+harness correction aligned with the established ordinary-product source contract,
+not a reason to flatten or change the product accessibility tree. No worker,
+product or CI implementation was edited during this audit.
+
+All audit files are under `.cache/canvas-theme-36804628122/`, including raw job
+logs, both theme artifacts, and the companion product-tree artifacts. Retrieval:
+
+```powershell
+gh run download 36804628122 --name native-canvas-theme-win-x64 `
+  --dir .cache/canvas-theme-36804628122/win-x64
+gh run download 36804628122 --name native-canvas-theme-win-arm64 `
+  --dir .cache/canvas-theme-36804628122/win-arm64
+gh api repos/kleedaisuki/mote/actions/jobs/110186128377/logs `
+  > .cache/canvas-theme-36804628122/win-x64.log
+gh api repos/kleedaisuki/mote/actions/jobs/110186128270/logs `
+  > .cache/canvas-theme-36804628122/win-arm64.log
+```
+
+Use paginated artifact inventory; keep nested raw exits and report status as the
+verdict inputs. Immutable version, source selection/history, palette transitions,
+render callbacks, physical presentation, screen readers and IME remain unverified
+by this theme diagnostic.
