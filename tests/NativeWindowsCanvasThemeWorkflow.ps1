@@ -95,10 +95,10 @@ foreach ($path in @($exe,$scratch,$output,$reportPath)) { Assert-NoReparseAncest
 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Published executable absent.' }
 New-Item -ItemType Directory -Force -Path $scratch,$output,(Split-Path $reportPath) | Out-Null
 foreach ($path in @($scratch,$output,$reportPath)) { Assert-NoReparseAncestors $path }
-$fixture=Join-Path $scratch 'theme.txt';$home=Join-Path $scratch 'home'
-New-Item -ItemType Directory -Force -Path $home | Out-Null
+$fixture=Join-Path $scratch 'theme.txt';$syntheticHome=Join-Path $scratch 'home'
+New-Item -ItemType Directory -Force -Path $syntheticHome | Out-Null
 [IO.File]::WriteAllText($fixture,"alpha`nbeta`n",[Text.UTF8Encoding]::new($false))
-[IO.File]::WriteAllText((Join-Path $home 'config.toml'),"[appearance]`ntheme = 'system'`n",[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $syntheticHome 'config.toml'),"[appearance]`ntheme = 'system'`n",[Text.UTF8Encoding]::new($false))
 $sourceHash=(Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash
 $state=[pscustomobject]@{Parent=$null;Key=$null;KeyExists=$false;ValueExists=$false;Kind=$null;Value=$null;Touched=$false}
 $report=[ordered]@{
@@ -129,7 +129,7 @@ try {
   $report.registry_original_kind=if ($state.ValueExists) { $state.Kind.ToString() } else { $null }
   $state.Touched=$true;$state.Key.SetValue('AppsUseLightTheme',0,[Microsoft.Win32.RegistryValueKind]::DWord)
   $start=[Diagnostics.ProcessStartInfo]::new($exe);$start.UseShellExecute=$false;$start.CreateNoWindow=$true
-  $start.Environment['MOTE_HOME']=$home;$start.Environment['MOTE_TRACE']='0'
+  $start.Environment['MOTE_HOME']=$syntheticHome;$start.Environment['MOTE_TRACE']='0'
   [void]$start.ArgumentList.Add($fixture) # Ordinary route, no legacy/experimental switches.
   $script:editor=[Diagnostics.Process]::Start($start)
   if ($null -eq $script:editor) { throw 'Editor launch failed.' }

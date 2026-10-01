@@ -10,8 +10,9 @@ is not evidence for the ordinary Continuous Canvas route.
 
 The new diagnostic launches the published executable with only its disposable
 fixture filename. It does not select a legacy, experimental Canvas or test-only
-product route. Its current status is **portable contracts passed; actual hosted
-GUI execution pending**. No registry setting was changed on the local developer
+product route. Its current status is **portable contracts passed; first hosted attempt blocked
+by a harness setup defect before registry mutation or editor launch; corrected
+harness awaiting another hosted observation**. No registry setting was changed on the local developer
 machine, and no product implementation was modified to satisfy the checks.
 
 ## Acceptance basis
@@ -146,3 +147,62 @@ window/raster content; they are neither a callback endpoint measurement nor a
 compositor/physical-display presentation or latency claim. Real IME candidate
 placement, composition preservation, screen-reader behavior, full accessibility
 acceptance and product-wide theme reload/edit/version guarantees remain separate.
+
+## First hosted audit: run 36800944850
+
+Run [36800944850](https://github.com/kleedaisuki/mote/actions/runs/36800944850),
+head `99fbe39`, exercised the separate diagnostic on both Windows RIDs. The
+reviewed-source pins passed, followed by the portable `13` restoration/fidelity
+and `7` source-range contracts. Both outer Native AOT jobs had green conclusions,
+and the non-gating diagnostic step conclusions were also masked `success`.
+The actual nested command failed with **exit 1** on both RIDs:
+
+| RID | Job ID | UTC error time | First failure | Evidence verdict |
+| --- | --- | --- | --- | --- |
+| win-x64 | 110174903104 | 2026-10-01 01:27:53.3733580 | `Cannot overwrite variable HOME because it is read-only or constant.` | harness setup failure; no Canvas evidence |
+| win-arm64 | 110174903186 | 2026-10-01 01:27:30.9183472 | same error | harness setup failure; no Canvas evidence |
+
+Raw job logs are preserved locally under repository `.cache`:
+`canvas-theme-36800944850-win-x64.log` and
+`canvas-theme-36800944850-win-arm64.log`. Reproduce retrieval after job completion:
+
+```powershell
+gh api repos/kleedaisuki/mote/actions/jobs/110174903104/logs `
+  > .cache/canvas-theme-36800944850-win-x64.log
+gh api repos/kleedaisuki/mote/actions/jobs/110174903186/logs `
+  > .cache/canvas-theme-36800944850-win-arm64.log
+```
+
+Both artifact-upload steps explicitly warned `No files were found` for the owner
+report/phase output paths. The run artifact inventory contained no
+`native-canvas-theme-win-x64` or `native-canvas-theme-win-arm64`. There are **no**
+owner reports, phase reports, PNGs or worker logs from which to infer colors,
+source selection/version, source hash or an actual registry-restore result.
+
+Mechanism: PowerShell variable names are case-insensitive. The owner assigned
+`$home` during synthetic path setup, colliding with the built-in readonly `$HOME`.
+This occurs before the fixture/config writes, source hash capture, registry
+snapshot/mutation, editor launch and GUI worker. Only repository-local output
+and scratch directories had been created. Static execution ordering therefore
+establishes **no registry mutation or editor launch was reached**; it does not
+manufacture a `registry_restored=true` report. This failure is neither a product
+palette failure nor a blocked-foreground observation.
+
+### Isolated correction and regression evidence
+
+The owner now uses `$syntheticHome` consistently; no registry, product, theme,
+GUI worker or launch-route behavior was changed. The portable contract adds:
+
+- A case-insensitive AST rejection of writable `HOME`, `home` and scoped
+  `script:Home` assignments.
+- A real local red reproduction of the old `$home` assignment, which throws
+  the readonly-HOME error without touching the environment or filesystem.
+- Execution of only the actual corrected `Join-Path` setup assignment, proving
+  the generated home equals `<synthetic scratch>/home` without running fixture,
+  registry, editor or GUI code.
+
+The fresh local command again exits **0**, retaining all `13 + 7` prior contracts
+and adding the readonly-HOME red/green setup checks. This closes the specific
+harness setup defect, not the hosted Canvas theme acceptance. A subsequent run
+must still supply all three exact phase reports/rasters, source UIA assertions,
+normal exit, unchanged input hash and verified registry restoration.

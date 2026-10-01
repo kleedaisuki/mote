@@ -10,6 +10,34 @@ function Read-ProbeAst([string] $Name) {
 }
 $owner=Read-ProbeAst 'NativeWindowsCanvasThemeWorkflow.ps1'
 $gui=Read-ProbeAst 'NativeWindowsCanvasThemeWorker.ps1'
+# PowerShell variable names are case-insensitive; $home collides with readonly $HOME.
+function Assert-NoReservedHomeWrite($Ast) {
+ foreach ($assignment in $Ast.FindAll({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst]},$true)) {
+  foreach ($variable in $assignment.Left.FindAll({param($n) $n -is [Management.Automation.Language.VariableExpressionAst]},$true)) {
+   $name=($variable.VariablePath.UserPath -split ':')[-1]
+   if ([string]::Equals($name,'HOME',[StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Readonly PowerShell HOME must not be used as a synthetic configuration variable.'
+   }
+  }
+ }
+}
+foreach ($probeAst in @($owner,$gui)) { Assert-NoReservedHomeWrite $probeAst }
+foreach ($sample in @('$HOME = 1','$home = 1','$script:Home = 1')) {
+ $tokens=$null;$errors=$null
+ $sampleAst=[Management.Automation.Language.Parser]::ParseInput($sample,[ref]$tokens,[ref]$errors)
+ $rejected=$false
+ try { Assert-NoReservedHomeWrite $sampleAst } catch { $rejected=$true }
+ if (-not $rejected) { throw 'Readonly HOME assignment was not rejected case-insensitively.' }
+}
+$readonlyRejected=$false
+try { & ([scriptblock]::Create('$home = "synthetic-only"')) } catch { $readonlyRejected=$_.Exception.Message.Contains('HOME') }
+if (-not $readonlyRejected) { throw 'Original hosted readonly-HOME defect did not reproduce locally.' }
+# Execute only the actual safe Join-Path assignment, without fixtures/registry/processes.
+$setup=@($owner.FindAll({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -ceq '$syntheticHome'},$true))
+if ($setup.Count -ne 1) { throw 'Expected one synthetic-home setup assignment.' }
+$scratch=Join-Path (Join-Path $PSScriptRoot '..') '.temp/native-canvas-theme/contract-only'
+. ([scriptblock]::Create($setup[0].Extent.Text))
+if ($syntheticHome -cne (Join-Path $scratch 'home')) { throw 'Fixed synthetic home setup failed.' }
 foreach ($ast in @($owner,$gui)) {
     $embedded=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst] -and $n.Value.StartsWith('using System;')},$true))
     if ($embedded.Count -ne 1) { throw 'Expected exactly one native declaration body per role.' }
@@ -144,4 +172,4 @@ foreach ($case in @(
     try { Assert-SourceState $pattern $expected "alpha`nbeta`n" } catch { $accepted=$false }
     if ($accepted -ne $case.Accept) { throw 'Source range case misclassified.' }
 }
-"PASS: owner/GUI AST and C# compile; role separation; old finally red reproduction; $count restoration/cleanup/fidelity contracts; 7 source-range cases. No GUI/registry API executed."
+"PASS: owner/GUI AST and C# compile; role separation and readonly-HOME red/green setup; old finally red reproduction; $count restoration/cleanup/fidelity contracts; 7 source-range cases. No GUI/registry API executed."
