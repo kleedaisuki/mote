@@ -54,6 +54,11 @@ dotnet test tests/Mote.Tests/Mote.Tests.csproj -c Release --no-restore --filter 
 The corrected representative fixtures passed **18/18**, zero failures/skips
 (57 ms), with no compiler warnings in `exact-source-release.log`. The earlier
 run remains historical evidence rather than the final fixture qualification.
+Corrected test source SHA-256:
+`C61B0B83EACACC777CB13BECA83F2591BB0119BEB63BADC367C0A531713CA149`;
+qualified test assembly SHA-256:
+`606169045ACBFD571932DADD4D9C87F376E5C1175540F31B111EDF7DE70B3249`.
+The production source hash remained the same as above.
 
 | Claim | Expected and observed |
 | --- | --- |
