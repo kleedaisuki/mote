@@ -41,3 +41,21 @@ manifest require a separate final byte-level review. Existing strict clean
 checkout, static source/invocation matching and report gates must stay intact.
 A prelaunch hash refusal is not evidence that clipboard publication itself
 failed, nor does this source review certify the next hosted run.
+## Final invocation and detached manifest approval
+
+The subsequent root-owned working diff was independently checked: each Windows
+and macOS invocation script changes only its two fixed source-hash constants.
+Both reviewed source files are unchanged from `b2f4661` through current HEAD.
+No executable invocation logic, permission gate, timeout, cleanup, report oracle
+or dynamic self-approval was added. Both PowerShell AST parses reported zero
+errors; the three-file diff passed whitespace checks.
+
+The detached macOS manifest matches independently recomputed invocation bytes:
+
+- LF: `A0E670D5C8339A746165F89BD995D711CE97490408705F1FA7D176317AF7C8DB`
+- CRLF: `83FA3795949F608E77FD8C8EB8850E2C9FF49CF3CC2BC1E7E64A948C45100152`
+
+**Approved** the exact two invocation constant updates and detached manifest
+pins. The manifest also records prelaunch admission failure separately from
+clipboard runtime results and requires renewed hosted acceptance. No actual
+clipboard experiment was executed during this review.
