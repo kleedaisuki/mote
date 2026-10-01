@@ -88,3 +88,25 @@ unmeasured; no performance nonregression claim follows from Windows measurements
 
 These primary sources were checked during this review. Their contracts support
 the narrow design, not runtime evidence for mote's new bridge on either RID.
+
+## Addendum: bounded CI gate promotion review
+
+Reviewed the subsequent working diff of `.github/workflows/ci.yml` on
+2026-10-01, after root and the independent hosted auditor reported retained
+both-RID Flow-ready, local-monitor ABI/install/remove, and posted-fault
+continuation markers in [CI 36836309613](https://github.com/kleedaisuki/mote/actions/runs/36836309613).
+That historical run's Flow step was **non-gating**: neither a green job nor the
+later promotion retroactively changes its acceptance contract. The completed
+run's runtime evidence is documented separately by the hosted audit, not
+re-audited here.
+
+**No substantive issue found in the exact gate-promotion diff.** It changes the
+Flow step's comment/name and removes its `continue-on-error: true` only. The
+macOS-only `always()` condition, published per-RID executable path, PowerShell
+wrapper, three-minute timeout and single invocation are unchanged. The wrapper
+still rejects a nonzero native process exit or missing exact Flow-ready marker;
+the native success path requires the new controls before that marker. No retry,
+input/clipboard/settings mutation, altered oracle or unrelated gate relaxation
+is added. A later blocking hosted run remains pending at this review checkpoint.
+Ordinary external shortcut delivery and enabled performance remain distinct
+contracts, not certified by this gate.
