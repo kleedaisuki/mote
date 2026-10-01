@@ -87,6 +87,34 @@ alone can make this inventory observed while the Save-chain stays unobserved.
 No event pairing, temporal join, command delivery, or request ancestry is
 inferred; zero retained entry/return counters do not certify callback absence.
 
+The nested `native_input_inventory` independently preserves a six-operation by
+four-outcome matrix from each size's Save-session evidence. The fixed operations
+are `native.input.monitor.ready`, `native.input.monitor.unavailable`,
+`native.input.monitor.callback_failed`, `native.input.monitor.removed`,
+`native.input.monitor.removal_failed`, and `native.input.save_family_candidate`.
+Only nonnegative strict integer `success`/`failure`/`cancelled`/`skipped` counters
+survive; Boolean, negative, null, float, string, missing, and arbitrary counters
+remain unknown rather than being replaced with zero. The shared closed checkpoint
+filter is also used for menu inventories without changing their contract.
+
+The input inventory's observed/unobserved claim requires the complete six-by-four
+matrix, a recognized independent boundary, `absence_certified=false`,
+`request_correlation=none`, and both `candidate_to_menu_edge=unknown` and
+`menu_to_request_edge=unknown`. Missing or unfamiliar edge claims keep it
+unverified. No arbitrary endpoint, reason, raw source, or operation name is
+copied. Valid partial counts remain visible even when the inventory is unverified.
+The Step Summary renders all six rows in the same four-outcome order, the
+boundary, absence flag, correlation, and both unknown edges. The two size samples
+retain their own counts; neither count summation nor event pairing is performed.
+
+Input candidates mean a local filter matched, **not** physical input, menu
+delivery, or Save request receipt. Setup, callback failure, removal, and candidate
+counts do not change Save-chain, menu, document-result, or recorded-exit status.
+An observed setup-only inventory can coexist with an unobserved Save chain.
+Zero retained candidates do not certify callback absence, including after normal
+exit; censored and open boundaries remain explicit. This followup does not
+create new native or hosted experiment evidence.
+
 ## Privacy boundary
 
 Outputs contain only fixed diagnostic IDs, fixed normalized statuses, RID,
@@ -118,7 +146,7 @@ python -B -m unittest discover -s tests -p test_summarize_ci_evidence.py -v
 python -B tests/summarize_ci_evidence.py --rid win-x64 --output .cache/ci-inventory/win-x64/evidence-summary.json
 ```
 
-Local validation: 32 deterministic fixtures passed. They cover all four RID
+Local validation: 39 deterministic fixtures passed. They cover all four RID
 manifests; missing/malformed reports; unknown report privacy; fake typed exits;
 control completion vs product pass; censored expected kills; forced cleanup;
 JSON exact two-case coverage; observed trace drops; hidden worker exits; and
@@ -132,6 +160,13 @@ non-promotion fixtures. These fixtures do not claim new hosted exit observations
 Menu fixtures additionally cover missing inventory, setup-only observations
 with an unobserved Save chain, fixed boundaries, false absence/none correlation,
 partial/fake counter types, unknown statuses, and raw-payload privacy.
+Seven input fixtures additionally verify independent 1/100 MiB six-by-four
+matrices and visible candidate counts, missing/malformed inventories, invalid
+types for every outcome, negative/unknown counters, all fixed boundaries,
+uncertified zero inventories, rejected correlation/edge claims, and missing
+unknown edges. Existing malformed-report, censored-sample, Save-chain, menu, and
+numeric-exit fixtures remain passing. Validation command above completed locally
+with 39/39 cases; `git diff --check` passed. No workflow was changed.
 A cached real hosted osx-arm64 JSON pilot
 report was summarized: both 1/100 MiB claims and no-observed-drops retained,
 other unavailable reports explicitly missing, no inferred numeric exits.

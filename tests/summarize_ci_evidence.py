@@ -26,6 +26,12 @@ MENU_FIELDS = (("native.menu.observation.ready", "setup-ready"),
                ("native.menu.save_family.returned_true", "true"),
                ("native.menu.save_family.returned_false", "false"))
 MENU_STATUSES = ("success", "failure", "cancelled", "skipped")
+INPUT_FIELDS = (("native.input.monitor.ready", "setup-ready"),
+                ("native.input.monitor.unavailable", "setup-unavailable"),
+                ("native.input.monitor.callback_failed", "callback-failed"),
+                ("native.input.monitor.removed", "removed"),
+                ("native.input.monitor.removal_failed", "removal-failed"),
+                ("native.input.save_family_candidate", "candidate"))
 
 
 def scalar_fields(data):
@@ -95,7 +101,25 @@ def request_evidence_health(evidence):
 
 def menu_inventory(evidence):
     """Filter independent menu checkpoint counts, never infer request correlation."""
-    inventory = evidence.get("native_menu_inventory")
+    return checkpoint_inventory(evidence.get("native_menu_inventory"), MENU_FIELDS)
+
+
+def input_inventory(evidence):
+    """Retain local-filter counts without asserting physical input or delivery."""
+    inventory = evidence.get("native_input_inventory")
+    result = checkpoint_inventory(inventory, INPUT_FIELDS)
+    if isinstance(inventory, dict):
+        for edge in ("candidate_to_menu_edge", "menu_to_request_edge"):
+            if inventory.get(edge) == "unknown":
+                result[edge] = "unknown"
+        if any(result.get(edge) != "unknown" for edge in
+               ("candidate_to_menu_edge", "menu_to_request_edge")):
+            result["status"] = "unverified"
+    return result
+
+
+def checkpoint_inventory(inventory, fields):
+    """Filter a closed operation/outcome matrix; absent counters stay unknown."""
     result = {"status": "unverified", "boundary": "unverified", "counts": {}}
     if not isinstance(inventory, dict):
         return result
@@ -108,13 +132,13 @@ def menu_inventory(evidence):
     counts = inventory.get("counts")
     if not isinstance(counts, dict):
         return result
-    for operation, _ in MENU_FIELDS:
+    for operation, _ in fields:
         outcomes = counts.get(operation)
         if isinstance(outcomes, dict):
             result["counts"][operation] = {status: outcomes[status] for status in MENU_STATUSES
                 if type(outcomes.get(status)) is int and outcomes[status] >= 0}
     complete = all(len(result["counts"].get(operation, {})) == len(MENU_STATUSES)
-                   for operation, _ in MENU_FIELDS)
+                   for operation, _ in fields)
     if (complete and result["boundary"] != "unverified" and
             result.get("absence_certified") is False and result.get("request_correlation") == "none" and
             inventory.get("status") in ("observed", "unobserved")):
@@ -137,6 +161,7 @@ def save_causal_evidence(sample):
         if type(evidence.get(key)) is bool:
             result[key] = evidence[key]
     result["native_menu_inventory"] = menu_inventory(evidence)
+    result["native_input_inventory"] = input_inventory(evidence)
     return result
 
 
@@ -284,17 +309,33 @@ def causal_markdown(item):
 
 def menu_markdown(item):
     """Render fixed independent counts with unknown gaps, not a Save routing verdict."""
+    return checkpoint_markdown(item, "native_menu_inventory", MENU_FIELDS)
+
+
+def input_markdown(item):
+    """Render local monitor counts and explicit uncertified, uncorrelated boundaries."""
+    return checkpoint_markdown(item, "native_input_inventory", INPUT_FIELDS, input_edges=True)
+
+
+def checkpoint_markdown(item, key, fields, *, input_edges=False):
+    """Render only filtered generated inventory values, never raw report payloads."""
     evidence = item.get("save_causal_evidence", {})
-    inventory = evidence.get("native_menu_inventory")
+    inventory = evidence.get(key)
     if not isinstance(inventory, dict):
         return "unverified"
     counts = inventory.get("counts", {})
     checkpoints = []
-    for operation, label in MENU_FIELDS:
+    for operation, label in fields:
         outcomes = counts.get(operation, {})
         values = "/".join(str(outcomes.get(status, "?")) for status in MENU_STATUSES)
         checkpoints.append(f"{label}[{values}]")
-    return (f"{inventory['status']}, boundary={inventory['boundary']}, " + ", ".join(checkpoints))
+    rendered = (f"{inventory['status']}, boundary={inventory['boundary']}, " + ", ".join(checkpoints))
+    if input_edges:
+        rendered += (f", absence-certified={inventory.get('absence_certified', 'unknown')}, "
+                     f"request-correlation={inventory.get('request_correlation', 'unknown')}, "
+                     f"candidate-to-menu={inventory.get('candidate_to_menu_edge', 'unknown')}, "
+                     f"menu-to-request={inventory.get('menu_to_request_edge', 'unknown')}")
+    return rendered
 
 
 def markdown(report):
@@ -303,6 +344,7 @@ def markdown(report):
              "Non-gating observations; a green job does not certify these diagnostics.",
              "Missing exit codes mean unknown, not zero. Trace no-observed-drops is not loss certification.",
              "Menu counts are independent checkpoints (success/failure/cancelled/skipped; ? unknown), not Save routing or request edges.",
+             "Input counts are independent local-filter checkpoints in the same outcome order; candidate is not physical input or Save delivery. Zero counts never certify absence, even on normal exit.",
              "", "| Diagnostic | Report health | Report result | Recorded exits | Nested evidence |",
              "|---|---|---|---|---|"]
     for row in report["diagnostics"]:
@@ -311,7 +353,7 @@ def markdown(report):
                            f"{item.get('evidence_health', 'unknown')}, trace={item.get('trace_health', 'not-applicable')}, "
                            f"exits={','.join(f'{key}={item[key]}' for key in EXIT_FIELDS if key in item) or 'unknown'}, "
                            f"AX-reply={item.get('ax_reply', 'not-applicable')}, "
-                           f"Save-chain={causal_markdown(item)}, menu={menu_markdown(item)}"
+                           f"Save-chain={causal_markdown(item)}, menu={menu_markdown(item)}, input={input_markdown(item)}"
                            for item in row["nested"]) or "not-recorded"
         if "recorded_checks" in row:
             nested += f"; checks={row['passed_checks']}/{row['recorded_checks']}, failed={row['failed_checks']}"

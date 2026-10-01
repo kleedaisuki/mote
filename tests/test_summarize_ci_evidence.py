@@ -182,7 +182,8 @@ class SummaryTests(unittest.TestCase):
         evidence = row["nested"][0]["save_causal_evidence"]
         self.assertEqual(evidence, {"status": "censored", "recorded_requests": 1,
             "absence_certified": False, "normal_exit": False, "terminated": True,
-            "native_menu_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}}})
+            "native_menu_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}},
+            "native_input_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}}})
         self.assertNotIn("SECRET", json.dumps(row))
         self.assertNotIn("PRIVATE", json.dumps(row))
 
@@ -192,7 +193,8 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(summary.save_causal_evidence({"save_causal_evidence": {
             "contract": "native-save-causal-v1", "status": "SECRET", "requests": "PRIVATE",
             "absence_certified": "false", "normal_exit": 1}}), {"status": "unverified",
-            "native_menu_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}}})
+            "native_menu_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}},
+            "native_input_inventory": {"status": "unverified", "boundary": "unverified", "counts": {}}})
 
     def test_markdown_exposes_save_claim_request_count_and_normal_exit_privately(self):
         row = self.report("native-json-large", {"status": "incomplete", "samples": [
@@ -294,6 +296,100 @@ class SummaryTests(unittest.TestCase):
         self.assertNotIn("request_correlation", inventory)
         self.assertNotIn("SECRET", json.dumps(inventory))
         self.assertNotIn("PRIVATE", json.dumps(inventory))
+
+    def input_fixture(self, boundary="normal-exit-observed"):
+        """Create six closed operation rows without implying a delivered command."""
+        counts = {operation: {status: 0 for status in summary.MENU_STATUSES}
+                  for operation, _ in summary.INPUT_FIELDS}
+        counts["native.input.monitor.ready"]["success"] = 1
+        return {"status": "observed", "boundary": boundary, "counts": counts,
+                "absence_certified": False, "request_correlation": "none",
+                "candidate_to_menu_edge": "unknown", "menu_to_request_edge": "unknown"}
+
+    def test_input_matrix_is_retained_and_rendered_for_both_sizes_independently(self):
+        samples = []
+        for size, boundary in ((1, "normal-exit-observed"), (100, "censored")):
+            inventory = self.input_fixture(boundary)
+            inventory["counts"]["native.input.save_family_candidate"]["success"] = size
+            samples.append({"size_mib": size, "status": "failed", "editor_exit_code": -9,
+                "save_causal_evidence": {"contract": "native-save-causal-v1", "status": "unobserved",
+                    "native_input_inventory": inventory}})
+        row = self.report("native-json-large", {"status": "incomplete", "samples": samples})
+        for size, item in zip((1, 100), row["nested"]):
+            inventory = item["save_causal_evidence"]["native_input_inventory"]
+            self.assertEqual(len(inventory["counts"]), 6)
+            self.assertTrue(all(len(outcomes) == 4 for outcomes in inventory["counts"].values()))
+            self.assertEqual(inventory["counts"]["native.input.save_family_candidate"]["success"], size)
+            self.assertEqual(item["save_causal_evidence"]["status"], "unobserved")
+            self.assertEqual(item["editor_exit_code"], -9)
+        output = summary.markdown({"rid": "osx-x64", "diagnostics": [row], "unrecognized_inventory_reports": 0})
+        for value in ("candidate[1/0/0/0]", "candidate[100/0/0/0]", "boundary=censored",
+                      "absence-certified=False", "request-correlation=none", "candidate-to-menu=unknown",
+                      "menu-to-request=unknown", "not physical input or Save delivery",
+                      "Zero counts never certify absence"):
+            self.assertIn(value, output)
+
+    def test_input_missing_or_malformed_inventory_never_synthesizes_zero(self):
+        for raw in (None, {}, [], "PRIVATE"):
+            inventory = summary.input_inventory({"native_input_inventory": raw})
+            self.assertEqual(inventory, {"status": "unverified", "boundary": "unverified", "counts": {}})
+            output = summary.input_markdown({"save_causal_evidence": {"native_input_inventory": inventory}})
+            self.assertIn("candidate[?/?/?/?]", output)
+            self.assertNotIn("PRIVATE", output)
+
+    def test_input_counter_types_negatives_and_unknown_keys_are_filtered(self):
+        raw = self.input_fixture("censored")
+        raw["counts"]["native.input.save_family_candidate"] = {
+            "success": True, "failure": -1, "cancelled": "PRIVATE", "skipped": 2, "SECRET": 99}
+        raw["counts"]["SECRET-OP"] = {"success": 9}
+        raw["source"] = "PRIVATE-PATH"
+        inventory = summary.input_inventory({"native_input_inventory": raw})
+        self.assertEqual(inventory["status"], "unverified")
+        self.assertEqual(inventory["counts"]["native.input.save_family_candidate"], {"skipped": 2})
+        output = summary.input_markdown({"save_causal_evidence": {"native_input_inventory": inventory}})
+        self.assertIn("candidate[?/?/?/2]", output)
+        self.assertNotIn("SECRET", json.dumps(inventory) + output)
+        self.assertNotIn("PRIVATE", json.dumps(inventory) + output)
+
+    def test_input_each_invalid_outcome_keeps_matrix_unverified(self):
+        for value in (False, -1, None, "0", 0.0, [], {}):
+            for outcome in summary.MENU_STATUSES:
+                raw = self.input_fixture()
+                raw["counts"]["native.input.monitor.ready"][outcome] = value
+                inventory = summary.input_inventory({"native_input_inventory": raw})
+                self.assertEqual(inventory["status"], "unverified")
+                self.assertNotIn(outcome, inventory["counts"]["native.input.monitor.ready"])
+
+    def test_input_boundaries_and_zero_inventory_do_not_certify_absence(self):
+        for boundary in ("normal-exit-observed", "censored", "open"):
+            raw = self.input_fixture(boundary)
+            raw["counts"]["native.input.monitor.ready"]["success"] = 0
+            raw["status"] = "unobserved"
+            inventory = summary.input_inventory({"native_input_inventory": raw})
+            self.assertEqual(inventory["status"], "unobserved")
+            self.assertEqual(inventory["boundary"], boundary)
+            self.assertFalse(inventory["absence_certified"])
+            self.assertEqual(inventory["request_correlation"], "none")
+
+    def test_input_unknown_claims_and_links_are_not_retained_or_promoted(self):
+        for patch in ({"status": "SECRET"}, {"boundary": "PRIVATE"},
+                      {"absence_certified": True}, {"request_correlation": "SECRET"},
+                      {"candidate_to_menu_edge": "PRIVATE"}, {"menu_to_request_edge": "SECRET"}):
+            raw = self.input_fixture()
+            raw.update(patch)
+            inventory = summary.input_inventory({"native_input_inventory": raw})
+            self.assertEqual(inventory["status"], "unverified")
+            output = summary.input_markdown({"save_causal_evidence": {"native_input_inventory": inventory}})
+            self.assertNotIn("SECRET", json.dumps(inventory) + output)
+            self.assertNotIn("PRIVATE", json.dumps(inventory) + output)
+
+    def test_input_missing_unknown_edges_prevent_observed_claim(self):
+        for edge in ("candidate_to_menu_edge", "menu_to_request_edge"):
+            raw = self.input_fixture()
+            del raw[edge]
+            inventory = summary.input_inventory({"native_input_inventory": raw})
+            self.assertEqual(inventory["status"], "unverified")
+            self.assertNotIn(edge, inventory)
 
 
 if __name__ == "__main__":
