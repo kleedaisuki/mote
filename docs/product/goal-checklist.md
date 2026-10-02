@@ -27,9 +27,16 @@ source, run and public availability agree. Evidence is retained under
 
 **Scope of completion:** the current delivery-first objective is fulfilled by
 the published four-RID AOT release and maintained product documentation. The
-original broader vision's semantic, performance, physical IME/reader and capacity
+original broader vision's semantic, performance, physical IME and capacity
 gaps remain explicitly Partial below; publication does not close them.
 Later documentation status corrections do not rebuild images or move this tag.
+
+**Scope correction, 2026-10-02:** specialized screen-reader/accessibility
+adaptation was not requested and is not an unfinished user goal, planned work
+stream or release prerequisite. Preserve OS-native capabilities without making
+unsupported certification claims. Ordinary keyboard/focus/selection and Chinese
+input correctness remain normal editor concerns. Test observation interfaces
+belong to verification infrastructure, not automatic product requirements.
 
 Previous pre-servicing exact-main checkpoint:
 `3c2209cb8728120c5f2b94f9155b0c57b13ee7c4`,
@@ -171,7 +178,7 @@ runtime acceptance supplies stronger evidence.
 | Six-format parsing/semantic results | Partial | All six policies exist and produce structural results, diagnostics and conservative formatting/rendering. General semantic completeness and recovery/large-domain boundaries remain format-specific. |
 | Intermediate representation / source projections | Established foundation | Versioned semantic nodes, tokens and source spans; per-format caches/compact summaries. Not a claim of one universal compiler IR or general local incremental parsing. |
 | Incremental analysis and caching | Partial | Actual reuse for CSV, restricted JSON/Markdown domains and TOML statements; YAML still re-streams. Session interface alone is not incrementality. |
-| Native Windows/macOS editing | Ordinary default tasks established; attended evidence partial | Shipped ed96fe4 uses a coherent native source locus and passes actual four-RID edits/history/navigation/Save/reopen/final-view tasks. Physical Pinyin and attended assistive-technology acceptance remain open and unadvertised. |
+| Native Windows/macOS editing | Ordinary default tasks established; real IME evidence partial | Shipped ed96fe4 uses a coherent native source locus and passes actual four-RID edits/history/navigation/Save/reopen/final-view tasks. Physical Pinyin requires real input evidence. Dedicated screen-reader adaptation is outside the agreed scope, not outstanding goal work; existing native capabilities are preserved without certification claims. |
 | Restrained strategy-based themes | Established foundation | Dark/light/high-contrast policies, overrides and system appearance notifications. Physical/high-DPI/all-state visual polish is not certified. |
 | ~/.mote conventions and configurable directories | Established | Typed configuration, MOTE_HOME, relocatable cache/data/trace paths; explicit settings override conventions. |
 | End-to-end tracing | Partial | Opt-in bounded local JSONL, explicit Save provenance, versioned analysis/draw boundaries and native observations. Physical presentation and missing cross-process edges are not fabricated. |

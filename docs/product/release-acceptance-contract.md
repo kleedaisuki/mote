@@ -19,6 +19,14 @@ pause; it does not waive data integrity or turn research hypotheses into SLOs.
 - First version: `0.1.0`. A version number is not an unsupported claim of complete
   parser conformance, every assistive technology, or a universal capacity SLO.
 
+Scope clarification from the user, 2026-10-02: dedicated screen-reader/accessibility
+adaptation is not an assigned product goal or release prerequisite. Do not create
+NVDA/VoiceOver work streams from an absence of certification. Preserve native
+control capabilities; ordinary keyboard, focus, selection and Chinese input
+correctness still matter. Automation observation is infrastructure, not a license
+to promote its interface requirements into user-facing features. Historical
+accessibility investigations below remain evidence records, not new assignments.
+
 The [standards audit](../research/editor-experience-standard-audit.md) supports
 separating correctness, ordinary task experience, capacity stress and mechanism
 experiments. Historical 16/50/100 ms targets and memory-to-file-size ratios are
